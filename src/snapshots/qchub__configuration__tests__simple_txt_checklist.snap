@@ -1,0 +1,8 @@
+---
+source: src/configuration.rs
+expression: "&config.checklists[\"simple_checklist\"]"
+---
+This is a plain text checklist
+Item 1
+Item 2
+Item 3

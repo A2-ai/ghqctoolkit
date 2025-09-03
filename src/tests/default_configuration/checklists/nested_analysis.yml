@@ -1,0 +1,24 @@
+Complex Analysis:
+  Setup:
+    Data Preparation:
+      - Load dataset
+      - Clean data
+      - Validate inputs
+    Environment:
+      - Set working directory
+      - Load required packages
+  Analysis:
+    Statistical Tests:
+      Normality:
+        - Shapiro-Wilk test
+        - Q-Q plots
+      Variance:
+        - Levene's test
+        - Bartlett's test
+    Model Fitting:
+      - Fit initial model
+      - Check assumptions
+  Reporting:
+    - Generate tables
+    - Create figures
+    - Write summary

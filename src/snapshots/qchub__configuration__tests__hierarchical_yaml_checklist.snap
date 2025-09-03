@@ -1,0 +1,22 @@
+---
+source: src/configuration.rs
+expression: "&config.checklists[\"NCA Analysis\"]"
+---
+### Set-up
+
+- [ ] Correct dataset used. Any modifications appropriate and documented.
+- [ ] Exclusion of anomalous concentration appropriate (if applicable).
+- [ ] Correct units for time and concentration variable specified.
+
+
+### Analysis
+
+- [ ] Source data mapped correctly.
+- [ ] Time and concentration variables mapped correctly.
+- [ ] Model type selected appropriately.
+
+
+### Outputs
+
+- [ ] Final Parameters file named appropriately.
+- [ ] ND and NC assignment done correctly.

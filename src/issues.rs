@@ -9,6 +9,7 @@ pub(crate) struct QCIssue {
     pub(crate) branch: String,
     authors: Vec<GitAuthor>,
     checklist_name: String,
+    checklist_note: Option<String>,
     checklist_content: String,
     pub(crate) assignees: Vec<String>,
 }
@@ -39,6 +40,12 @@ impl QCIssue {
             "<a href=\"{file_contents_url}\" target=\"_blank\">file contents at initial qc commit</a>"
         );
 
+        let checklist_note = if let Some(note) = &self.checklist_note {
+            format!("\n\n{note}")
+        } else {
+            String::new()
+        };
+
         Ok(format!(
             "\
 ## Metadata
@@ -47,7 +54,8 @@ impl QCIssue {
 * author: {author}{collaborators}
 * {file_contents_html}
         
-# {}
+# {}{checklist_note}
+
 {}
 ",
             self.commit, self.branch, self.checklist_name, self.checklist_content,
@@ -64,6 +72,7 @@ impl QCIssue {
         milestone_id: u64,
         assignees: Vec<String>,
         checklist_name: String,
+        checklist_note: Option<String>,
         checklist_content: String,
     ) -> Result<Self, GitInfoError> {
         Ok(Self {
@@ -72,6 +81,7 @@ impl QCIssue {
             branch: git_info.branch()?,
             authors: git_info.authors(file.as_ref())?,
             checklist_name,
+            checklist_note,
             checklist_content,
             assignees,
             milestone_id,
@@ -102,6 +112,7 @@ mod tests {
                 }
             ],
             checklist_name: "Code Review Checklist".to_string(),
+            checklist_note: Some("NOTE".to_string()),
             checklist_content: "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
             assignees: vec!["reviewer1".to_string(), "reviewer2".to_string()],
         }
