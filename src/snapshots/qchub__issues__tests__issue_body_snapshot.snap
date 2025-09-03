@@ -1,0 +1,15 @@
+---
+source: src/issues.rs
+expression: body
+---
+## Metadata
+* initial qc commit: abc123def456789
+* git branch: feature/new-feature
+* author: John Doe (john@example.com)
+* collaborators: Jane Smith (jane@example.com)
+* <a href="https://github.com/owner/repo/blob/abc123d/src/example.rs" target="_blank">file contents at initial qc commit</a>
+        
+# Code Review Checklist
+- [ ] Code compiles without warnings
+- [ ] Tests pass
+- [ ] Documentation updated
