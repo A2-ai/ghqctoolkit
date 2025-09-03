@@ -213,11 +213,6 @@ fn format_header(name: &str, level: usize) -> String {
     format!("{} {}", hashes, name)
 }
 
-// Keep the old function for backward compatibility in existing tests
-fn format_section_list(section_name: &str, items: &[Value]) -> String {
-    format_section_list_with_level(section_name, items, 3)
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigurationError {
     #[error("IO error: {0}")]
