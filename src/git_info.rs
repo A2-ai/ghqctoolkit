@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use gix::Repository;
 use octocrab::models::issues::Issue;
-use octocrab::{models::Milestone, Octocrab};
+use octocrab::{Octocrab, models::Milestone};
 
 #[cfg(test)]
 use mockall::automock;
@@ -18,12 +18,7 @@ pub struct GitAuthor {
 
 impl fmt::Display for GitAuthor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} ({})",
-            self.name,
-            self.email
-        )
+        write!(f, "{} ({})", self.name, self.email)
     }
 }
 
@@ -59,12 +54,14 @@ pub struct GitInfo {
 impl GitInfo {
     pub fn from_path(path: &Path) -> Result<Self, GitInfoError> {
         let repository = gix::open(path).map_err(GitInfoError::RepoOpen)?;
-        
-        let remote = repository.find_default_remote(gix::remote::Direction::Fetch)
+
+        let remote = repository
+            .find_default_remote(gix::remote::Direction::Fetch)
             .ok_or(GitInfoError::NoRemote)?
             .map_err(GitInfoError::RemoteNotFound)?;
 
-        let remote_url = remote.url(gix::remote::Direction::Fetch)
+        let remote_url = remote
+            .url(gix::remote::Direction::Fetch)
             .ok_or(GitInfoError::NoRemoteUrl)?
             .to_string();
 
@@ -99,7 +96,7 @@ impl LocalGitInfo for GitInfo {
 
     fn branch(&self) -> Result<String, GitInfoError> {
         let head = self.repository.head().map_err(GitInfoError::HeadError)?;
-        
+
         let name = head.name();
         let branch_name = name.shorten().to_string();
         // Remove "refs/heads/" prefix if present
@@ -112,21 +109,25 @@ impl LocalGitInfo for GitInfo {
 
     fn file_commits(&self, file: &Path) -> Result<Vec<gix::ObjectId>, GitInfoError> {
         let mut commits = Vec::new();
-        
-        let head_id = self.repository.head_id()
+
+        let head_id = self
+            .repository
+            .head_id()
             .map_err(GitInfoError::HeadIdError)?;
-        
+
         let revwalk = self.repository.rev_walk([head_id]);
-        
+
         for commit_info in revwalk.all().map_err(GitInfoError::RevWalkError)? {
             let commit_info = commit_info.map_err(GitInfoError::TraverseError)?;
             let commit_id = commit_info.id;
-            
-            let commit = self.repository.find_object(commit_id)
+
+            let commit = self
+                .repository
+                .find_object(commit_id)
                 .map_err(GitInfoError::FindObjectError)?
                 .try_into_commit()
                 .map_err(GitInfoError::CommitError)?;
-            
+
             // Check if this commit touched the file
             if let Ok(tree) = commit.tree() {
                 let mut buffer = Vec::new();
@@ -135,7 +136,7 @@ impl LocalGitInfo for GitInfo {
                 }
             }
         }
-        
+
         Ok(commits)
     }
 
@@ -143,9 +144,11 @@ impl LocalGitInfo for GitInfo {
         let commits = self.file_commits(file)?;
 
         let mut res = Vec::new();
-        
+
         for commit_id in commits {
-            let commit = self.repository.find_object(commit_id)
+            let commit = self
+                .repository
+                .find_object(commit_id)
                 .map_err(GitInfoError::FindObjectError)?
                 .try_into_commit()
                 .map_err(GitInfoError::CommitError)?;
@@ -156,7 +159,7 @@ impl LocalGitInfo for GitInfo {
                 email: signature.email.to_string(),
             });
         }
-        
+
         if res.is_empty() {
             Err(GitInfoError::AuthorNotFound(file.to_path_buf()))
         } else {
@@ -167,16 +170,17 @@ impl LocalGitInfo for GitInfo {
 
 impl GitHubApi for GitInfo {
     async fn get_milestones(&self) -> Result<Vec<Milestone>, GitInfoError> {
-        self
-            .octocrab
-            .get(format!("/repos/{}/{}/milestones", &self.owner, &self.repo), None::<&()>)
+        self.octocrab
+            .get(
+                format!("/repos/{}/{}/milestones", &self.owner, &self.repo),
+                None::<&()>,
+            )
             .await
-            .map_err(GitInfoError::APIError)  
+            .map_err(GitInfoError::APIError)
     }
 
     async fn get_milestone_issues(&self, milestone_num: u64) -> Result<Vec<Issue>, GitInfoError> {
-        self
-            .octocrab 
+        self.octocrab
             .issues(&self.owner, &self.repo)
             .list()
             .milestone(milestone_num)
@@ -186,8 +190,9 @@ impl GitHubApi for GitInfo {
             .map_err(GitInfoError::APIError)
     }
 
-    async fn post_issue(&self, issue: &QCIssue) -> Result<(),GitInfoError> {
-        let handler = self.octocrab
+    async fn post_issue(&self, issue: &QCIssue) -> Result<(), GitInfoError> {
+        let handler = self
+            .octocrab
             .issues(self.owner.to_string(), self.repo.to_string());
         let builder = handler
             .create(issue.title())
@@ -196,37 +201,42 @@ impl GitHubApi for GitInfo {
             .labels(vec!["ghqc".to_string(), issue.branch.to_string()])
             .assignees(issue.assignees.clone());
 
-        builder
-            .send()
-            .await
-            .map_err(GitInfoError::APIError)?;
+        builder.send().await.map_err(GitInfoError::APIError)?;
 
         Ok(())
     }
 }
 
 impl GitHelpers for GitInfo {
-    fn file_content_url(&self, commit: &str, file: &Path) -> String{
-        let file = file
-            .to_string_lossy()
-            .replace(" ", "%20");
-        format!("{}/{}/{}/blob/{}/{file}", self.base_url, self.owner, self.repo, &commit[..7])
+    fn file_content_url(&self, commit: &str, file: &Path) -> String {
+        let file = file.to_string_lossy().replace(" ", "%20");
+        format!(
+            "{}/{}/{}/blob/{}/{file}",
+            self.base_url,
+            self.owner,
+            self.repo,
+            &commit[..7]
+        )
     }
 }
 
 fn parse_github_url(url: &str) -> Result<(String, String, String), GitInfoError> {
     let url = url.strip_suffix(".git").unwrap_or(url);
-    
+
     if let Some(captures) = url.strip_prefix("https://") {
         let parts: Vec<&str> = captures.split('/').collect();
         if parts.len() >= 3 {
             let host = parts[0];
             let owner = parts[1];
             let repo = parts[2];
-            return Ok((owner.to_string(), repo.to_string(), format!("https://{}", host)));
+            return Ok((
+                owner.to_string(),
+                repo.to_string(),
+                format!("https://{}", host),
+            ));
         }
     }
-    
+
     if let Some(captures) = url.strip_prefix("git@") {
         let host_and_path: Vec<&str> = captures.split(':').collect();
         if host_and_path.len() == 2 {
@@ -235,11 +245,15 @@ fn parse_github_url(url: &str) -> Result<(String, String, String), GitInfoError>
             if path_parts.len() >= 2 {
                 let owner = path_parts[0];
                 let repo = path_parts[1];
-                return Ok((owner.to_string(), repo.to_string(), format!("https://{}", host)));
+                return Ok((
+                    owner.to_string(),
+                    repo.to_string(),
+                    format!("https://{}", host),
+                ));
             }
         }
     }
-    
+
     Err(GitInfoError::InvalidGitHubUrl(url.to_string()))
 }
 
@@ -287,25 +301,57 @@ mod tests {
     fn test_parse_github_url_matrix() {
         let test_cases = [
             // GitHub.com HTTPS
-            ("https://github.com/owner/repo", Ok(("owner", "repo", "https://github.com"))),
-            ("https://github.com/owner/repo.git", Ok(("owner", "repo", "https://github.com"))),
-            ("https://github.com/owner/repo/extra/path", Ok(("owner", "repo", "https://github.com"))),
-            
+            (
+                "https://github.com/owner/repo",
+                Ok(("owner", "repo", "https://github.com")),
+            ),
+            (
+                "https://github.com/owner/repo.git",
+                Ok(("owner", "repo", "https://github.com")),
+            ),
+            (
+                "https://github.com/owner/repo/extra/path",
+                Ok(("owner", "repo", "https://github.com")),
+            ),
             // GitHub.com SSH
-            ("git@github.com:owner/repo", Ok(("owner", "repo", "https://github.com"))),
-            ("git@github.com:owner/repo.git", Ok(("owner", "repo", "https://github.com"))),
-            ("git@github.com:owner/repo/subpath", Ok(("owner", "repo", "https://github.com"))),
-            
+            (
+                "git@github.com:owner/repo",
+                Ok(("owner", "repo", "https://github.com")),
+            ),
+            (
+                "git@github.com:owner/repo.git",
+                Ok(("owner", "repo", "https://github.com")),
+            ),
+            (
+                "git@github.com:owner/repo/subpath",
+                Ok(("owner", "repo", "https://github.com")),
+            ),
             // GitHub Enterprise HTTPS
-            ("https://github.enterprise.com/owner/repo", Ok(("owner", "repo", "https://github.enterprise.com"))),
-            ("https://github.enterprise.com/owner/repo.git", Ok(("owner", "repo", "https://github.enterprise.com"))),
-            ("https://ghe.company.internal/owner/repo", Ok(("owner", "repo", "https://ghe.company.internal"))),
-            
+            (
+                "https://github.enterprise.com/owner/repo",
+                Ok(("owner", "repo", "https://github.enterprise.com")),
+            ),
+            (
+                "https://github.enterprise.com/owner/repo.git",
+                Ok(("owner", "repo", "https://github.enterprise.com")),
+            ),
+            (
+                "https://ghe.company.internal/owner/repo",
+                Ok(("owner", "repo", "https://ghe.company.internal")),
+            ),
             // GitHub Enterprise SSH
-            ("git@github.enterprise.com:owner/repo", Ok(("owner", "repo", "https://github.enterprise.com"))),
-            ("git@github.enterprise.com:owner/repo.git", Ok(("owner", "repo", "https://github.enterprise.com"))),
-            ("git@ghe.company.internal:owner/repo", Ok(("owner", "repo", "https://ghe.company.internal"))),
-            
+            (
+                "git@github.enterprise.com:owner/repo",
+                Ok(("owner", "repo", "https://github.enterprise.com")),
+            ),
+            (
+                "git@github.enterprise.com:owner/repo.git",
+                Ok(("owner", "repo", "https://github.enterprise.com")),
+            ),
+            (
+                "git@ghe.company.internal:owner/repo",
+                Ok(("owner", "repo", "https://ghe.company.internal")),
+            ),
             // Invalid cases
             ("https://github.com/owner", Err(())),
             ("git@github.com:owner", Err(())),
@@ -320,14 +366,20 @@ mod tests {
                     let result = parse_github_url(input).unwrap();
                     assert_eq!(
                         result,
-                        (exp_owner.to_string(), exp_repo.to_string(), exp_base_url.to_string()),
-                        "Failed for input: {}", input
+                        (
+                            exp_owner.to_string(),
+                            exp_repo.to_string(),
+                            exp_base_url.to_string()
+                        ),
+                        "Failed for input: {}",
+                        input
                     );
                 }
                 Err(_) => {
                     assert!(
                         parse_github_url(input).is_err(),
-                        "Expected error for input: {}", input
+                        "Expected error for input: {}",
+                        input
                     );
                 }
             }
