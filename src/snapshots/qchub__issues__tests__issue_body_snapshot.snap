@@ -10,6 +10,9 @@ expression: body
 * <a href="https://github.com/owner/repo/blob/abc123d/src/example.rs" target="_blank">file contents at initial qc commit</a>
         
 # Code Review Checklist
+
+NOTE
+
 - [ ] Code compiles without warnings
 - [ ] Tests pass
 - [ ] Documentation updated
