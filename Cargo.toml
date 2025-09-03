@@ -14,3 +14,4 @@ thiserror = "1.0"
 [dev-dependencies]
 mockall = "0.12"
 tempfile = "3.0"
+insta = "1.34"
