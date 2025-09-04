@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::git_info::{GitAuthor, GitHelpers, GitInfoError, LocalGitInfo};
+use crate::git::{GitAuthor, GitHelpers, LocalGitError, LocalGitInfo};
 
-pub(crate) struct QCIssue {
+pub struct QCIssue {
     pub(crate) milestone_id: u64,
     title: PathBuf,
     commit: String,
@@ -15,7 +15,7 @@ pub(crate) struct QCIssue {
 }
 
 impl QCIssue {
-    pub(crate) fn body(&self, git_info: &impl GitHelpers) -> Result<String, GitInfoError> {
+    pub(crate) fn body(&self, git_info: &impl GitHelpers) -> String {
         let author = self
             .authors
             .first()
@@ -46,7 +46,7 @@ impl QCIssue {
             String::new()
         };
 
-        Ok(format!(
+        format!(
             "\
 ## Metadata
 * initial qc commit: {}
@@ -59,14 +59,14 @@ impl QCIssue {
 {}
 ",
             self.commit, self.branch, self.checklist_name, self.checklist_content,
-        ))
+        )
     }
 
     pub(crate) fn title(&self) -> String {
         self.title.to_string_lossy().to_string()
     }
 
-    fn new(
+    pub(crate) fn new(
         file: impl AsRef<Path>,
         git_info: &impl LocalGitInfo,
         milestone_id: u64,
@@ -74,7 +74,7 @@ impl QCIssue {
         checklist_name: String,
         checklist_note: Option<String>,
         checklist_content: String,
-    ) -> Result<Self, GitInfoError> {
+    ) -> Result<Self, LocalGitError> {
         Ok(Self {
             title: file.as_ref().to_path_buf(),
             commit: git_info.commit()?,
@@ -92,7 +92,7 @@ impl QCIssue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_info::{GitAuthor, MockGitHelpers};
+    use crate::git::{GitAuthor, helpers::MockGitHelpers};
     use std::path::PathBuf;
 
     fn create_test_issue() -> QCIssue {
@@ -147,7 +147,7 @@ mod tests {
                 "https://github.com/owner/repo/blob/abc123d/src/example.rs".to_string()
             });
 
-        let body = issue.body(&mock_git_info).unwrap();
+        let body = issue.body(&mock_git_info);
         insta::assert_snapshot!(body);
     }
 }
