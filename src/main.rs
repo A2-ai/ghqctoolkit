@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use clap_verbosity_flag::{Verbosity, InfoLevel};
-use qchub::{create_issue, Configuration, GitInfo};
+use clap_verbosity_flag::{InfoLevel, Verbosity};
+use qchub::{Configuration, GitInfo, create_issue};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -24,15 +24,15 @@ enum Commands {
         /// Milestone for the issue
         #[arg(short, long)]
         milestone: String,
-        
+
         /// File path to create issue for
         #[arg(short, long)]
         file: PathBuf,
-        
+
         /// Configuration directory path
         #[arg(short, long)]
         config_dir: Option<PathBuf>,
-        
+
         /// Name of the checklist to use
         #[arg(short = 'l', long)]
         checklist_name: String,
@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
         .init();
 
     let git_info = GitInfo::from_path(&cli.project)?;
-    
+
     match cli.command {
         Commands::CreateIssue {
             milestone,
@@ -70,8 +70,15 @@ async fn main() -> Result<()> {
                 log::debug!("Using default configuration");
                 Configuration::default()
             };
-            
-            create_issue(&file, &milestone, &checklist_name, &configuration, &git_info).await?;
+
+            create_issue(
+                &file,
+                &milestone,
+                &checklist_name,
+                &configuration,
+                &git_info,
+            )
+            .await?;
         }
     }
 

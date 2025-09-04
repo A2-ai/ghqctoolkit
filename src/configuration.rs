@@ -52,7 +52,7 @@ impl Default for Configuration {
         Self {
             path: PathBuf::default(),
             checklists: HashMap::from([("Custom".to_string(), "- [ ] [INSERT]".to_string())]),
-            options: ConfigurationOptions::default()
+            options: ConfigurationOptions::default(),
         }
     }
 }
@@ -262,10 +262,7 @@ mod tests {
         assert!(config.checklists.contains_key("Complex Analysis"));
 
         // Verify all content is as expected
-        insta::assert_snapshot!(
-            "default_custom",
-            &config.checklists["Custom"]
-        );
+        insta::assert_snapshot!("default_custom", &config.checklists["Custom"]);
         insta::assert_snapshot!(
             "simple_txt_checklist",
             &config.checklists["simple_checklist"]

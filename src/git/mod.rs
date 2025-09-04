@@ -1,7 +1,7 @@
-use std::path::Path;
 use gix::Repository;
 use octocrab::models::issues::Issue;
 use octocrab::{Octocrab, models::Milestone};
+use std::path::Path;
 
 pub(crate) mod api;
 pub(crate) mod auth;
@@ -10,8 +10,8 @@ pub(crate) mod local;
 
 pub use api::{GitHubApi, GitHubApiError};
 pub use auth::create_authenticated_client;
-pub use helpers::{parse_github_url, GitHelpers, GitInfoError};
-pub use local::{GitAuthor, LocalGitInfo, LocalGitError};
+pub use helpers::{GitHelpers, GitInfoError, parse_github_url};
+pub use local::{GitAuthor, LocalGitError, LocalGitInfo};
 
 use crate::issues::QCIssue;
 
@@ -27,7 +27,7 @@ pub struct GitInfo {
 impl GitInfo {
     pub fn from_path(path: &Path) -> Result<Self, GitInfoError> {
         log::debug!("Initializing GitInfo from path: {:?}", path);
-        
+
         let repository = gix::open(path).map_err(GitInfoError::RepoOpen)?;
         log::debug!("Opened git repository");
 
@@ -43,7 +43,12 @@ impl GitInfo {
         log::debug!("Found remote URL: {}", remote_url);
 
         let (owner, repo, base_url) = parse_github_url(&remote_url)?;
-        log::debug!("Parsed GitHub info - Owner: {}, Repo: {}, Base URL: {}", owner, repo, base_url);
+        log::debug!(
+            "Parsed GitHub info - Owner: {}, Repo: {}, Base URL: {}",
+            owner,
+            repo,
+            base_url
+        );
 
         let octocrab = create_authenticated_client(&base_url)?;
 
@@ -75,7 +80,7 @@ impl LocalGitInfo for GitInfo {
         if let Some(branch_name) = head.referent_name() {
             let name_str = branch_name.as_bstr().to_string();
             log::debug!("Raw branch reference: {}", name_str);
-            
+
             // Remove "refs/heads/" prefix if present
             let final_branch = if let Some(branch) = name_str.strip_prefix("refs/heads/") {
                 branch.to_string()
@@ -122,7 +127,11 @@ impl LocalGitInfo for GitInfo {
             }
         }
 
-        log::debug!("Found {} commits that touched file: {:?}", commits.len(), file);
+        log::debug!(
+            "Found {} commits that touched file: {:?}",
+            commits.len(),
+            file
+        );
         Ok(commits)
     }
 
@@ -157,11 +166,13 @@ impl LocalGitInfo for GitInfo {
 }
 
 impl GitHubApi for GitInfo {
-    fn get_milestones(&self) -> impl std::future::Future<Output = Result<Vec<Milestone>, GitHubApiError>> + Send {
+    fn get_milestones(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<Milestone>, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        
+
         async move {
             log::debug!("Fetching milestones for {}/{}", owner, repo);
             let milestones: Vec<Milestone> = octocrab
@@ -171,19 +182,27 @@ impl GitHubApi for GitInfo {
                 )
                 .await
                 .map_err(GitHubApiError::APIError)?;
-            
+
             log::debug!("Successfully fetched {} milestones", milestones.len());
             Ok(milestones)
         }
     }
 
-    fn get_milestone_issues(&self, milestone_id: u64) -> impl std::future::Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
+    fn get_milestone_issues(
+        &self,
+        milestone_id: u64,
+    ) -> impl std::future::Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        
+
         async move {
-            log::debug!("Fetching issues for milestone {} in {}/{}", milestone_id, owner, repo);
+            log::debug!(
+                "Fetching issues for milestone {} in {}/{}",
+                milestone_id,
+                owner,
+                repo
+            );
             let issues = octocrab
                 .issues(&owner, &repo)
                 .list()
@@ -192,21 +211,33 @@ impl GitHubApi for GitInfo {
                 .await
                 .map(|issues| issues.items)
                 .map_err(GitHubApiError::APIError)?;
-            
-            log::debug!("Successfully fetched {} issues for milestone {}", issues.len(), milestone_id);
-            
+
+            log::debug!(
+                "Successfully fetched {} issues for milestone {}",
+                issues.len(),
+                milestone_id
+            );
+
             Ok(issues)
         }
     }
 
-    fn create_milestone(&self, milestone_name: &str) -> impl std::future::Future<Output = Result<Milestone, GitHubApiError>> + Send {
+    fn create_milestone(
+        &self,
+        milestone_name: &str,
+    ) -> impl std::future::Future<Output = Result<Milestone, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let milestone_name = milestone_name.to_string();
-        
+
         async move {
-            log::debug!("Creating milestone '{}' for {}/{}", milestone_name, owner, repo);
+            log::debug!(
+                "Creating milestone '{}' for {}/{}",
+                milestone_name,
+                owner,
+                repo
+            );
             let milestone_request = serde_json::json!({
                 "title": milestone_name,
                 "state": "open"
@@ -215,18 +246,25 @@ impl GitHubApi for GitInfo {
             let milestone: Milestone = octocrab
                 .post(
                     format!("/repos/{}/{}/milestones", &owner, &repo),
-                    Some(&milestone_request)
+                    Some(&milestone_request),
                 )
                 .await
                 .map_err(GitHubApiError::APIError)?;
-            
-            log::info!("Successfully created milestone '{}' with ID: {}", milestone_name, milestone.number);
-            
+
+            log::info!(
+                "Successfully created milestone '{}' with ID: {}",
+                milestone_name,
+                milestone.number
+            );
+
             Ok(milestone)
         }
     }
 
-    fn post_issue(&self, issue: &QCIssue) -> impl std::future::Future<Output = Result<(), GitHubApiError>> + Send {
+    fn post_issue(
+        &self,
+        issue: &QCIssue,
+    ) -> impl std::future::Future<Output = Result<(), GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
@@ -235,10 +273,10 @@ impl GitHubApi for GitInfo {
         let milestone_id = issue.milestone_id;
         let branch = issue.branch.clone();
         let assignees = issue.assignees.clone();
-        
+
         async move {
             log::debug!("Posting issue '{}' to {}/{}", title, owner, repo);
-            
+
             let handler = octocrab.issues(owner.clone(), repo.clone());
             let builder = handler
                 .create(title.clone())
@@ -248,9 +286,14 @@ impl GitHubApi for GitInfo {
                 .assignees(assignees);
 
             let issue = builder.send().await.map_err(GitHubApiError::APIError)?;
-            
-            log::info!("Successfully posted issue #'{}' to {}/{}", issue.number, owner, repo);
-            
+
+            log::info!(
+                "Successfully posted issue #'{}' to {}/{}",
+                issue.number,
+                owner,
+                repo
+            );
+
             Ok(())
         }
     }
