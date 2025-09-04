@@ -1,0 +1,5 @@
+---
+source: src/configuration.rs
+expression: "&config.checklists[\"Custom\"]"
+---
+- [ ] [INSERT]

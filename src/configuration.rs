@@ -8,9 +8,9 @@ use std::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-struct ConfigurationOptions {
+pub(crate) struct ConfigurationOptions {
     // Note to prepend at the top of all checklists
-    prepended_checklist_notes: Option<String>,
+    pub(crate) prepended_checklist_notes: Option<String>,
     // What to call the checklist in the app. Default: checklist
     checklist_display_name: String,
     // Path to the logo within the configuration repo. Default: logo
@@ -40,29 +40,40 @@ impl ConfigurationOptions {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Configuration {
+pub struct Configuration {
     path: PathBuf,
     // checklist name and content
     pub(crate) checklists: HashMap<String, String>,
-    options: ConfigurationOptions,
+    pub(crate) options: ConfigurationOptions,
+}
+
+impl Default for Configuration {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::default(),
+            checklists: HashMap::from([("Custom".to_string(), "- [ ] [INSERT]".to_string())]),
+            options: ConfigurationOptions::default(),
+        }
+    }
 }
 
 impl Configuration {
-    fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigurationError> {
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigurationError> {
         let path = path.as_ref();
         let options =
             ConfigurationOptions::from_path(path.join("options.yaml")).unwrap_or_default();
         Ok(Configuration {
             path: path.to_path_buf(),
-            checklists: HashMap::new(),
             options,
+            ..Default::default()
         })
     }
 
-    fn load_checklists(&mut self) -> Result<(), ConfigurationError> {
+    pub fn load_checklists(&mut self) -> Result<(), ConfigurationError> {
         let checklist_dir = self.path.join(&self.options.checklist_directory);
 
         if !checklist_dir.exists() {
+            log::debug!("Checklist directory does not exist. Nothing to load");
             return Ok(()); // No checklists directory, nothing to load
         }
 
@@ -92,6 +103,8 @@ impl Configuration {
                 _ => continue, // Skip other file types
             }
         }
+
+        log::debug!("Found checklists with titles: {:?}", self.checklists.keys());
 
         Ok(())
     }
@@ -237,10 +250,11 @@ mod tests {
         let mut config = Configuration::from_path(&test_config_path).unwrap();
         config.load_checklists().unwrap();
 
-        // Should have loaded 5 checklists (ignoring .md file)
-        assert_eq!(config.checklists.len(), 5);
+        // Should have loaded 5 checklists and 1 default custom (ignoring .md file)
+        assert_eq!(config.checklists.len(), 6);
 
         // Verify all expected keys are present
+        assert!(config.checklists.contains_key("Custom"));
         assert!(config.checklists.contains_key("simple_checklist"));
         assert!(config.checklists.contains_key("Complex Checklist Name"));
         assert!(config.checklists.contains_key("Simple Tasks"));
@@ -248,6 +262,7 @@ mod tests {
         assert!(config.checklists.contains_key("Complex Analysis"));
 
         // Verify all content is as expected
+        insta::assert_snapshot!("default_custom", &config.checklists["Custom"]);
         insta::assert_snapshot!(
             "simple_txt_checklist",
             &config.checklists["simple_checklist"]
@@ -274,7 +289,7 @@ mod tests {
         let mut config = Configuration::from_path(&test_config_path).unwrap();
         config.load_checklists().unwrap();
 
-        assert_eq!(config.checklists.len(), 1);
+        assert_eq!(config.checklists.len(), 2);
         assert!(config.checklists.contains_key("Custom Checklist"));
 
         // Verify the custom options were loaded
@@ -302,16 +317,11 @@ mod tests {
     #[test]
     fn test_missing_checklist_directory() {
         let temp_dir = TempDir::new().unwrap();
-
-        let mut config = Configuration {
-            path: temp_dir.path().to_path_buf(),
-            checklists: HashMap::new(),
-            options: ConfigurationOptions::default(),
-        };
+        let mut config = Configuration::from_path(temp_dir).unwrap();
 
         // Should not error when checklist directory doesn't exist
         config.load_checklists().unwrap();
-        assert_eq!(config.checklists.len(), 0);
+        assert_eq!(config.checklists.len(), 1);
     }
 
     #[test]
