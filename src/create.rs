@@ -1,6 +1,5 @@
+use core::fmt;
 use std::path::{Path, PathBuf};
-
-use octocrab::models::Milestone;
 
 use crate::{
     Configuration,
@@ -8,20 +7,56 @@ use crate::{
     issues::QCIssue,
 };
 
+#[derive(Debug, Clone)]
+pub enum MilestoneStatus {
+    Existing{
+        name: String,
+        number: u64
+    },
+    New(String),
+    Unknown(String),
+}
+
+impl fmt::Display for MilestoneStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::New(name) => write!(f, "{name} (new)"),
+            Self::Existing { name, number } => write!(f, "{name} (existing: #{number})"),
+            Self::Unknown(name) => write!(f, "{name} (unknown)")
+        }
+    }
+}
+
+impl MilestoneStatus {
+    async fn determine_milestone(&self, file: impl AsRef<Path>, git_info: &impl GitHubApi) -> Result<u64, CreateError> {
+        match self {
+            Self::Existing{number, ..} => return Ok(*number),
+            Self::New(milestone_name) => {
+                let m = git_info.create_milestone(milestone_name).await?;
+                log::debug!(
+                    "Created milestone '{}' with ID: {}",
+                    milestone_name,
+                    m.number
+                );
+                Ok(m.number as u64)
+            }
+            Self::Unknown(milestone_name) => {
+                find_or_create_milestone(file.as_ref(), milestone_name, git_info).await
+            }
+        }
+    }
+}
+
 pub async fn create_issue(
     file: impl AsRef<Path>,
-    milestone_name: &str,
+    milestone_status: &MilestoneStatus,
     checklist_name: &str,
     configuration: &Configuration,
     git_info: &(impl LocalGitInfo + GitHubApi),
 ) -> Result<(), CreateError> {
     let file = file.as_ref();
 
-    let milestones = git_info.get_milestones().await?;
-    log::debug!("Found {} existing milestones", milestones.len());
-
-    let milestone_id =
-        find_or_create_milestone(file, milestone_name, &milestones, git_info).await?;
+    let milestone_id = milestone_status.determine_milestone(file, git_info).await?;
 
     let checklist_content = match configuration.checklists.get(checklist_name) {
         Some(content) => {
@@ -41,7 +76,7 @@ pub async fn create_issue(
         checklist_content.to_string(),
     )?;
 
-    log::info!("Posting issue to GitHub: {}", issue.title());
+    log::debug!("Posting issue to GitHub: {}", issue.title());
     git_info.post_issue(&issue).await?;
 
     Ok(())
@@ -50,10 +85,12 @@ pub async fn create_issue(
 async fn find_or_create_milestone(
     file: impl AsRef<Path>,
     milestone_name: &str,
-    milestones: &[Milestone],
     git_info: &impl GitHubApi,
 ) -> Result<u64, CreateError> {
     let file = file.as_ref();
+    let milestones = git_info.get_milestones().await?;
+    log::debug!("Found {} existing milestones", milestones.len());
+
     let id = if let Some(m) = milestones.iter().find(|m| m.title == milestone_name) {
         log::debug!(
             "Found existing milestone '{}' with ID: {}",
@@ -155,7 +192,7 @@ mod tests {
     #[derive(Clone)]
     struct CreateIssueTestCase {
         name: &'static str,
-        milestone_name: &'static str,
+        milestone_status: MilestoneStatus,
         checklist_name: &'static str,
         existing_milestones: Vec<&'static str>, // fixture names
         existing_issues: Vec<&'static str>,     // fixture names
@@ -202,55 +239,91 @@ mod tests {
             .map(|&name| load_milestone(name))
             .collect();
 
-        mock_git_info
-            .github
-            .expect_get_milestones()
-            .times(1)
-            .returning(move || {
-                let milestones = milestones.clone();
-                Box::pin(async move { Ok(milestones) })
-            });
+        // Set up expectations based on the milestone status
+        match &test_case.milestone_status {
+            MilestoneStatus::Existing { .. } => {
+                // For existing milestones, no GitHub API calls needed for milestone lookup
+                // The ID is already known
+            }
+            MilestoneStatus::New(_) => {
+                // For new milestones, expect create_milestone call
+                if let Some(created_milestone_name) = test_case.created_milestone {
+                    let created_milestone = load_milestone(created_milestone_name);
+                    let milestone_name = match &test_case.milestone_status {
+                        MilestoneStatus::New(name) => name.clone(),
+                        _ => unreachable!(),
+                    };
 
-        // Handle milestone creation if needed
-        if let Some(created_milestone_name) = test_case.created_milestone {
-            let created_milestone = load_milestone(created_milestone_name);
-            let milestone_name = test_case.milestone_name.to_string();
+                    mock_git_info
+                        .github
+                        .expect_create_milestone()
+                        .with(eq(milestone_name))
+                        .times(1)
+                        .returning(move |_| {
+                            let created_milestone = created_milestone.clone();
+                            Box::pin(async move { Ok(created_milestone) })
+                        });
+                }
+            }
+            MilestoneStatus::Unknown(_) => {
+                // For unknown milestones, expect get_milestones and potentially get_milestone_issues calls
+                mock_git_info
+                    .github
+                    .expect_get_milestones()
+                    .times(1)
+                    .returning(move || {
+                        let milestones = milestones.clone();
+                        Box::pin(async move { Ok(milestones) })
+                    });
 
-            mock_git_info
-                .github
-                .expect_create_milestone()
-                .with(eq(milestone_name))
-                .times(1)
-                .returning(move |_| {
-                    let created_milestone = created_milestone.clone();
-                    Box::pin(async move { Ok(created_milestone) })
-                });
-        }
+                // Set up milestone issues expectations for find_or_create_milestone
+                for milestone_fixture in &test_case.existing_milestones {
+                    let milestone = load_milestone(milestone_fixture);
+                    let milestone_name = match &test_case.milestone_status {
+                        MilestoneStatus::Unknown(name) => name.as_str(),
+                        _ => unreachable!(),
+                    };
+                    let issues: Vec<Issue> = if milestone.title == milestone_name {
+                        // For the matching milestone, load the expected issues
+                        test_case
+                            .existing_issues
+                            .iter()
+                            .map(|&name| load_issue(name))
+                            .collect()
+                    } else {
+                        vec![]
+                    };
 
-        // Set up milestone issues expectations for find_or_create_milestone
-        // This will be called during the milestone finding process
-        for milestone_fixture in &test_case.existing_milestones {
-            let milestone = load_milestone(milestone_fixture);
-            let issues: Vec<Issue> = if milestone.title == test_case.milestone_name {
-                // For the matching milestone, load the expected issues
-                test_case
-                    .existing_issues
-                    .iter()
-                    .map(|&name| load_issue(name))
-                    .collect()
-            } else {
-                vec![]
-            };
+                    mock_git_info
+                        .github
+                        .expect_get_milestone_issues()
+                        .with(eq(milestone.number as u64))
+                        .times(1)
+                        .returning(move |_| {
+                            let issues = issues.clone();
+                            Box::pin(async move { Ok(issues) })
+                        });
+                }
 
-            mock_git_info
-                .github
-                .expect_get_milestone_issues()
-                .with(eq(milestone.number as u64))
-                .times(1)
-                .returning(move |_| {
-                    let issues = issues.clone();
-                    Box::pin(async move { Ok(issues) })
-                });
+                // Handle milestone creation for Unknown that becomes New
+                if let Some(created_milestone_name) = test_case.created_milestone {
+                    let created_milestone = load_milestone(created_milestone_name);
+                    let milestone_name = match &test_case.milestone_status {
+                        MilestoneStatus::Unknown(name) => name.clone(),
+                        _ => unreachable!(),
+                    };
+
+                    mock_git_info
+                        .github
+                        .expect_create_milestone()
+                        .with(eq(milestone_name))
+                        .times(1)
+                        .returning(move |_| {
+                            let created_milestone = created_milestone.clone();
+                            Box::pin(async move { Ok(created_milestone) })
+                        });
+                }
+            }
         }
 
         // Only set up git and post expectations for success cases
@@ -293,7 +366,7 @@ mod tests {
         let test_cases = vec![
             CreateIssueTestCase {
                 name: "success_with_existing_milestone",
-                milestone_name: "v1.0",
+                milestone_status: MilestoneStatus::Existing { name: "v1.0".to_string(), number: 1 },
                 checklist_name: "Simple Tasks",
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec![],
@@ -302,7 +375,7 @@ mod tests {
             },
             CreateIssueTestCase {
                 name: "success_with_new_milestone",
-                milestone_name: "v2.0",
+                milestone_status: MilestoneStatus::New("v2.0".to_string()),
                 checklist_name: "NCA Analysis",
                 existing_milestones: vec![],
                 existing_issues: vec![],
@@ -310,8 +383,17 @@ mod tests {
                 expected_result: TestResult::Success,
             },
             CreateIssueTestCase {
+                name: "success_with_unknown_milestone",
+                milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
+                checklist_name: "Simple Tasks",
+                existing_milestones: vec!["v1.0"],
+                existing_issues: vec![],
+                created_milestone: None,
+                expected_result: TestResult::Success,
+            },
+            CreateIssueTestCase {
                 name: "fails_when_issue_exists",
-                milestone_name: "v1.0",
+                milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
                 checklist_name: "Simple Tasks",
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec!["test_file_issue"],
@@ -320,7 +402,7 @@ mod tests {
             },
             CreateIssueTestCase {
                 name: "fails_with_nonexistent_checklist",
-                milestone_name: "v1.0",
+                milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
                 checklist_name: "Nonexistent Checklist",
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec![],
@@ -338,7 +420,7 @@ mod tests {
 
             let result = create_issue(
                 PathBuf::from("src/test.rs"),
-                test_case.milestone_name,
+                &test_case.milestone_status,
                 test_case.checklist_name,
                 &config,
                 &mock_git_info,
@@ -414,6 +496,18 @@ mod tests {
                 .map(|&fixture| load_milestone(fixture))
                 .collect();
 
+            // Set up get_milestones expectation
+            mock_api
+                .expect_get_milestones()
+                .times(1)
+                .returning({
+                    let milestones = milestones.clone();
+                    move || {
+                        let milestones = milestones.clone();
+                        Box::pin(async move { Ok(milestones) })
+                    }
+                });
+
             // For existing milestones, expect get_milestone_issues call
             if let Some(found_milestone) = milestones.iter().find(|m| m.title == milestone_name) {
                 mock_api
@@ -440,7 +534,6 @@ mod tests {
             let result = find_or_create_milestone(
                 PathBuf::from("test.rs"),
                 milestone_name,
-                &milestones,
                 &mock_api,
             )
             .await;
