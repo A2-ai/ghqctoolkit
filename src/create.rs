@@ -2,9 +2,7 @@ use core::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Configuration,
-    git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo},
-    issues::QCIssue,
+    git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser}, issues::QCIssue, Configuration
 };
 
 #[derive(Debug, Clone)]
@@ -30,8 +28,15 @@ impl MilestoneStatus {
         file: impl AsRef<Path>,
         git_info: &impl GitHubApi,
     ) -> Result<u64, CreateError> {
+        let file = file.as_ref();
         match self {
-            Self::Existing { number, .. } => return Ok(*number),
+            Self::Existing { number, .. } => {
+                if issue_exists(git_info, *number, file).await? {
+                    return Err(CreateError::IssueExists(file.to_path_buf()))
+                } else {
+                    Ok(*number)
+                }
+            }
             Self::New(milestone_name) => {
                 let m = git_info.create_milestone(milestone_name).await?;
                 log::debug!(
@@ -42,16 +47,38 @@ impl MilestoneStatus {
                 Ok(m.number as u64)
             }
             Self::Unknown(milestone_name) => {
-                find_or_create_milestone(file.as_ref(), milestone_name, git_info).await
+                find_or_create_milestone(file, milestone_name, git_info).await
             }
         }
     }
+}
+
+pub fn validate_assignees(
+    assignees: &[String],
+    repo_users: &[RepoUser],
+) -> Result<(), CreateError> {
+    if assignees.is_empty() {
+        return Ok(());
+    }
+
+    log::debug!("Validating {} assignees", assignees.len());
+    let valid_logins: Vec<String> = repo_users.iter().map(|u| u.login.clone()).collect();
+
+    for assignee in assignees {
+        if !valid_logins.contains(assignee) {
+            return Err(CreateError::InvalidAssignee(assignee.clone()));
+        }
+    }
+
+    log::debug!("All assignees are valid repository users");
+    Ok(())
 }
 
 pub async fn create_issue(
     file: impl AsRef<Path>,
     milestone_status: &MilestoneStatus,
     checklist_name: &str,
+    assignees: Vec<String>,
     configuration: &Configuration,
     git_info: &(impl LocalGitInfo + GitHubApi),
 ) -> Result<(), CreateError> {
@@ -71,7 +98,7 @@ pub async fn create_issue(
         file,
         git_info,
         milestone_id,
-        Vec::new(),
+        assignees,
         checklist_name.to_string(),
         configuration.options.prepended_checklist_notes.clone(),
         checklist_content.to_string(),
@@ -81,6 +108,12 @@ pub async fn create_issue(
     git_info.post_issue(&issue).await?;
 
     Ok(())
+}
+
+async fn issue_exists(git_info: &impl GitHubApi, milestone_num: u64, file: impl AsRef<Path>) -> Result<bool, GitHubApiError> {
+    let issues = git_info.get_milestone_issues(milestone_num).await?;
+    log::debug!("Found {} existing issues in milestone", issues.len());
+    Ok(issues.iter().any(|i| i.title == file.as_ref().to_string_lossy()))
 }
 
 async fn find_or_create_milestone(
@@ -99,12 +132,10 @@ async fn find_or_create_milestone(
             m.number
         );
 
-        let issues = git_info.get_milestone_issues(m.number as u64).await?;
-        log::debug!("Found {} existing issues in milestone", issues.len());
-
-        if issues.iter().any(|i| i.title == file.to_string_lossy()) {
-            return Err(CreateError::IssueExists(file.to_path_buf()));
+        if issue_exists(git_info, m.number as u64, file).await? {
+            return Err(CreateError::IssueExists(file.to_path_buf()))
         }
+
         m.number
     } else {
         let m = git_info.create_milestone(milestone_name).await?;
@@ -128,12 +159,17 @@ pub enum CreateError {
     IssueExists(PathBuf),
     #[error("Checklist name {0} does not exist in configuration directory")]
     NoChecklist(String),
+    #[error("Invalid assignee: {0} is not a valid user in this repository")]
+    InvalidAssignee(String),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{GitAuthor, api::MockGitHubApi, local::MockLocalGitInfo};
+    use crate::git::{
+        api::{MockGitHubApi, RepoUser},
+        local::{GitAuthor, MockLocalGitInfo},
+    };
     use mockall::predicate::*;
     use octocrab::models::{Milestone, issues::Issue};
     use std::fs;
@@ -187,6 +223,9 @@ mod tests {
         async fn post_issue(&self, issue: &QCIssue) -> Result<(), GitHubApiError> {
             self.github.post_issue(issue).await
         }
+        async fn get_users(&self) -> Result<Vec<RepoUser>, GitHubApiError> {
+            self.github.get_users().await
+        }
     }
 
     // Test scenario struct for matrix testing
@@ -195,6 +234,7 @@ mod tests {
         name: &'static str,
         milestone_status: MilestoneStatus,
         checklist_name: &'static str,
+        assignees: Vec<&'static str>,
         existing_milestones: Vec<&'static str>, // fixture names
         existing_issues: Vec<&'static str>,     // fixture names
         created_milestone: Option<&'static str>, // fixture name for new milestone
@@ -206,6 +246,7 @@ mod tests {
         Success,
         IssueExists,
         NoChecklist,
+        InvalidAssignee,
     }
 
     // Helper functions to load test fixtures
@@ -240,91 +281,124 @@ mod tests {
             .map(|&name| load_milestone(name))
             .collect();
 
-        // Set up expectations based on the milestone status
-        match &test_case.milestone_status {
-            MilestoneStatus::Existing { .. } => {
-                // For existing milestones, no GitHub API calls needed for milestone lookup
-                // The ID is already known
-            }
-            MilestoneStatus::New(_) => {
-                // For new milestones, expect create_milestone call
-                if let Some(created_milestone_name) = test_case.created_milestone {
-                    let created_milestone = load_milestone(created_milestone_name);
-                    let milestone_name = match &test_case.milestone_status {
-                        MilestoneStatus::New(name) => name.clone(),
-                        _ => unreachable!(),
-                    };
-
-                    mock_git_info
-                        .github
-                        .expect_create_milestone()
-                        .with(eq(milestone_name))
-                        .times(1)
-                        .returning(move |_| {
-                            let created_milestone = created_milestone.clone();
-                            Box::pin(async move { Ok(created_milestone) })
-                        });
-                }
-            }
-            MilestoneStatus::Unknown(_) => {
-                // For unknown milestones, expect get_milestones and potentially get_milestone_issues calls
-                mock_git_info
-                    .github
-                    .expect_get_milestones()
-                    .times(1)
-                    .returning(move || {
-                        let milestones = milestones.clone();
-                        Box::pin(async move { Ok(milestones) })
-                    });
-
-                // Set up milestone issues expectations for find_or_create_milestone
-                for milestone_fixture in &test_case.existing_milestones {
-                    let milestone = load_milestone(milestone_fixture);
-                    let milestone_name = match &test_case.milestone_status {
-                        MilestoneStatus::Unknown(name) => name.as_str(),
-                        _ => unreachable!(),
-                    };
-                    let issues: Vec<Issue> = if milestone.title == milestone_name {
-                        // For the matching milestone, load the expected issues
-                        test_case
-                            .existing_issues
-                            .iter()
-                            .map(|&name| load_issue(name))
-                            .collect()
-                    } else {
-                        vec![]
-                    };
-
+        // Set up expectations based on the milestone status (skip for InvalidAssignee)
+        if !matches!(test_case.expected_result, TestResult::InvalidAssignee) {
+            match &test_case.milestone_status {
+                MilestoneStatus::Existing { number, .. } => {
+                    // For existing milestones, we need to check if issue already exists
+                    let issues: Vec<Issue> = test_case
+                        .existing_issues
+                        .iter()
+                        .map(|&name| load_issue(name))
+                        .collect();
+                    
                     mock_git_info
                         .github
                         .expect_get_milestone_issues()
-                        .with(eq(milestone.number as u64))
+                        .with(eq(*number))
                         .times(1)
                         .returning(move |_| {
                             let issues = issues.clone();
                             Box::pin(async move { Ok(issues) })
                         });
                 }
+                MilestoneStatus::New(_) => {
+                    // For new milestones, expect create_milestone call
+                    if let Some(created_milestone_name) = test_case.created_milestone {
+                        let created_milestone = load_milestone(created_milestone_name);
+                        let milestone_name = match &test_case.milestone_status {
+                            MilestoneStatus::New(name) => name.clone(),
+                            _ => unreachable!(),
+                        };
 
-                // Handle milestone creation for Unknown that becomes New
-                if let Some(created_milestone_name) = test_case.created_milestone {
-                    let created_milestone = load_milestone(created_milestone_name);
-                    let milestone_name = match &test_case.milestone_status {
-                        MilestoneStatus::Unknown(name) => name.clone(),
-                        _ => unreachable!(),
-                    };
-
+                        mock_git_info
+                            .github
+                            .expect_create_milestone()
+                            .with(eq(milestone_name))
+                            .times(1)
+                            .returning(move |_| {
+                                let created_milestone = created_milestone.clone();
+                                Box::pin(async move { Ok(created_milestone) })
+                            });
+                    }
+                }
+                MilestoneStatus::Unknown(_) => {
+                    // For unknown milestones, expect get_milestones and potentially get_milestone_issues calls
                     mock_git_info
                         .github
-                        .expect_create_milestone()
-                        .with(eq(milestone_name))
+                        .expect_get_milestones()
                         .times(1)
-                        .returning(move |_| {
-                            let created_milestone = created_milestone.clone();
-                            Box::pin(async move { Ok(created_milestone) })
+                        .returning(move || {
+                            let milestones = milestones.clone();
+                            Box::pin(async move { Ok(milestones) })
                         });
+
+                    // Set up milestone issues expectations for find_or_create_milestone
+                    for milestone_fixture in &test_case.existing_milestones {
+                        let milestone = load_milestone(milestone_fixture);
+                        let milestone_name = match &test_case.milestone_status {
+                            MilestoneStatus::Unknown(name) => name.as_str(),
+                            _ => unreachable!(),
+                        };
+                        let issues: Vec<Issue> = if milestone.title == milestone_name {
+                            // For the matching milestone, load the expected issues
+                            test_case
+                                .existing_issues
+                                .iter()
+                                .map(|&name| load_issue(name))
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                        mock_git_info
+                            .github
+                            .expect_get_milestone_issues()
+                            .with(eq(milestone.number as u64))
+                            .times(1)
+                            .returning(move |_| {
+                                let issues = issues.clone();
+                                Box::pin(async move { Ok(issues) })
+                            });
+                    }
+
+                    // Handle milestone creation for Unknown that becomes New
+                    if let Some(created_milestone_name) = test_case.created_milestone {
+                        let created_milestone = load_milestone(created_milestone_name);
+                        let milestone_name = match &test_case.milestone_status {
+                            MilestoneStatus::Unknown(name) => name.clone(),
+                            _ => unreachable!(),
+                        };
+
+                        mock_git_info
+                            .github
+                            .expect_create_milestone()
+                            .with(eq(milestone_name))
+                            .times(1)
+                            .returning(move |_| {
+                                let created_milestone = created_milestone.clone();
+                                Box::pin(async move { Ok(created_milestone) })
+                            });
+                    }
                 }
             }
+        }
+
+        // Set up get_users mock for validation (only needed for cases that don't fail early)
+        if !matches!(test_case.expected_result, TestResult::InvalidAssignee) {
+            let valid_users = get_test_repo_users();
+
+            mock_git_info
+                .github
+                .expect_get_users()
+                .times(0..=1) // May not be called if validation fails early
+                .returning({
+                    let users = valid_users.clone();
+                    move || {
+                        let users = users.clone();
+                        Box::pin(async move { Ok(users) })
+                    }
+                });
         }
 
         // Only set up git and post expectations for success cases
@@ -362,6 +436,24 @@ mod tests {
         mock_git_info
     }
 
+    // Helper function to get test repo users
+    fn get_test_repo_users() -> Vec<RepoUser> {
+        vec![
+            RepoUser {
+                login: "user1".to_string(),
+                name: Some("User One".to_string()),
+            },
+            RepoUser {
+                login: "user2".to_string(),
+                name: Some("User Two".to_string()),
+            },
+            RepoUser {
+                login: "admin".to_string(),
+                name: None,
+            },
+        ]
+    }
+
     #[tokio::test]
     async fn test_create_issue_matrix() {
         let test_cases = vec![
@@ -372,6 +464,7 @@ mod tests {
                     number: 1,
                 },
                 checklist_name: "Simple Tasks",
+                assignees: vec!["user1", "user2"],
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec![],
                 created_milestone: None,
@@ -381,6 +474,7 @@ mod tests {
                 name: "success_with_new_milestone",
                 milestone_status: MilestoneStatus::New("v2.0".to_string()),
                 checklist_name: "NCA Analysis",
+                assignees: vec!["admin"],
                 existing_milestones: vec![],
                 existing_issues: vec![],
                 created_milestone: Some("v2.0"),
@@ -390,6 +484,7 @@ mod tests {
                 name: "success_with_unknown_milestone",
                 milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
                 checklist_name: "Simple Tasks",
+                assignees: vec![],
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec![],
                 created_milestone: None,
@@ -399,6 +494,7 @@ mod tests {
                 name: "fails_when_issue_exists",
                 milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
                 checklist_name: "Simple Tasks",
+                assignees: vec!["user1"],
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec!["test_file_issue"],
                 created_milestone: None,
@@ -408,10 +504,21 @@ mod tests {
                 name: "fails_with_nonexistent_checklist",
                 milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
                 checklist_name: "Nonexistent Checklist",
+                assignees: vec!["user2"],
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec![],
                 created_milestone: None,
                 expected_result: TestResult::NoChecklist,
+            },
+            CreateIssueTestCase {
+                name: "fails_with_invalid_assignee",
+                milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
+                checklist_name: "Simple Tasks",
+                assignees: vec!["invalid_user"],
+                existing_milestones: vec!["v1.0"],
+                existing_issues: vec![],
+                created_milestone: None,
+                expected_result: TestResult::InvalidAssignee,
             },
         ];
 
@@ -421,15 +528,26 @@ mod tests {
             println!("Running test case: {}", test_case.name);
 
             let mock_git_info = setup_mock_git_info(&test_case);
+            let repo_users = get_test_repo_users();
+            let assignees: Vec<String> =
+                test_case.assignees.iter().map(|s| s.to_string()).collect();
 
-            let result = create_issue(
-                PathBuf::from("src/test.rs"),
-                &test_case.milestone_status,
-                test_case.checklist_name,
-                &config,
-                &mock_git_info,
-            )
-            .await;
+            // Validate assignees before calling create_issue (simulating main.rs logic)
+            let validation_result = validate_assignees(&assignees, &repo_users);
+
+            let result = if validation_result.is_err() {
+                validation_result.map(|_| ())
+            } else {
+                create_issue(
+                    PathBuf::from("src/test.rs"),
+                    &test_case.milestone_status,
+                    test_case.checklist_name,
+                    assignees,
+                    &config,
+                    &mock_git_info,
+                )
+                .await
+            };
 
             match test_case.expected_result {
                 TestResult::Success => {
@@ -455,8 +573,50 @@ mod tests {
                     );
                     assert!(matches!(result.unwrap_err(), CreateError::NoChecklist(_)));
                 }
+                TestResult::InvalidAssignee => {
+                    assert!(
+                        result.is_err(),
+                        "Test case '{}' should fail",
+                        test_case.name
+                    );
+                    assert!(matches!(
+                        result.unwrap_err(),
+                        CreateError::InvalidAssignee(_)
+                    ));
+                }
             }
         }
+    }
+
+    #[test]
+    fn test_validate_assignees() {
+        let repo_users = get_test_repo_users();
+
+        // Test valid assignees
+        assert!(
+            validate_assignees(&["user1".to_string(), "user2".to_string()], &repo_users).is_ok()
+        );
+        assert!(validate_assignees(&["admin".to_string()], &repo_users).is_ok());
+        assert!(validate_assignees(&[], &repo_users).is_ok()); // Empty is valid
+
+        // Test invalid assignees
+        let result = validate_assignees(&["invalid_user".to_string()], &repo_users);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            CreateError::InvalidAssignee(_)
+        ));
+
+        // Test mixed valid and invalid
+        let result = validate_assignees(
+            &["user1".to_string(), "invalid_user".to_string()],
+            &repo_users,
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            CreateError::InvalidAssignee(_)
+        ));
     }
 
     #[tokio::test]

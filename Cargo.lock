@@ -2395,6 +2395,7 @@ dependencies = [
  "clap-verbosity-flag",
  "env_logger",
  "etcetera",
+ "futures",
  "gix",
  "inquire",
  "insta",

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::git::{GitAuthor, GitHelpers, LocalGitError, LocalGitInfo};
+use crate::git::{GitHelpers, LocalGitError, LocalGitInfo, local::GitAuthor};
 
 pub struct QCIssue {
     pub(crate) milestone_id: u64,
@@ -92,7 +92,7 @@ impl QCIssue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{GitAuthor, helpers::MockGitHelpers};
+    use crate::git::{helpers::MockGitHelpers, local::GitAuthor};
     use std::path::PathBuf;
 
     fn create_test_issue() -> QCIssue {

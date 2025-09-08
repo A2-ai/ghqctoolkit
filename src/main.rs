@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use qchub::{
-    Configuration, GitInfo, MilestoneStatus, create_issue, prompt_checklist, prompt_file,
-    prompt_milestone,
+    Configuration, GitHubApi, GitInfo, MilestoneStatus, RepoUser, create_issue, prompt_assignees,
+    prompt_checklist, prompt_file, prompt_milestone, validate_assignees,
 };
 use std::path::PathBuf;
 
@@ -39,6 +39,10 @@ enum Commands {
         /// Name of the checklist to use (will prompt if not provided)
         #[arg(short = 'l', long)]
         checklist_name: Option<String>,
+
+        /// Assignees for the issue (usernames)
+        #[arg(short, long)]
+        assignees: Option<Vec<String>>,
     },
 }
 
@@ -55,6 +59,7 @@ async fn main() -> Result<()> {
         .filter(Some("tracing"), log::LevelFilter::Off)
         .filter(Some("hyper_util"), log::LevelFilter::Off)
         .filter(Some("tower"), log::LevelFilter::Off)
+        .filter(Some("mio"), log::LevelFilter::Off)
         .init();
 
     let git_info = GitInfo::from_path(&cli.project)?;
@@ -65,7 +70,11 @@ async fn main() -> Result<()> {
             file,
             config_dir,
             checklist_name,
+            assignees,
         } => {
+            // Fetch users once for validation and interactive prompts
+            let repo_users: Vec<RepoUser> = git_info.get_users().await?;
+
             // Check if we should enter interactive mode or validate all args are provided
             let interactive_mode =
                 milestone.is_none() && file.is_none() && checklist_name.is_none();
@@ -88,31 +97,43 @@ async fn main() -> Result<()> {
                 Configuration::default()
             };
 
-            let (final_milestone_status, final_file, final_checklist) = if interactive_mode {
-                println!("🚀 Welcome to QCHub Interactive Mode!");
-                let milestone_status = prompt_milestone(&git_info).await?;
-                let file = prompt_file(&cli.project)?;
-                let checklist = prompt_checklist(&configuration)?;
+            let (final_milestone_status, final_file, final_checklist, final_assignees) =
+                if interactive_mode {
+                    println!("🚀 Welcome to QCHub Interactive Mode!");
+                    let milestone_status = prompt_milestone(&git_info).await?;
+                    let file = prompt_file(&cli.project)?;
+                    let checklist = prompt_checklist(&configuration)?;
+                    let assignees = prompt_assignees(&repo_users)?;
 
-                println!("\n✨ Creating issue with:");
-                println!("   📊 Milestone: {}", milestone_status);
-                println!("   📁 File: {}", file.display());
-                println!("   📋 Checklist: {}", checklist);
-                println!();
+                    println!("\n✨ Creating issue with:");
+                    println!("   📊 Milestone: {}", milestone_status);
+                    println!("   📁 File: {}", file.display());
+                    println!("   📋 Checklist: {}", checklist);
+                    if !assignees.is_empty() {
+                        println!("   👥 Assignees: {}", assignees.join(", "));
+                    }
+                    println!();
 
-                (milestone_status, file, checklist)
-            } else {
-                (
-                    MilestoneStatus::Unknown(milestone.unwrap()),
-                    file.unwrap(),
-                    checklist_name.unwrap(),
-                )
-            };
+                    (milestone_status, file, checklist, assignees)
+                } else {
+                    let final_assignees = assignees.unwrap_or_default();
+
+                    // Validate assignees if provided
+                    validate_assignees(&final_assignees, &repo_users)?;
+
+                    (
+                        MilestoneStatus::Unknown(milestone.unwrap()),
+                        file.unwrap(),
+                        checklist_name.unwrap(),
+                        final_assignees,
+                    )
+                };
 
             create_issue(
                 &final_file,
                 &final_milestone_status,
                 &final_checklist,
+                final_assignees,
                 &configuration,
                 &git_info,
             )
