@@ -52,7 +52,7 @@ impl GitInfo {
 
         let octocrab = create_authenticated_client(&base_url)?;
 
-        log::info!("Successfully initialized GitInfo for {}/{}", owner, repo);
+        log::debug!("Successfully initialized GitInfo for {}/{}", owner, repo);
 
         Ok(Self {
             owner,
@@ -138,7 +138,7 @@ impl LocalGitInfo for GitInfo {
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, LocalGitError> {
         let commits = self.file_commits(file)?;
 
-        let mut res = Vec::new();
+        let mut res: Vec<GitAuthor> = Vec::new();
 
         for commit_id in commits {
             let commit = self
@@ -149,10 +149,12 @@ impl LocalGitInfo for GitInfo {
                 .map_err(LocalGitError::CommitError)?;
 
             let signature = commit.author().map_err(LocalGitError::SignatureError)?;
-            res.push(GitAuthor {
-                name: signature.name.to_string(),
-                email: signature.email.to_string(),
-            });
+            if !res.iter().any(|author| author.email == signature.email) {
+                res.push(GitAuthor {
+                    name: signature.name.to_string(),
+                    email: signature.email.to_string(),
+                });
+            }
         }
 
         if res.is_empty() {
@@ -251,7 +253,7 @@ impl GitHubApi for GitInfo {
                 .await
                 .map_err(GitHubApiError::APIError)?;
 
-            log::info!(
+            log::debug!(
                 "Successfully created milestone '{}' with ID: {}",
                 milestone_name,
                 milestone.number
@@ -287,7 +289,7 @@ impl GitHubApi for GitInfo {
 
             let issue = builder.send().await.map_err(GitHubApiError::APIError)?;
 
-            log::info!(
+            log::debug!(
                 "Successfully posted issue #'{}' to {}/{}",
                 issue.number,
                 owner,

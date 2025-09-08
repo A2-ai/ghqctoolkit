@@ -17,6 +17,7 @@ anyhow = { version = "1.0", optional = true }
 etcetera = { version = "0.8", optional = true }
 clap-verbosity-flag = { version = "2.0", optional = true }
 env_logger = { version = "0.10", optional = true }
+inquire = { version = "0.7", optional = true }
 
 [features]
 cli = [
@@ -24,7 +25,8 @@ cli = [
     "dep:anyhow", 
     "dep:etcetera",
     "dep:clap-verbosity-flag",
-    "dep:env_logger"
+    "dep:env_logger",
+    "dep:inquire"
 ]
 
 [dev-dependencies]
