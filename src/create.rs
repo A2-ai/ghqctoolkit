@@ -2,7 +2,9 @@ use core::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser}, issues::QCIssue, Configuration
+    Configuration,
+    git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser},
+    issues::QCIssue,
 };
 
 #[derive(Debug, Clone)]
@@ -32,7 +34,7 @@ impl MilestoneStatus {
         match self {
             Self::Existing { number, .. } => {
                 if issue_exists(git_info, *number, file).await? {
-                    return Err(CreateError::IssueExists(file.to_path_buf()))
+                    return Err(CreateError::IssueExists(file.to_path_buf()));
                 } else {
                     Ok(*number)
                 }
@@ -110,10 +112,16 @@ pub async fn create_issue(
     Ok(())
 }
 
-async fn issue_exists(git_info: &impl GitHubApi, milestone_num: u64, file: impl AsRef<Path>) -> Result<bool, GitHubApiError> {
+async fn issue_exists(
+    git_info: &impl GitHubApi,
+    milestone_num: u64,
+    file: impl AsRef<Path>,
+) -> Result<bool, GitHubApiError> {
     let issues = git_info.get_milestone_issues(milestone_num).await?;
     log::debug!("Found {} existing issues in milestone", issues.len());
-    Ok(issues.iter().any(|i| i.title == file.as_ref().to_string_lossy()))
+    Ok(issues
+        .iter()
+        .any(|i| i.title == file.as_ref().to_string_lossy()))
 }
 
 async fn find_or_create_milestone(
@@ -133,7 +141,7 @@ async fn find_or_create_milestone(
         );
 
         if issue_exists(git_info, m.number as u64, file).await? {
-            return Err(CreateError::IssueExists(file.to_path_buf()))
+            return Err(CreateError::IssueExists(file.to_path_buf()));
         }
 
         m.number
@@ -291,7 +299,7 @@ mod tests {
                         .iter()
                         .map(|&name| load_issue(name))
                         .collect();
-                    
+
                     mock_git_info
                         .github
                         .expect_get_milestone_issues()

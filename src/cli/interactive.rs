@@ -97,14 +97,14 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
             if let Ok(entries) = fs::read_dir(&base_path) {
                 let mut files = Vec::new();
                 let mut dirs = Vec::new();
-                
+
                 for entry in entries.flatten() {
                     if let Ok(name) = entry.file_name().into_string() {
                         // Skip hidden files/directories
                         if name.starts_with('.') {
                             continue;
                         }
-                        
+
                         if name.to_lowercase().starts_with(&search_term.to_lowercase()) {
                             let relative_path = if input.contains('/') {
                                 let dir_part = input.rsplitn(2, '/').nth(1).unwrap_or("");
@@ -112,7 +112,7 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
                             } else {
                                 name.clone()
                             };
-                            
+
                             if entry.path().is_file() {
                                 files.push(relative_path);
                             } else if entry.path().is_dir() {
@@ -122,7 +122,7 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
                         }
                     }
                 }
-                
+
                 // Sort directories and files separately, then combine
                 dirs.sort();
                 files.sort();
@@ -150,29 +150,30 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
     };
 
     let validator_dir = current_dir.clone();
-    let file_path = Text::new("📁 Enter file path (Tab for autocomplete, directories shown with /):")
-        .with_autocomplete(file_completer)
-        .with_validator(move |input: &str| {
-            let trimmed = input.trim();
-            if trimmed.is_empty() {
-                Ok(Validation::Invalid("File path cannot be empty".into()))
-            } else if trimmed.ends_with('/') {
-                Ok(Validation::Invalid(
-                    "Cannot select a directory. Please select a file.".into(),
-                ))
-            } else {
-                let path = validator_dir.join(trimmed);
-                if path.exists() && path.is_dir() {
+    let file_path =
+        Text::new("📁 Enter file path (Tab for autocomplete, directories shown with /):")
+            .with_autocomplete(file_completer)
+            .with_validator(move |input: &str| {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    Ok(Validation::Invalid("File path cannot be empty".into()))
+                } else if trimmed.ends_with('/') {
                     Ok(Validation::Invalid(
-                        "Path must be a file, not a directory".into(),
+                        "Cannot select a directory. Please select a file.".into(),
                     ))
                 } else {
-                    Ok(Validation::Valid)
+                    let path = validator_dir.join(trimmed);
+                    if path.exists() && path.is_dir() {
+                        Ok(Validation::Invalid(
+                            "Path must be a file, not a directory".into(),
+                        ))
+                    } else {
+                        Ok(Validation::Valid)
+                    }
                 }
-            }
-        })
-        .prompt()
-        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+            })
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
 
     Ok(PathBuf::from(file_path.trim()))
 }
