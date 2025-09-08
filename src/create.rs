@@ -9,10 +9,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum MilestoneStatus {
-    Existing{
-        name: String,
-        number: u64
-    },
+    Existing { name: String, number: u64 },
     New(String),
     Unknown(String),
 }
@@ -22,15 +19,19 @@ impl fmt::Display for MilestoneStatus {
         match self {
             Self::New(name) => write!(f, "{name} (new)"),
             Self::Existing { name, number } => write!(f, "{name} (existing: #{number})"),
-            Self::Unknown(name) => write!(f, "{name} (unknown)")
+            Self::Unknown(name) => write!(f, "{name} (unknown)"),
         }
     }
 }
 
 impl MilestoneStatus {
-    async fn determine_milestone(&self, file: impl AsRef<Path>, git_info: &impl GitHubApi) -> Result<u64, CreateError> {
+    async fn determine_milestone(
+        &self,
+        file: impl AsRef<Path>,
+        git_info: &impl GitHubApi,
+    ) -> Result<u64, CreateError> {
         match self {
-            Self::Existing{number, ..} => return Ok(*number),
+            Self::Existing { number, .. } => return Ok(*number),
             Self::New(milestone_name) => {
                 let m = git_info.create_milestone(milestone_name).await?;
                 log::debug!(
@@ -366,7 +367,10 @@ mod tests {
         let test_cases = vec![
             CreateIssueTestCase {
                 name: "success_with_existing_milestone",
-                milestone_status: MilestoneStatus::Existing { name: "v1.0".to_string(), number: 1 },
+                milestone_status: MilestoneStatus::Existing {
+                    name: "v1.0".to_string(),
+                    number: 1,
+                },
                 checklist_name: "Simple Tasks",
                 existing_milestones: vec!["v1.0"],
                 existing_issues: vec![],
@@ -497,16 +501,13 @@ mod tests {
                 .collect();
 
             // Set up get_milestones expectation
-            mock_api
-                .expect_get_milestones()
-                .times(1)
-                .returning({
+            mock_api.expect_get_milestones().times(1).returning({
+                let milestones = milestones.clone();
+                move || {
                     let milestones = milestones.clone();
-                    move || {
-                        let milestones = milestones.clone();
-                        Box::pin(async move { Ok(milestones) })
-                    }
-                });
+                    Box::pin(async move { Ok(milestones) })
+                }
+            });
 
             // For existing milestones, expect get_milestone_issues call
             if let Some(found_milestone) = milestones.iter().find(|m| m.title == milestone_name) {
@@ -531,12 +532,8 @@ mod tests {
                     });
             }
 
-            let result = find_or_create_milestone(
-                PathBuf::from("test.rs"),
-                milestone_name,
-                &mock_api,
-            )
-            .await;
+            let result =
+                find_or_create_milestone(PathBuf::from("test.rs"), milestone_name, &mock_api).await;
 
             match expected {
                 Ok(expected_id) => {

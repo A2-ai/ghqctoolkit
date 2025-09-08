@@ -3,11 +3,11 @@ use inquire::{Autocomplete, CustomUserError, Select, Text, validator::Validation
 use std::fs;
 use std::path::PathBuf;
 
-use crate::{git::GitHubApi, Configuration, create::MilestoneStatus};
+use crate::{Configuration, create::MilestoneStatus, git::GitHubApi};
 
 pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStatus> {
     println!("📋 Fetching milestones...");
-    
+
     let milestones = git_info
         .get_milestones()
         .await
@@ -19,7 +19,7 @@ pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStat
         .filter(|m| m.state.as_deref() == Some("open"))
         .map(|m| format!("🎯 {}", m.title))
         .collect();
-    
+
     options.extend(milestone_titles);
 
     if options.len() == 1 {
@@ -32,14 +32,20 @@ pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStat
 
     if selection.starts_with("📝") {
         let existing_names: Vec<String> = milestones.iter().map(|m| m.title.clone()).collect();
-        
+
         let new_milestone = Text::new("Enter new milestone name:")
             .with_validator(move |input: &str| {
                 let trimmed = input.trim();
                 if trimmed.is_empty() {
                     Ok(Validation::Invalid("Milestone name cannot be empty".into()))
                 } else if existing_names.contains(&trimmed.to_string()) {
-                    Ok(Validation::Invalid(format!("Milestone '{}' already exists. Please choose a different name.", trimmed).into()))
+                    Ok(Validation::Invalid(
+                        format!(
+                            "Milestone '{}' already exists. Please choose a different name.",
+                            trimmed
+                        )
+                        .into(),
+                    ))
                 } else {
                     Ok(Validation::Valid)
                 }
@@ -51,7 +57,7 @@ pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStat
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
         if let Some(milestone) = milestones.iter().find(|m| m.title == milestone_title) {
-            Ok(MilestoneStatus::Existing{
+            Ok(MilestoneStatus::Existing {
                 number: milestone.number as u64,
                 name: milestone.title.to_string(),
             })
@@ -69,7 +75,10 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
     }
 
     impl Autocomplete for FileCompleter {
-        fn get_suggestions(&mut self, input: &str) -> std::result::Result<Vec<String>, CustomUserError> {
+        fn get_suggestions(
+            &mut self,
+            input: &str,
+        ) -> std::result::Result<Vec<String>, CustomUserError> {
             let mut suggestions = Vec::new();
 
             let (base_path, search_term) = if input.contains('/') {
@@ -131,7 +140,9 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
             } else {
                 let path = validator_dir.join(input.trim());
                 if path.exists() && path.is_dir() {
-                    Ok(Validation::Invalid("Path must be a file, not a directory".into()))
+                    Ok(Validation::Invalid(
+                        "Path must be a file, not a directory".into(),
+                    ))
                 } else {
                     Ok(Validation::Valid)
                 }
@@ -161,7 +172,10 @@ pub fn prompt_checklist(configuration: &Configuration) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
     // Remove the emoji prefix
-    Ok(selection.strip_prefix("📋 ").unwrap_or(&selection).to_string())
+    Ok(selection
+        .strip_prefix("📋 ")
+        .unwrap_or(&selection)
+        .to_string())
 }
 
 #[cfg(test)]
@@ -171,8 +185,13 @@ mod tests {
     #[test]
     fn test_prompt_checklist() {
         let mut config = Configuration::default();
-        config.checklists.insert("Test Checklist".to_string(), "- [ ] Test item".to_string());
-        config.checklists.insert("Another Checklist".to_string(), "- [ ] Another item".to_string());
+        config
+            .checklists
+            .insert("Test Checklist".to_string(), "- [ ] Test item".to_string());
+        config.checklists.insert(
+            "Another Checklist".to_string(),
+            "- [ ] Another item".to_string(),
+        );
 
         // This test just verifies the function doesn't panic with valid configuration
         // Actual interactive testing would require manual verification

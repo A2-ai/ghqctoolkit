@@ -1,7 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
-use qchub::{create_issue, prompt_checklist, prompt_file, prompt_milestone, Configuration, GitInfo, MilestoneStatus};
+use qchub::{
+    Configuration, GitInfo, MilestoneStatus, create_issue, prompt_checklist, prompt_file,
+    prompt_milestone,
+};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -64,7 +67,8 @@ async fn main() -> Result<()> {
             checklist_name,
         } => {
             // Check if we should enter interactive mode or validate all args are provided
-            let interactive_mode = milestone.is_none() && file.is_none() && checklist_name.is_none();
+            let interactive_mode =
+                milestone.is_none() && file.is_none() && checklist_name.is_none();
             let all_provided = milestone.is_some() && file.is_some() && checklist_name.is_some();
 
             if !interactive_mode && !all_provided {
@@ -73,7 +77,7 @@ async fn main() -> Result<()> {
                 ));
             }
 
-            // Load configuration 
+            // Load configuration
             let configuration = if let Some(c) = config_dir {
                 log::debug!("Loading configuration from: {:?}", c);
                 let mut config = Configuration::from_path(&c)?;
@@ -89,16 +93,20 @@ async fn main() -> Result<()> {
                 let milestone_status = prompt_milestone(&git_info).await?;
                 let file = prompt_file(&cli.project)?;
                 let checklist = prompt_checklist(&configuration)?;
-                
+
                 println!("\n✨ Creating issue with:");
                 println!("   📊 Milestone: {}", milestone_status);
                 println!("   📁 File: {}", file.display());
                 println!("   📋 Checklist: {}", checklist);
                 println!();
-                
+
                 (milestone_status, file, checklist)
             } else {
-                (MilestoneStatus::Unknown(milestone.unwrap()), file.unwrap(), checklist_name.unwrap())
+                (
+                    MilestoneStatus::Unknown(milestone.unwrap()),
+                    file.unwrap(),
+                    checklist_name.unwrap(),
+                )
             };
 
             create_issue(

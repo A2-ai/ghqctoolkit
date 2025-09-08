@@ -161,7 +161,6 @@ impl LocalGitInfo for GitInfo {
             log::warn!("No authors found for file: {:?}", file);
             Err(LocalGitError::AuthorNotFound(file.to_path_buf()))
         } else {
-            
             log::debug!("Found {} unique authors for file: {:?}", res.len(), file);
             Ok(res)
         }
