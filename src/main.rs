@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use qchub::cli::{CliContext, RelevantFileParser};
-use qchub::{Configuration, GitInfo, RelevantFile, create_issue};
+use ghqctoolkit::cli::{CliContext, RelevantFileParser};
+use ghqctoolkit::{Configuration, GitInfo, RelevantFile, create_issue};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
