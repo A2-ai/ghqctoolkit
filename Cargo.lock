@@ -1893,6 +1893,7 @@ dependencies = [
  "fxhash",
  "newline-converter",
  "once_cell",
+ "tempfile",
  "unicode-segmentation",
  "unicode-width",
 ]
@@ -2395,6 +2396,7 @@ dependencies = [
  "clap-verbosity-flag",
  "env_logger",
  "etcetera",
+ "futures",
  "gix",
  "inquire",
  "insta",

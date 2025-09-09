@@ -3,7 +3,11 @@ use inquire::{Autocomplete, CustomUserError, Select, Text, validator::Validation
 use std::fs;
 use std::path::PathBuf;
 
-use crate::{Configuration, create::MilestoneStatus, git::GitHubApi};
+use crate::{
+    Configuration, RelevantFile,
+    create::MilestoneStatus,
+    git::{GitHubApi, RepoUser},
+};
 
 pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStatus> {
     println!("📋 Fetching milestones...");
@@ -91,26 +95,40 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
             };
 
             if let Ok(entries) = fs::read_dir(&base_path) {
+                let mut files = Vec::new();
+                let mut dirs = Vec::new();
+
                 for entry in entries.flatten() {
                     if let Ok(name) = entry.file_name().into_string() {
+                        // Skip hidden files/directories
+                        if name.starts_with('.') {
+                            continue;
+                        }
+
                         if name.to_lowercase().starts_with(&search_term.to_lowercase()) {
-                            // Only include files in suggestions, not directories
+                            let relative_path = if input.contains('/') {
+                                let dir_part = input.rsplitn(2, '/').nth(1).unwrap_or("");
+                                format!("{}/{}", dir_part, name)
+                            } else {
+                                name.clone()
+                            };
+
                             if entry.path().is_file() {
-                                let relative_path = if input.contains('/') {
-                                    let dir_part = input.rsplitn(2, '/').nth(1).unwrap_or("");
-                                    format!("{}/{}", dir_part, name)
-                                } else {
-                                    name
-                                };
-                                suggestions.push(relative_path);
+                                files.push(relative_path);
+                            } else if entry.path().is_dir() {
+                                // Add trailing slash to indicate directory
+                                dirs.push(format!("{}/", relative_path));
                             }
                         }
                     }
                 }
-            }
 
-            // Sort suggestions alphabetically (all files now)
-            suggestions.sort();
+                // Sort directories and files separately, then combine
+                dirs.sort();
+                files.sort();
+                suggestions.extend(dirs);
+                suggestions.extend(files);
+            }
 
             Ok(suggestions)
         }
@@ -132,24 +150,30 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
     };
 
     let validator_dir = current_dir.clone();
-    let file_path = Text::new("📁 Enter file path (use Tab for autocomplete):")
-        .with_autocomplete(file_completer)
-        .with_validator(move |input: &str| {
-            if input.trim().is_empty() {
-                Ok(Validation::Invalid("File path cannot be empty".into()))
-            } else {
-                let path = validator_dir.join(input.trim());
-                if path.exists() && path.is_dir() {
+    let file_path =
+        Text::new("📁 Enter file path (Tab for autocomplete, directories shown with /):")
+            .with_autocomplete(file_completer)
+            .with_validator(move |input: &str| {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    Ok(Validation::Invalid("File path cannot be empty".into()))
+                } else if trimmed.ends_with('/') {
                     Ok(Validation::Invalid(
-                        "Path must be a file, not a directory".into(),
+                        "Cannot select a directory. Please select a file.".into(),
                     ))
                 } else {
-                    Ok(Validation::Valid)
+                    let path = validator_dir.join(trimmed);
+                    if path.exists() && path.is_dir() {
+                        Ok(Validation::Invalid(
+                            "Path must be a file, not a directory".into(),
+                        ))
+                    } else {
+                        Ok(Validation::Valid)
+                    }
                 }
-            }
-        })
-        .prompt()
-        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+            })
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
 
     Ok(PathBuf::from(file_path.trim()))
 }
@@ -176,6 +200,296 @@ pub fn prompt_checklist(configuration: &Configuration) -> Result<String> {
         .strip_prefix("📋 ")
         .unwrap_or(&selection)
         .to_string())
+}
+
+pub fn prompt_assignees(repo_users: &[RepoUser]) -> Result<Vec<String>> {
+    #[derive(Clone)]
+    struct UserCompleter {
+        users: Vec<RepoUser>,
+    }
+
+    impl Autocomplete for UserCompleter {
+        fn get_suggestions(
+            &mut self,
+            input: &str,
+        ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let mut suggestions = Vec::new();
+
+            for user in &self.users {
+                // Search by login or name
+                let matches_login = user.login.to_lowercase().contains(&input.to_lowercase());
+                let matches_name = user
+                    .name
+                    .as_ref()
+                    .map(|name| name.to_lowercase().contains(&input.to_lowercase()))
+                    .unwrap_or(false);
+
+                if matches_login || matches_name {
+                    suggestions.push(user.to_string());
+                }
+            }
+
+            // Sort suggestions alphabetically
+            suggestions.sort();
+
+            Ok(suggestions)
+        }
+
+        fn get_completion(
+            &mut self,
+            _input: &str,
+            highlighted_suggestion: Option<String>,
+        ) -> std::result::Result<inquire::autocompletion::Replacement, CustomUserError> {
+            Ok(match highlighted_suggestion {
+                Some(suggestion) => inquire::autocompletion::Replacement::Some(suggestion),
+                None => inquire::autocompletion::Replacement::None,
+            })
+        }
+    }
+
+    if repo_users.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let user_completer = UserCompleter {
+        users: repo_users.to_vec(),
+    };
+
+    // Create owned copy for validator
+    let valid_logins: Vec<String> = repo_users.iter().map(|u| u.login.clone()).collect();
+
+    let mut assignees = Vec::new();
+
+    loop {
+        let prompt_text = if assignees.is_empty() {
+            "👥 Enter assignee username (use Tab for autocomplete, Enter for none):".to_string()
+        } else {
+            format!(
+                "👥 Enter another assignee (current: {}, use Tab for autocomplete, Enter to finish):",
+                assignees.join(", ")
+            )
+        };
+
+        let valid_logins_for_validator = valid_logins.clone();
+        let input = Text::new(&prompt_text)
+            .with_autocomplete(user_completer.clone())
+            .with_validator(move |input: &str| {
+                if input.trim().is_empty() {
+                    Ok(Validation::Valid) // Empty is valid - means finish
+                } else {
+                    // Validate that the assignee exists and extract login from display format
+                    let login = if let Some(space_pos) = input.find(' ') {
+                        &input[..space_pos]
+                    } else {
+                        input.trim()
+                    };
+
+                    if valid_logins_for_validator.iter().any(|u| u == login) {
+                        Ok(Validation::Valid)
+                    } else {
+                        Ok(Validation::Invalid(
+                            format!("User '{}' not found in repository", login).into(),
+                        ))
+                    }
+                }
+            })
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let trimmed_input = input.trim();
+        if trimmed_input.is_empty() {
+            break; // User pressed Enter without input, finish
+        }
+
+        // Extract login from display format "login (name)" or just "login"
+        let login = if let Some(space_pos) = trimmed_input.find(' ') {
+            trimmed_input[..space_pos].to_string()
+        } else {
+            trimmed_input.to_string()
+        };
+
+        // Avoid duplicates
+        if !assignees.contains(&login) {
+            assignees.push(login);
+        }
+    }
+
+    Ok(assignees)
+}
+
+pub fn prompt_relevant_files(current_dir: &PathBuf) -> Result<Vec<RelevantFile>> {
+    #[derive(Clone)]
+    struct FileCompleter {
+        current_dir: PathBuf,
+    }
+
+    impl Autocomplete for FileCompleter {
+        fn get_suggestions(
+            &mut self,
+            input: &str,
+        ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let mut suggestions = Vec::new();
+
+            let (base_path, search_term) = if input.contains('/') {
+                let mut parts = input.rsplitn(2, '/');
+                let filename = parts.next().unwrap_or("");
+                let dir_path = parts.next().unwrap_or("");
+                (self.current_dir.join(dir_path), filename)
+            } else {
+                (self.current_dir.clone(), input)
+            };
+
+            if let Ok(entries) = fs::read_dir(&base_path) {
+                let mut files = Vec::new();
+                let mut dirs = Vec::new();
+
+                for entry in entries.flatten() {
+                    if let Ok(name) = entry.file_name().into_string() {
+                        // Skip hidden files/directories
+                        if name.starts_with('.') {
+                            continue;
+                        }
+
+                        if name.to_lowercase().starts_with(&search_term.to_lowercase()) {
+                            let relative_path = if input.contains('/') {
+                                let dir_part = input.rsplitn(2, '/').nth(1).unwrap_or("");
+                                format!("{}/{}", dir_part, name)
+                            } else {
+                                name.clone()
+                            };
+
+                            if entry.path().is_file() {
+                                files.push(relative_path);
+                            } else if entry.path().is_dir() {
+                                // Add trailing slash to indicate directory
+                                dirs.push(format!("{}/", relative_path));
+                            }
+                        }
+                    }
+                }
+
+                // Sort directories and files separately, then combine
+                dirs.sort();
+                files.sort();
+                suggestions.extend(dirs);
+                suggestions.extend(files);
+            }
+
+            Ok(suggestions)
+        }
+
+        fn get_completion(
+            &mut self,
+            _input: &str,
+            highlighted_suggestion: Option<String>,
+        ) -> std::result::Result<inquire::autocompletion::Replacement, CustomUserError> {
+            Ok(match highlighted_suggestion {
+                Some(suggestion) => inquire::autocompletion::Replacement::Some(suggestion),
+                None => inquire::autocompletion::Replacement::None,
+            })
+        }
+    }
+
+    let file_completer = FileCompleter {
+        current_dir: current_dir.clone(),
+    };
+
+    let mut relevant_files = Vec::new();
+
+    loop {
+        let prompt_text = if relevant_files.is_empty() {
+            "📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none):".to_string()
+        } else {
+            format!(
+                "📁 Enter another relevant file (current: {}, Tab for autocomplete, Enter to finish):",
+                relevant_files
+                    .iter()
+                    .map(RelevantFile::to_string)
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )
+        };
+
+        let validator_dir = current_dir.clone();
+        let input = Text::new(&prompt_text)
+            .with_autocomplete(file_completer.clone())
+            .with_validator(move |input: &str| {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    Ok(Validation::Valid) // Empty is valid - means finish
+                } else if trimmed.ends_with('/') {
+                    Ok(Validation::Invalid(
+                        "Cannot select a directory. Please select a file.".into(),
+                    ))
+                } else {
+                    let path = validator_dir.join(trimmed);
+                    if path.exists() && path.is_dir() {
+                        Ok(Validation::Invalid(
+                            "Path must be a file, not a directory".into(),
+                        ))
+                    } else {
+                        Ok(Validation::Valid)
+                    }
+                }
+            })
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let trimmed_input = input.trim();
+        if trimmed_input.is_empty() {
+            break; // User pressed Enter without input, finish
+        }
+
+        let file_path = PathBuf::from(trimmed_input);
+
+        // Suggest a default name based on the filename
+        let suggested_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(trimmed_input);
+
+        // Prompt for the name with the suggested default
+        let name_prompt = format!(
+            "📝 Enter name for this file (default: '{}'):",
+            suggested_name
+        );
+        let name_input = Text::new(&name_prompt)
+            .with_default(suggested_name)
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let final_name = if name_input.trim().is_empty() {
+            suggested_name.to_string()
+        } else {
+            name_input.trim().to_string()
+        };
+
+        // Prompt for optional notes (supports \n for line breaks)
+        let notes_input = Text::new(
+            "📝 Enter optional notes for this file (use \\n for line breaks, Enter to finish):",
+        )
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let final_notes = if notes_input.trim().is_empty() {
+            None
+        } else {
+            Some(notes_input.trim().to_string())
+        };
+
+        let relevant_file = RelevantFile {
+            name: final_name,
+            path: file_path.clone(),
+            notes: final_notes,
+        };
+
+        // Avoid duplicates (check by path)
+        if !relevant_files.iter().any(|f| f.path == file_path) {
+            relevant_files.push(relevant_file);
+        }
+    }
+
+    Ok(relevant_files)
 }
 
 #[cfg(test)]

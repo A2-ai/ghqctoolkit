@@ -8,11 +8,12 @@ pub(crate) mod auth;
 pub(crate) mod helpers;
 pub(crate) mod local;
 
-pub use api::{GitHubApi, GitHubApiError};
+pub use api::{GitHubApi, GitHubApiError, RepoUser};
 pub use auth::create_authenticated_client;
 pub use helpers::{GitHelpers, GitInfoError, parse_github_url};
-pub use local::{GitAuthor, LocalGitError, LocalGitInfo};
+pub use local::{LocalGitError, LocalGitInfo};
 
+use crate::git::local::GitAuthor;
 use crate::issues::QCIssue;
 
 #[derive(Debug, Clone)]
@@ -284,7 +285,7 @@ impl GitHubApi for GitInfo {
                 .create(title.clone())
                 .body(body)
                 .milestone(Some(milestone_id))
-                .labels(vec!["ghqc".to_string(), branch])
+                .labels(vec!["QC".to_string(), branch])
                 .assignees(assignees);
 
             let issue = builder.send().await.map_err(GitHubApiError::APIError)?;
@@ -299,17 +300,147 @@ impl GitHubApi for GitInfo {
             Ok(())
         }
     }
+
+    fn get_users(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<RepoUser>, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+
+        async move {
+            log::debug!("Fetching assignees for repository {}/{}", owner, repo);
+
+            let mut all_assignees = Vec::new();
+            let mut page = 1;
+            let per_page = 100; // Maximum per page
+
+            loop {
+                let url = format!(
+                    "/repos/{}/{}/assignees?per_page={}&page={}",
+                    &owner, &repo, per_page, page
+                );
+
+                let assignees: Vec<serde_json::Value> = octocrab
+                    .get(url, None::<&()>)
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+
+                if assignees.is_empty() {
+                    break; // No more pages
+                }
+
+                log::debug!("Fetched {} assignees on page {}", assignees.len(), page);
+                all_assignees.extend(assignees);
+                page += 1;
+
+                // Safety check to prevent infinite loops
+                if page > 100 {
+                    log::warn!("Reached maximum page limit (100) for assignees");
+                    break;
+                }
+            }
+
+            log::debug!("Total assignees fetched: {}", all_assignees.len());
+
+            // Parallelize user detail fetching
+            let user_futures: Vec<_> = all_assignees
+                .into_iter()
+                .filter_map(|assignee| {
+                    assignee.get("login")
+                        .and_then(|v| v.as_str())
+                        .map(|username| {
+                            let octocrab = octocrab.clone();
+                            let username = username.to_string();
+                            async move {
+                                log::debug!("Fetching user details for: {}", username);
+
+                                let mut res = RepoUser {
+                                    login: username.to_string(),
+                                    name: None,
+                                };
+
+                                let user: Result<serde_json::Value, _> = octocrab
+                                    .get(format!("/users/{}", username), None::<&()>)
+                                    .await;
+
+                                match user {
+                                    Ok(user_data) => {
+                                        res.name = user_data
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Failed to fetch user details for {}: {}, using login only", username, e);
+                                    }
+                                }
+
+                                res
+                            }
+                        })
+                })
+                .collect();
+
+            // Execute all futures concurrently
+            let users: Vec<RepoUser> = futures::future::join_all(user_futures).await;
+
+            log::debug!(
+                "Successfully fetched {} assignees with user details",
+                users.len()
+            );
+            Ok(users)
+        }
+    }
+
+    fn create_labels_if_needed(
+        &self,
+        branch: &str,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let branch = branch.to_string();
+
+        async move {
+            log::debug!("Fetching labels...");
+            let labels = octocrab
+                .issues(&owner, &repo)
+                .list_labels_for_repo()
+                .send()
+                .await
+                .map_err(GitHubApiError::APIError)?;
+            log::debug!("Found {} labels", labels.items.len());
+
+            if !labels.items.iter().any(|l| l.name == "QC") {
+                log::debug!("QC label does not exist. Creating...");
+                octocrab
+                    .issues(&owner, &repo)
+                    .create_label("QC", "FFCB05", "QC Issue")
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+            }
+
+            if !labels.items.iter().any(|l| l.name == branch) {
+                log::debug!("Branch label ({branch}) does not exist. Creating...");
+                octocrab
+                    .issues(&owner, &repo)
+                    .create_label(&branch, "00274C", "QC Branch")
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+            }
+
+            Ok(())
+        }
+    }
 }
 
 impl GitHelpers for GitInfo {
-    fn file_content_url(&self, commit: &str, file: &Path) -> String {
+    fn file_content_url(&self, git_ref: &str, file: &Path) -> String {
         let file = file.to_string_lossy().replace(" ", "%20");
         format!(
             "{}/{}/{}/blob/{}/{file}",
-            self.base_url,
-            self.owner,
-            self.repo,
-            &commit[..7]
+            self.base_url, self.owner, self.repo, &git_ref
         )
     }
 }
