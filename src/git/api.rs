@@ -166,7 +166,7 @@ impl GitHubApi for GitInfo {
                 .create(title.clone())
                 .body(body)
                 .milestone(Some(milestone_id))
-                .labels(vec!["QC".to_string(), branch])
+                .labels(vec!["ghqc".to_string(), branch])
                 .assignees(assignees);
 
             let issue = builder.send().await.map_err(GitHubApiError::APIError)?;

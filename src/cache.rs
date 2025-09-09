@@ -261,7 +261,14 @@ mod tests {
         let user_path = cache.path(&["users", "details"], "user1");
         assert!(user_path.ends_with("user1.json"));
         assert!(user_path.parent().unwrap().ends_with("details"));
-        assert!(user_path.parent().unwrap().parent().unwrap().ends_with("users"));
+        assert!(
+            user_path
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .ends_with("users")
+        );
 
         // Verify reading works
         let cached_assignees: Option<Vec<String>> = cache.read(&["users"], "assignees");
