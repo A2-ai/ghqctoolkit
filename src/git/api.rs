@@ -39,6 +39,10 @@ pub trait GitHubApi {
         issue: &QCIssue,
     ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
     fn get_users(&self) -> impl Future<Output = Result<Vec<RepoUser>, GitHubApiError>> + Send;
+    fn create_labels_if_needed(
+        &self,
+        branch: &str,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
 }
 
 #[derive(thiserror::Error, Debug)]

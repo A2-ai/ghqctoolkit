@@ -285,7 +285,7 @@ impl GitHubApi for GitInfo {
                 .create(title.clone())
                 .body(body)
                 .milestone(Some(milestone_id))
-                .labels(vec!["ghqc".to_string(), branch])
+                .labels(vec!["QC".to_string(), branch])
                 .assignees(assignees);
 
             let issue = builder.send().await.map_err(GitHubApiError::APIError)?;
@@ -390,6 +390,47 @@ impl GitHubApi for GitInfo {
                 users.len()
             );
             Ok(users)
+        }
+    }
+
+    fn create_labels_if_needed(
+        &self,
+        branch: &str,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let branch = branch.to_string();
+
+        async move {
+            log::debug!("Fetching labels...");
+            let labels = octocrab
+                .issues(&owner, &repo)
+                .list_labels_for_repo()
+                .send()
+                .await
+                .map_err(GitHubApiError::APIError)?;
+            log::debug!("Found {} labels", labels.items.len());
+
+            if !labels.items.iter().any(|l| l.name == "QC") {
+                log::debug!("QC label does not exist. Creating...");
+                octocrab
+                    .issues(&owner, &repo)
+                    .create_label("QC", "FFCB05", "QC Issue")
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+            }
+
+            if !labels.items.iter().any(|l| l.name == branch) {
+                log::debug!("Branch label ({branch}) does not exist. Creating...");
+                octocrab
+                    .issues(&owner, &repo)
+                    .create_label(&branch, "00274C", "QC Branch")
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+            }
+
+            Ok(())
         }
     }
 }

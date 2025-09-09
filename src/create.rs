@@ -108,6 +108,8 @@ pub async fn create_issue(
         checklist_content.to_string(),
     )?;
 
+    git_info.create_labels_if_needed(&issue.branch).await?;
+
     log::debug!("Posting issue to GitHub: {}", issue.title());
     git_info.post_issue(&issue).await?;
 
@@ -235,6 +237,9 @@ mod tests {
         }
         async fn get_users(&self) -> Result<Vec<RepoUser>, GitHubApiError> {
             self.github.get_users().await
+        }
+        async fn create_labels_if_needed(&self, branch: &str) -> Result<(), GitHubApiError> {
+            self.github.create_labels_if_needed(branch).await
         }
     }
 
