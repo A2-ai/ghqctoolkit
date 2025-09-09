@@ -3,8 +3,8 @@ use std::future::Future;
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
 
-use crate::issues::QCIssue;
 use crate::GitInfo;
+use crate::issues::QCIssue;
 #[cfg(test)]
 use mockall::automock;
 
@@ -29,7 +29,7 @@ pub trait GitHubApi {
     -> impl Future<Output = Result<Vec<Milestone>, GitHubApiError>> + Send;
     fn get_milestone_issues(
         &self,
-        milestone_id: u64,
+        milestone: &Milestone,
     ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
     fn create_milestone(
         &self,
@@ -46,6 +46,8 @@ pub trait GitHubApi {
     ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
 }
 
+// TODO: implement caching for milestones and issues. Frequent updates and comments must be considered about each,
+// so not implementing until comment functionality is included
 impl GitHubApi for GitInfo {
     fn get_milestones(
         &self,
@@ -71,11 +73,12 @@ impl GitHubApi for GitInfo {
 
     fn get_milestone_issues(
         &self,
-        milestone_id: u64,
+        milestone: &Milestone,
     ) -> impl std::future::Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
+        let milestone_id = milestone.number as u64;
 
         async move {
             log::debug!(
@@ -190,16 +193,20 @@ impl GitHubApi for GitInfo {
         async move {
             // Try to get assignees from cache first (using default TTL from DiskCache)
             let cached_assignees: Option<Vec<String>> = if let Some(ref cache) = cache {
-                cache.read::<Vec<String>>("assignees")
+                cache.read::<Vec<String>>(&["users"], "assignees")
             } else {
                 None
             };
 
             let assignee_logins = if let Some(logins) = cached_assignees {
-                log::debug!("Using cached assignees for {}/{}", owner, repo);
+                log::trace!("Using cached assignees for {}/{}", owner, repo);
                 logins
             } else {
-                log::debug!("Fetching assignees for repository {}/{}", owner, repo);
+                log::debug!(
+                    "Assignees not found or expired in cache for repository {}/{}. Fetching...",
+                    owner,
+                    repo
+                );
 
                 let mut all_assignees = Vec::new();
                 let mut page = 1;
@@ -237,7 +244,8 @@ impl GitHubApi for GitInfo {
                 let logins: Vec<String> = all_assignees
                     .into_iter()
                     .filter_map(|assignee| {
-                        assignee.get("login")
+                        assignee
+                            .get("login")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                     })
@@ -245,7 +253,7 @@ impl GitHubApi for GitInfo {
 
                 // Cache the assignee list with TTL (temporary cache)
                 if let Some(ref cache) = cache {
-                    if let Err(e) = cache.write("assignees", &logins, true) {
+                    if let Err(e) = cache.write(&["users"], "assignees", &logins, true) {
                         log::warn!("Failed to cache assignees: {}", e);
                     }
                 }
@@ -264,17 +272,17 @@ impl GitHubApi for GitInfo {
                     async move {
                         // Try to get user details from cache first (permanent cache)
                         let cached_user: Option<RepoUser> = if let Some(ref cache) = cache {
-                            cache.read::<RepoUser>(&format!("user_{}", username))
+                            cache.read::<RepoUser>(&["users", "details"], &username)
                         } else {
                             None
                         };
 
                         if let Some(user) = cached_user {
-                            log::debug!("Using cached user details for: {}", username);
+                            log::trace!("Using cached user details for: {}", username);
                             return user;
                         }
 
-                        log::debug!("Fetching user details for: {}", username);
+                        log::debug!("User details for {username} not found in cache. Fetching...");
 
                         let mut res = RepoUser {
                             login: username.to_string(),
@@ -293,13 +301,19 @@ impl GitHubApi for GitInfo {
                                     .map(|s| s.to_string());
                             }
                             Err(e) => {
-                                log::warn!("Failed to fetch user details for {}: {}, using login only", username, e);
+                                log::warn!(
+                                    "Failed to fetch user details for {}: {}, using login only",
+                                    username,
+                                    e
+                                );
                             }
                         }
 
                         // Cache user details permanently (no TTL)
                         if let Some(ref cache) = cache {
-                            if let Err(e) = cache.write(&format!("user_{}", username), &res, false) {
+                            if let Err(e) =
+                                cache.write(&["users", "details"], &username, &res, false)
+                            {
                                 log::warn!("Failed to cache user details for {}: {}", username, e);
                             }
                         }
@@ -330,33 +344,79 @@ impl GitHubApi for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let branch = branch.to_string();
+        let cache = self.cache.clone();
 
         async move {
-            log::debug!("Fetching labels...");
-            let labels = octocrab
-                .issues(&owner, &repo)
-                .list_labels_for_repo()
-                .send()
-                .await
-                .map_err(GitHubApiError::APIError)?;
-            log::debug!("Found {} labels", labels.items.len());
+            // Try to get labels from cache first
+            let cached_labels: Option<Vec<String>> = if let Some(ref cache) = cache {
+                cache.read::<Vec<String>>(&["labels"], "names")
+            } else {
+                None
+            };
 
-            if !labels.items.iter().any(|l| l.name == "QC") {
-                log::debug!("QC label does not exist. Creating...");
-                octocrab
+            let label_names = if let Some(names) = cached_labels {
+                log::trace!("Using cached label names for {}/{}", owner, repo);
+                names
+            } else {
+                log::debug!(
+                    "Label names not found or expired in cache for repository {}/{}. Fetching...",
+                    owner,
+                    repo
+                );
+                let labels = octocrab
                     .issues(&owner, &repo)
-                    .create_label("QC", "FFCB05", "QC Issue")
+                    .list_labels_for_repo()
+                    .send()
                     .await
                     .map_err(GitHubApiError::APIError)?;
+                log::debug!("Found {} labels", labels.items.len());
+
+                let names: Vec<String> = labels.items.into_iter().map(|l| l.name).collect();
+
+                // Cache the label names with TTL
+                if let Some(ref cache) = cache {
+                    if let Err(e) = cache.write(&["labels"], "names", &names, true) {
+                        log::warn!("Failed to cache label names: {}", e);
+                    }
+                }
+
+                names
+            };
+
+            let original_count = label_names.len();
+            let mut updated_labels = label_names;
+
+            if !updated_labels.iter().any(|name| name == "ghqc") {
+                log::debug!("ghqc label does not exist. Creating...");
+                octocrab
+                    .issues(&owner, &repo)
+                    .create_label("ghqc", "FFCB05", "ghqc Issue")
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+
+                // Add the new label to our cache
+                updated_labels.push("ghqc".to_string());
             }
 
-            if !labels.items.iter().any(|l| l.name == branch) {
+            if !updated_labels.iter().any(|name| name == &branch) {
                 log::debug!("Branch label ({branch}) does not exist. Creating...");
                 octocrab
                     .issues(&owner, &repo)
                     .create_label(&branch, "00274C", "QC Branch")
                     .await
                     .map_err(GitHubApiError::APIError)?;
+
+                // Add the new label to our cache
+                updated_labels.push(branch.clone());
+            }
+
+            // Update cache with new labels if we created any
+            if updated_labels.len() != original_count {
+                if let Some(ref cache) = cache {
+                    if let Err(e) = cache.write(&["labels"], "names", &updated_labels, true) {
+                        log::warn!("Failed to update cached label names: {}", e);
+                    }
+                }
             }
 
             Ok(())

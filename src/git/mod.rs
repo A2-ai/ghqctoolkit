@@ -57,7 +57,7 @@ impl GitInfo {
             Ok(cache) => {
                 log::debug!("Cache initialized for {}/{}", owner, repo);
                 Some(cache)
-            },
+            }
             Err(e) => {
                 log::warn!("Failed to initialize cache for {}/{}: {}", owner, repo, e);
                 None
@@ -76,4 +76,3 @@ impl GitInfo {
         })
     }
 }
-
