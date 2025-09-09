@@ -1,11 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
-use qchub::{
-    Configuration, GitHubApi, GitInfo, MilestoneStatus, RepoUser, create_issue, prompt_assignees,
-    prompt_checklist, prompt_file, prompt_milestone, validate_assignees,
-};
 use std::path::PathBuf;
+
+use qchub::cli::CliContext;
+use qchub::{Configuration, GitInfo, RelevantFile, RelevantFileParser, create_issue};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -23,7 +22,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    CreateIssue {
+    /// Issue management commands
+    Issue {
+        #[command(subcommand)]
+        issue_command: IssueCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum IssueCommands {
+    /// Create a new issue for quality control
+    Create {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
         milestone: Option<String>,
@@ -43,9 +52,14 @@ enum Commands {
         /// Assignees for the issue (usernames)
         #[arg(short, long)]
         assignees: Option<Vec<String>>,
+
+        /// Additional relevant files for the issue (format: "name:path" or just "path")
+        #[arg(short = 'r', long, value_parser = RelevantFileParser)]
+        relevant_files: Option<Vec<RelevantFile>>,
     },
 }
 
+#[cfg(feature = "cli")]
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -65,84 +79,59 @@ async fn main() -> Result<()> {
     let git_info = GitInfo::from_path(&cli.project)?;
 
     match cli.command {
-        Commands::CreateIssue {
-            milestone,
-            file,
-            config_dir,
-            checklist_name,
-            assignees,
-        } => {
-            // Fetch users once for validation and interactive prompts
-            let repo_users: Vec<RepoUser> = git_info.get_users().await?;
-
-            // Check if we should enter interactive mode or validate all args are provided
-            let interactive_mode =
-                milestone.is_none() && file.is_none() && checklist_name.is_none();
-            let all_provided = milestone.is_some() && file.is_some() && checklist_name.is_some();
-
-            if !interactive_mode && !all_provided {
-                return Err(anyhow::anyhow!(
-                    "Either provide all three arguments (--milestone, --file, --checklist-name) or none to enter interactive mode"
-                ));
-            }
-
-            // Load configuration
-            let configuration = if let Some(c) = config_dir {
-                log::debug!("Loading configuration from: {:?}", c);
-                let mut config = Configuration::from_path(&c)?;
-                config.load_checklists()?;
-                config
-            } else {
-                log::debug!("Using default configuration");
-                Configuration::default()
-            };
-
-            let (final_milestone_status, final_file, final_checklist, final_assignees) =
-                if interactive_mode {
-                    println!("🚀 Welcome to QCHub Interactive Mode!");
-                    let milestone_status = prompt_milestone(&git_info).await?;
-                    let file = prompt_file(&cli.project)?;
-                    let checklist = prompt_checklist(&configuration)?;
-                    let assignees = prompt_assignees(&repo_users)?;
-
-                    println!("\n✨ Creating issue with:");
-                    println!("   📊 Milestone: {}", milestone_status);
-                    println!("   📁 File: {}", file.display());
-                    println!("   📋 Checklist: {}", checklist);
-                    if !assignees.is_empty() {
-                        println!("   👥 Assignees: {}", assignees.join(", "));
-                    }
-                    println!();
-
-                    (milestone_status, file, checklist, assignees)
+        Commands::Issue { issue_command } => match issue_command {
+            IssueCommands::Create {
+                milestone,
+                file,
+                config_dir,
+                checklist_name,
+                assignees,
+                relevant_files,
+            } => {
+                let configuartion = if let Some(c) = config_dir {
+                    Configuration::from_path(&c)?
                 } else {
-                    let final_assignees = assignees.unwrap_or_default();
-
-                    // Validate assignees if provided
-                    validate_assignees(&final_assignees, &repo_users)?;
-
-                    (
-                        MilestoneStatus::Unknown(milestone.unwrap()),
-                        file.unwrap(),
-                        checklist_name.unwrap(),
-                        final_assignees,
-                    )
+                    log::debug!("Configuration not specified, using default.");
+                    Configuration::default()
                 };
 
-            create_issue(
-                &final_file,
-                &final_milestone_status,
-                &final_checklist,
-                final_assignees,
-                &configuration,
-                &git_info,
-            )
-            .await?;
+                let context = match (milestone, file, checklist_name) {
+                    (Some(milestone), Some(file), Some(checklist_name)) => {
+                        CliContext::from_args(
+                            milestone,
+                            file,
+                            checklist_name,
+                            assignees,
+                            relevant_files,
+                            configuartion,
+                            git_info,
+                        )
+                        .await?
+                    }
+                    (None, None, None) => {
+                        CliContext::from_interactive(&cli.project, configuartion, git_info).await?
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Either provide all three arguments (--milestone, --file, --checklist-name) or none to enter interactive mode"
+                        ));
+                    }
+                };
 
-            if interactive_mode {
+                create_issue(
+                    &context.file,
+                    &context.milestone_status,
+                    &context.checklist,
+                    context.assignees,
+                    &context.configuration,
+                    &context.git_info,
+                    context.relevant_files,
+                )
+                .await?;
+
                 println!("✅ Issue created successfully!");
             }
-        }
+        },
     }
 
     Ok(())

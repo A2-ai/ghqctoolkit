@@ -2,7 +2,7 @@ use core::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Configuration,
+    Configuration, RelevantFile,
     git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser},
     issues::QCIssue,
 };
@@ -83,6 +83,7 @@ pub async fn create_issue(
     assignees: Vec<String>,
     configuration: &Configuration,
     git_info: &(impl LocalGitInfo + GitHubApi),
+    relevant_files: Vec<RelevantFile>,
 ) -> Result<(), CreateError> {
     let file = file.as_ref();
 
@@ -101,6 +102,7 @@ pub async fn create_issue(
         git_info,
         milestone_id,
         assignees,
+        relevant_files,
         checklist_name.to_string(),
         configuration.options.prepended_checklist_notes.clone(),
         checklist_content.to_string(),
@@ -553,6 +555,7 @@ mod tests {
                     assignees,
                     &config,
                     &mock_git_info,
+                    vec![],
                 )
                 .await
             };

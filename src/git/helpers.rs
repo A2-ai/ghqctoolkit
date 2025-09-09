@@ -5,7 +5,7 @@ use mockall::automock;
 
 #[cfg_attr(test, automock)]
 pub trait GitHelpers {
-    fn file_content_url(&self, commit: &str, file: &Path) -> String;
+    fn file_content_url(&self, git_ref: &str, file: &Path) -> String;
 }
 
 pub fn parse_github_url(url: &str) -> Result<(String, String, String), GitInfoError> {

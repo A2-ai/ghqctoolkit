@@ -16,27 +16,30 @@ cargo test --all-features
 cargo test --all-features create::tests::test_create_issue_matrix
 
 # Run the CLI binary (requires --all-features)
-cargo run --all-features -- create-issue --help
+cargo run --all-features -- issue create --help
 ```
 
 ### Common CLI Usage Examples
 ```bash
 # Interactive mode (prompts for all inputs)
-cargo run --all-features -- create-issue
+cargo run --all-features -- issue create
 
 # Non-interactive mode (all parameters required)
-cargo run --all-features -- create-issue \
+cargo run --all-features -- issue create \
   --milestone "v1.0" \
   --file "src/main.rs" \
   --checklist-name "Simple Tasks" \
   --assignees user1 user2
 
 # With custom configuration
-cargo run --all-features -- create-issue \
+cargo run --all-features -- issue create \
   --config-dir ./custom-config \
   --milestone "Sprint 1" \
   --file "src/lib.rs" \
   --checklist-name "Code Review"
+
+# Check help for all issue commands
+cargo run --all-features -- issue --help
 ```
 
 ## Architecture Overview
