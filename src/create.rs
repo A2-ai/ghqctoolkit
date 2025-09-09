@@ -1,5 +1,10 @@
 use core::fmt;
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
+
+use octocrab::models::Milestone;
 
 use crate::{
     Configuration, RelevantFile,
@@ -9,7 +14,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum MilestoneStatus {
-    Existing { name: String, number: u64 },
+    Existing(Milestone),
     New(String),
     Unknown(String),
 }
@@ -18,25 +23,27 @@ impl fmt::Display for MilestoneStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::New(name) => write!(f, "{name} (new)"),
-            Self::Existing { name, number } => write!(f, "{name} (existing: #{number})"),
+            Self::Existing(milestone) => {
+                write!(f, "{} (existing: #{})", milestone.title, milestone.number)
+            }
             Self::Unknown(name) => write!(f, "{name} (unknown)"),
         }
     }
 }
 
 impl MilestoneStatus {
-    async fn determine_milestone(
-        &self,
+    async fn determine_milestone<'a>(
+        &'a self,
         file: impl AsRef<Path>,
         git_info: &impl GitHubApi,
-    ) -> Result<u64, CreateError> {
+    ) -> Result<Cow<'a, Milestone>, CreateError> {
         let file = file.as_ref();
         match self {
-            Self::Existing { number, .. } => {
-                if issue_exists(git_info, *number, file).await? {
+            Self::Existing(milestone) => {
+                if issue_exists(git_info, milestone, file).await? {
                     return Err(CreateError::IssueExists(file.to_path_buf()));
                 } else {
-                    Ok(*number)
+                    Ok(Cow::Borrowed(milestone))
                 }
             }
             Self::New(milestone_name) => {
@@ -46,10 +53,12 @@ impl MilestoneStatus {
                     milestone_name,
                     m.number
                 );
-                Ok(m.number as u64)
+                Ok(Cow::Owned(m))
             }
             Self::Unknown(milestone_name) => {
-                find_or_create_milestone(file, milestone_name, git_info).await
+                find_or_create_milestone(file, milestone_name, git_info)
+                    .await
+                    .map(|m| Cow::Owned(m))
             }
         }
     }
@@ -87,7 +96,7 @@ pub async fn create_issue(
 ) -> Result<(), CreateError> {
     let file = file.as_ref();
 
-    let milestone_id = milestone_status.determine_milestone(file, git_info).await?;
+    let milestone = milestone_status.determine_milestone(file, git_info).await?;
 
     let checklist_content = match configuration.checklists.get(checklist_name) {
         Some(content) => {
@@ -100,7 +109,7 @@ pub async fn create_issue(
     let issue = QCIssue::new(
         file,
         git_info,
-        milestone_id,
+        milestone.number as u64,
         assignees,
         relevant_files,
         checklist_name.to_string(),
@@ -110,7 +119,6 @@ pub async fn create_issue(
 
     git_info.create_labels_if_needed(&issue.branch).await?;
 
-    log::debug!("Posting issue to GitHub: {}", issue.title());
     git_info.post_issue(&issue).await?;
 
     Ok(())
@@ -118,37 +126,37 @@ pub async fn create_issue(
 
 async fn issue_exists(
     git_info: &impl GitHubApi,
-    milestone_num: u64,
+    milestone: &Milestone,
     file: impl AsRef<Path>,
 ) -> Result<bool, GitHubApiError> {
-    let issues = git_info.get_milestone_issues(milestone_num).await?;
+    let issues = git_info.get_milestone_issues(milestone).await?;
     log::debug!("Found {} existing issues in milestone", issues.len());
     Ok(issues
         .iter()
         .any(|i| i.title == file.as_ref().to_string_lossy()))
 }
 
-async fn find_or_create_milestone(
+async fn find_or_create_milestone<'a>(
     file: impl AsRef<Path>,
     milestone_name: &str,
     git_info: &impl GitHubApi,
-) -> Result<u64, CreateError> {
+) -> Result<Milestone, CreateError> {
     let file = file.as_ref();
     let milestones = git_info.get_milestones().await?;
     log::debug!("Found {} existing milestones", milestones.len());
 
-    let id = if let Some(m) = milestones.iter().find(|m| m.title == milestone_name) {
+    let milestone = if let Some(m) = milestones.into_iter().find(|m| m.title == milestone_name) {
         log::debug!(
             "Found existing milestone '{}' with ID: {}",
             milestone_name,
             m.number
         );
 
-        if issue_exists(git_info, m.number as u64, file).await? {
+        if issue_exists(git_info, &m, file).await? {
             return Err(CreateError::IssueExists(file.to_path_buf()));
         }
 
-        m.number
+        m
     } else {
         let m = git_info.create_milestone(milestone_name).await?;
         log::debug!(
@@ -156,9 +164,9 @@ async fn find_or_create_milestone(
             milestone_name,
             m.number
         );
-        m.number
+        m
     };
-    Ok(id as u64)
+    Ok(milestone)
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -220,9 +228,9 @@ mod tests {
 
         async fn get_milestone_issues(
             &self,
-            milestone_id: u64,
+            milestone: &Milestone,
         ) -> Result<Vec<Issue>, GitHubApiError> {
-            self.github.get_milestone_issues(milestone_id).await
+            self.github.get_milestone_issues(milestone).await
         }
 
         async fn create_milestone(
@@ -299,7 +307,7 @@ mod tests {
         // Set up expectations based on the milestone status (skip for InvalidAssignee)
         if !matches!(test_case.expected_result, TestResult::InvalidAssignee) {
             match &test_case.milestone_status {
-                MilestoneStatus::Existing { number, .. } => {
+                MilestoneStatus::Existing(milestone) => {
                     // For existing milestones, we need to check if issue already exists
                     let issues: Vec<Issue> = test_case
                         .existing_issues
@@ -307,10 +315,11 @@ mod tests {
                         .map(|&name| load_issue(name))
                         .collect();
 
+                    let expected_milestone = milestone.clone();
                     mock_git_info
                         .github
                         .expect_get_milestone_issues()
-                        .with(eq(*number))
+                        .withf(move |m: &Milestone| m.number == expected_milestone.number)
                         .times(1)
                         .returning(move |_| {
                             let issues = issues.clone();
@@ -366,10 +375,11 @@ mod tests {
                             vec![]
                         };
 
+                        let expected_milestone_number = milestone.number;
                         mock_git_info
                             .github
                             .expect_get_milestone_issues()
-                            .with(eq(milestone.number as u64))
+                            .withf(move |m: &Milestone| m.number == expected_milestone_number)
                             .times(1)
                             .returning(move |_| {
                                 let issues = issues.clone();
@@ -481,10 +491,7 @@ mod tests {
         let test_cases = vec![
             CreateIssueTestCase {
                 name: "success_with_existing_milestone",
-                milestone_status: MilestoneStatus::Existing {
-                    name: "v1.0".to_string(),
-                    number: 1,
-                },
+                milestone_status: MilestoneStatus::Existing(load_milestone("v1.0")),
                 checklist_name: "Simple Tasks",
                 assignees: vec!["user1", "user2"],
                 existing_milestones: vec!["v1.0"],
@@ -694,9 +701,10 @@ mod tests {
 
             // For existing milestones, expect get_milestone_issues call
             if let Some(found_milestone) = milestones.iter().find(|m| m.title == milestone_name) {
+                let expected_milestone_number = found_milestone.number;
                 mock_api
                     .expect_get_milestone_issues()
-                    .with(eq(found_milestone.number as u64))
+                    .withf(move |m: &Milestone| m.number == expected_milestone_number)
                     .times(1)
                     .returning(|_| Box::pin(async move { Ok(vec![]) }));
             }
@@ -722,7 +730,7 @@ mod tests {
                 Ok(expected_id) => {
                     assert!(result.is_ok(), "Test '{}' should succeed", name);
                     assert_eq!(
-                        result.unwrap(),
+                        result.unwrap().number as u64,
                         expected_id,
                         "Test '{}' wrong milestone ID",
                         name

@@ -733,6 +733,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghqctoolkit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap-verbosity-flag",
+ "env_logger",
+ "etcetera",
+ "futures",
+ "gix",
+ "inquire",
+ "insta",
+ "log",
+ "mockall",
+ "octocrab",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "gimli"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2385,30 +2409,6 @@ checksum = "744a264d26b88a6a7e37cbad97953fa233b94d585236310bcbc88474b4092d79"
 dependencies = [
  "bytesize",
  "human_format",
-]
-
-[[package]]
-name = "qchub"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap-verbosity-flag",
- "env_logger",
- "etcetera",
- "futures",
- "gix",
- "inquire",
- "insta",
- "log",
- "mockall",
- "octocrab",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]

@@ -60,11 +60,8 @@ pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStat
     } else {
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
-        if let Some(milestone) = milestones.iter().find(|m| m.title == milestone_title) {
-            Ok(MilestoneStatus::Existing {
-                number: milestone.number as u64,
-                name: milestone.title.to_string(),
-            })
+        if let Some(milestone) = milestones.into_iter().find(|m| m.title == milestone_title) {
+            Ok(MilestoneStatus::Existing(milestone))
         } else {
             // Fallback to Unknown if we can't find the milestone
             Ok(MilestoneStatus::Unknown(milestone_title.to_string()))
