@@ -25,7 +25,7 @@ impl CliContext {
         configuration: Configuration,
         git_info: GitInfo,
     ) -> Result<Self> {
-        println!("🚀 Welcome to GHQC Interactive Mode!");
+        println!("🚀 Welcome to QCHub Interactive Mode!");
         // Fetch users once for validation and interactive prompts
         let repo_users: Vec<RepoUser> = git_info.get_users().await?;
 

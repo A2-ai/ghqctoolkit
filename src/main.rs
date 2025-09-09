@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use ghqctoolkit::cli::{CliContext, RelevantFileParser};
-use ghqctoolkit::{Configuration, GitInfo, RelevantFile, create_issue};
+use qchub::cli::{CliContext, RelevantFileParser};
+use qchub::{Configuration, GitInfo, RelevantFile, create_issue};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -66,9 +66,14 @@ async fn main() -> Result<()> {
 
     let log_level = cli.verbose.log_level_filter();
     env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Off) // Turn off all logs by default
-        .filter(Some("ghqctoolkit"), log_level) // Allow logs from your crate
-        .filter(Some("octocrab"), log_level) // Allow logs from octocrab
+        .filter_level(log_level)
+        .filter(Some("ureq"), log::LevelFilter::Off)
+        .filter(Some("rustls"), log::LevelFilter::Off)
+        .filter(Some("os_info"), log::LevelFilter::Off)
+        .filter(Some("tracing"), log::LevelFilter::Off)
+        .filter(Some("hyper_util"), log::LevelFilter::Off)
+        .filter(Some("tower"), log::LevelFilter::Off)
+        .filter(Some("mio"), log::LevelFilter::Off)
         .init();
 
     let git_info = GitInfo::from_path(&cli.project)?;

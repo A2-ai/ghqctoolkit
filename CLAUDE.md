@@ -46,7 +46,7 @@ cargo run --all-features -- issue --help
 
 ### Core Components
 
-**ghqctoolkit** is a CLI tool for creating GitHub issues with quality control checklists. It integrates with both local git repositories and GitHub APIs to automate issue creation with file-specific context.
+**qchub** is a CLI tool for creating GitHub issues with quality control checklists. It integrates with both local git repositories and GitHub APIs to automate issue creation with file-specific context.
 
 ### Module Structure
 
