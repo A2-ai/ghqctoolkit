@@ -355,7 +355,7 @@ impl GitHubApi for GitInfo {
             };
 
             let label_names = if let Some(names) = cached_labels {
-                log::trace!("Using cached label names for {}/{}", owner, repo);
+                log::debug!("Using cached label names for {}/{}", owner, repo);
                 names
             } else {
                 log::debug!(

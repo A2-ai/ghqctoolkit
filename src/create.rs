@@ -119,7 +119,6 @@ pub async fn create_issue(
 
     git_info.create_labels_if_needed(&issue.branch).await?;
 
-    log::debug!("Posting issue to GitHub: {}", issue.title());
     git_info.post_issue(&issue).await?;
 
     Ok(())
