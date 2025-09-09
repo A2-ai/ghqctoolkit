@@ -446,6 +446,13 @@ mod tests {
                 .expect_post_issue()
                 .times(1)
                 .returning(|_| Box::pin(async move { Ok(()) }));
+
+            mock_git_info
+                .github
+                .expect_create_labels_if_needed()
+                .with(eq("main"))
+                .times(1)
+                .returning(|_| Box::pin(async move { Ok(()) }));
         }
 
         mock_git_info

@@ -436,14 +436,11 @@ impl GitHubApi for GitInfo {
 }
 
 impl GitHelpers for GitInfo {
-    fn file_content_url(&self, commit: &str, file: &Path) -> String {
+    fn file_content_url(&self, git_ref: &str, file: &Path) -> String {
         let file = file.to_string_lossy().replace(" ", "%20");
         format!(
             "{}/{}/{}/blob/{}/{file}",
-            self.base_url,
-            self.owner,
-            self.repo,
-            &commit[..7]
+            self.base_url, self.owner, self.repo, &git_ref
         )
     }
 }

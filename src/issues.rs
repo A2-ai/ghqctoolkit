@@ -1,5 +1,3 @@
-use clap::builder::TypedValueParser;
-use clap::{Arg, Command, error::ErrorKind};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -16,12 +14,6 @@ pub struct RelevantFile {
 impl fmt::Display for RelevantFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.path.display())
-    }
-}
-
-impl RelevantFile {
-    pub fn new(name: String, path: PathBuf, notes: Option<String>) -> Self {
-        Self { name, path, notes }
     }
 }
 
@@ -95,47 +87,6 @@ impl RelevantFile {
     }
 }
 
-// Custom parser for clap
-#[derive(Clone)]
-pub struct RelevantFileParser;
-
-impl TypedValueParser for RelevantFileParser {
-    type Value = RelevantFile;
-
-    fn parse_ref(
-        &self,
-        _cmd: &Command,
-        arg: Option<&Arg>,
-        value: &std::ffi::OsStr,
-    ) -> Result<Self::Value, clap::Error> {
-        let s = value.to_str().ok_or_else(|| {
-            clap::Error::raw(
-                ErrorKind::InvalidUtf8,
-                "Invalid UTF-8 in file specification",
-            )
-        })?;
-
-        s.parse().map_err(|_| {
-            let mut err = clap::Error::new(ErrorKind::InvalidValue);
-            if let Some(arg) = arg {
-                err.insert(
-                    clap::error::ContextKind::InvalidArg,
-                    clap::error::ContextValue::String(arg.to_string()),
-                );
-            }
-            err.insert(
-                clap::error::ContextKind::InvalidValue,
-                clap::error::ContextValue::String(s.to_string()),
-            );
-            err.insert(
-                clap::error::ContextKind::ValidValue,
-                clap::error::ContextValue::String("name:path".to_string()),
-            );
-            err
-        })
-    }
-}
-
 pub struct QCIssue {
     pub(crate) milestone_id: u64,
     title: PathBuf,
@@ -170,7 +121,7 @@ impl QCIssue {
             String::new()
         };
 
-        let file_contents_url = git_info.file_content_url(&self.commit, &self.title);
+        let file_contents_url = git_info.file_content_url(&self.commit[..7], &self.title);
         let file_contents_html =
             format!("[file contents at initial qc commit]({file_contents_url})");
 
@@ -305,7 +256,7 @@ mod tests {
             .helpers
             .expect_file_content_url()
             .with(
-                mockall::predicate::eq("abc123def456789"),
+                mockall::predicate::eq("abc123d"),
                 mockall::predicate::eq(PathBuf::from("src/example.rs")),
             )
             .returning(|_, _| {
@@ -353,7 +304,7 @@ mod tests {
             .helpers
             .expect_file_content_url()
             .with(
-                mockall::predicate::eq("abc123def456789"),
+                mockall::predicate::eq("abc123d"),
                 mockall::predicate::eq(PathBuf::from("src/example.rs")),
             )
             .returning(|_, _| {
@@ -370,92 +321,92 @@ mod tests {
             // (input, expected_result, test_description)
             (
                 "Config File:src/config.rs",
-                Ok(RelevantFile::new(
-                    "Config File".to_string(),
-                    PathBuf::from("src/config.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "Config File".to_string(),
+                    path: PathBuf::from("src/config.rs"),
+                    notes: None,
+                }),
                 "basic parsing with name and path",
             ),
             (
                 "  Test File  :  src/test.rs  ",
-                Ok(RelevantFile::new(
-                    "Test File".to_string(),
-                    PathBuf::from("src/test.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "Test File".to_string(),
+                    path: PathBuf::from("src/test.rs"),
+                    notes: None,
+                }),
                 "parsing with extra spaces",
             ),
             (
                 "Database:db/models.rs",
-                Ok(RelevantFile::new(
-                    "Database".to_string(),
-                    PathBuf::from("db/models.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "Database".to_string(),
+                    path: PathBuf::from("db/models.rs"),
+                    notes: None,
+                }),
                 "single word name",
             ),
             (
                 "Very Long Config File Name:path/to/very/long/file/name.rs",
-                Ok(RelevantFile::new(
-                    "Very Long Config File Name".to_string(),
-                    PathBuf::from("path/to/very/long/file/name.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "Very Long Config File Name".to_string(),
+                    path: PathBuf::from("path/to/very/long/file/name.rs"),
+                    notes: None,
+                }),
                 "long names and paths",
             ),
             (
                 "File with: colon:src/special.rs",
-                Ok(RelevantFile::new(
-                    "File with".to_string(),
-                    PathBuf::from("colon:src/special.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "File with".to_string(),
+                    path: PathBuf::from("colon:src/special.rs"),
+                    notes: None,
+                }),
                 "multiple colons (only first is separator)",
             ),
             (
                 "src/config.rs",
-                Ok(RelevantFile::new(
-                    "config.rs".to_string(),
-                    PathBuf::from("src/config.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "config.rs".to_string(),
+                    path: PathBuf::from("src/config.rs"),
+                    notes: None,
+                }),
                 "no separator - path only, name derived from filename",
             ),
             (
                 "path/to/file.txt",
-                Ok(RelevantFile::new(
-                    "file.txt".to_string(),
-                    PathBuf::from("path/to/file.txt"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "file.txt".to_string(),
+                    path: PathBuf::from("path/to/file.txt"),
+                    notes: None,
+                }),
                 "no separator - derive name from file extension",
             ),
             (
                 "single_file",
-                Ok(RelevantFile::new(
-                    "single_file".to_string(),
-                    PathBuf::from("single_file"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "single_file".to_string(),
+                    path: PathBuf::from("single_file"),
+                    notes: None,
+                }),
                 "no separator - single filename",
             ),
             (
                 ":src/file.rs",
-                Ok(RelevantFile::new(
-                    "file.rs".to_string(),
-                    PathBuf::from("src/file.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "file.rs".to_string(),
+                    path: PathBuf::from("src/file.rs"),
+                    notes: None,
+                }),
                 "empty name - derive from filename",
             ),
             (
                 "   :  src/test.rs  ",
-                Ok(RelevantFile::new(
-                    "test.rs".to_string(),
-                    PathBuf::from("src/test.rs"),
-                    None,
-                )),
+                Ok(RelevantFile {
+                    name: "test.rs".to_string(),
+                    path: PathBuf::from("src/test.rs"),
+                    notes: None,
+                }),
                 "whitespace name - derive from filename",
             ),
             (

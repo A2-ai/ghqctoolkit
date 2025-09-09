@@ -477,7 +477,11 @@ pub fn prompt_relevant_files(current_dir: &PathBuf) -> Result<Vec<RelevantFile>>
             Some(notes_input.trim().to_string())
         };
 
-        let relevant_file = RelevantFile::new(final_name, file_path.clone(), final_notes);
+        let relevant_file = RelevantFile {
+            name: final_name,
+            path: file_path.clone(),
+            notes: final_notes,
+        };
 
         // Avoid duplicates (check by path)
         if !relevant_files.iter().any(|f| f.path == file_path) {
