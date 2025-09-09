@@ -63,6 +63,18 @@ pub enum GitInfoError {
     AuthError(#[from] super::auth::AuthError),
 }
 
+use crate::git::GitInfo;
+
+impl GitHelpers for GitInfo {
+    fn file_content_url(&self, git_ref: &str, file: &Path) -> String {
+        let file = file.to_string_lossy().replace(" ", "%20");
+        format!(
+            "{}/{}/{}/blob/{}/{file}",
+            self.base_url, self.owner, self.repo, &git_ref
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
