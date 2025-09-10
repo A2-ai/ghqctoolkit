@@ -90,27 +90,41 @@ impl Default for Configuration {
 }
 
 impl Configuration {
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigurationError> {
-        let path = path.as_ref();
-        let options =
-            ConfigurationOptions::from_path(path.join("options.yaml")).unwrap_or_default();
-        Ok(Configuration {
+    pub fn from_path(path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref().join("options.yaml");
+        let options = match ConfigurationOptions::from_path(&path) {
+            Ok(o) => o,
+            Err(e) => {
+                log::warn!(
+                    "Could not load configuration options at {} due to: {e}. Using default.", path.display()
+                );
+                ConfigurationOptions::default()
+            }
+        };
+        Configuration {
             path: path.to_path_buf(),
             options,
             ..Default::default()
-        })
+        }
     }
 
-    pub fn load_checklists(&mut self) -> Result<(), ConfigurationError> {
+    pub fn load_checklists(&mut self) {
         let checklist_dir = self.path.join(&self.options.checklist_directory);
 
         if !checklist_dir.exists() {
             log::debug!("Checklist directory does not exist. Nothing to load");
-            return Ok(()); // No checklists directory, nothing to load
+            return;
         }
 
-        for entry in fs::read_dir(&checklist_dir)? {
-            let entry = entry?;
+        let Ok(read_dir) = fs::read_dir(&checklist_dir) else {
+            log::debug!("Could not read {}", checklist_dir.display());
+            return;
+        };
+
+        for entry in read_dir {
+            let Ok(entry) = entry else {
+                continue;
+            };
             let path = entry.path();
 
             if !path.is_file() {
@@ -121,34 +135,54 @@ impl Configuration {
                 continue;
             };
 
-            let content = fs::read_to_string(&path)?;
+            let Ok(content) = fs::read_to_string(&path) else {
+                log::debug!("Could not read content at {}", path.display());
+                continue;
+            };
 
             match extension.to_lowercase().as_str() {
                 "txt" => {
-                    let key = extract_title_from_filename(&path)?;
-                    let checklist = Checklist {
-                        name: key.to_string(),
-                        note: self.options.prepended_checklist_notes.clone(),
-                        content
+                    match extract_title_from_filename(&path) {
+                        Ok(key) => {
+                            let checklist = Checklist {
+                                name: key.to_string(),
+                                note: self.options.prepended_checklist_notes.clone(),
+                                content
+                            };
+                            self.checklists.insert(key, checklist);
+                        },
+                        Err(e) => {
+                            log::warn!(
+                                "Could not extract title from filename for {} due to: {}. Skipping...",
+                                path.display(), e
+                            );
+                            continue;
+                        }
                     };
-                    self.checklists.insert(key, checklist);
                 }
                 "yaml" | "yml" => {
-                    let (title, parsed_content) = parse_yaml_checklist(&content)?;
-                    let checklist = Checklist {
-                        name: title.to_string(),
-                        note: self.options.prepended_checklist_notes.clone(),
-                        content: parsed_content
-                    };
-                    self.checklists.insert(title, checklist);
+                    match parse_yaml_checklist(&content) {
+                        Ok((title, content)) => {
+                            let checklist = Checklist {
+                                name: title.to_string(),
+                                note: self.options.prepended_checklist_notes.clone(),
+                                content
+                            };
+                            self.checklists.insert(title, checklist);
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Could not parse yaml at {} as valid checklist due to: {}",
+                                path.display(), e
+                            )
+                        }
+                    }                    
                 }
                 _ => continue, // Skip other file types
             }
         }
 
         log::debug!("Found checklists with titles: {:?}", self.checklists.keys());
-
-        Ok(())
     }
 }
 
@@ -289,8 +323,8 @@ mod tests {
     fn test_load_checklists_default() {
         let test_config_path = PathBuf::from("src/tests/default_configuration");
 
-        let mut config = Configuration::from_path(&test_config_path).unwrap();
-        config.load_checklists().unwrap();
+        let mut config = Configuration::from_path(&test_config_path);
+        config.load_checklists();
 
         // Should have loaded 5 checklists and 1 default custom (ignoring .md file)
         assert_eq!(config.checklists.len(), 6);
@@ -328,8 +362,8 @@ mod tests {
     fn test_configuration_options_with_custom_directory() {
         let test_config_path = PathBuf::from("src/tests/custom_configuration");
 
-        let mut config = Configuration::from_path(&test_config_path).unwrap();
-        config.load_checklists().unwrap();
+        let mut config = Configuration::from_path(&test_config_path);
+        config.load_checklists();
 
         assert_eq!(config.checklists.len(), 2);
         assert!(config.checklists.contains_key("Custom Checklist"));
@@ -359,10 +393,10 @@ mod tests {
     #[test]
     fn test_missing_checklist_directory() {
         let temp_dir = TempDir::new().unwrap();
-        let mut config = Configuration::from_path(temp_dir).unwrap();
+        let mut config = Configuration::from_path(temp_dir);
 
         // Should not error when checklist directory doesn't exist
-        config.load_checklists().unwrap();
+        config.load_checklists();
         assert_eq!(config.checklists.len(), 1);
     }
 

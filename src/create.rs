@@ -270,8 +270,8 @@ mod tests {
     }
 
     fn create_test_configuration() -> Configuration {
-        let mut config = Configuration::from_path("src/tests/default_configuration").unwrap();
-        config.load_checklists().unwrap();
+        let mut config = Configuration::from_path("src/tests/default_configuration");
+        config.load_checklists();
         config
     }
 

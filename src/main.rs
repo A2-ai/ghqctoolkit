@@ -83,7 +83,9 @@ async fn main() -> Result<()> {
                 relevant_files,
             } => {
                 let configuration = if let Some(c) = cli.config_dir {
-                    Configuration::from_path(&c)?
+                    let mut c = Configuration::from_path(&c);
+                    c.load_checklists();
+                    c
                 } else {
                     log::debug!("Configuration not specified, using default.");
                     Configuration::default()
