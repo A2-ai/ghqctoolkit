@@ -16,6 +16,10 @@ struct Cli {
     #[clap(short, long, default_value = ".", global = true)]
     project: PathBuf,
 
+    /// Configuration directory path
+    #[arg(short, long)]
+    config_dir: Option<PathBuf>,
+
     #[command(flatten)]
     verbose: Verbosity<InfoLevel>,
 }
@@ -40,10 +44,6 @@ enum IssueCommands {
         /// File path to create issue for (will prompt if not provided)
         #[arg(short, long)]
         file: Option<PathBuf>,
-
-        /// Configuration directory path
-        #[arg(short, long)]
-        config_dir: Option<PathBuf>,
 
         /// Name of the checklist to use (will prompt if not provided)
         #[arg(short = 'l', long)]
@@ -78,12 +78,11 @@ async fn main() -> Result<()> {
             IssueCommands::Create {
                 milestone,
                 file,
-                config_dir,
                 checklist_name,
                 assignees,
                 relevant_files,
             } => {
-                let configuartion = if let Some(c) = config_dir {
+                let configuration = if let Some(c) = cli.config_dir {
                     Configuration::from_path(&c)?
                 } else {
                     log::debug!("Configuration not specified, using default.");
@@ -98,13 +97,13 @@ async fn main() -> Result<()> {
                             checklist_name,
                             assignees,
                             relevant_files,
-                            configuartion,
+                            configuration,
                             git_info,
                         )
                         .await?
                     }
                     (None, None, None) => {
-                        CliContext::from_interactive(&cli.project, configuartion, git_info).await?
+                        CliContext::from_interactive(&cli.project, configuration, git_info).await?
                     }
                     _ => {
                         return Err(anyhow::anyhow!(
@@ -118,7 +117,6 @@ async fn main() -> Result<()> {
                     &context.milestone_status,
                     &context.checklist,
                     context.assignees,
-                    &context.configuration,
                     &context.git_info,
                     context.relevant_files,
                 )

@@ -2,6 +2,8 @@
 source: src/configuration.rs
 expression: "&config.checklists[\"Complex Checklist Name\"]"
 ---
+# Complex Checklist Name
+
 This checklist has spaces in the name
 And multiple lines
 Of content

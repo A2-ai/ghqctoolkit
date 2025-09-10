@@ -1,18 +1,16 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_file, prompt_milestone, prompt_relevant_files,
-    },
-    create::validate_assignees,
+    }, configuration::Checklist, create::validate_assignees, Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser
 };
 
 pub struct CliContext {
     pub file: PathBuf,
     pub milestone_status: MilestoneStatus,
-    pub checklist: String,
+    pub checklist: Checklist,
     pub assignees: Vec<String>,
     pub relevant_files: Vec<RelevantFile>,
     pub configuration: Configuration,
@@ -85,10 +83,17 @@ impl CliContext {
         // Validate assignees if provided
         validate_assignees(&final_assignees, &repo_users)?;
 
+        // Get selected checklist
+        let checklist = configuration
+            .checklists
+            .get(&checklist_name)
+            .ok_or(anyhow!("No checklist named {checklist_name}"))?
+            .clone();
+
         Ok(Self {
             file,
             milestone_status: MilestoneStatus::Unknown(milestone),
-            checklist: checklist_name,
+            checklist,
             assignees: final_assignees,
             relevant_files: final_relevant_files,
             configuration,

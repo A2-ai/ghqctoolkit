@@ -7,9 +7,7 @@ use std::{
 use octocrab::models::Milestone;
 
 use crate::{
-    Configuration, RelevantFile,
-    git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser},
-    issues::QCIssue,
+    configuration::Checklist, git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser}, issues::QCIssue, RelevantFile
 };
 
 #[derive(Debug, Clone)]
@@ -88,9 +86,8 @@ pub fn validate_assignees(
 pub async fn create_issue(
     file: impl AsRef<Path>,
     milestone_status: &MilestoneStatus,
-    checklist_name: &str,
+    checklist: &Checklist,
     assignees: Vec<String>,
-    configuration: &Configuration,
     git_info: &(impl LocalGitInfo + GitHubApi),
     relevant_files: Vec<RelevantFile>,
 ) -> Result<(), CreateError> {
@@ -98,23 +95,13 @@ pub async fn create_issue(
 
     let milestone = milestone_status.determine_milestone(file, git_info).await?;
 
-    let checklist_content = match configuration.checklists.get(checklist_name) {
-        Some(content) => {
-            log::debug!("Found checklist in configuration");
-            content
-        }
-        None => return Err(CreateError::NoChecklist(checklist_name.to_string())),
-    };
-
     let issue = QCIssue::new(
         file,
         git_info,
         milestone.number as u64,
         assignees,
         relevant_files,
-        checklist_name.to_string(),
-        configuration.options.prepended_checklist_notes.clone(),
-        checklist_content.to_string(),
+        checklist.clone(),
     )?;
 
     git_info.create_labels_if_needed(&issue.branch).await?;
@@ -177,8 +164,6 @@ pub enum CreateError {
     LocalGitError(#[from] LocalGitError),
     #[error("Issue already exists within milestone for {0:?}")]
     IssueExists(PathBuf),
-    #[error("Checklist name {0} does not exist in configuration directory")]
-    NoChecklist(String),
     #[error("Invalid assignee: {0} is not a valid user in this repository")]
     InvalidAssignee(String),
 }
@@ -186,10 +171,10 @@ pub enum CreateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{
+    use crate::{Configuration, git::{
         api::{MockGitHubApi, RepoUser},
         local::{GitAuthor, MockLocalGitInfo},
-    };
+    }};
     use mockall::predicate::*;
     use octocrab::models::{Milestone, issues::Issue};
     use std::fs;
@@ -268,7 +253,6 @@ mod tests {
     enum TestResult {
         Success,
         IssueExists,
-        NoChecklist,
         InvalidAssignee,
     }
 
@@ -530,16 +514,6 @@ mod tests {
                 expected_result: TestResult::IssueExists,
             },
             CreateIssueTestCase {
-                name: "fails_with_nonexistent_checklist",
-                milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
-                checklist_name: "Nonexistent Checklist",
-                assignees: vec!["user2"],
-                existing_milestones: vec!["v1.0"],
-                existing_issues: vec![],
-                created_milestone: None,
-                expected_result: TestResult::NoChecklist,
-            },
-            CreateIssueTestCase {
                 name: "fails_with_invalid_assignee",
                 milestone_status: MilestoneStatus::Unknown("v1.0".to_string()),
                 checklist_name: "Simple Tasks",
@@ -567,12 +541,12 @@ mod tests {
             let result = if validation_result.is_err() {
                 validation_result.map(|_| ())
             } else {
+                let checklist = &config.checklists[test_case.checklist_name];
                 create_issue(
                     PathBuf::from("src/test.rs"),
                     &test_case.milestone_status,
-                    test_case.checklist_name,
+                    checklist,
                     assignees,
-                    &config,
                     &mock_git_info,
                     vec![],
                 )
@@ -594,14 +568,6 @@ mod tests {
                         test_case.name
                     );
                     assert!(matches!(result.unwrap_err(), CreateError::IssueExists(_)));
-                }
-                TestResult::NoChecklist => {
-                    assert!(
-                        result.is_err(),
-                        "Test case '{}' should fail",
-                        test_case.name
-                    );
-                    assert!(matches!(result.unwrap_err(), CreateError::NoChecklist(_)));
                 }
                 TestResult::InvalidAssignee => {
                     assert!(

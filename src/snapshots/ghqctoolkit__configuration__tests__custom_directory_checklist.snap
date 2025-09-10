@@ -2,6 +2,10 @@
 source: src/configuration.rs
 expression: custom_content
 ---
+# Custom Checklist
+
+Please review carefully
+
 - [ ] Custom item 1
 - [ ] Custom item 2
 - [ ] Custom item 3

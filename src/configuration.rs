@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
+    collections::HashMap, fmt, fs, path::{Path, PathBuf}
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,10 +38,44 @@ impl ConfigurationOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct Checklist {
+    name: String,
+    note: Option<String>,
+    content: String,
+}
+
+impl Checklist {
+    pub fn new(name: String, note: Option<String>, content: String) -> Self {
+        Self { name, note, content }
+    }
+}
+
+impl fmt::Display for Checklist {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let note = if let Some(n) = &self.note {
+            format!("\n\n{n}")
+        } else {
+            String::new()
+        };
+        writeln!(f, "# {}{note}\n\n{}", self.name, self.content)
+    }
+}
+
+impl Default for Checklist {
+    fn default() -> Self {
+        Self {
+            name: "Custom".to_string(),
+            note: None,
+            content: "- [ ] [INSERT]".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Configuration {
     path: PathBuf,
     // checklist name and content
-    pub(crate) checklists: HashMap<String, String>,
+    pub(crate) checklists: HashMap<String, Checklist>,
     pub(crate) options: ConfigurationOptions,
 }
 
@@ -51,7 +83,7 @@ impl Default for Configuration {
     fn default() -> Self {
         Self {
             path: PathBuf::default(),
-            checklists: HashMap::from([("Custom".to_string(), "- [ ] [INSERT]".to_string())]),
+            checklists: HashMap::from([("Custom".to_string(), Checklist::default())]),
             options: ConfigurationOptions::default(),
         }
     }
@@ -94,11 +126,21 @@ impl Configuration {
             match extension.to_lowercase().as_str() {
                 "txt" => {
                     let key = extract_title_from_filename(&path)?;
-                    self.checklists.insert(key, content);
+                    let checklist = Checklist {
+                        name: key.to_string(),
+                        note: self.options.prepended_checklist_notes.clone(),
+                        content
+                    };
+                    self.checklists.insert(key, checklist);
                 }
                 "yaml" | "yml" => {
                     let (title, parsed_content) = parse_yaml_checklist(&content)?;
-                    self.checklists.insert(title, parsed_content);
+                    let checklist = Checklist {
+                        name: title.to_string(),
+                        note: self.options.prepended_checklist_notes.clone(),
+                        content: parsed_content
+                    };
+                    self.checklists.insert(title, checklist);
                 }
                 _ => continue, // Skip other file types
             }

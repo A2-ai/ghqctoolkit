@@ -4,9 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, RelevantFile,
-    create::MilestoneStatus,
-    git::{GitHubApi, RepoUser},
+    configuration::Checklist, create::MilestoneStatus, git::{GitHubApi, RepoUser}, Configuration, RelevantFile
 };
 
 pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStatus> {
@@ -175,7 +173,7 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
     Ok(PathBuf::from(file_path.trim()))
 }
 
-pub fn prompt_checklist(configuration: &Configuration) -> Result<String> {
+pub fn prompt_checklist(configuration: &Configuration) -> Result<Checklist> {
     let mut checklist_names: Vec<String> = configuration.checklists.keys().cloned().collect();
     checklist_names.sort();
 
@@ -193,10 +191,11 @@ pub fn prompt_checklist(configuration: &Configuration) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
     // Remove the emoji prefix
-    Ok(selection
+    let sel = selection
         .strip_prefix("📋 ")
-        .unwrap_or(&selection)
-        .to_string())
+        .unwrap_or(&selection);
+
+    Ok(configuration.checklists[sel].clone())
 }
 
 pub fn prompt_assignees(repo_users: &[RepoUser]) -> Result<Vec<String>> {
@@ -495,13 +494,24 @@ mod tests {
 
     #[test]
     fn test_prompt_checklist() {
+        use crate::configuration::Checklist;
+        
         let mut config = Configuration::default();
-        config
-            .checklists
-            .insert("Test Checklist".to_string(), "- [ ] Test item".to_string());
+        config.checklists.insert(
+            "Test Checklist".to_string(),
+            Checklist::new(
+                "Test Checklist".to_string(),
+                None,
+                "- [ ] Test item".to_string(),
+            ),
+        );
         config.checklists.insert(
             "Another Checklist".to_string(),
-            "- [ ] Another item".to_string(),
+            Checklist::new(
+                "Another Checklist".to_string(),
+                None,
+                "- [ ] Another item".to_string(),
+            ),
         );
 
         // This test just verifies the function doesn't panic with valid configuration
