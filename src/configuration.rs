@@ -504,8 +504,8 @@ mod tests {
         let result = determine_config_info(None, &mock_env).unwrap();
 
         // Should use default "ghqc" directory
-        assert!(result.ends_with("ghqc"));
-        assert!(result.to_string_lossy().contains("config")); // Should be in some config directory
+        assert!(result.ends_with("config"));
+        assert!(result.to_string_lossy().contains("ghqc")); // Should be in some config directory
     }
 
     #[test]
