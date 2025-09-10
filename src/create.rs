@@ -7,7 +7,10 @@ use std::{
 use octocrab::models::Milestone;
 
 use crate::{
-    configuration::Checklist, git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser}, issues::QCIssue, RelevantFile
+    RelevantFile,
+    configuration::Checklist,
+    git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser},
+    issues::QCIssue,
 };
 
 #[derive(Debug, Clone)]
@@ -171,10 +174,13 @@ pub enum CreateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Configuration, git::{
-        api::{MockGitHubApi, RepoUser},
-        local::{GitAuthor, MockLocalGitInfo},
-    }};
+    use crate::{
+        Configuration,
+        git::{
+            api::{MockGitHubApi, RepoUser},
+            local::{GitAuthor, MockLocalGitInfo},
+        },
+    };
     use mockall::predicate::*;
     use octocrab::models::{Milestone, issues::Issue};
     use std::fs;

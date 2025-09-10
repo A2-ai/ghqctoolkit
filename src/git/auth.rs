@@ -1,7 +1,7 @@
+use crate::utils::EnvProvider;
 use octocrab::Octocrab;
 use std::path::PathBuf;
 use std::process::Command;
-use crate::utils::EnvProvider;
 
 #[derive(thiserror::Error, Debug)]
 pub enum AuthError {
@@ -19,11 +19,16 @@ pub enum AuthError {
     Yaml(#[from] serde_yaml::Error),
 }
 
-pub fn create_authenticated_client(base_url: &str, env: &impl EnvProvider) -> Result<Octocrab, AuthError> {
+pub fn create_authenticated_client(
+    base_url: &str,
+    env: &impl EnvProvider,
+) -> Result<Octocrab, AuthError> {
     match get_token(base_url, env) {
         Ok(token) => build_client_with_token(base_url, token),
         Err(_) => {
-            log::warn!("No authentication found. API access will be limited to public repositories");
+            log::warn!(
+                "No authentication found. API access will be limited to public repositories"
+            );
             // Fall back to unauthenticated client
             build_unauthenticated_client(base_url)
         }

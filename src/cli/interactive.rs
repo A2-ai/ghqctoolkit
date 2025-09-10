@@ -4,7 +4,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::{
-    configuration::Checklist, create::MilestoneStatus, git::{GitHubApi, RepoUser}, Configuration, RelevantFile
+    Configuration, RelevantFile,
+    configuration::Checklist,
+    create::MilestoneStatus,
+    git::{GitHubApi, RepoUser},
 };
 
 pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStatus> {
@@ -191,9 +194,7 @@ pub fn prompt_checklist(configuration: &Configuration) -> Result<Checklist> {
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
     // Remove the emoji prefix
-    let sel = selection
-        .strip_prefix("📋 ")
-        .unwrap_or(&selection);
+    let sel = selection.strip_prefix("📋 ").unwrap_or(&selection);
 
     Ok(configuration.checklists[sel].clone())
 }
@@ -495,7 +496,7 @@ mod tests {
     #[test]
     fn test_prompt_checklist() {
         use crate::configuration::Checklist;
-        
+
         let mut config = Configuration::default();
         config.checklists.insert(
             "Test Checklist".to_string(),

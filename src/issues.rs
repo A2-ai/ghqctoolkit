@@ -116,25 +116,21 @@ impl QCIssue {
         ];
 
         if self.authors.len() > 1 {
-            metadata.push(
-                format!(
-                    "collaborators: {}",
-                    self.authors
-                        .iter()
-                        .skip(1)
-                        .map(|a| a.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            );
+            metadata.push(format!(
+                "collaborators: {}",
+                self.authors
+                    .iter()
+                    .skip(1)
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
 
-        metadata.push(
-            format!(
-                "[file contents at initial qc commit]({})",
-                git_info.file_content_url(&self.commit[..7], &self.title)
-            )
-        );
+        metadata.push(format!(
+            "[file contents at initial qc commit]({})",
+            git_info.file_content_url(&self.commit[..7], &self.title)
+        ));
 
         let mut body = vec![metadata.join("\n* ")];
 
@@ -148,9 +144,7 @@ impl QCIssue {
             metadata.push(format!("## Relevant files\n\n{rel_files}"));
         };
 
-        body.push(
-            self.checklist.to_string()
-        );
+        body.push(self.checklist.to_string());
 
         body.join("\n\n")
     }
@@ -188,7 +182,7 @@ mod tests {
 
     fn create_test_issue() -> QCIssue {
         use crate::configuration::Checklist;
-        
+
         QCIssue {
             milestone_id: 1,
             title: PathBuf::from("src/example.rs"),

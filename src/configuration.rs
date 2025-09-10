@@ -3,7 +3,9 @@ use gix::Url;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::{
-    collections::HashMap, fmt, fs, path::{Path, PathBuf}
+    collections::HashMap,
+    fmt, fs,
+    path::{Path, PathBuf},
 };
 
 use crate::git::GitAction;
@@ -51,7 +53,11 @@ pub struct Checklist {
 
 impl Checklist {
     pub fn new(name: String, note: Option<String>, content: String) -> Self {
-        Self { name, note, content }
+        Self {
+            name,
+            note,
+            content,
+        }
     }
 }
 
@@ -101,7 +107,8 @@ impl Configuration {
             Ok(o) => o,
             Err(e) => {
                 log::warn!(
-                    "Could not load configuration options at {} due to: {e}. Using default.", path.display()
+                    "Could not load configuration options at {} due to: {e}. Using default.",
+                    path.display()
                 );
                 ConfigurationOptions::default()
             }
@@ -152,37 +159,37 @@ impl Configuration {
                             let checklist = Checklist {
                                 name: key.to_string(),
                                 note: self.options.prepended_checklist_notes.clone(),
-                                content
+                                content,
                             };
                             self.checklists.insert(key, checklist);
-                        },
+                        }
                         Err(e) => {
                             log::warn!(
                                 "Could not extract title from filename for {} due to: {}. Skipping...",
-                                path.display(), e
+                                path.display(),
+                                e
                             );
                             continue;
                         }
                     };
                 }
-                "yaml" | "yml" => {
-                    match parse_yaml_checklist(&content) {
-                        Ok((title, content)) => {
-                            let checklist = Checklist {
-                                name: title.to_string(),
-                                note: self.options.prepended_checklist_notes.clone(),
-                                content
-                            };
-                            self.checklists.insert(title, checklist);
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "Could not parse yaml at {} as valid checklist due to: {}",
-                                path.display(), e
-                            )
-                        }
-                    }                    
-                }
+                "yaml" | "yml" => match parse_yaml_checklist(&content) {
+                    Ok((title, content)) => {
+                        let checklist = Checklist {
+                            name: title.to_string(),
+                            note: self.options.prepended_checklist_notes.clone(),
+                            content,
+                        };
+                        self.checklists.insert(title, checklist);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Could not parse yaml at {} as valid checklist due to: {}",
+                            path.display(),
+                            e
+                        )
+                    }
+                },
                 _ => continue, // Skip other file types
             }
         }
@@ -307,13 +314,20 @@ fn format_header(name: &str, level: usize) -> String {
     format!("{} {}", hashes, name)
 }
 
-pub async fn setup_configuration(config_dir: impl AsRef<Path>, git: Url, git_action: impl GitAction) -> Result<(), ConfigurationError>{
+pub async fn setup_configuration(
+    config_dir: impl AsRef<Path>,
+    git: Url,
+    git_action: impl GitAction,
+) -> Result<(), ConfigurationError> {
     let config_dir = config_dir.as_ref();
-    
+
     // Check if config directory already exists
     if config_dir.exists() {
-        log::debug!("Config directory already exists at {}", config_dir.display());
-        
+        log::debug!(
+            "Config directory already exists at {}",
+            config_dir.display()
+        );
+
         // Check if it's already a git repository with the same remote
         match git_action.remote(config_dir) {
             Ok(existing_url) => {
@@ -322,12 +336,16 @@ pub async fn setup_configuration(config_dir: impl AsRef<Path>, git: Url, git_act
                     return Ok(());
                 } else {
                     log::warn!(
-                        "Config directory exists with different remote URL: {} (expected: {})", 
-                        existing_url, git
+                        "Config directory exists with different remote URL: {} (expected: {})",
+                        existing_url,
+                        git
                     );
                     return Err(ConfigurationError::Io(std::io::Error::new(
                         std::io::ErrorKind::AlreadyExists,
-                        format!("Config directory exists with different remote: {}", existing_url)
+                        format!(
+                            "Config directory exists with different remote: {}",
+                            existing_url
+                        ),
                     )));
                 }
             }
@@ -335,31 +353,41 @@ pub async fn setup_configuration(config_dir: impl AsRef<Path>, git: Url, git_act
                 // Directory exists but is not a git repository
                 return Err(ConfigurationError::Io(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
-                    "Config directory exists but is not a git repository"
+                    "Config directory exists but is not a git repository",
                 )));
             }
         }
     }
-    
-    log::debug!("Cloning configuration repository from {} to {}", git, config_dir.display());
+
+    log::debug!(
+        "Cloning configuration repository from {} to {}",
+        git,
+        config_dir.display()
+    );
 
     if let Some(parent) = config_dir.parent() {
         if !parent.is_dir() {
             fs::create_dir_all(parent)?;
         }
     }
-    
+
     // Clone the repository
     git_action.clone(git, config_dir)?;
-    
-    log::debug!("Successfully set up configuration at {}", config_dir.display());
+
+    log::debug!(
+        "Successfully set up configuration at {}",
+        config_dir.display()
+    );
     Ok(())
 }
 
-pub fn determine_config_info(config_dir: Option<PathBuf>, env: &impl EnvProvider) -> Result<PathBuf, ConfigurationError> {
+pub fn determine_config_info(
+    config_dir: Option<PathBuf>,
+    env: &impl EnvProvider,
+) -> Result<PathBuf, ConfigurationError> {
     if let Some(c) = config_dir {
         log::debug!("Using custom config dir: {}", c.display());
-        return Ok(c)
+        return Ok(c);
     }
 
     let strategy = etcetera::choose_base_strategy()
@@ -369,31 +397,40 @@ pub fn determine_config_info(config_dir: Option<PathBuf>, env: &impl EnvProvider
     match env.var("GHQC_CONFIG_HOME") {
         Ok(url_str) => {
             log::debug!("GHQC_CONFIG_HOME found: {url_str}");
-            let url = gix::url::parse(url_str.as_str().into())
-                .map_err(|error| ConfigurationError::InvalidGitUrl { url: url_str, error })?;
-            
+            let url = gix::url::parse(url_str.as_str().into()).map_err(|error| {
+                ConfigurationError::InvalidGitUrl {
+                    url: url_str,
+                    error,
+                }
+            })?;
+
             // Extract repo name from URL path (last segment)
             let url_path: PathBuf = url.path.to_string().into();
             let repo_name = url_path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .ok_or_else(|| ConfigurationError::ConfigDir(
-                    format!("Cannot extract repo name from URL: {}", url)
-                ))?;
+                .ok_or_else(|| {
+                    ConfigurationError::ConfigDir(format!(
+                        "Cannot extract repo name from URL: {}",
+                        url
+                    ))
+                })?;
 
             let dir = config_dir.join(repo_name);
             log::debug!("Using env var directory: {}", dir.display());
-            
+
             Ok(dir)
         }
         Err(_) => {
             // No env var set, use default path with no URL
             let dir = config_dir.join("config");
-            log::debug!("GHQC_CONFIG_HOME not set. Using default dir: {}", dir.display());
+            log::debug!(
+                "GHQC_CONFIG_HOME not set. Using default dir: {}",
+                dir.display()
+            );
             Ok(dir)
         }
     }
-        
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -427,7 +464,7 @@ mod tests {
     fn test_determine_config_info_with_provided_path() {
         let provided_path = PathBuf::from("/custom/config/path");
         let mock_env = MockEnvProvider::new();
-        
+
         let result = determine_config_info(Some(provided_path.clone()), &mock_env).unwrap();
         assert_eq!(result, provided_path);
     }
@@ -440,9 +477,9 @@ mod tests {
             .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
             .times(1)
             .returning(|_| Ok("https://github.com/owner/my-config-repo.git".to_string()));
-        
+
         let result = determine_config_info(None, &mock_env).unwrap();
-        
+
         // Should extract "my-config-repo.git" from the URL and append to config dir
         assert!(result.ends_with("my-config-repo.git"));
         assert!(result.to_string_lossy().contains("config")); // Should be in some config directory
@@ -456,9 +493,9 @@ mod tests {
             .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
             .times(1)
             .returning(|_| Err(std::env::VarError::NotPresent));
-        
+
         let result = determine_config_info(None, &mock_env).unwrap();
-        
+
         // Should use default "ghqc" directory
         assert!(result.ends_with("ghqc"));
         assert!(result.to_string_lossy().contains("config")); // Should be in some config directory
@@ -472,10 +509,13 @@ mod tests {
             .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
             .times(1)
             .returning(|_| Ok("://invalid-url-scheme".to_string()));
-        
+
         let result = determine_config_info(None, &mock_env);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigurationError::InvalidGitUrl { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigurationError::InvalidGitUrl { .. }
+        ));
     }
 
     #[test]
@@ -486,10 +526,13 @@ mod tests {
             .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
             .times(1)
             .returning(|_| Ok("https://github.com".to_string()));
-        
+
         let result = determine_config_info(None, &mock_env);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigurationError::ConfigDir(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigurationError::ConfigDir(_)
+        ));
     }
 
     #[test]

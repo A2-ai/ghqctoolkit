@@ -1,10 +1,13 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::PathBuf;
 
 use crate::{
+    Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_file, prompt_milestone, prompt_relevant_files,
-    }, configuration::Checklist, create::validate_assignees, Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser
+    },
+    configuration::Checklist,
+    create::validate_assignees,
 };
 
 pub struct CliContext {
