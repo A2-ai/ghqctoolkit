@@ -2,6 +2,8 @@
 source: src/configuration.rs
 expression: "&config.checklists[\"Simple Tasks\"]"
 ---
+# Simple Tasks
+
 - [ ] Review code changes
 - [ ] Run unit tests
 - [ ] Update documentation

@@ -9,16 +9,6 @@ expression: body
 * collaborators: Jane Smith (jane@example.com)
 * [file contents at initial qc commit](https://github.com/owner/repo/blob/abc123d/src/example.rs)
 
-## Relevant files
-
-- **rel file**
-	- [`path/to/file.rel`](https://github.com/owner/repo/blob/feature/new-feature/path/to/file.rel)
-	> this
-	> is
-	> a note
-- **rel file2**
-	- [`path/to/file2.rel`](https://github.com/owner/repo/blob/feature/new-feature/path/to/file2.rel)
-        
 # Code Review Checklist
 
 NOTE

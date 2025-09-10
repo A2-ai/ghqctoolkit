@@ -2,6 +2,8 @@
 source: src/configuration.rs
 expression: "&config.checklists[\"NCA Analysis\"]"
 ---
+# NCA Analysis
+
 ### Set-up
 
 - [ ] Correct dataset used. Any modifications appropriate and documented.

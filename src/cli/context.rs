@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::path::PathBuf;
 
 use crate::{
@@ -6,13 +6,14 @@ use crate::{
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_file, prompt_milestone, prompt_relevant_files,
     },
+    configuration::Checklist,
     create::validate_assignees,
 };
 
 pub struct CliContext {
     pub file: PathBuf,
     pub milestone_status: MilestoneStatus,
-    pub checklist: String,
+    pub checklist: Checklist,
     pub assignees: Vec<String>,
     pub relevant_files: Vec<RelevantFile>,
     pub configuration: Configuration,
@@ -40,7 +41,7 @@ impl CliContext {
         println!("\n✨ Creating issue with:");
         println!("   📊 Milestone: {}", milestone_status);
         println!("   📁 File: {}", file.display());
-        println!("   📋 Checklist: {}", checklist);
+        println!("   📋 Checklist: {}", checklist.name());
         if !assignees.is_empty() {
             println!("   👥 Assignees: {}", assignees.join(", "));
         }
@@ -85,10 +86,17 @@ impl CliContext {
         // Validate assignees if provided
         validate_assignees(&final_assignees, &repo_users)?;
 
+        // Get selected checklist
+        let checklist = configuration
+            .checklists
+            .get(&checklist_name)
+            .ok_or(anyhow!("No checklist named {checklist_name}"))?
+            .clone();
+
         Ok(Self {
             file,
             milestone_status: MilestoneStatus::Unknown(milestone),
-            checklist: checklist_name,
+            checklist,
             assignees: final_assignees,
             relevant_files: final_relevant_files,
             configuration,

@@ -2,6 +2,8 @@
 source: src/configuration.rs
 expression: "&config.checklists[\"Complex Analysis\"]"
 ---
+# Complex Analysis
+
 ### Setup
 
 #### Data Preparation

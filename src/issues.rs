@@ -2,6 +2,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::configuration::Checklist;
 use crate::git::{GitHelpers, LocalGitError, LocalGitInfo, local::GitAuthor};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,15 +88,14 @@ impl RelevantFile {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct QCIssue {
     pub(crate) milestone_id: u64,
     title: PathBuf,
     commit: String,
     pub(crate) branch: String,
     authors: Vec<GitAuthor>,
-    checklist_name: String,
-    checklist_note: Option<String>,
-    checklist_content: String,
+    checklist: Checklist,
     pub(crate) assignees: Vec<String>,
     relevant_files: Vec<RelevantFile>,
 }
@@ -107,61 +107,46 @@ impl QCIssue {
             .first()
             .map(|a| a.to_string())
             .unwrap_or_else(|| "Unknown".to_string());
-        let collaborators = if self.authors.len() > 1 {
-            format!(
-                "\n* collaborators: {}",
+
+        let mut metadata = vec![
+            "## Metadata".to_string(),
+            format!("initial qc commit: {}", self.commit),
+            format!("git branch: {}", self.branch),
+            format!("author: {author}"),
+        ];
+
+        if self.authors.len() > 1 {
+            metadata.push(format!(
+                "collaborators: {}",
                 self.authors
                     .iter()
                     .skip(1)
                     .map(|a| a.to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
-            )
-        } else {
-            String::new()
-        };
+            ));
+        }
 
-        let file_contents_url = git_info.file_content_url(&self.commit[..7], &self.title);
-        let file_contents_html =
-            format!("[file contents at initial qc commit]({file_contents_url})");
+        metadata.push(format!(
+            "[file contents at initial qc commit]({})",
+            git_info.file_content_url(&self.commit[..7], &self.title)
+        ));
 
-        let rel_files_section = if self.relevant_files.is_empty() {
-            String::new()
-        } else {
+        let mut body = vec![metadata.join("\n* ")];
+
+        if !self.relevant_files.is_empty() {
             let rel_files = self
                 .relevant_files
                 .iter()
                 .map(|r| r.as_string(git_info, &self.branch))
                 .collect::<Vec<_>>()
                 .join("\n");
-            format!(
-                "\n
-## Relevant files
-
-{rel_files}"
-            )
+            metadata.push(format!("## Relevant files\n\n{rel_files}"));
         };
 
-        let checklist_note = if let Some(note) = &self.checklist_note {
-            format!("\n\n{note}")
-        } else {
-            String::new()
-        };
+        body.push(self.checklist.to_string());
 
-        format!(
-            "\
-## Metadata
-* initial qc commit: {}
-* git branch: {}
-* author: {author}{collaborators}
-* {file_contents_html}{rel_files_section}
-        
-# {}{checklist_note}
-
-{}
-",
-            self.commit, self.branch, self.checklist_name, self.checklist_content,
-        )
+        body.join("\n\n")
     }
 
     pub(crate) fn title(&self) -> String {
@@ -174,18 +159,14 @@ impl QCIssue {
         milestone_id: u64,
         assignees: Vec<String>,
         relevant_files: Vec<RelevantFile>,
-        checklist_name: String,
-        checklist_note: Option<String>,
-        checklist_content: String,
+        checklist: Checklist,
     ) -> Result<Self, LocalGitError> {
         Ok(Self {
             title: file.as_ref().to_path_buf(),
             commit: git_info.commit()?,
             branch: git_info.branch()?,
             authors: git_info.authors(file.as_ref())?,
-            checklist_name,
-            checklist_note,
-            checklist_content,
+            checklist,
             assignees,
             milestone_id,
             relevant_files,
@@ -200,6 +181,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_issue() -> QCIssue {
+        use crate::configuration::Checklist;
+
         QCIssue {
             milestone_id: 1,
             title: PathBuf::from("src/example.rs"),
@@ -215,9 +198,11 @@ mod tests {
                     email: "jane@example.com".to_string(),
                 }
             ],
-            checklist_name: "Code Review Checklist".to_string(),
-            checklist_note: Some("NOTE".to_string()),
-            checklist_content: "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
+            checklist: Checklist::new(
+                "Code Review Checklist".to_string(),
+                Some("NOTE".to_string()),
+                "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
+            ),
             assignees: vec!["reviewer1".to_string(), "reviewer2".to_string()],
             relevant_files: vec![
                 RelevantFile {
