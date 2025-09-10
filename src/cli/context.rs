@@ -41,7 +41,7 @@ impl CliContext {
         println!("\n✨ Creating issue with:");
         println!("   📊 Milestone: {}", milestone_status);
         println!("   📁 File: {}", file.display());
-        println!("   📋 Checklist: {}", checklist);
+        println!("   📋 Checklist: {}", checklist.name());
         if !assignees.is_empty() {
             println!("   👥 Assignees: {}", assignees.join(", "));
         }

@@ -102,14 +102,9 @@ async fn main() -> Result<()> {
                     assignees,
                     relevant_files,
                 } => {
-                    let configuration = if let Some(c) = cli.config_dir {
-                        let mut c = Configuration::from_path(&c);
-                        c.load_checklists();
-                        c
-                    } else {
-                        log::debug!("Configuration not specified, using default.");
-                        Configuration::default()
-                    };
+                    let config_dir = determine_config_info(cli.config_dir, &env)?;
+                    let mut configuration = Configuration::from_path(&config_dir);
+                    configuration.load_checklists();
 
                     let context = match (milestone, file, checklist_name) {
                         (Some(milestone), Some(file), Some(checklist_name)) => {

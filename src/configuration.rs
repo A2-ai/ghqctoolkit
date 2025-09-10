@@ -28,7 +28,7 @@ impl Default for ConfigurationOptions {
     fn default() -> Self {
         Self {
             prepended_checklist_notes: None,
-            checklist_display_name: "checklist".to_string(),
+            checklist_display_name: "checklists".to_string(),
             logo_path: PathBuf::from("logo.png"),
             checklist_directory: PathBuf::from("checklists"),
         }
@@ -58,6 +58,10 @@ impl Checklist {
             note,
             content,
         }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -102,8 +106,8 @@ impl Default for Configuration {
 
 impl Configuration {
     pub fn from_path(path: impl AsRef<Path>) -> Self {
-        let path = path.as_ref().join("options.yaml");
-        let options = match ConfigurationOptions::from_path(&path) {
+        let path = path.as_ref();
+        let options = match ConfigurationOptions::from_path(&path.join("options.yaml")) {
             Ok(o) => o,
             Err(e) => {
                 log::warn!(
@@ -124,7 +128,10 @@ impl Configuration {
         let checklist_dir = self.path.join(&self.options.checklist_directory);
 
         if !checklist_dir.exists() {
-            log::debug!("Checklist directory does not exist. Nothing to load");
+            log::debug!(
+                "Checklist directory {} does not exist. Nothing to load",
+                checklist_dir.display()
+            );
             return;
         }
 
