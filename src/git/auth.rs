@@ -1,24 +1,7 @@
 use octocrab::Octocrab;
 use std::path::PathBuf;
 use std::process::Command;
-
-#[cfg(test)]
-use mockall::automock;
-
-// Trait for environment variable access (mockable in tests)
-#[cfg_attr(test, automock)]
-pub trait EnvProvider {
-    fn var(&self, key: &str) -> Result<String, std::env::VarError>;
-}
-
-// Default implementation that uses std::env
-pub struct StdEnvProvider;
-
-impl EnvProvider for StdEnvProvider {
-    fn var(&self, key: &str) -> Result<String, std::env::VarError> {
-        std::env::var(key)
-    }
-}
+use crate::utils::EnvProvider;
 
 #[derive(thiserror::Error, Debug)]
 pub enum AuthError {
@@ -36,44 +19,45 @@ pub enum AuthError {
     Yaml(#[from] serde_yaml::Error),
 }
 
-pub fn create_authenticated_client(base_url: &str) -> Result<Octocrab, AuthError> {
-    create_authenticated_client_with_env(base_url, &StdEnvProvider)
+pub fn create_authenticated_client(base_url: &str, env: &impl EnvProvider) -> Result<Octocrab, AuthError> {
+    match get_token(base_url, env) {
+        Ok(token) => build_client_with_token(base_url, token),
+        Err(_) => {
+            log::warn!("No authentication found. API access will be limited to public repositories");
+            // Fall back to unauthenticated client
+            build_unauthenticated_client(base_url)
+        }
+    }
 }
 
-fn create_authenticated_client_with_env(
-    base_url: &str,
-    env: &impl EnvProvider,
-) -> Result<Octocrab, AuthError> {
+pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Result<String, AuthError> {
     // Try authentication sources in priority order (similar to gitcreds R package)
 
     // 1. GITHUB_TOKEN environment variable (highest priority)
     if let Ok(token) = env.var("GITHUB_TOKEN") {
         log::debug!("Using GITHUB_TOKEN environment variable");
-        return build_client_with_token(base_url, token);
+        return Ok(token);
     }
 
     // 2. gh CLI authentication
     if let Ok(token) = get_gh_token_with_env(base_url, env) {
         log::debug!("Using gh CLI stored credentials");
-        return build_client_with_token(base_url, token);
+        return Ok(token);
     }
 
     // 3. Git credential manager (git credential fill)
     if let Ok(token) = get_git_credential_token(base_url) {
         log::debug!("Using git credential manager");
-        return build_client_with_token(base_url, token);
+        return Ok(token);
     }
 
     // 4. .netrc file
     if let Ok(token) = get_netrc_token_with_env(base_url, env) {
         log::debug!("Using .netrc file credentials");
-        return build_client_with_token(base_url, token);
+        return Ok(token);
     }
 
-    log::warn!("No authentication found. API access will be limited to public repositories");
-
-    // Fall back to unauthenticated client
-    build_unauthenticated_client(base_url)
+    Err(AuthError::NoAuth)
 }
 
 fn build_client_with_token(base_url: &str, token: String) -> Result<Octocrab, AuthError> {
@@ -256,6 +240,7 @@ fn get_netrc_path_with_env(env: &impl EnvProvider) -> Result<PathBuf, AuthError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::MockEnvProvider;
     use std::fs;
     use tempfile::TempDir;
 
@@ -333,7 +318,7 @@ password ghp_api_token_456
             .times(1)
             .returning(|_| Ok("ghp_env_token".to_string()));
 
-        let client = create_authenticated_client_with_env("https://github.com", &mock_env);
+        let client = create_authenticated_client("https://github.com", &mock_env);
         assert!(client.is_ok());
     }
 }

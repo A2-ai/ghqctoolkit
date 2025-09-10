@@ -1,10 +1,11 @@
-use anyhow::Result;
+use anyhow::{Result, bail, anyhow};
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
 use ghqctoolkit::cli::{CliContext, RelevantFileParser};
-use ghqctoolkit::{Configuration, GitInfo, RelevantFile, create_issue};
+use ghqctoolkit::{Configuration, GitActionImpl, GitInfo, RelevantFile, create_issue, determine_config_info, setup_configuration};
+use ghqctoolkit::utils::StdEnvProvider;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -31,6 +32,11 @@ enum Commands {
         #[command(subcommand)]
         issue_command: IssueCommands,
     },
+    /// Configuration management commands
+    Configuration {
+        #[command(subcommand)]
+        configuration_command: ConfigurationCommands,
+    }
 }
 
 #[derive(Subcommand)]
@@ -59,6 +65,14 @@ enum IssueCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum ConfigurationCommands {
+    Setup {
+        /// git repository url to be cloned to config_dir
+        git: Option<String>
+    }
+}
+
 #[cfg(feature = "cli")]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -71,60 +85,88 @@ async fn main() -> Result<()> {
         .filter(Some("octocrab"), log_level) // Allow logs from octocrab
         .init();
 
-    let git_info = GitInfo::from_path(&cli.project)?;
+    let env = StdEnvProvider;
 
     match cli.command {
-        Commands::Issue { issue_command } => match issue_command {
-            IssueCommands::Create {
-                milestone,
-                file,
-                checklist_name,
-                assignees,
-                relevant_files,
-            } => {
-                let configuration = if let Some(c) = cli.config_dir {
-                    let mut c = Configuration::from_path(&c);
-                    c.load_checklists();
-                    c
+        Commands::Issue { issue_command } => {
+            let git_info = GitInfo::from_path(&cli.project, &env)?;
+            
+            match issue_command {
+                IssueCommands::Create {
+                    milestone,
+                    file,
+                    checklist_name,
+                    assignees,
+                    relevant_files,
+                } => {
+                    let configuration = if let Some(c) = cli.config_dir {
+                        let mut c = Configuration::from_path(&c);
+                        c.load_checklists();
+                        c
+                    } else {
+                        log::debug!("Configuration not specified, using default.");
+                        Configuration::default()
+                    };
+
+                    let context = match (milestone, file, checklist_name) {
+                        (Some(milestone), Some(file), Some(checklist_name)) => {
+                            CliContext::from_args(
+                                milestone,
+                                file,
+                                checklist_name,
+                                assignees,
+                                relevant_files,
+                                configuration,
+                                git_info,
+                            )
+                            .await?
+                        }
+                        (None, None, None) => {
+                            CliContext::from_interactive(&cli.project, configuration, git_info).await?
+                        }
+                        _ => {
+                            return Err(anyhow!(
+                                "Either provide all three arguments (--milestone, --file, --checklist-name) or none to enter interactive mode"
+                            ));
+                        }
+                    };
+
+                    create_issue(
+                        &context.file,
+                        &context.milestone_status,
+                        &context.checklist,
+                        context.assignees,
+                        &context.git_info,
+                        context.relevant_files,
+                    )
+                    .await?;
+
+                    println!("✅ Issue created successfully!");
+                }
+            }
+        },
+        Commands::Configuration { configuration_command } => match configuration_command {
+            ConfigurationCommands::Setup { git } => {
+                let url = if let Some(git) = git {
+                    gix::url::parse(git.as_str().into())
+                        .map_err(|e| anyhow!("provided url {git} is not a valid git url: {e}"))?
                 } else {
-                    log::debug!("Configuration not specified, using default.");
-                    Configuration::default()
-                };
-
-                let context = match (milestone, file, checklist_name) {
-                    (Some(milestone), Some(file), Some(checklist_name)) => {
-                        CliContext::from_args(
-                            milestone,
-                            file,
-                            checklist_name,
-                            assignees,
-                            relevant_files,
-                            configuration,
-                            git_info,
-                        )
-                        .await?
-                    }
-                    (None, None, None) => {
-                        CliContext::from_interactive(&cli.project, configuration, git_info).await?
-                    }
-                    _ => {
-                        return Err(anyhow::anyhow!(
-                            "Either provide all three arguments (--milestone, --file, --checklist-name) or none to enter interactive mode"
-                        ));
+                    if let Ok(git) = std::env::var("GHQC_CONFIG_HOME") {
+                        gix::url::parse(git.as_str().into())
+                            .map_err(|e| anyhow!("GHQC_CONFIG_HOME value {git} is not a valid git url: {e}"))?
+                    } else {
+                        bail!("Must provide `git` flag or have the environment variable `GHQC_CONFIG_HOME` set");
                     }
                 };
 
-                create_issue(
-                    &context.file,
-                    &context.milestone_status,
-                    &context.checklist,
-                    context.assignees,
-                    &context.git_info,
-                    context.relevant_files,
-                )
-                .await?;
+                let config_dir = determine_config_info(cli.config_dir, &StdEnvProvider::default())?;
 
-                println!("✅ Issue created successfully!");
+                let git_action = GitActionImpl;
+
+                setup_configuration(&config_dir, url, git_action).await
+                    .map_err(|e| anyhow!("{e}"))?;
+
+                println!("✅ Configuration successfully setup at {}", config_dir.display());
             }
         },
     }

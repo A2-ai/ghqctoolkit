@@ -37,7 +37,7 @@ pub enum LocalGitError {
     #[error("Failed to walk revision history: {0}")]
     RevWalkError(gix::revision::walk::Error),
     #[error("Failed to traverse commits: {0}")]
-    TraverseError(gix::traverse::commit::simple::Error),
+    TraverseError(gix::revision::walk::iter::Error),
     #[error("Failed to find git object: {0}")]
     FindObjectError(gix::object::find::existing::Error),
     #[error("Failed to parse commit: {0}")]
@@ -106,8 +106,7 @@ impl LocalGitInfo for GitInfo {
 
             // Check if this commit touched the file
             if let Ok(tree) = commit.tree() {
-                let mut buffer = Vec::new();
-                if tree.lookup_entry_by_path(file, &mut buffer).is_ok() {
+                if tree.lookup_entry_by_path(file).is_ok() {
                     commits.push(commit_id);
                 }
             }
