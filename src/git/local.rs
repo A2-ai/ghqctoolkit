@@ -22,7 +22,7 @@ impl fmt::Display for GitAuthor {
 pub trait LocalGitInfo {
     fn commit(&self) -> Result<String, LocalGitError>;
     fn branch(&self) -> Result<String, LocalGitError>;
-    fn file_commits(&self, file: &Path) -> Result<Vec<gix::ObjectId>, LocalGitError>;
+    fn file_commits(&self, file: &Path) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError>;
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, LocalGitError>;
 }
 
@@ -82,7 +82,7 @@ impl LocalGitInfo for GitInfo {
         }
     }
 
-    fn file_commits(&self, file: &Path) -> Result<Vec<gix::ObjectId>, LocalGitError> {
+    fn file_commits(&self, file: &Path) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
         log::debug!("Finding commits that touched file: {:?}", file);
         let mut commits = Vec::new();
 
@@ -107,7 +107,12 @@ impl LocalGitInfo for GitInfo {
             // Check if this commit touched the file
             if let Ok(tree) = commit.tree() {
                 if tree.lookup_entry_by_path(file).is_ok() {
-                    commits.push(commit_id);
+                    // Get commit message, fallback to empty string if not available
+                    let commit_message = commit.message_raw()
+                        .map(|msg| msg.to_string())
+                        .unwrap_or(String::new());
+                    
+                    commits.push((commit_id, commit_message));
                 }
             }
         }
@@ -125,7 +130,7 @@ impl LocalGitInfo for GitInfo {
 
         let mut res: Vec<GitAuthor> = Vec::new();
 
-        for commit_id in commits {
+        for (commit_id, _) in commits {
             let commit = self
                 .repository
                 .find_object(commit_id)

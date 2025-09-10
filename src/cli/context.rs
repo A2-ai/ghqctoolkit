@@ -1,16 +1,19 @@
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
+use octocrab::models::{Milestone, issues::Issue};
 
 use crate::{
     Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
     cli::interactive::{
-        prompt_assignees, prompt_checklist, prompt_file, prompt_milestone, prompt_relevant_files,
+        prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, 
+        prompt_file, prompt_issue, prompt_milestone, prompt_relevant_files,
     },
     configuration::Checklist,
     create::validate_assignees,
+    git::LocalGitInfo,
 };
 
-pub struct CliContext {
+pub struct CreateContext {
     pub file: PathBuf,
     pub milestone_status: MilestoneStatus,
     pub checklist: Checklist,
@@ -20,9 +23,10 @@ pub struct CliContext {
     pub git_info: GitInfo,
 }
 
-impl CliContext {
+impl CreateContext {
     pub async fn from_interactive(
         project_dir: &PathBuf,
+        milestones: &[Milestone],
         configuration: Configuration,
         git_info: GitInfo,
     ) -> Result<Self> {
@@ -31,7 +35,7 @@ impl CliContext {
         let repo_users: Vec<RepoUser> = git_info.get_users().await?;
 
         // Interactive prompts
-        let milestone_status = prompt_milestone(&git_info).await?;
+        let milestone_status = prompt_milestone(milestones)?;
         let file = prompt_file(project_dir)?;
         let checklist = prompt_checklist(&configuration)?;
         let assignees = prompt_assignees(&repo_users)?;
@@ -102,5 +106,168 @@ impl CliContext {
             configuration,
             git_info,
         })
+    }
+}
+
+pub struct CommentContext {
+    pub file: PathBuf,
+    pub issue: Issue,
+    pub current_commit: String,
+    pub previous_commit: Option<String>,
+    pub git_info: GitInfo,
+}
+
+impl CommentContext {
+    pub async fn from_args(
+        milestone_name: String,
+        file: PathBuf,
+        current_commit: Option<String>,
+        previous_commit: Option<String>,
+        milestones: &[Milestone],
+        git_info: GitInfo,
+    ) -> Result<Self> {
+        // Find the milestone
+        let milestone = milestones
+            .iter()
+            .find(|m| m.title == milestone_name)
+            .ok_or_else(|| anyhow!("Milestone '{}' not found", milestone_name))?;
+        
+        // Get issues for this milestone
+        let issues = git_info.get_milestone_issues(milestone).await?;
+        
+        // Find issue that matches the file path
+        let file_str = file.display().to_string();
+        let issue = issues
+            .iter()
+            .find(|issue| {
+                issue.title.contains(&file_str) || 
+                issue.body.as_ref().map_or(false, |body| body.contains(&file_str))
+            })
+            .ok_or_else(|| anyhow!(
+                "No issue found for file '{}' in milestone '{}'", 
+                file_str, 
+                milestone_name
+            ))?;
+        
+        // Get file commits to determine defaults if needed
+        let file_commits = git_info.file_commits(&file)?;
+        
+        if file_commits.is_empty() {
+            return Err(anyhow!("No commits found for file: {}", file.display()));
+        }
+        
+        let final_current_commit = match current_commit {
+            Some(commit) => commit,
+            None => {
+                // Default to most recent commit for this file (first in chronological order)
+                file_commits[0].0.to_string()
+            }
+        };
+        
+        let final_previous_commit = match previous_commit {
+            Some(commit) => Some(commit),
+            None => {
+                // Default to second most recent commit if it exists
+                if file_commits.len() > 1 {
+                    Some(file_commits[1].0.to_string())
+                } else {
+                    None // Only one commit exists for this file
+                }
+            }
+        };
+        
+        Ok(Self {
+            file,
+            issue: issue.clone(),
+            current_commit: final_current_commit,
+            previous_commit: final_previous_commit,
+            git_info,
+        })
+    }
+    
+    pub async fn from_interactive(
+        milestones: &[Milestone],
+        git_info: GitInfo,
+    ) -> Result<Self> {
+        println!("💬 Welcome to GHQC Comment Mode!");
+        
+        // Select milestone (existing only)
+        let milestone = prompt_existing_milestone(milestones)?;
+        
+        // Get issues for this milestone
+        let issues = git_info.get_milestone_issues(&milestone).await?;
+        
+        // Select issue by title
+        let issue = prompt_issue(&issues)?;
+        
+        // Extract file path from issue - we need to determine which file this issue is about
+        let file_path = Self::extract_file_path_from_issue(&issue)?;
+        
+        // Get commits for this file
+        let file_commits = git_info.file_commits(&file_path)?;
+        
+        // Select commits for comparison
+        let (current_commit, previous_commit) = prompt_commits(&file_commits)?;
+        
+        // Display summary
+        println!("\n✨ Creating comment with:");
+        println!("   🎯 Milestone: {}", milestone.title);
+        println!("   🎫 Issue: #{} - {}", issue.number, issue.title);
+        println!("   📁 File: {}", file_path.display());
+        println!("   📝 Current commit: {}", current_commit);
+        if let Some(prev) = &previous_commit {
+            println!("   📝 Previous commit: {}", prev);
+        } else {
+            println!("   📝 Previous commit: None (first commit for this file)");
+        }
+        println!();
+        
+        Ok(Self {
+            file: file_path,
+            issue,
+            current_commit,
+            previous_commit,
+            git_info,
+        })
+    }
+    
+    /// Extract file path from issue title or body
+    fn extract_file_path_from_issue(issue: &Issue) -> Result<PathBuf> {
+        // Look for file paths in the title first
+        if let Some(path) = Self::find_file_path_in_text(&issue.title) {
+            return Ok(PathBuf::from(path));
+        }
+        
+        // Look in the body if available
+        if let Some(body) = &issue.body {
+            if let Some(path) = Self::find_file_path_in_text(body) {
+                return Ok(PathBuf::from(path));
+            }
+        }
+        
+        Err(anyhow!("Could not determine file path from issue #{} - {}", issue.number, issue.title))
+    }
+    
+    /// Simple heuristic to find file paths in text
+    fn find_file_path_in_text(text: &str) -> Option<String> {
+        // Look for common file patterns: src/something.rs, path/to/file.ext, etc.
+        let words: Vec<&str> = text.split_whitespace().collect();
+        
+        for word in words {
+            // Remove markdown backticks if present
+            let clean_word = word.trim_matches('`');
+            
+            // Check if it looks like a file path
+            if clean_word.contains('/') && clean_word.contains('.') {
+                // Basic validation - should have an extension
+                if let Some(extension) = clean_word.split('.').last() {
+                    if extension.len() <= 10 && extension.chars().all(|c| c.is_alphanumeric()) {
+                        return Some(clean_word.to_string());
+                    }
+                }
+            }
+        }
+        
+        None
     }
 }

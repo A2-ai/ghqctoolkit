@@ -1,5 +1,6 @@
 use anyhow::Result;
 use inquire::{Autocomplete, CustomUserError, Select, Text, validator::Validation};
+use octocrab::models::{Milestone, issues::Issue};
 use std::fs;
 use std::path::PathBuf;
 
@@ -7,17 +8,11 @@ use crate::{
     Configuration, RelevantFile,
     configuration::Checklist,
     create::MilestoneStatus,
-    git::{GitHubApi, RepoUser},
+    git::RepoUser,
 };
 
-pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStatus> {
-    println!("📋 Fetching milestones...");
-
-    let milestones = git_info
-        .get_milestones()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to fetch milestones: {}", e))?;
-
+/// Modular milestone selection - allows creation of new milestones
+pub fn prompt_milestone(milestones: &[Milestone]) -> Result<MilestoneStatus> {
     let mut options = vec!["📝 Create new milestone".to_string()];
     let milestone_titles: Vec<String> = milestones
         .iter()
@@ -61,12 +56,40 @@ pub async fn prompt_milestone(git_info: &impl GitHubApi) -> Result<MilestoneStat
     } else {
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
-        if let Some(milestone) = milestones.into_iter().find(|m| m.title == milestone_title) {
-            Ok(MilestoneStatus::Existing(milestone))
+        if let Some(milestone) = milestones.iter().find(|m| m.title == milestone_title) {
+            Ok(MilestoneStatus::Existing(milestone.clone()))
         } else {
             // Fallback to Unknown if we can't find the milestone
             Ok(MilestoneStatus::Unknown(milestone_title.to_string()))
         }
+    }
+}
+
+/// Modular milestone selection - only existing milestones (for comments)
+pub fn prompt_existing_milestone(milestones: &[Milestone]) -> Result<Milestone> {
+    let open_milestones: Vec<_> = milestones
+        .iter()
+        .filter(|m| m.state.as_deref() == Some("open"))
+        .collect();
+
+    if open_milestones.is_empty() {
+        return Err(anyhow::anyhow!("No open milestones found. Please create a milestone first or ensure there are open milestones with issues."));
+    }
+
+    let milestone_titles: Vec<String> = open_milestones
+        .iter()
+        .map(|m| format!("🎯 {}", m.title))
+        .collect();
+
+    let selection = Select::new("Select a milestone:", milestone_titles)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
+    if let Some(milestone) = milestones.iter().find(|m| m.title == milestone_title) {
+        Ok(milestone.clone())
+    } else {
+        Err(anyhow::anyhow!("Selected milestone not found"))
     }
 }
 
@@ -487,6 +510,203 @@ pub fn prompt_relevant_files(current_dir: &PathBuf) -> Result<Vec<RelevantFile>>
     }
 
     Ok(relevant_files)
+}
+
+/// Select an issue from a milestone by title with autocomplete
+pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
+    #[derive(Clone)]
+    struct IssueCompleter {
+        issues: Vec<Issue>,
+    }
+
+    impl Autocomplete for IssueCompleter {
+        fn get_suggestions(
+            &mut self,
+            input: &str,
+        ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let mut suggestions = Vec::new();
+
+            for issue in &self.issues {
+                // Search by title
+                if issue.title.to_lowercase().contains(&input.to_lowercase()) {
+                    suggestions.push(issue.title.clone());
+                }
+            }
+
+            // Sort suggestions alphabetically by title
+            suggestions.sort();
+
+            Ok(suggestions)
+        }
+
+        fn get_completion(
+            &mut self,
+            _input: &str,
+            highlighted_suggestion: Option<String>,
+        ) -> std::result::Result<inquire::autocompletion::Replacement, CustomUserError> {
+            Ok(match highlighted_suggestion {
+                Some(suggestion) => inquire::autocompletion::Replacement::Some(suggestion),
+                None => inquire::autocompletion::Replacement::None,
+            })
+        }
+    }
+
+    if issues.is_empty() {
+        return Err(anyhow::anyhow!("No issues found in the selected milestone"));
+    }
+
+    let issue_completer = IssueCompleter {
+        issues: issues.to_vec(),
+    };
+
+    let issue_input = Text::new("🎫 Enter issue title (use Tab for autocomplete):")
+        .with_autocomplete(issue_completer)
+        .with_validator(move |input: &str| {
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                Ok(Validation::Invalid("Issue selection cannot be empty".into()))
+            } else {
+                Ok(Validation::Valid)
+            }
+        })
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+    // Find the issue by title
+    if let Some(issue) = issues.iter().find(|i| i.title == issue_input.trim()) {
+        Ok(issue.clone())
+    } else {
+        Err(anyhow::anyhow!("Issue with title '{}' not found", issue_input.trim()))
+    }
+}
+
+/// Select commits for comparison - returns (current, previous) in chronological order
+pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(String, Option<String>)> {
+    if file_commits.is_empty() {
+        return Err(anyhow::anyhow!("No commits found for this file"));
+    }
+
+    if file_commits.len() == 1 {
+        return Ok((file_commits[0].0.to_string(), None));
+    }
+
+    let mut selected_commits: Vec<usize> = Vec::new();
+    
+    // Helper function to create display options with selection indicators
+    let create_commit_options = |selected: &[usize]| -> Vec<String> {
+        file_commits
+            .iter()
+            .enumerate()
+            .map(|(i, (commit_id, message))| {
+                let short_hash = commit_id.to_string()[..8].to_string();
+                let short_message = if message.is_empty() {
+                    "No message".to_string()
+                } else {
+                    // Take first line and truncate if too long
+                    let first_line = message.lines().next().unwrap_or("");
+                    if first_line.len() > 50 {
+                        format!("{}...", &first_line[..47])
+                    } else {
+                        first_line.to_string()
+                    }
+                };
+                
+                let time_desc = if i == 0 { "latest".to_string() } else { format!("{} commits ago", i) };
+                let selection_indicator = if selected.contains(&i) {
+                    format!("✓ {} - {} - {} (already selected)", short_hash, short_message, time_desc)
+                } else {
+                    format!("  {} - {} - {}", short_hash, short_message, time_desc)
+                };
+                
+                selection_indicator
+            })
+            .collect()
+    };
+
+    // First selection
+    println!("📝 Select first commit:");
+    let options = create_commit_options(&selected_commits);
+    let first_selection = Select::new("Pick commit:", options)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    // Extract short hash from selection (remove prefixes)
+    let first_short_hash = first_selection
+        .trim_start_matches("✓ ")
+        .trim_start_matches("  ")
+        .split(" - ")
+        .next()
+        .unwrap_or("");
+
+    // Find the commit index
+    let first_index = file_commits
+        .iter()
+        .position(|(commit_id, _)| commit_id.to_string().starts_with(first_short_hash))
+        .unwrap_or(0);
+
+    selected_commits.push(first_index);
+
+    // Second selection with loop to prevent selecting already chosen commits
+    let second_selection = loop {
+        println!("📝 Select second commit:");
+        let options = create_commit_options(&selected_commits);
+
+        if options.len() <= 1 {
+            // Only one commit available, return it
+            return Ok((file_commits[first_index].0.to_string(), None));
+        }
+
+        let selection = Select::new("Pick commit:", options)
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+        // Extract short hash from the selection
+        let short_hash = selection
+            .trim_start_matches("✓ ")
+            .trim_start_matches("  ")
+            .split(" - ")
+            .next()
+            .unwrap_or("");
+        
+        // Check if this commit is already selected
+        let is_selected = file_commits
+            .iter()
+            .position(|(commit_id, _)| commit_id.to_string().starts_with(short_hash))
+            .map(|idx| selected_commits.contains(&idx))
+            .unwrap_or(false);
+        
+        if is_selected {
+            println!("⚠️  This commit is already selected. Please choose a different commit.\n");
+            continue;
+        }
+        
+        break selection;
+    };
+
+    // Extract short hash from second selection
+    let second_short_hash = second_selection
+        .trim_start_matches("✓ ")
+        .trim_start_matches("  ")
+        .split(" - ")
+        .next()
+        .unwrap_or("");
+
+    // Find the second commit index
+    let second_index = file_commits
+        .iter()
+        .position(|(commit_id, _)| commit_id.to_string().starts_with(second_short_hash))
+        .unwrap_or(0);
+
+    // Determine chronological order (current should be more recent)
+    let (current_commit, previous_commit) = if first_index <= second_index {
+        // first_index is more recent (smaller index)
+        (file_commits[first_index].0.to_string(), Some(file_commits[second_index].0.to_string()))
+    } else {
+        // second_index is more recent
+        (file_commits[second_index].0.to_string(), Some(file_commits[first_index].0.to_string()))
+    };
+
+    Ok((current_commit, previous_commit))
 }
 
 #[cfg(test)]
