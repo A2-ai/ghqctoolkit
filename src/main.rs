@@ -9,7 +9,7 @@ use ghqctoolkit::{
     Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, create_issue,
     determine_config_info, setup_configuration,
 };
-use ghqctoolkit::{QCApprove, QCComment};
+use ghqctoolkit::{QCApprove, QCComment, QCUnapprove};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -72,7 +72,7 @@ enum IssueCommands {
         #[arg(short, long)]
         milestone: Option<String>,
 
-        /// File path to create issue for (will prompt if not provided)
+        /// File path of issue to comment on (will prompt if not provided)
         #[arg(short, long)]
         file: Option<PathBuf>,
 
@@ -97,7 +97,7 @@ enum IssueCommands {
         #[arg(short, long)]
         milestone: Option<String>,
 
-        /// File path to create issue for (will prompt if not provided)
+        /// File path of issue to approve and close (will prompt if not provided)
         #[arg(short, long)]
         file: Option<PathBuf>,
 
@@ -109,6 +109,19 @@ enum IssueCommands {
         #[arg(short, long)]
         note: Option<String>,
     },
+    Unapprove {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path of issue to un-approve and re-open (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Reason to re-open issue (will prompt if not provided)
+        #[arg(short, long)]
+        reason: Option<String>,
+    }
 }
 
 #[derive(Subcommand)]
@@ -271,6 +284,35 @@ async fn main() -> Result<()> {
 
                     println!("✅ Approval created and issue closed!");
                     println!("{}", approval_url);
+                }
+                IssueCommands::Unapprove { milestone, file, reason } => {
+                    let milestones = git_info.get_milestones().await?;
+                    let unapproval = match (milestone, file, &reason) {
+                        (None, None, None) => {
+                            // Interactive Mode
+                            QCUnapprove::from_interactive(&milestones, &git_info).await?
+                        }
+                        (Some(milestone), Some(file), Some(reason)) => {
+                            QCUnapprove::from_args(
+                                milestone,
+                                file,
+                                reason.clone(),
+                                &milestones,
+                                &git_info,
+                            )
+                            .await?
+                        }
+                        _ => {
+                            bail!(
+                                "Must provide all arguments (--milestone, --file, --reason) or no arguments to enter interactive mode"
+                            )
+                        }
+                    };
+
+                    let unapproval_url = git_info.post_unapproval(&unapproval).await?;
+
+                    println!("🚫 Issue unapproved and reopened!");
+                    println!("{}", unapproval_url);
                 }
             }
         }

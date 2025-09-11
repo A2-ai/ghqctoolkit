@@ -34,3 +34,14 @@ impl QCApprove {
         body.join("\n\n")
     }
 }
+
+pub struct QCUnapprove {
+    pub(crate) issue: Issue,
+    pub(crate) reason: String,
+}
+
+impl QCUnapprove {
+    pub fn body(&self) -> String {
+        vec!["# QC Un-Approval", &self.reason].join("\n")
+    }
+}

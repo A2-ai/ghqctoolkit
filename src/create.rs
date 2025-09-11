@@ -211,6 +211,12 @@ mod tests {
         ) -> Result<String, GitHubApiError> {
             self.github.post_approval(approval).await
         }
+        async fn post_unapproval(
+            &self,
+            unapproval: &crate::QCUnapprove,
+        ) -> Result<String, GitHubApiError> {
+            self.github.post_unapproval(unapproval).await
+        }
         async fn get_users(&self) -> Result<Vec<RepoUser>, GitHubApiError> {
             self.github.get_users().await
         }

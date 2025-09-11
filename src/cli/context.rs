@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::{
     Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
-    approve::QCApprove,
+    QCApprove, QCUnapprove,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
@@ -322,8 +322,18 @@ impl QCApprove {
         // Get issues for this milestone
         let issues = git_info.get_milestone_issues(&milestone).await?;
 
+        // Filter to only show open issues (since we can only approve open issues)
+        let open_issues: Vec<_> = issues
+            .into_iter()
+            .filter(|issue| matches!(issue.state, octocrab::models::IssueState::Open))
+            .collect();
+
+        if open_issues.is_empty() {
+            bail!("No open issues found in milestone '{}' to approve", milestone.title);
+        }
+
         // Select issue by title
-        let issue = prompt_issue(&issues)?;
+        let issue = prompt_issue(&open_issues)?;
 
         // Extract file path from issue - we need to determine which file this issue is about
         let file_path = extract_file_path_from_issue(&issue)?;
@@ -381,9 +391,12 @@ impl QCApprove {
         let file_str = file.to_string_lossy();
         let issue = issues
             .into_iter()
-            .find(|issue| issue.title.contains(file_str.as_ref()))
+            .find(|issue| {
+                issue.title.contains(file_str.as_ref()) 
+                    && matches!(issue.state, octocrab::models::IssueState::Open)
+            })
             .ok_or(anyhow!(
-                "No issue found for file '{file_str}' in milestone '{milestone_name}'"
+                "No open issue found for file '{file_str}' in milestone '{milestone_name}'"
             ))?;
 
         let file_commits = git_info.file_commits(&file)?;
@@ -410,5 +423,93 @@ impl QCApprove {
             issue,
             note,
         })
+    }
+}
+
+impl QCUnapprove {
+    pub async fn from_interactive(milestones: &[Milestone], git_info: &GitInfo) -> Result<Self> {
+        println!("🚫 Welcome to GHQC Unapprove Mode!");
+
+        // Select milestone (existing only)
+        let milestone = prompt_existing_milestone(milestones)?;
+
+        // Get issues for this milestone
+        let issues = git_info.get_milestone_issues(&milestone).await?;
+        log::debug!("Found {} total issues in milestone '{}'", issues.len(), milestone.title);
+
+        // Filter to only show closed issues (since we can only unapprove closed issues)
+        let closed_issues: Vec<_> = issues
+            .into_iter()
+            .filter(|issue| {
+                let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
+                log::debug!("Issue #{}: '{}' (state: {:?}) -> closed: {}", issue.number, issue.title, issue.state, is_closed);
+                is_closed
+            })
+            .collect();
+            
+        log::debug!("Found {} closed issues after filtering", closed_issues.len());
+
+        if closed_issues.is_empty() {
+            bail!("No closed issues found in milestone '{}' to unapprove", milestone.title);
+        }
+
+        // Select issue by title
+        let issue = prompt_issue(&closed_issues)?;
+
+        // Prompt for reason
+        use inquire::{Text, validator::Validation};
+        let reason_input = Text::new("📝 Enter reason for unapproval:")
+            .with_validator(|input: &str| {
+                if input.trim().is_empty() {
+                    Ok(Validation::Invalid("Reason cannot be empty".into()))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()
+            .map_err(|e| anyhow!("Input cancelled: {}", e))?;
+
+        let reason = reason_input.trim().to_string();
+
+        // Display summary
+        println!("\n✨ Creating unapproval with:");
+        println!("   🎯 Milestone: {}", milestone.title);
+        println!("   🎫 Issue: #{} - {}", issue.number, issue.title);
+        println!("   🚫 Reason: {}", reason);
+        println!();
+
+        Ok(Self { issue, reason })
+    }
+
+    pub async fn from_args(
+        milestone_name: String,
+        file: PathBuf,
+        reason: String,
+        milestones: &[Milestone],
+        git_info: &GitInfo,
+    ) -> Result<Self> {
+        let milestone = milestones
+            .iter()
+            .find(|m| m.title == milestone_name)
+            .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
+
+        let issues = git_info.get_milestone_issues(milestone).await?;
+        log::debug!("Found {} total issues in milestone '{}'", issues.len(), milestone_name);
+
+        let file_str = file.to_string_lossy();
+        let issue = issues
+            .into_iter()
+            .find(|issue| {
+                let title_matches = issue.title.contains(file_str.as_ref());
+                let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
+                log::debug!("Issue #{}: '{}' (state: {:?}) -> title_match: {}, closed: {}", 
+                    issue.number, issue.title, issue.state, title_matches, is_closed);
+                title_matches && is_closed
+            })
+            .ok_or(anyhow!(
+                "No closed issue found for file '{file_str}' in milestone '{milestone_name}'"
+            ))?;
+
+        Ok(Self { issue, reason })
     }
 }
