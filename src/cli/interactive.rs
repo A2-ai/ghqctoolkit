@@ -637,9 +637,10 @@ pub fn prompt_commits(
     };
 
     // First selection
-    println!("📝 Select first commit:");
+    println!("📝 Select first commit (press Enter for latest):");
     let options = create_commit_options(&selected_commits);
     let first_selection = Select::new("Pick commit:", options)
+        .with_starting_cursor(0) // Default to first (most recent) commit
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
@@ -661,15 +662,17 @@ pub fn prompt_commits(
 
     // Second selection with loop to prevent selecting already chosen commits
     let second_selection = loop {
-        println!("📝 Select second commit:");
         let options = create_commit_options(&selected_commits);
-
         if options.len() <= 1 {
             // Only one commit available, return it
             return Ok((file_commits[first_index].0, None));
         }
-
+        // Default to the first unselected commit (usually index 1 if first selection was 0)
+        let (default_index, message) = if selected_commits.contains(&0) { (1, "1 commit ago") } else { (0, "latest") };
+        println!("📝 Select second commit (press Enter for {message}):");
+        
         let selection = Select::new("Pick commit:", options)
+            .with_starting_cursor(default_index)
             .prompt()
             .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 

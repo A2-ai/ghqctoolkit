@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 use gix::ObjectId;
 use octocrab::models::{Milestone, issues::Issue};
+use inquire::Confirm;
+
 use std::path::PathBuf;
 
 use crate::{
@@ -231,7 +233,6 @@ impl QCComment {
         let note = prompt_note()?;
 
         // Ask if user wants diff in comment (default is yes/include diff)
-        use inquire::Confirm;
         let include_diff = Confirm::new("📊 Include commit diff in comment?")
             .with_default(true)
             .prompt()
