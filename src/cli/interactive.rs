@@ -760,7 +760,11 @@ pub fn prompt_single_commit(
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
-    let commit_short_hash = commit_selection.trim_start_matches("  ").split(" - ").next().unwrap_or("");
+    let commit_short_hash = commit_selection
+        .trim_start_matches("  ")
+        .split(" - ")
+        .next()
+        .unwrap_or("");
     let commit_index = file_commits
         .iter()
         .position(|(commit_id, _)| commit_id.to_string().starts_with(commit_short_hash))

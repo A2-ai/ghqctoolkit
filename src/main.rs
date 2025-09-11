@@ -3,13 +3,13 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use ghqctoolkit::{QCComment, QCApprove};
 use ghqctoolkit::cli::{CreateContext, RelevantFileParser};
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, create_issue,
     determine_config_info, setup_configuration,
 };
+use ghqctoolkit::{QCApprove, QCComment};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -108,7 +108,7 @@ enum IssueCommands {
         /// Optional note to include in the approval
         #[arg(short, long)]
         note: Option<String>,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -237,7 +237,12 @@ async fn main() -> Result<()> {
                     println!("✅ Comment created!");
                     println!("{}", comment_url);
                 }
-                IssueCommands::Approve { milestone, file, approved_commit, note } => {
+                IssueCommands::Approve {
+                    milestone,
+                    file,
+                    approved_commit,
+                    note,
+                } => {
                     let milestones = git_info.get_milestones().await?;
                     let approval = match (milestone, file, &note) {
                         (None, None, None) => {
@@ -245,10 +250,20 @@ async fn main() -> Result<()> {
                             QCApprove::from_interactive(&milestones, &git_info).await?
                         }
                         (Some(milestone), Some(file), _) => {
-                            QCApprove::from_args(milestone, file, approved_commit, note, &milestones, &git_info).await?
+                            QCApprove::from_args(
+                                milestone,
+                                file,
+                                approved_commit,
+                                note,
+                                &milestones,
+                                &git_info,
+                            )
+                            .await?
                         }
                         _ => {
-                            bail!("Must provide both --milestone and --file arguments or no arguments to enter interactive mode")
+                            bail!(
+                                "Must provide both --milestone and --file arguments or no arguments to enter interactive mode"
+                            )
                         }
                     };
 

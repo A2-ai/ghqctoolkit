@@ -4,7 +4,7 @@ use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
 
 use crate::issues::QCIssue;
-use crate::{GitInfo, QCComment, QCApprove};
+use crate::{GitInfo, QCApprove, QCComment};
 #[cfg(test)]
 use mockall::automock;
 

@@ -1,14 +1,20 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use inquire::Confirm;
 use octocrab::models::{Milestone, issues::Issue};
 
 use std::path::PathBuf;
 
 use crate::{
-    approve::QCApprove, cli::interactive::{
+    Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
+    approve::QCApprove,
+    cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
-    }, comment::QCComment, configuration::Checklist, create::validate_assignees, git::LocalGitInfo, Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser
+    },
+    comment::QCComment,
+    configuration::Checklist,
+    create::validate_assignees,
+    git::LocalGitInfo,
 };
 
 pub struct CreateContext {
@@ -140,7 +146,7 @@ impl QCComment {
         let file_str = file.display().to_string();
         let issue = issues
             .into_iter()
-            .find(|issue| issue.title.contains(&file_str) )
+            .find(|issue| issue.title.contains(&file_str))
             .ok_or_else(|| {
                 anyhow!(
                     "No issue found for file '{}' in milestone '{}'",
@@ -156,18 +162,20 @@ impl QCComment {
             return Err(anyhow!("No commits found for file: {}", file.display()));
         }
 
-        let final_current_commit = match current_commit {
-            Some(commit_str) => {
-                file_commits
+        let final_current_commit =
+            match current_commit {
+                Some(commit_str) => file_commits
                     .iter()
                     .find(|(c, _)| c.to_string().contains(&commit_str))
-                    .ok_or(anyhow!("Provided commit does not correspond to any commits which edited this file"))?.0
-            }
-            None => {
-                // Default to most recent commit for this file (first in chronological order)
-                file_commits[0].0
-            }
-        };
+                    .ok_or(anyhow!(
+                        "Provided commit does not correspond to any commits which edited this file"
+                    ))?
+                    .0,
+                None => {
+                    // Default to most recent commit for this file (first in chronological order)
+                    file_commits[0].0
+                }
+            };
 
         let final_previous_commit = match previous_commit {
             Some(commit_str) => {
@@ -330,7 +338,7 @@ impl QCApprove {
         // Select single commit to approve
         let approved_commit = prompt_single_commit(
             &file_commits,
-            "📝 Select commit to approve (press Enter for latest):"
+            "📝 Select commit to approve (press Enter for latest):",
         )?;
 
         // Prompt for optional note
@@ -374,7 +382,9 @@ impl QCApprove {
         let issue = issues
             .into_iter()
             .find(|issue| issue.title.contains(file_str.as_ref()))
-            .ok_or(anyhow!("No issue found for file '{file_str}' in milestone '{milestone_name}'"))?;
+            .ok_or(anyhow!(
+                "No issue found for file '{file_str}' in milestone '{milestone_name}'"
+            ))?;
 
         let file_commits = git_info.file_commits(&file)?;
 
@@ -382,24 +392,23 @@ impl QCApprove {
             bail!("There are no commits for the selected file");
         }
 
-        let approved_commit = match approve_commit {
-            Some(commit_str) => {
-                file_commits
+        let approved_commit =
+            match approve_commit {
+                Some(commit_str) => file_commits
                     .iter()
                     .find(|(c, _)| c.to_string().contains(&commit_str))
-                    .ok_or(anyhow!("Provided commit does not correspond to any commits which edited this file"))?.0
-            }
-            None => {
-                file_commits[0].0
-            }
-        };
+                    .ok_or(anyhow!(
+                        "Provided commit does not correspond to any commits which edited this file"
+                    ))?
+                    .0,
+                None => file_commits[0].0,
+            };
 
-        Ok(Self { 
+        Ok(Self {
             file,
-            commit: approved_commit, 
-            issue, 
+            commit: approved_commit,
+            issue,
             note,
         })
     }
 }
-
