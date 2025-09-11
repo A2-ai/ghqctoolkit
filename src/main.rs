@@ -84,6 +84,10 @@ enum IssueCommands {
         #[arg(short, long)]
         previous_commit: Option<String>,
 
+        /// Optional note to include in the comment
+        #[arg(short, long)]
+        note: Option<String>,
+
         /// Do not include commit diff between files even if possible. No effect in interactive mode
         #[arg(long)]
         no_diff: bool,
@@ -179,6 +183,7 @@ async fn main() -> Result<()> {
                     file,
                     current_commit,
                     previous_commit,
+                    note,
                     no_diff,
                 } => {
                     // Fetch milestones first
@@ -196,6 +201,7 @@ async fn main() -> Result<()> {
                                 file,
                                 current_commit,
                                 previous_commit,
+                                note,
                                 &milestones,
                                 &git_info,
                                 no_diff,

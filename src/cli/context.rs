@@ -7,7 +7,7 @@ use crate::{
     Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
-        prompt_issue, prompt_milestone, prompt_relevant_files,
+        prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files,
     },
     comment::QCComment,
     configuration::Checklist,
@@ -126,6 +126,7 @@ impl QCComment {
         file: PathBuf,
         current_commit: Option<String>,
         previous_commit: Option<String>,
+        note: Option<String>,
         milestones: &[Milestone],
         git_info: &GitInfo,
         no_diff: bool,
@@ -200,6 +201,7 @@ impl QCComment {
             file,
             current_commit: final_current_commit,
             previous_commit: final_previous_commit,
+            note,
             no_diff,
         })
     }
@@ -225,6 +227,9 @@ impl QCComment {
         // Select commits for comparison
         let (current_commit, previous_commit) = prompt_commits(&file_commits)?;
 
+        // Prompt for optional note
+        let note = prompt_note()?;
+
         // Ask if user wants diff in comment (default is yes/include diff)
         use inquire::Confirm;
         let include_diff = Confirm::new("📊 Include commit diff in comment?")
@@ -243,6 +248,9 @@ impl QCComment {
         } else {
             println!("   📝 Previous commit: None (first commit for this file)");
         }
+        if let Some(ref n) = note {
+            println!("   💬 Note: {}", n);
+        }
         println!(
             "   📊 Include diff: {}",
             if include_diff { "Yes" } else { "No" }
@@ -254,6 +262,7 @@ impl QCComment {
             file: file_path,
             current_commit,
             previous_commit,
+            note,
             no_diff: !include_diff,
         })
     }

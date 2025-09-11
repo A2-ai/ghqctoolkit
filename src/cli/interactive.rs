@@ -728,6 +728,20 @@ pub fn prompt_commits(
     Ok((current_commit, previous_commit))
 }
 
+/// Prompt for optional note for a comment
+pub fn prompt_note() -> Result<Option<String>> {
+    let note_input = Text::new("📝 Enter optional note for this comment (Enter to skip):")
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+    let trimmed_input = note_input.trim();
+    if trimmed_input.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed_input.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

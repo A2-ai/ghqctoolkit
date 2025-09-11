@@ -11,6 +11,7 @@ pub struct QCComment {
     pub(crate) issue: Issue,
     pub(crate) current_commit: ObjectId,
     pub(crate) previous_commit: Option<ObjectId>,
+    pub(crate) note: Option<String>,
     pub(crate) no_diff: bool,
 }
 
@@ -42,6 +43,10 @@ impl QCComment {
         let mut body = vec!["# QC Notification".to_string()];
         if !assignees.is_empty() {
             body.push(assignees);
+        }
+
+        if let Some(note) = &self.note {
+            body.push(note.clone());
         }
 
         body.push(metadata.join("\n* "));
@@ -324,6 +329,7 @@ mod tests {
         file_path: String,
         current_commit: String,
         previous_commit: Option<String>,
+        note: Option<String>,
         no_diff: bool,
         previous_content: Option<ContentSection>,
         current_content: Option<ContentSection>,
@@ -433,6 +439,7 @@ mod tests {
             issue,
             current_commit,
             previous_commit,
+            note: config.note.clone(),
             no_diff: config.no_diff,
         };
 

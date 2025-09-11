@@ -12,6 +12,9 @@ file_path = "src/example.rs"
 current_commit = "1234567890abcdef1234567890abcdef12345678"
 previous_commit = "abcdef1234567890abcdef1234567890abcdef12"
 
+# Optional note
+note = "This change fixes the function signature and adds additional logging"
+
 # Diff settings
 no_diff = false
 

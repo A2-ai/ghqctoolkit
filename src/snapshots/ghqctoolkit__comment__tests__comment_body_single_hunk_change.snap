@@ -4,6 +4,8 @@ expression: result
 ---
 # QC Notification
 
+This change fixes the function signature and adds additional logging
+
 ## Metadata
 * current commit: 1234567890abcdef1234567890abcdef12345678
 * previous commit: abcdef1234567890abcdef1234567890abcdef12
