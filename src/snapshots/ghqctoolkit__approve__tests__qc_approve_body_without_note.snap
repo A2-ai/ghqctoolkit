@@ -1,0 +1,9 @@
+---
+source: src/approve.rs
+expression: body
+---
+# QC Approved
+
+## Metadata
+* approved qc commit: abcdef1234567890abcdef1234567890abcdef12
+* [file contents at approved qc commit](https://github.com/owner/repo/blob/abcdef1/src/lib.rs)
