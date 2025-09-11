@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use gix::ObjectId;
-use octocrab::models::{Milestone, issues::Issue};
 use inquire::Confirm;
+use octocrab::models::{Milestone, issues::Issue};
 
 use std::path::PathBuf;
 

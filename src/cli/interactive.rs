@@ -668,9 +668,13 @@ pub fn prompt_commits(
             return Ok((file_commits[first_index].0, None));
         }
         // Default to the first unselected commit (usually index 1 if first selection was 0)
-        let (default_index, message) = if selected_commits.contains(&0) { (1, "1 commit ago") } else { (0, "latest") };
+        let (default_index, message) = if selected_commits.contains(&0) {
+            (1, "1 commit ago")
+        } else {
+            (0, "latest")
+        };
         println!("📝 Select second commit (press Enter for {message}):");
-        
+
         let selection = Select::new("Pick commit:", options)
             .with_starting_cursor(default_index)
             .prompt()
