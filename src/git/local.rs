@@ -24,7 +24,11 @@ pub trait LocalGitInfo {
     fn branch(&self) -> Result<String, LocalGitError>;
     fn file_commits(&self, file: &Path) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError>;
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, LocalGitError>;
-    fn file_content_at_commit(&self, file: &Path, commit: &gix::ObjectId) -> Result<String, LocalGitError>;
+    fn file_content_at_commit(
+        &self,
+        file: &Path,
+        commit: &gix::ObjectId,
+    ) -> Result<String, LocalGitError>;
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -124,7 +128,7 @@ impl LocalGitInfo for GitInfo {
             } else {
                 // Compare this commit's tree with each parent to see if the file changed
                 let current_tree = commit.tree().map_err(LocalGitError::TreeError)?;
-                
+
                 for parent_id in commit.parent_ids() {
                     let parent_commit = self
                         .repository
@@ -132,13 +136,13 @@ impl LocalGitInfo for GitInfo {
                         .map_err(LocalGitError::FindObjectError)?
                         .try_into_commit()
                         .map_err(LocalGitError::CommitError)?;
-                    
+
                     let parent_tree = parent_commit.tree().map_err(LocalGitError::TreeError)?;
-                    
+
                     // Check if file exists in current and parent trees
                     let file_in_current = current_tree.lookup_entry_by_path(file);
                     let file_in_parent = parent_tree.lookup_entry_by_path(file);
-                    
+
                     match (file_in_current, file_in_parent) {
                         (Ok(Some(current_entry)), Ok(Some(parent_entry))) => {
                             // File exists in both - check if content changed
@@ -167,10 +171,11 @@ impl LocalGitInfo for GitInfo {
 
             if file_was_modified {
                 // Get commit message, fallback to empty string if not available
-                let commit_message = commit.message_raw()
+                let commit_message = commit
+                    .message_raw()
                     .map(|msg| msg.to_string())
                     .unwrap_or(String::new());
-                
+
                 commits.push((commit_id, commit_message));
             }
         }
@@ -214,9 +219,17 @@ impl LocalGitInfo for GitInfo {
         }
     }
 
-    fn file_content_at_commit(&self, file: &Path, commit: &gix::ObjectId) -> Result<String, LocalGitError> {
+    fn file_content_at_commit(
+        &self,
+        file: &Path,
+        commit: &gix::ObjectId,
+    ) -> Result<String, LocalGitError> {
         let file_path = file;
-        log::debug!("Getting file content for {:?} at commit {}", file_path, commit);
+        log::debug!(
+            "Getting file content for {:?} at commit {}",
+            file_path,
+            commit
+        );
 
         // Get the commit object
         let commit_obj = self

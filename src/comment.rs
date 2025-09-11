@@ -4,7 +4,7 @@ use diff::{Result as DiffResult, lines};
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
-use crate::{git::{GitHelpers, LocalGitError, LocalGitInfo}};
+use crate::git::{GitHelpers, LocalGitError, LocalGitInfo};
 
 pub struct QCComment {
     pub(crate) file: PathBuf,
@@ -15,10 +15,13 @@ pub struct QCComment {
 }
 
 impl QCComment {
-    pub(crate) fn body(&self, git_info: &(impl GitHelpers + LocalGitInfo)) -> Result<String, CommentError> {
+    pub(crate) fn body(
+        &self,
+        git_info: &(impl GitHelpers + LocalGitInfo),
+    ) -> Result<String, CommentError> {
         let mut metadata = vec![
-            "## Metadata".to_string(), 
-            format!("current commit: {}", self.current_commit)
+            "## Metadata".to_string(),
+            format!("current commit: {}", self.current_commit),
         ];
         if let Some(p_c) = self.previous_commit {
             metadata.push(format!("previous commit: {p_c}"));
@@ -28,9 +31,13 @@ impl QCComment {
             ));
         }
 
-        let assignees = self.issue.assignees
-            .iter().map(|a| format!("@{}", a.login))
-            .collect::<Vec<_>>().join(", ");
+        let assignees = self
+            .issue
+            .assignees
+            .iter()
+            .map(|a| format!("@{}", a.login))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         let mut body = vec!["# QC Notification".to_string()];
         if !assignees.is_empty() {
@@ -41,17 +48,22 @@ impl QCComment {
 
         if !self.no_diff {
             if let Some(previous_commit) = self.previous_commit {
-                let current_content = git_info.file_content_at_commit(&self.file, &self.current_commit)?;
-                let previous_content = git_info.file_content_at_commit(&self.file, &previous_commit)?;
-                
-                let difference = format!("## File Difference\n{}", diff(&previous_content, &current_content));
+                let current_content =
+                    git_info.file_content_at_commit(&self.file, &self.current_commit)?;
+                let previous_content =
+                    git_info.file_content_at_commit(&self.file, &previous_commit)?;
+
+                let difference = format!(
+                    "## File Difference\n{}",
+                    diff(&previous_content, &current_content)
+                );
 
                 body.push(difference);
             } else {
                 log::debug!("Previous Commit not specified. Cannot generate diff...");
             }
         }
-        
+
         Ok(body.join("\n\n"))
     }
 }
@@ -60,28 +72,28 @@ impl QCComment {
 fn diff(old_content: &str, new_content: &str) -> String {
     let old_lines: Vec<&str> = old_content.lines().collect();
     let new_lines: Vec<&str> = new_content.lines().collect();
-    
+
     // Check if files are identical
     if old_lines == new_lines {
         return "\nNo difference between file versions.\n".to_string();
     }
-    
+
     let changeset = lines(old_content, new_content);
-    
+
     // Group changes into hunks with context
     let hunks = create_hunks(&changeset, 3); // 3 lines of context
-    
+
     if hunks.is_empty() {
         return "\nNo difference between file versions.\n".to_string();
     }
-    
+
     let mut result = Vec::new();
     result.push("```diff".to_string());
-    
+
     for hunk in hunks {
         result.push(format_hunk(&hunk));
     }
-    
+
     result.push("```".to_string());
     result.join("\n")
 }
@@ -108,10 +120,10 @@ fn create_hunks(changeset: &[DiffResult<&str>], context_lines: usize) -> Vec<Dif
     let mut old_line = 1;
     let mut new_line = 1;
     let mut last_change_idx = None;
-    
+
     for (idx, change) in changeset.iter().enumerate() {
         let is_change = matches!(change, DiffResult::Left(_) | DiffResult::Right(_));
-        
+
         if is_change {
             // If this is a change, include context before it if we haven't started a hunk
             if current_hunk_lines.is_empty() {
@@ -120,13 +132,17 @@ fn create_hunks(changeset: &[DiffResult<&str>], context_lines: usize) -> Vec<Dif
                     if let DiffResult::Both(line, _) = &changeset[i] {
                         let ctx_old = old_line - (idx - i);
                         let ctx_new = new_line - (idx - i);
-                        current_hunk_lines.push(DiffLine::Context(line.to_string(), ctx_old, ctx_new));
+                        current_hunk_lines.push(DiffLine::Context(
+                            line.to_string(),
+                            ctx_old,
+                            ctx_new,
+                        ));
                     }
                 }
             }
             last_change_idx = Some(idx);
         }
-        
+
         // Add the current line to the hunk
         match change {
             DiffResult::Left(line) => {
@@ -139,13 +155,17 @@ fn create_hunks(changeset: &[DiffResult<&str>], context_lines: usize) -> Vec<Dif
             }
             DiffResult::Both(line, _) => {
                 if !current_hunk_lines.is_empty() {
-                    current_hunk_lines.push(DiffLine::Context(line.to_string(), old_line, new_line));
+                    current_hunk_lines.push(DiffLine::Context(
+                        line.to_string(),
+                        old_line,
+                        new_line,
+                    ));
                 }
                 old_line += 1;
                 new_line += 1;
             }
         }
-        
+
         // Check if we should end the current hunk
         if let Some(last_change) = last_change_idx {
             let distance_from_last_change = idx - last_change;
@@ -153,7 +173,7 @@ fn create_hunks(changeset: &[DiffResult<&str>], context_lines: usize) -> Vec<Dif
                 // Trim to exactly context_lines after the last change
                 let mut lines_to_keep = current_hunk_lines.len();
                 let mut context_after_change = 0;
-                
+
                 // Count backwards from the end to find where to cut off
                 for (i, line) in current_hunk_lines.iter().enumerate().rev() {
                     if matches!(line, DiffLine::Context(_, _, _)) {
@@ -167,9 +187,9 @@ fn create_hunks(changeset: &[DiffResult<&str>], context_lines: usize) -> Vec<Dif
                         context_after_change = 0;
                     }
                 }
-                
+
                 current_hunk_lines.truncate(lines_to_keep);
-                
+
                 if let Some(hunk) = create_hunk_from_lines(current_hunk_lines.clone()) {
                     hunks.push(hunk);
                 }
@@ -178,13 +198,13 @@ fn create_hunks(changeset: &[DiffResult<&str>], context_lines: usize) -> Vec<Dif
             }
         }
     }
-    
+
     // Handle remaining hunk
     if !current_hunk_lines.is_empty() {
         // Trim final hunk to exactly context_lines after the last change
         let mut lines_to_keep = current_hunk_lines.len();
         let mut context_after_change = 0;
-        
+
         // Count backwards from the end to find where to cut off
         for (i, line) in current_hunk_lines.iter().enumerate().rev() {
             if matches!(line, DiffLine::Context(_, _, _)) {
@@ -198,14 +218,14 @@ fn create_hunks(changeset: &[DiffResult<&str>], context_lines: usize) -> Vec<Dif
                 context_after_change = 0;
             }
         }
-        
+
         current_hunk_lines.truncate(lines_to_keep);
-        
+
         if let Some(hunk) = create_hunk_from_lines(current_hunk_lines) {
             hunks.push(hunk);
         }
     }
-    
+
     hunks
 }
 
@@ -213,12 +233,12 @@ fn create_hunk_from_lines(lines: Vec<DiffLine>) -> Option<DiffHunk> {
     if lines.is_empty() {
         return None;
     }
-    
+
     let mut old_start = usize::MAX;
     let mut new_start = usize::MAX;
     let mut old_count = 0;
     let mut new_count = 0;
-    
+
     for line in &lines {
         match line {
             DiffLine::Context(_, old_num, new_num) => {
@@ -237,7 +257,7 @@ fn create_hunk_from_lines(lines: Vec<DiffLine>) -> Option<DiffHunk> {
             }
         }
     }
-    
+
     Some(DiffHunk {
         old_start,
         old_count,
@@ -249,7 +269,7 @@ fn create_hunk_from_lines(lines: Vec<DiffLine>) -> Option<DiffHunk> {
 
 fn format_hunk(hunk: &DiffHunk) -> String {
     let mut result = Vec::new();
-    
+
     // Add hunk header
     result.push(format!(
         "@@ previous script: lines {}-{} @@",
@@ -261,7 +281,7 @@ fn format_hunk(hunk: &DiffHunk) -> String {
         hunk.new_start,
         hunk.new_start + hunk.new_count - 1
     ));
-    
+
     // Add hunk content with line numbers
     for line in &hunk.lines {
         match line {
@@ -276,7 +296,7 @@ fn format_hunk(hunk: &DiffHunk) -> String {
             }
         }
     }
-    
+
     result.join("\n")
 }
 
@@ -289,12 +309,12 @@ pub enum CommentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::collections::HashMap;
-    use octocrab::models::issues::Issue;
     use gix::ObjectId;
-    use std::str::FromStr;
+    use octocrab::models::issues::Issue;
     use serde::Deserialize;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::str::FromStr;
 
     #[derive(Debug, Deserialize)]
     struct TestConfig {
@@ -335,7 +355,11 @@ mod tests {
             "https://github.com/owner/repo/blob/commit/file".to_string()
         }
 
-        fn commit_comparison_url(&self, _current_commit: &gix::ObjectId, _previous_commit: &gix::ObjectId) -> String {
+        fn commit_comparison_url(
+            &self,
+            _current_commit: &gix::ObjectId,
+            _previous_commit: &gix::ObjectId,
+        ) -> String {
             "https://github.com/owner/repo/compare/prev..current".to_string()
         }
     }
@@ -349,17 +373,28 @@ mod tests {
             Ok("test-branch".to_string())
         }
 
-        fn file_commits(&self, _file: &std::path::Path) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
+        fn file_commits(
+            &self,
+            _file: &std::path::Path,
+        ) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
             Ok(Vec::new())
         }
 
-        fn authors(&self, _file: &std::path::Path) -> Result<Vec<crate::git::local::GitAuthor>, LocalGitError> {
+        fn authors(
+            &self,
+            _file: &std::path::Path,
+        ) -> Result<Vec<crate::git::local::GitAuthor>, LocalGitError> {
             Ok(Vec::new())
         }
 
-        fn file_content_at_commit(&self, file: &std::path::Path, commit: &gix::ObjectId) -> Result<String, LocalGitError> {
+        fn file_content_at_commit(
+            &self,
+            file: &std::path::Path,
+            commit: &gix::ObjectId,
+        ) -> Result<String, LocalGitError> {
             let key = (file.to_path_buf(), commit.to_string());
-            self.file_contents.get(&key)
+            self.file_contents
+                .get(&key)
                 .cloned()
                 .ok_or_else(|| LocalGitError::FileNotFoundAtCommit(file.to_path_buf()))
         }
@@ -369,7 +404,7 @@ mod tests {
         let path = format!("src/tests/comments/{}", test_file);
         let content = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("Failed to read test config file: {}", path));
-        
+
         toml::from_str(&content)
             .unwrap_or_else(|e| panic!("Failed to parse test config file {}: {}", path, e))
     }
@@ -378,21 +413,21 @@ mod tests {
         let path = format!("src/tests/github_api/issues/{}", issue_file);
         let content = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("Failed to read issue file: {}", path));
-        
+
         serde_json::from_str(&content)
             .unwrap_or_else(|e| panic!("Failed to parse issue file {}: {}", path, e))
     }
 
     fn create_comment_from_config(config: &TestConfig) -> (QCComment, MockGitInfo) {
         let issue = load_issue(&config.issue_file);
-        
+
         let current_commit = ObjectId::from_str(&config.current_commit)
             .unwrap_or_else(|_| panic!("Invalid current commit: {}", config.current_commit));
-        
-        let previous_commit = config.previous_commit.as_ref()
-            .map(|c| ObjectId::from_str(c)
-                .unwrap_or_else(|_| panic!("Invalid previous commit: {}", c)));
-        
+
+        let previous_commit = config.previous_commit.as_ref().map(|c| {
+            ObjectId::from_str(c).unwrap_or_else(|_| panic!("Invalid previous commit: {}", c))
+        });
+
         let comment = QCComment {
             file: PathBuf::from(&config.file_path),
             issue,
@@ -413,7 +448,9 @@ mod tests {
         }
 
         // Set up file content for previous commit if it exists
-        if let (Some(previous_commit), Some(previous_content)) = (&config.previous_commit, &config.previous_content) {
+        if let (Some(previous_commit), Some(previous_content)) =
+            (&config.previous_commit, &config.previous_content)
+        {
             git_info.set_file_content(
                 PathBuf::from(&config.file_path),
                 previous_commit.clone(),
@@ -427,10 +464,14 @@ mod tests {
     fn run_comment_test(test_file: &str) {
         let config = load_test_config(test_file);
         let (comment, git_info) = create_comment_from_config(&config);
-        
-        let result = comment.body(&git_info)
-            .unwrap_or_else(|e| panic!("Failed to generate comment body for test {}: {}", config.name, e));
-        
+
+        let result = comment.body(&git_info).unwrap_or_else(|e| {
+            panic!(
+                "Failed to generate comment body for test {}: {}",
+                config.name, e
+            )
+        });
+
         // Use insta with a test-specific name
         let test_name = format!("comment_body_{}", config.name);
         insta::assert_snapshot!(test_name, result);
@@ -440,7 +481,7 @@ mod tests {
     fn test_all_comment_scenarios() {
         // Get all .toml files in the test comments directory
         let test_dir = std::path::Path::new("src/tests/comments");
-        
+
         if !test_dir.exists() {
             panic!("Test comments directory does not exist: {:?}", test_dir);
         }
@@ -465,7 +506,11 @@ mod tests {
             panic!("No test files found in {}", test_dir.display());
         }
 
-        println!("Running comment tests for {} files: {:?}", test_files.len(), test_files);
+        println!(
+            "Running comment tests for {} files: {:?}",
+            test_files.len(),
+            test_files
+        );
 
         for test_file in test_files {
             println!("Running test: {}", test_file);
@@ -499,4 +544,3 @@ mod tests {
         run_comment_test("separated_hunks.toml");
     }
 }
-

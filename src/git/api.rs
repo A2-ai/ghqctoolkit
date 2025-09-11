@@ -3,8 +3,8 @@ use std::future::Future;
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
 
-use crate::{GitInfo, QCComment};
 use crate::issues::QCIssue;
+use crate::{GitInfo, QCComment};
 #[cfg(test)]
 use mockall::automock;
 
@@ -186,7 +186,10 @@ impl GitHubApi for GitInfo {
         }
     }
 
-    fn post_comment(&self, comment: &QCComment) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
+    fn post_comment(
+        &self,
+        comment: &QCComment,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
@@ -195,8 +198,13 @@ impl GitHubApi for GitInfo {
 
         async move {
             let body = body_result?;
-            
-            log::debug!("Posting comment to issue #{} in {}/{}", issue_number, owner, repo);
+
+            log::debug!(
+                "Posting comment to issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
 
             let comment = octocrab
                 .issues(&owner, &repo)

@@ -6,10 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, RelevantFile,
-    configuration::Checklist,
-    create::MilestoneStatus,
-    git::RepoUser,
+    Configuration, RelevantFile, configuration::Checklist, create::MilestoneStatus, git::RepoUser,
 };
 
 /// Modular milestone selection - allows creation of new milestones
@@ -73,7 +70,9 @@ pub fn prompt_existing_milestone(milestones: &[Milestone]) -> Result<Milestone> 
         .collect();
 
     if open_milestones.is_empty() {
-        return Err(anyhow::anyhow!("No open milestones found. Please create a milestone first or ensure there are open milestones with issues."));
+        return Err(anyhow::anyhow!(
+            "No open milestones found. Please create a milestone first or ensure there are open milestones with issues."
+        ));
     }
 
     let milestone_titles: Vec<String> = open_milestones
@@ -564,7 +563,9 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
         .with_validator(move |input: &str| {
             let trimmed = input.trim();
             if trimmed.is_empty() {
-                Ok(Validation::Invalid("Issue selection cannot be empty".into()))
+                Ok(Validation::Invalid(
+                    "Issue selection cannot be empty".into(),
+                ))
             } else {
                 Ok(Validation::Valid)
             }
@@ -576,12 +577,17 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
     if let Some(issue) = issues.iter().find(|i| i.title == issue_input.trim()) {
         Ok(issue.clone())
     } else {
-        Err(anyhow::anyhow!("Issue with title '{}' not found", issue_input.trim()))
+        Err(anyhow::anyhow!(
+            "Issue with title '{}' not found",
+            issue_input.trim()
+        ))
     }
 }
 
 /// Select commits for comparison - returns (current, previous) in chronological order
-pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(ObjectId, Option<ObjectId>)> {
+pub fn prompt_commits(
+    file_commits: &[(gix::ObjectId, String)],
+) -> Result<(ObjectId, Option<ObjectId>)> {
     if file_commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
@@ -591,7 +597,7 @@ pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(Objec
     }
 
     let mut selected_commits: Vec<usize> = Vec::new();
-    
+
     // Helper function to create display options with selection indicators
     let create_commit_options = |selected: &[usize]| -> Vec<String> {
         file_commits
@@ -610,14 +616,21 @@ pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(Objec
                         first_line.to_string()
                     }
                 };
-                
-                let time_desc = if i == 0 { "latest".to_string() } else { format!("{} commits ago", i) };
+
+                let time_desc = if i == 0 {
+                    "latest".to_string()
+                } else {
+                    format!("{} commits ago", i)
+                };
                 let selection_indicator = if selected.contains(&i) {
-                    format!("✓ {} - {} - {} (already selected)", short_hash, short_message, time_desc)
+                    format!(
+                        "✓ {} - {} - {} (already selected)",
+                        short_hash, short_message, time_desc
+                    )
                 } else {
                     format!("  {} - {} - {}", short_hash, short_message, time_desc)
                 };
-                
+
                 selection_indicator
             })
             .collect()
@@ -667,19 +680,19 @@ pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(Objec
             .split(" - ")
             .next()
             .unwrap_or("");
-        
+
         // Check if this commit is already selected
         let is_selected = file_commits
             .iter()
             .position(|(commit_id, _)| commit_id.to_string().starts_with(short_hash))
             .map(|idx| selected_commits.contains(&idx))
             .unwrap_or(false);
-        
+
         if is_selected {
             println!("⚠️  This commit is already selected. Please choose a different commit.\n");
             continue;
         }
-        
+
         break selection;
     };
 
@@ -700,10 +713,16 @@ pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(Objec
     // Determine chronological order (current should be more recent)
     let (current_commit, previous_commit) = if first_index <= second_index {
         // first_index is more recent (smaller index)
-        (file_commits[first_index].0, Some(file_commits[second_index].0))
+        (
+            file_commits[first_index].0,
+            Some(file_commits[second_index].0),
+        )
     } else {
         // second_index is more recent
-        (file_commits[second_index].0, Some(file_commits[first_index].0))
+        (
+            file_commits[second_index].0,
+            Some(file_commits[first_index].0),
+        )
     };
 
     Ok((current_commit, previous_commit))

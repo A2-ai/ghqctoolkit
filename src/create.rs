@@ -171,7 +171,11 @@ mod tests {
             self.local.authors(file)
         }
 
-        fn file_content_at_commit(&self, file: &Path, commit: &gix::ObjectId) -> Result<String, crate::git::LocalGitError> {
+        fn file_content_at_commit(
+            &self,
+            file: &Path,
+            commit: &gix::ObjectId,
+        ) -> Result<String, crate::git::LocalGitError> {
             self.local.file_content_at_commit(file, commit)
         }
     }
@@ -216,7 +220,7 @@ mod tests {
         milestone_status: MilestoneStatus<'a>,
         checklist_name: &'static str,
         assignees: Vec<&'static str>,
-        existing_issues: Vec<&'static str>,     // fixture names
+        existing_issues: Vec<&'static str>,      // fixture names
         created_milestone: Option<&'static str>, // fixture name for new milestone
     }
 
@@ -336,7 +340,11 @@ mod tests {
                 .github
                 .expect_post_issue()
                 .times(1)
-                .returning(|_| Box::pin(async move { Ok("https://github.com/owner/repo/issues/123".to_string()) }));
+                .returning(|_| {
+                    Box::pin(
+                        async move { Ok("https://github.com/owner/repo/issues/123".to_string()) },
+                    )
+                });
 
             mock_git_info
                 .github
@@ -371,7 +379,7 @@ mod tests {
     async fn test_create_issue_matrix() {
         // Load milestone fixtures that will be referenced by the test cases
         let v1_milestone = load_milestone("v1.0");
-        
+
         let test_cases = vec![
             CreateIssueTestCase {
                 name: "success_with_existing_milestone",
@@ -388,7 +396,7 @@ mod tests {
                 assignees: vec!["admin"],
                 existing_issues: vec![],
                 created_milestone: Some("v2.0"),
-            }
+            },
         ];
 
         let config = create_test_configuration();
@@ -459,5 +467,4 @@ mod tests {
             CreateError::InvalidAssignee(_)
         ));
     }
-
 }

@@ -1,13 +1,18 @@
 use anyhow::{Result, anyhow};
 use gix::ObjectId;
-use std::path::PathBuf;
 use octocrab::models::{Milestone, issues::Issue};
+use std::path::PathBuf;
 
 use crate::{
+    Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
     cli::interactive::{
-        prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, 
-        prompt_file, prompt_issue, prompt_milestone, prompt_relevant_files,
-    }, comment::QCComment, configuration::Checklist, create::validate_assignees, git::LocalGitInfo, Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser
+        prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
+        prompt_issue, prompt_milestone, prompt_relevant_files,
+    },
+    comment::QCComment,
+    configuration::Checklist,
+    create::validate_assignees,
+    git::LocalGitInfo,
 };
 
 pub struct CreateContext<'a> {
@@ -79,12 +84,13 @@ impl<'a> CreateContext<'a> {
         configuration: Configuration,
         git_info: GitInfo,
     ) -> Result<Self> {
-        let milestone_status = if let Some(m) = milestones.iter().find(|m| m.title == milestone_name) {
-            log::debug!("Found existing milestone {}", m.number);
-            MilestoneStatus::Existing(m)
-        } else {
-            MilestoneStatus::New(milestone_name)
-        };
+        let milestone_status =
+            if let Some(m) = milestones.iter().find(|m| m.title == milestone_name) {
+                log::debug!("Found existing milestone {}", m.number);
+                MilestoneStatus::Existing(m)
+            } else {
+                MilestoneStatus::New(milestone_name)
+            };
 
         let final_assignees = assignees.unwrap_or_default();
         let final_relevant_files = relevant_files.unwrap_or_default();
@@ -129,31 +135,36 @@ impl QCComment {
             .iter()
             .find(|m| m.title == milestone_name)
             .ok_or_else(|| anyhow!("Milestone '{}' not found", milestone_name))?;
-        
+
         // Get issues for this milestone
         let issues = git_info.get_milestone_issues(milestone).await?;
-        
+
         // Find issue that matches the file path
         let file_str = file.display().to_string();
         let issue = issues
             .iter()
             .find(|issue| {
-                issue.title.contains(&file_str) || 
-                issue.body.as_ref().map_or(false, |body| body.contains(&file_str))
+                issue.title.contains(&file_str)
+                    || issue
+                        .body
+                        .as_ref()
+                        .map_or(false, |body| body.contains(&file_str))
             })
-            .ok_or_else(|| anyhow!(
-                "No issue found for file '{}' in milestone '{}'", 
-                file_str, 
-                milestone_name
-            ))?;
-        
+            .ok_or_else(|| {
+                anyhow!(
+                    "No issue found for file '{}' in milestone '{}'",
+                    file_str,
+                    milestone_name
+                )
+            })?;
+
         // Get file commits to determine defaults if needed
         let file_commits = git_info.file_commits(&file)?;
-        
+
         if file_commits.is_empty() {
             return Err(anyhow!("No commits found for file: {}", file.display()));
         }
-        
+
         let final_current_commit = match current_commit {
             Some(commit_str) => {
                 // Parse the provided commit string into ObjectId
@@ -165,12 +176,14 @@ impl QCComment {
                 file_commits[0].0
             }
         };
-        
+
         let final_previous_commit = match previous_commit {
             Some(commit_str) => {
                 // Parse the provided commit string into ObjectId
-                Some(ObjectId::from_hex(commit_str.as_bytes())
-                    .map_err(|_| anyhow!("Invalid commit hash: {}", commit_str))?)
+                Some(
+                    ObjectId::from_hex(commit_str.as_bytes())
+                        .map_err(|_| anyhow!("Invalid commit hash: {}", commit_str))?,
+                )
             }
             None => {
                 // Default to second most recent commit if it exists
@@ -181,7 +194,7 @@ impl QCComment {
                 }
             }
         };
-        
+
         Ok(Self {
             issue: issue.clone(),
             file,
@@ -190,38 +203,35 @@ impl QCComment {
             no_diff,
         })
     }
-    
-    pub async fn from_interactive(
-        milestones: &[Milestone],
-        git_info: &GitInfo,
-    ) -> Result<Self> {
+
+    pub async fn from_interactive(milestones: &[Milestone], git_info: &GitInfo) -> Result<Self> {
         println!("💬 Welcome to GHQC Comment Mode!");
-        
+
         // Select milestone (existing only)
         let milestone = prompt_existing_milestone(milestones)?;
-        
+
         // Get issues for this milestone
         let issues = git_info.get_milestone_issues(&milestone).await?;
-        
+
         // Select issue by title
         let issue = prompt_issue(&issues)?;
-        
+
         // Extract file path from issue - we need to determine which file this issue is about
         let file_path = Self::extract_file_path_from_issue(&issue)?;
-        
+
         // Get commits for this file
         let file_commits = git_info.file_commits(&file_path)?;
-        
+
         // Select commits for comparison
         let (current_commit, previous_commit) = prompt_commits(&file_commits)?;
-        
+
         // Ask if user wants diff in comment (default is yes/include diff)
         use inquire::Confirm;
         let include_diff = Confirm::new("📊 Include commit diff in comment?")
             .with_default(true)
             .prompt()
             .map_err(|e| anyhow!("Prompt cancelled: {}", e))?;
-                
+
         // Display summary
         println!("\n✨ Creating comment with:");
         println!("   🎯 Milestone: {}", milestone.title);
@@ -233,9 +243,12 @@ impl QCComment {
         } else {
             println!("   📝 Previous commit: None (first commit for this file)");
         }
-        println!("   📊 Include diff: {}", if include_diff { "Yes" } else { "No" });
+        println!(
+            "   📊 Include diff: {}",
+            if include_diff { "Yes" } else { "No" }
+        );
         println!();
-        
+
         Ok(Self {
             issue,
             file: file_path,
@@ -244,33 +257,37 @@ impl QCComment {
             no_diff: !include_diff,
         })
     }
-    
+
     /// Extract file path from issue title or body
     fn extract_file_path_from_issue(issue: &Issue) -> Result<PathBuf> {
         // Look for file paths in the title first
         if let Some(path) = Self::find_file_path_in_text(&issue.title) {
             return Ok(PathBuf::from(path));
         }
-        
+
         // Look in the body if available
         if let Some(body) = &issue.body {
             if let Some(path) = Self::find_file_path_in_text(body) {
                 return Ok(PathBuf::from(path));
             }
         }
-        
-        Err(anyhow!("Could not determine file path from issue #{} - {}", issue.number, issue.title))
+
+        Err(anyhow!(
+            "Could not determine file path from issue #{} - {}",
+            issue.number,
+            issue.title
+        ))
     }
-    
+
     /// Simple heuristic to find file paths in text
     fn find_file_path_in_text(text: &str) -> Option<String> {
         // Look for common file patterns: src/something.rs, path/to/file.ext, etc.
         let words: Vec<&str> = text.split_whitespace().collect();
-        
+
         for word in words {
             // Remove markdown backticks if present
             let clean_word = word.trim_matches('`');
-            
+
             // Check if it looks like a file path
             if clean_word.contains('/') && clean_word.contains('.') {
                 // Basic validation - should have an extension
@@ -281,7 +298,7 @@ impl QCComment {
                 }
             }
         }
-        
+
         None
     }
 }
