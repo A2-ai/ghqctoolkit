@@ -3,9 +3,9 @@ use std::future::Future;
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
 
+use crate::approve::QCUnapprove;
 use crate::issues::QCIssue;
 use crate::{GitInfo, QCApprove, QCComment};
-use crate::approve::QCUnapprove;
 #[cfg(test)]
 use mockall::automock;
 

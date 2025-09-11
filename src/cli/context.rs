@@ -5,8 +5,8 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
-    QCApprove, QCUnapprove,
+    Configuration, GitHubApi, GitInfo, MilestoneStatus, QCApprove, QCUnapprove, RelevantFile,
+    RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
@@ -329,7 +329,10 @@ impl QCApprove {
             .collect();
 
         if open_issues.is_empty() {
-            bail!("No open issues found in milestone '{}' to approve", milestone.title);
+            bail!(
+                "No open issues found in milestone '{}' to approve",
+                milestone.title
+            );
         }
 
         // Select issue by title
@@ -392,7 +395,7 @@ impl QCApprove {
         let issue = issues
             .into_iter()
             .find(|issue| {
-                issue.title.contains(file_str.as_ref()) 
+                issue.title.contains(file_str.as_ref())
                     && matches!(issue.state, octocrab::models::IssueState::Open)
             })
             .ok_or(anyhow!(
@@ -435,22 +438,38 @@ impl QCUnapprove {
 
         // Get issues for this milestone
         let issues = git_info.get_milestone_issues(&milestone).await?;
-        log::debug!("Found {} total issues in milestone '{}'", issues.len(), milestone.title);
+        log::debug!(
+            "Found {} total issues in milestone '{}'",
+            issues.len(),
+            milestone.title
+        );
 
         // Filter to only show closed issues (since we can only unapprove closed issues)
         let closed_issues: Vec<_> = issues
             .into_iter()
             .filter(|issue| {
                 let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
-                log::debug!("Issue #{}: '{}' (state: {:?}) -> closed: {}", issue.number, issue.title, issue.state, is_closed);
+                log::debug!(
+                    "Issue #{}: '{}' (state: {:?}) -> closed: {}",
+                    issue.number,
+                    issue.title,
+                    issue.state,
+                    is_closed
+                );
                 is_closed
             })
             .collect();
-            
-        log::debug!("Found {} closed issues after filtering", closed_issues.len());
+
+        log::debug!(
+            "Found {} closed issues after filtering",
+            closed_issues.len()
+        );
 
         if closed_issues.is_empty() {
-            bail!("No closed issues found in milestone '{}' to unapprove", milestone.title);
+            bail!(
+                "No closed issues found in milestone '{}' to unapprove",
+                milestone.title
+            );
         }
 
         // Select issue by title
@@ -494,7 +513,11 @@ impl QCUnapprove {
             .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
 
         let issues = git_info.get_milestone_issues(milestone).await?;
-        log::debug!("Found {} total issues in milestone '{}'", issues.len(), milestone_name);
+        log::debug!(
+            "Found {} total issues in milestone '{}'",
+            issues.len(),
+            milestone_name
+        );
 
         let file_str = file.to_string_lossy();
         let issue = issues
@@ -502,8 +525,14 @@ impl QCUnapprove {
             .find(|issue| {
                 let title_matches = issue.title.contains(file_str.as_ref());
                 let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
-                log::debug!("Issue #{}: '{}' (state: {:?}) -> title_match: {}, closed: {}", 
-                    issue.number, issue.title, issue.state, title_matches, is_closed);
+                log::debug!(
+                    "Issue #{}: '{}' (state: {:?}) -> title_match: {}, closed: {}",
+                    issue.number,
+                    issue.title,
+                    issue.state,
+                    title_matches,
+                    is_closed
+                );
                 title_matches && is_closed
             })
             .ok_or(anyhow!(

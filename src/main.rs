@@ -121,7 +121,7 @@ enum IssueCommands {
         /// Reason to re-open issue (will prompt if not provided)
         #[arg(short, long)]
         reason: Option<String>,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -285,7 +285,11 @@ async fn main() -> Result<()> {
                     println!("✅ Approval created and issue closed!");
                     println!("{}", approval_url);
                 }
-                IssueCommands::Unapprove { milestone, file, reason } => {
+                IssueCommands::Unapprove {
+                    milestone,
+                    file,
+                    reason,
+                } => {
                     let milestones = git_info.get_milestones().await?;
                     let unapproval = match (milestone, file, &reason) {
                         (None, None, None) => {
