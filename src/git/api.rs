@@ -3,8 +3,9 @@ use std::future::Future;
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
 
+use crate::approve::QCUnapprove;
 use crate::issues::QCIssue;
-use crate::{GitInfo, QCComment};
+use crate::{GitInfo, QCApprove, QCComment};
 #[cfg(test)]
 use mockall::automock;
 
@@ -42,6 +43,14 @@ pub trait GitHubApi {
     fn post_comment(
         &self,
         comment: &QCComment,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
+    fn post_approval(
+        &self,
+        approval: &QCApprove,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
+    fn post_unapproval(
+        &self,
+        unapproval: &QCUnapprove,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
     fn get_users(&self) -> impl Future<Output = Result<Vec<RepoUser>, GitHubApiError>> + Send;
     fn create_labels_if_needed(
@@ -95,6 +104,8 @@ impl GitHubApi for GitInfo {
                 .issues(&owner, &repo)
                 .list()
                 .milestone(milestone_id)
+                .state(octocrab::params::State::All)
+                .labels(&[String::from("ghqc")])
                 .send()
                 .await
                 .map(|issues| issues.items)
@@ -215,6 +226,120 @@ impl GitHubApi for GitInfo {
             log::debug!(
                 "Successfully posted comment {} to issue #{} in {}/{}",
                 comment.id,
+                issue_number,
+                owner,
+                repo
+            );
+
+            Ok(comment.html_url.to_string())
+        }
+    }
+
+    fn post_approval(
+        &self,
+        approval: &QCApprove,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let issue_number = approval.issue.number;
+        let body = approval.body(self);
+
+        async move {
+            log::debug!(
+                "Posting approval comment and closing issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            // Post the comment first
+            let comment = octocrab
+                .issues(&owner, &repo)
+                .create_comment(issue_number, body)
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::debug!(
+                "Successfully posted approval comment {} to issue #{} in {}/{}",
+                comment.id,
+                issue_number,
+                owner,
+                repo
+            );
+
+            // Then close the issue
+            let update_request = serde_json::json!({
+                "state": "closed"
+            });
+
+            let _: serde_json::Value = octocrab
+                .patch(
+                    format!("/repos/{}/{}/issues/{}", &owner, &repo, issue_number),
+                    Some(&update_request),
+                )
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::debug!(
+                "Successfully closed issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            Ok(comment.html_url.to_string())
+        }
+    }
+
+    fn post_unapproval(
+        &self,
+        unapproval: &QCUnapprove,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let issue_number = unapproval.issue.number;
+        let body = unapproval.body();
+
+        async move {
+            log::debug!(
+                "Posting unapproval comment and reopening issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            // Post the comment first
+            let comment = octocrab
+                .issues(&owner, &repo)
+                .create_comment(issue_number, body)
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::debug!(
+                "Successfully posted unapproval comment {} to issue #{} in {}/{}",
+                comment.id,
+                issue_number,
+                owner,
+                repo
+            );
+
+            // Then reopen the issue
+            let update_request = serde_json::json!({
+                "state": "open"
+            });
+
+            let _: serde_json::Value = octocrab
+                .patch(
+                    format!("/repos/{}/{}/issues/{}", &owner, &repo, issue_number),
+                    Some(&update_request),
+                )
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::debug!(
+                "Successfully reopened issue #{} in {}/{}",
                 issue_number,
                 owner,
                 repo

@@ -1,0 +1,11 @@
+---
+source: src/approve.rs
+expression: body
+---
+# QC Approved
+
+Everything looks good!
+
+## Metadata
+* approved qc commit: 1234567890abcdef1234567890abcdef12345678
+* [file contents at approved qc commit](https://github.com/owner/repo/blob/1234567/src/main.rs)
