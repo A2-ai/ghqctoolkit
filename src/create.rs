@@ -205,6 +205,9 @@ mod tests {
         async fn post_comment(&self, comment: &crate::QCComment) -> Result<String, GitHubApiError> {
             self.github.post_comment(comment).await
         }
+        async fn post_approval(&self, approval: &crate::QCApprove) -> Result<String, GitHubApiError> {
+            self.github.post_approval(approval).await
+        }
         async fn get_users(&self) -> Result<Vec<RepoUser>, GitHubApiError> {
             self.github.get_users().await
         }

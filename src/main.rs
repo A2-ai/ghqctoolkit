@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use ghqctoolkit::QCComment;
+use ghqctoolkit::{QCComment, QCApprove};
 use ghqctoolkit::cli::{CreateContext, RelevantFileParser};
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -92,6 +92,23 @@ enum IssueCommands {
         #[arg(long)]
         no_diff: bool,
     },
+    Approve {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path to create issue for (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Approved commit (defaults to most recent file commit if not in interactive mode)
+        #[arg(short, long)]
+        approved_commit: Option<String>,
+
+        /// Optional note to include in the approval
+        #[arg(short, long)]
+        note: Option<String>,
+    }
 }
 
 #[derive(Subcommand)]
@@ -219,6 +236,26 @@ async fn main() -> Result<()> {
 
                     println!("✅ Comment created!");
                     println!("{}", comment_url);
+                }
+                IssueCommands::Approve { milestone, file, approved_commit, note } => {
+                    let milestones = git_info.get_milestones().await?;
+                    let approval = match (milestone, file, &note) {
+                        (None, None, None) => {
+                            // Interactive Mode
+                            QCApprove::from_interactive(&milestones, &git_info).await?
+                        }
+                        (Some(milestone), Some(file), _) => {
+                            QCApprove::from_args(milestone, file, approved_commit, note, &milestones, &git_info).await?
+                        }
+                        _ => {
+                            bail!("Must provide both --milestone and --file arguments or no arguments to enter interactive mode")
+                        }
+                    };
+
+                    let approval_url = git_info.post_approval(&approval).await?;
+
+                    println!("✅ Approval created and issue closed!");
+                    println!("{}", approval_url);
                 }
             }
         }

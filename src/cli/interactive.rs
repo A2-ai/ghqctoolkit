@@ -584,6 +584,47 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
     }
 }
 
+/// Helper function to format commit options for display
+fn format_commit_options(
+    file_commits: &[(gix::ObjectId, String)],
+    selected: &[usize],
+) -> Vec<String> {
+    file_commits
+        .iter()
+        .enumerate()
+        .map(|(i, (commit_id, message))| {
+            let short_hash = commit_id.to_string()[..8].to_string();
+            let short_message = if message.is_empty() {
+                "No message".to_string()
+            } else {
+                // Take first line and truncate if too long
+                let first_line = message.lines().next().unwrap_or("");
+                if first_line.len() > 50 {
+                    format!("{}...", &first_line[..47])
+                } else {
+                    first_line.to_string()
+                }
+            };
+
+            let time_desc = if i == 0 {
+                "latest".to_string()
+            } else {
+                format!("{} commits ago", i)
+            };
+            let selection_indicator = if selected.contains(&i) {
+                format!(
+                    "✓ {} - {} - {} (already selected)",
+                    short_hash, short_message, time_desc
+                )
+            } else {
+                format!("  {} - {} - {}", short_hash, short_message, time_desc)
+            };
+
+            selection_indicator
+        })
+        .collect()
+}
+
 /// Select commits for comparison - returns (current, previous) in chronological order
 pub fn prompt_commits(
     file_commits: &[(gix::ObjectId, String)],
@@ -598,47 +639,9 @@ pub fn prompt_commits(
 
     let mut selected_commits: Vec<usize> = Vec::new();
 
-    // Helper function to create display options with selection indicators
-    let create_commit_options = |selected: &[usize]| -> Vec<String> {
-        file_commits
-            .iter()
-            .enumerate()
-            .map(|(i, (commit_id, message))| {
-                let short_hash = commit_id.to_string()[..8].to_string();
-                let short_message = if message.is_empty() {
-                    "No message".to_string()
-                } else {
-                    // Take first line and truncate if too long
-                    let first_line = message.lines().next().unwrap_or("");
-                    if first_line.len() > 50 {
-                        format!("{}...", &first_line[..47])
-                    } else {
-                        first_line.to_string()
-                    }
-                };
-
-                let time_desc = if i == 0 {
-                    "latest".to_string()
-                } else {
-                    format!("{} commits ago", i)
-                };
-                let selection_indicator = if selected.contains(&i) {
-                    format!(
-                        "✓ {} - {} - {} (already selected)",
-                        short_hash, short_message, time_desc
-                    )
-                } else {
-                    format!("  {} - {} - {}", short_hash, short_message, time_desc)
-                };
-
-                selection_indicator
-            })
-            .collect()
-    };
-
     // First selection
     println!("📝 Select first commit (press Enter for latest):");
-    let options = create_commit_options(&selected_commits);
+    let options = format_commit_options(file_commits, &selected_commits);
     let first_selection = Select::new("Pick commit:", options)
         .with_starting_cursor(0) // Default to first (most recent) commit
         .prompt()
@@ -662,7 +665,7 @@ pub fn prompt_commits(
 
     // Second selection with loop to prevent selecting already chosen commits
     let second_selection = loop {
-        let options = create_commit_options(&selected_commits);
+        let options = format_commit_options(file_commits, &selected_commits);
         if options.len() <= 1 {
             // Only one commit available, return it
             return Ok((file_commits[first_index].0, None));
@@ -733,6 +736,37 @@ pub fn prompt_commits(
     };
 
     Ok((current_commit, previous_commit))
+}
+
+/// Select a single commit from file commits - returns the selected commit
+pub fn prompt_single_commit(
+    file_commits: &[(gix::ObjectId, String)],
+    prompt_text: &str,
+) -> Result<ObjectId> {
+    if file_commits.is_empty() {
+        return Err(anyhow::anyhow!("No commits found for this file"));
+    }
+
+    if file_commits.len() == 1 {
+        return Ok(file_commits[0].0);
+    }
+
+    // Create commit options (no selection tracking for single commit)
+    let commit_options = format_commit_options(file_commits, &[]);
+
+    println!("{}", prompt_text);
+    let commit_selection = Select::new("Pick commit:", commit_options)
+        .with_starting_cursor(0) // Default to latest commit
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    let commit_short_hash = commit_selection.trim_start_matches("  ").split(" - ").next().unwrap_or("");
+    let commit_index = file_commits
+        .iter()
+        .position(|(commit_id, _)| commit_id.to_string().starts_with(commit_short_hash))
+        .unwrap_or(0);
+
+    Ok(file_commits[commit_index].0)
 }
 
 /// Prompt for optional note for a comment
