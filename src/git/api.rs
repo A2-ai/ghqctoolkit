@@ -3,8 +3,8 @@ use std::future::Future;
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
 
-use crate::GitInfo;
 use crate::issues::QCIssue;
+use crate::{GitInfo, QCComment};
 #[cfg(test)]
 use mockall::automock;
 
@@ -38,7 +38,11 @@ pub trait GitHubApi {
     fn post_issue(
         &self,
         issue: &QCIssue,
-    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
+    fn post_comment(
+        &self,
+        comment: &QCComment,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
     fn get_users(&self) -> impl Future<Output = Result<Vec<RepoUser>, GitHubApiError>> + Send;
     fn create_labels_if_needed(
         &self,
@@ -148,7 +152,7 @@ impl GitHubApi for GitInfo {
     fn post_issue(
         &self,
         issue: &QCIssue,
-    ) -> impl std::future::Future<Output = Result<(), GitHubApiError>> + Send {
+    ) -> impl std::future::Future<Output = Result<String, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
@@ -172,13 +176,51 @@ impl GitHubApi for GitInfo {
             let issue = builder.send().await.map_err(GitHubApiError::APIError)?;
 
             log::debug!(
-                "Successfully posted issue #'{}' to {}/{}",
+                "Successfully posted issue #{} to {}/{}",
                 issue.number,
                 owner,
                 repo
             );
 
-            Ok(())
+            Ok(issue.html_url.to_string())
+        }
+    }
+
+    fn post_comment(
+        &self,
+        comment: &QCComment,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let issue_number = comment.issue.number;
+        let body_result = comment.body(self);
+
+        async move {
+            let body = body_result?;
+
+            log::debug!(
+                "Posting comment to issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            let comment = octocrab
+                .issues(&owner, &repo)
+                .create_comment(issue_number, body)
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::debug!(
+                "Successfully posted comment {} to issue #{} in {}/{}",
+                comment.id,
+                issue_number,
+                owner,
+                repo
+            );
+
+            Ok(comment.html_url.to_string())
         }
     }
 
@@ -430,4 +472,6 @@ pub enum GitHubApiError {
     NoApi,
     #[error("GitHub API URL access failed due to: {0}")]
     APIError(octocrab::Error),
+    #[error("Failed to generate comment body: {0}")]
+    CommentGenerationError(#[from] crate::comment::CommentError),
 }

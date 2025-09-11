@@ -1,0 +1,32 @@
+---
+source: src/comment.rs
+expression: result
+---
+# QC Notification
+
+@reviewer1, @reviewer2
+
+## Metadata
+* current commit: 5678901234abcdef5678901234abcdef56789012
+* previous commit: 90abcdef567812349012abcdef5678901234abcd
+* [commit comparison](https://github.com/owner/repo/compare/prev..current)
+
+## File Difference
+```diff
+@@ previous script: lines 1-4 @@
+@@  current script: lines 1-5 @@
+  1 # file a - header section
++ 2 # file edit - added header comment
+  3 line 2
+  4 line 3
+  5 line 4
+@@ previous script: lines 19-24 @@
+@@  current script: lines 20-26 @@
+  20 line 19
+  21 line 20
+  22 # file b - footer section
++ 23 # file b edit - added footer comment
+  24 line 22
+  25 line 23
+  26 line 24
+```

@@ -1,0 +1,8 @@
+---
+source: src/comment.rs
+expression: result
+---
+# QC Notification
+
+## Metadata
+* current commit: aabbccdd11223344aabbccdd11223344aabbccdd

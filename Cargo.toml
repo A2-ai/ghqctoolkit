@@ -23,6 +23,7 @@ futures = "0.3"
 thiserror = "1.0"
 log = "0.4"
 etcetera = "0.8"
+diff = "0.1"
 clap = { version = "4.0", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
 clap-verbosity-flag = { version = "2.0", optional = true }
@@ -42,6 +43,7 @@ cli = [
 mockall = "0.12"
 tempfile = "3.0"
 insta = "1.34"
+toml = "0.8"
 
 [[bin]]
 name = "ghqc"

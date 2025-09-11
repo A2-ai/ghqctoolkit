@@ -3,11 +3,12 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use ghqctoolkit::cli::{CliContext, RelevantFileParser};
+use ghqctoolkit::QCComment;
+use ghqctoolkit::cli::{CreateContext, RelevantFileParser};
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, GitActionImpl, GitInfo, RelevantFile, create_issue, determine_config_info,
-    setup_configuration,
+    Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, create_issue,
+    determine_config_info, setup_configuration,
 };
 
 #[derive(Parser)]
@@ -17,8 +18,8 @@ struct Cli {
     command: Commands,
 
     /// the git project directory for which to QC on
-    #[clap(short, long, default_value = ".", global = true)]
-    project: PathBuf,
+    #[clap(short = 'd', long, default_value = ".", global = true)]
+    directory: PathBuf,
 
     /// Configuration directory path
     #[arg(short, long)]
@@ -66,6 +67,31 @@ enum IssueCommands {
         #[arg(short = 'r', long, value_parser = RelevantFileParser)]
         relevant_files: Option<Vec<RelevantFile>>,
     },
+    Comment {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path to create issue for (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Current commit (defaults to most recent file commit if not in interactive mode)
+        #[arg(short, long)]
+        current_commit: Option<String>,
+
+        /// Previous commit (defaults to second most recent file commit if not in interactive mode)
+        #[arg(short, long)]
+        previous_commit: Option<String>,
+
+        /// Optional note to include in the comment
+        #[arg(short, long)]
+        note: Option<String>,
+
+        /// Do not include commit diff between files even if possible. No effect in interactive mode
+        #[arg(long)]
+        no_diff: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -92,7 +118,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Issue { issue_command } => {
-            let git_info = GitInfo::from_path(&cli.project, &env)?;
+            let git_info = GitInfo::from_path(&cli.directory, &env)?;
 
             match issue_command {
                 IssueCommands::Create {
@@ -106,10 +132,14 @@ async fn main() -> Result<()> {
                     let mut configuration = Configuration::from_path(&config_dir);
                     configuration.load_checklists();
 
+                    // Fetch milestones first
+                    let milestones = git_info.get_milestones().await?;
+
                     let context = match (milestone, file, checklist_name) {
-                        (Some(milestone), Some(file), Some(checklist_name)) => {
-                            CliContext::from_args(
-                                milestone,
+                        (Some(milestone_name), Some(file), Some(checklist_name)) => {
+                            CreateContext::from_args(
+                                milestone_name,
+                                milestones,
                                 file,
                                 checklist_name,
                                 assignees,
@@ -120,17 +150,22 @@ async fn main() -> Result<()> {
                             .await?
                         }
                         (None, None, None) => {
-                            CliContext::from_interactive(&cli.project, configuration, git_info)
-                                .await?
+                            CreateContext::from_interactive(
+                                &cli.directory,
+                                milestones,
+                                configuration,
+                                git_info,
+                            )
+                            .await?
                         }
                         _ => {
-                            return Err(anyhow!(
+                            bail!(
                                 "Either provide all three arguments (--milestone, --file, --checklist-name) or none to enter interactive mode"
-                            ));
+                            );
                         }
                     };
 
-                    create_issue(
+                    let issue_url = create_issue(
                         &context.file,
                         &context.milestone_status,
                         &context.checklist,
@@ -141,6 +176,49 @@ async fn main() -> Result<()> {
                     .await?;
 
                     println!("✅ Issue created successfully!");
+                    println!("{}", issue_url);
+                }
+                IssueCommands::Comment {
+                    milestone,
+                    file,
+                    current_commit,
+                    previous_commit,
+                    note,
+                    no_diff,
+                } => {
+                    // Fetch milestones first
+                    let milestones = git_info.get_milestones().await?;
+
+                    let comment = match (milestone, file) {
+                        (None, None) => {
+                            // Interactive mode
+                            QCComment::from_interactive(&milestones, &git_info).await?
+                        }
+                        (Some(milestone), Some(file)) => {
+                            // Non-interactive mode
+                            QCComment::from_args(
+                                milestone,
+                                file,
+                                current_commit,
+                                previous_commit,
+                                note,
+                                &milestones,
+                                &git_info,
+                                no_diff,
+                            )
+                            .await?
+                        }
+                        _ => {
+                            bail!(
+                                "Must provide both --milestone and --file arguments or neither to enter interactive mode"
+                            )
+                        }
+                    };
+
+                    let comment_url = git_info.post_comment(&comment).await?;
+
+                    println!("✅ Comment created!");
+                    println!("{}", comment_url);
                 }
             }
         }

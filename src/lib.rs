@@ -1,4 +1,5 @@
 mod cache;
+mod comment;
 mod configuration;
 mod create;
 mod git;
@@ -9,6 +10,7 @@ pub mod utils;
 pub mod cli;
 
 pub use cache::DiskCache;
+pub use comment::QCComment;
 pub use configuration::{Configuration, determine_config_info, setup_configuration};
 pub use create::{MilestoneStatus, create_issue, validate_assignees};
 pub use git::{GitAction, GitActionImpl, GitHubApi, GitInfo, RepoUser};

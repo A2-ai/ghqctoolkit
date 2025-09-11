@@ -1,0 +1,10 @@
+---
+source: src/comment.rs
+expression: result
+---
+# QC Notification
+
+## Metadata
+* current commit: 9876543210fedcba9876543210fedcba98765432
+* previous commit: fedcba9876543210fedcba9876543210fedcba98
+* [commit comparison](https://github.com/owner/repo/compare/prev..current)

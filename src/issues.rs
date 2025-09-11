@@ -227,6 +227,15 @@ mod tests {
         fn file_content_url(&self, commit: &str, file: &std::path::Path) -> String {
             self.helpers.file_content_url(commit, file)
         }
+
+        fn commit_comparison_url(
+            &self,
+            current_commit: &gix::ObjectId,
+            previous_commit: &gix::ObjectId,
+        ) -> String {
+            self.helpers
+                .commit_comparison_url(current_commit, previous_commit)
+        }
     }
 
     #[test]

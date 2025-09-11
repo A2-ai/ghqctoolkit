@@ -1,0 +1,40 @@
+# Test diff comment configuration
+name = "single_hunk_change"
+description = "Test a simple single hunk change in a file"
+
+# Issue configuration
+issue_file = "test_file_issue.json"
+
+# File being tracked
+file_path = "src/example.rs"
+
+# Commit information
+current_commit = "1234567890abcdef1234567890abcdef12345678"
+previous_commit = "abcdef1234567890abcdef1234567890abcdef12"
+
+# Optional note
+note = "This change fixes the function signature and adds additional logging"
+
+# Diff settings
+no_diff = false
+
+# File content at previous commit
+[previous_content]
+content = '''
+line 1
+line 2
+line 3
+line 4
+line 5
+'''
+
+# File content at current commit
+[current_content]
+content = '''
+line 1
+line 2 modified
+line 3
+line 4
+line 5 added
+line 6
+'''
