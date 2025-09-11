@@ -17,9 +17,9 @@ use crate::{
     git::LocalGitInfo,
 };
 
-pub struct CreateContext<'a> {
+pub struct CreateContext {
     pub file: PathBuf,
-    pub milestone_status: MilestoneStatus<'a>,
+    pub milestone_status: MilestoneStatus,
     pub checklist: Checklist,
     pub assignees: Vec<String>,
     pub relevant_files: Vec<RelevantFile>,
@@ -27,10 +27,10 @@ pub struct CreateContext<'a> {
     pub git_info: GitInfo,
 }
 
-impl<'a> CreateContext<'a> {
+impl<'a> CreateContext {
     pub async fn from_interactive(
         project_dir: &PathBuf,
-        milestones: &'a [Milestone],
+        milestones: Vec<Milestone>,
         configuration: Configuration,
         git_info: GitInfo,
     ) -> Result<Self> {
@@ -78,7 +78,7 @@ impl<'a> CreateContext<'a> {
 
     pub async fn from_args(
         milestone_name: String,
-        milestones: &'a [Milestone],
+        milestones: Vec<Milestone>,
         file: PathBuf,
         checklist_name: String,
         assignees: Option<Vec<String>>,
@@ -87,7 +87,7 @@ impl<'a> CreateContext<'a> {
         git_info: GitInfo,
     ) -> Result<Self> {
         let milestone_status =
-            if let Some(m) = milestones.iter().find(|m| m.title == milestone_name) {
+            if let Some(m) = milestones.into_iter().find(|m| m.title == milestone_name) {
                 log::debug!("Found existing milestone {}", m.number);
                 MilestoneStatus::Existing(m)
             } else {

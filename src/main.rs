@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
                         (Some(milestone_name), Some(file), Some(checklist_name)) => {
                             CreateContext::from_args(
                                 milestone_name,
-                                &milestones,
+                                milestones,
                                 file,
                                 checklist_name,
                                 assignees,
@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
                         (None, None, None) => {
                             CreateContext::from_interactive(
                                 &cli.directory,
-                                &milestones,
+                                milestones,
                                 configuration,
                                 git_info,
                             )

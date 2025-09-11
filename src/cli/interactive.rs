@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Modular milestone selection - allows creation of new milestones
-pub fn prompt_milestone(milestones: &[Milestone]) -> Result<MilestoneStatus> {
+pub fn prompt_milestone(milestones: Vec<Milestone>) -> Result<MilestoneStatus> {
     let mut options = vec!["📝 Create new milestone".to_string()];
     let milestone_titles: Vec<String> = milestones
         .iter()
@@ -55,7 +55,7 @@ pub fn prompt_milestone(milestones: &[Milestone]) -> Result<MilestoneStatus> {
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
         let milestone = milestones
-            .iter()
+            .into_iter()
             .find(|m| m.title == milestone_title)
             .expect("selected milestone to exist");
         Ok(MilestoneStatus::Existing(milestone))

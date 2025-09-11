@@ -324,7 +324,7 @@ mod tests {
     #[derive(Debug, Deserialize)]
     struct TestConfig {
         name: String,
-        _description: String,
+        description: String,
         issue_file: String,
         file_path: String,
         current_commit: String,

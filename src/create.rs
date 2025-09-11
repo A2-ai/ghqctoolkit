@@ -14,12 +14,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub enum MilestoneStatus<'a> {
-    Existing(&'a Milestone),
+pub enum MilestoneStatus {
+    Existing(Milestone),
     New(String),
 }
 
-impl<'a> fmt::Display for MilestoneStatus<'a> {
+impl<'a> fmt::Display for MilestoneStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::New(name) => write!(f, "{name} (new)"),
@@ -30,9 +30,9 @@ impl<'a> fmt::Display for MilestoneStatus<'a> {
     }
 }
 
-impl<'a> MilestoneStatus<'a> {
-    async fn determine_milestone(
-        &self,
+impl MilestoneStatus {
+    async fn determine_milestone<'a>(
+        &'a self,
         file: impl AsRef<Path>,
         git_info: &impl GitHubApi,
     ) -> Result<Cow<'a, Milestone>, CreateError> {
@@ -79,9 +79,9 @@ pub fn validate_assignees(
     Ok(())
 }
 
-pub async fn create_issue<'a>(
+pub async fn create_issue(
     file: impl AsRef<Path>,
-    milestone_status: &MilestoneStatus<'a>,
+    milestone_status: &MilestoneStatus,
     checklist: &Checklist,
     assignees: Vec<String>,
     git_info: &(impl LocalGitInfo + GitHubApi),
@@ -215,9 +215,9 @@ mod tests {
 
     // Test scenario struct for matrix testing
     #[derive(Clone)]
-    struct CreateIssueTestCase<'a> {
+    struct CreateIssueTestCase {
         name: &'static str,
-        milestone_status: MilestoneStatus<'a>,
+        milestone_status: MilestoneStatus,
         checklist_name: &'static str,
         assignees: Vec<&'static str>,
         existing_issues: Vec<&'static str>,      // fixture names
@@ -383,7 +383,7 @@ mod tests {
         let test_cases = vec![
             CreateIssueTestCase {
                 name: "success_with_existing_milestone",
-                milestone_status: MilestoneStatus::Existing(&v1_milestone),
+                milestone_status: MilestoneStatus::Existing(v1_milestone),
                 checklist_name: "Simple Tasks",
                 assignees: vec!["user1", "user2"],
                 existing_issues: vec![],
