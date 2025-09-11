@@ -1,0 +1,25 @@
+---
+source: src/comment.rs
+expression: result
+---
+# QC Notification
+
+## Metadata
+* current commit: 1234567890abcdef1234567890abcdef12345678
+* previous commit: abcdef1234567890abcdef1234567890abcdef12
+* [commit comparison](https://github.com/owner/repo/compare/prev..current)
+
+## File Difference
+```diff
+@@ previous script: lines 1-6 @@
+@@  current script: lines 1-7 @@
+  1 line 1
+- 2 line 2
++ 2 line 2 modified
+  3 line 3
+  4 line 4
+- 5 line 5
++ 5 line 5 added
++ 6 line 6
+  7 
+```

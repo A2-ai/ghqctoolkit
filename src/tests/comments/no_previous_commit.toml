@@ -1,0 +1,34 @@
+# Test diff comment configuration
+name = "no_previous_commit"
+description = "Test comment generation when there is no previous commit"
+
+# Issue configuration
+issue_file = "test_file_issue.json"
+
+# File being tracked
+file_path = "src/new_file.rs"
+
+# Commit information (no previous commit)
+current_commit = "aabbccdd11223344aabbccdd11223344aabbccdd"
+# previous_commit intentionally omitted
+
+# Diff settings
+no_diff = false
+
+# No previous content since there's no previous commit
+# [previous_content] - intentionally omitted
+
+# File content at current commit
+[current_content]
+content = '''
+// This is a brand new file
+pub struct NewStruct {
+    pub field: String,
+}
+
+impl NewStruct {
+    pub fn new(field: String) -> Self {
+        Self { field }
+    }
+}
+'''

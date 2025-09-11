@@ -1,0 +1,60 @@
+# Test diff comment configuration
+name = "multiple_hunks"
+description = "Test multiple separate hunks in a JavaScript-like file"
+
+# Issue configuration
+issue_file = "config_file_issue.json"
+
+# File being tracked
+file_path = "src/app.js"
+
+# Commit information
+current_commit = "2468ace13579bdf24680ace13579bdf246802468"
+previous_commit = "1357bdf24680ace13579bdf24680ace135791357"
+
+# Diff settings
+no_diff = false
+
+# File content at previous commit
+[previous_content]
+content = '''
+function start() {
+    console.log("starting");
+    let x = 1;
+    let y = 2;
+}
+
+function middle() {
+    console.log("middle");
+    return "old value";
+}
+
+function end() {
+    console.log("ending");
+    let z = 3;
+    return "done";
+}
+'''
+
+# File content at current commit
+[current_content]
+content = '''
+function start() {
+    console.log("starting application");
+    let x = 1;
+    let y = 2;
+    let w = 4; // new variable
+}
+
+function middle() {
+    console.log("middle processing");
+    return "new value";
+    let extra = "something";
+}
+
+function end() {
+    console.log("ending");
+    let z = 3;
+    return "completed";
+}
+'''

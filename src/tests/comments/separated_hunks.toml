@@ -1,0 +1,80 @@
+# Test diff comment configuration
+name = "separated_hunks"
+description = "Test multiple hunks that are far apart with non-overlapping context windows"
+
+# Issue configuration
+issue_file = "config_file_issue.json"
+
+# File being tracked
+file_path = "src/large_file.rs"
+
+# Commit information
+current_commit = "5678901234abcdef5678901234abcdef56789012"
+previous_commit = "90abcdef567812349012abcdef5678901234abcd"
+
+# Diff settings
+no_diff = false
+
+# File content at previous commit
+[previous_content]
+content = '''
+# file a - header section
+line 2
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+line 11
+line 12
+line 13
+line 14
+line 15
+line 16
+line 17
+line 18
+line 19
+line 20
+# file b - footer section
+line 22
+line 23
+line 24
+line 25
+line 26
+'''
+
+# File content at current commit
+[current_content]
+content = '''
+# file a - header section
+# file edit - added header comment
+line 2
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+line 11
+line 12
+line 13
+line 14
+line 15
+line 16
+line 17
+line 18
+line 19
+line 20
+# file b - footer section
+# file b edit - added footer comment
+line 22
+line 23
+line 24
+line 25
+line 26
+'''

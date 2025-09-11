@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gix::ObjectId;
 use inquire::{Autocomplete, CustomUserError, Select, Text, validator::Validation};
 use octocrab::models::{Milestone, issues::Issue};
 use std::fs;
@@ -56,12 +57,11 @@ pub fn prompt_milestone(milestones: &[Milestone]) -> Result<MilestoneStatus> {
     } else {
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
-        if let Some(milestone) = milestones.iter().find(|m| m.title == milestone_title) {
-            Ok(MilestoneStatus::Existing(milestone.clone()))
-        } else {
-            // Fallback to Unknown if we can't find the milestone
-            Ok(MilestoneStatus::Unknown(milestone_title.to_string()))
-        }
+        let milestone = milestones
+            .iter()
+            .find(|m| m.title == milestone_title)
+            .expect("selected milestone to exist");
+        Ok(MilestoneStatus::Existing(milestone))
     }
 }
 
@@ -581,13 +581,13 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
 }
 
 /// Select commits for comparison - returns (current, previous) in chronological order
-pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(String, Option<String>)> {
+pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(ObjectId, Option<ObjectId>)> {
     if file_commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
 
     if file_commits.len() == 1 {
-        return Ok((file_commits[0].0.to_string(), None));
+        return Ok((file_commits[0].0, None));
     }
 
     let mut selected_commits: Vec<usize> = Vec::new();
@@ -653,7 +653,7 @@ pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(Strin
 
         if options.len() <= 1 {
             // Only one commit available, return it
-            return Ok((file_commits[first_index].0.to_string(), None));
+            return Ok((file_commits[first_index].0, None));
         }
 
         let selection = Select::new("Pick commit:", options)
@@ -700,10 +700,10 @@ pub fn prompt_commits(file_commits: &[(gix::ObjectId, String)]) -> Result<(Strin
     // Determine chronological order (current should be more recent)
     let (current_commit, previous_commit) = if first_index <= second_index {
         // first_index is more recent (smaller index)
-        (file_commits[first_index].0.to_string(), Some(file_commits[second_index].0.to_string()))
+        (file_commits[first_index].0, Some(file_commits[second_index].0))
     } else {
         // second_index is more recent
-        (file_commits[second_index].0.to_string(), Some(file_commits[first_index].0.to_string()))
+        (file_commits[second_index].0, Some(file_commits[first_index].0))
     };
 
     Ok((current_commit, previous_commit))

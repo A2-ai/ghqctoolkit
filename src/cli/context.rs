@@ -1,21 +1,18 @@
 use anyhow::{Result, anyhow};
+use gix::ObjectId;
 use std::path::PathBuf;
 use octocrab::models::{Milestone, issues::Issue};
 
 use crate::{
-    Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, 
         prompt_file, prompt_issue, prompt_milestone, prompt_relevant_files,
-    },
-    configuration::Checklist,
-    create::validate_assignees,
-    git::LocalGitInfo,
+    }, comment::QCComment, configuration::Checklist, create::validate_assignees, git::LocalGitInfo, Configuration, GitHubApi, GitInfo, MilestoneStatus, RelevantFile, RepoUser
 };
 
-pub struct CreateContext {
+pub struct CreateContext<'a> {
     pub file: PathBuf,
-    pub milestone_status: MilestoneStatus,
+    pub milestone_status: MilestoneStatus<'a>,
     pub checklist: Checklist,
     pub assignees: Vec<String>,
     pub relevant_files: Vec<RelevantFile>,
@@ -23,10 +20,10 @@ pub struct CreateContext {
     pub git_info: GitInfo,
 }
 
-impl CreateContext {
+impl<'a> CreateContext<'a> {
     pub async fn from_interactive(
         project_dir: &PathBuf,
-        milestones: &[Milestone],
+        milestones: &'a [Milestone],
         configuration: Configuration,
         git_info: GitInfo,
     ) -> Result<Self> {
@@ -73,7 +70,8 @@ impl CreateContext {
     }
 
     pub async fn from_args(
-        milestone: String,
+        milestone_name: String,
+        milestones: &'a [Milestone],
         file: PathBuf,
         checklist_name: String,
         assignees: Option<Vec<String>>,
@@ -81,6 +79,13 @@ impl CreateContext {
         configuration: Configuration,
         git_info: GitInfo,
     ) -> Result<Self> {
+        let milestone_status = if let Some(m) = milestones.iter().find(|m| m.title == milestone_name) {
+            log::debug!("Found existing milestone {}", m.number);
+            MilestoneStatus::Existing(m)
+        } else {
+            MilestoneStatus::New(milestone_name)
+        };
+
         let final_assignees = assignees.unwrap_or_default();
         let final_relevant_files = relevant_files.unwrap_or_default();
 
@@ -99,7 +104,7 @@ impl CreateContext {
 
         Ok(Self {
             file,
-            milestone_status: MilestoneStatus::Unknown(milestone),
+            milestone_status,
             checklist,
             assignees: final_assignees,
             relevant_files: final_relevant_files,
@@ -109,22 +114,15 @@ impl CreateContext {
     }
 }
 
-pub struct CommentContext {
-    pub file: PathBuf,
-    pub issue: Issue,
-    pub current_commit: String,
-    pub previous_commit: Option<String>,
-    pub git_info: GitInfo,
-}
-
-impl CommentContext {
+impl QCComment {
     pub async fn from_args(
         milestone_name: String,
         file: PathBuf,
         current_commit: Option<String>,
         previous_commit: Option<String>,
         milestones: &[Milestone],
-        git_info: GitInfo,
+        git_info: &GitInfo,
+        no_diff: bool,
     ) -> Result<Self> {
         // Find the milestone
         let milestone = milestones
@@ -157,19 +155,27 @@ impl CommentContext {
         }
         
         let final_current_commit = match current_commit {
-            Some(commit) => commit,
+            Some(commit_str) => {
+                // Parse the provided commit string into ObjectId
+                ObjectId::from_hex(commit_str.as_bytes())
+                    .map_err(|_| anyhow!("Invalid commit hash: {}", commit_str))?
+            }
             None => {
                 // Default to most recent commit for this file (first in chronological order)
-                file_commits[0].0.to_string()
+                file_commits[0].0
             }
         };
         
         let final_previous_commit = match previous_commit {
-            Some(commit) => Some(commit),
+            Some(commit_str) => {
+                // Parse the provided commit string into ObjectId
+                Some(ObjectId::from_hex(commit_str.as_bytes())
+                    .map_err(|_| anyhow!("Invalid commit hash: {}", commit_str))?)
+            }
             None => {
                 // Default to second most recent commit if it exists
                 if file_commits.len() > 1 {
-                    Some(file_commits[1].0.to_string())
+                    Some(file_commits[1].0)
                 } else {
                     None // Only one commit exists for this file
                 }
@@ -177,17 +183,17 @@ impl CommentContext {
         };
         
         Ok(Self {
-            file,
             issue: issue.clone(),
+            file,
             current_commit: final_current_commit,
             previous_commit: final_previous_commit,
-            git_info,
+            no_diff,
         })
     }
     
     pub async fn from_interactive(
         milestones: &[Milestone],
-        git_info: GitInfo,
+        git_info: &GitInfo,
     ) -> Result<Self> {
         println!("💬 Welcome to GHQC Comment Mode!");
         
@@ -209,6 +215,13 @@ impl CommentContext {
         // Select commits for comparison
         let (current_commit, previous_commit) = prompt_commits(&file_commits)?;
         
+        // Ask if user wants diff in comment (default is yes/include diff)
+        use inquire::Confirm;
+        let include_diff = Confirm::new("📊 Include commit diff in comment?")
+            .with_default(true)
+            .prompt()
+            .map_err(|e| anyhow!("Prompt cancelled: {}", e))?;
+                
         // Display summary
         println!("\n✨ Creating comment with:");
         println!("   🎯 Milestone: {}", milestone.title);
@@ -220,14 +233,15 @@ impl CommentContext {
         } else {
             println!("   📝 Previous commit: None (first commit for this file)");
         }
+        println!("   📊 Include diff: {}", if include_diff { "Yes" } else { "No" });
         println!();
         
         Ok(Self {
-            file: file_path,
             issue,
+            file: file_path,
             current_commit,
             previous_commit,
-            git_info,
+            no_diff: !include_diff,
         })
     }
     

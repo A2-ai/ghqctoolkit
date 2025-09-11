@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use ghqctoolkit::cli::{CreateContext, CommentContext, RelevantFileParser};
+use ghqctoolkit::cli::{CreateContext, RelevantFileParser};
+use ghqctoolkit::QCComment;
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, create_issue, determine_config_info,
@@ -82,6 +83,10 @@ enum IssueCommands {
         /// Previous commit (defaults to second most recent file commit if not in interactive mode)
         #[arg(short, long)]
         previous_commit: Option<String>,
+
+        /// Do not include commit diff between files even if possible. No effect in interactive mode
+        #[arg(long)]
+        no_diff: bool,
     }
 }
 
@@ -127,9 +132,10 @@ async fn main() -> Result<()> {
                     let milestones = git_info.get_milestones().await?;
 
                     let context = match (milestone, file, checklist_name) {
-                        (Some(milestone), Some(file), Some(checklist_name)) => {
+                        (Some(milestone_name), Some(file), Some(checklist_name)) => {
                             CreateContext::from_args(
-                                milestone,
+                                milestone_name,
+                                &milestones,
                                 file,
                                 checklist_name,
                                 assignees,
@@ -150,7 +156,7 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    create_issue(
+                    let issue_url = create_issue(
                         &context.file,
                         &context.milestone_status,
                         &context.checklist,
@@ -161,44 +167,38 @@ async fn main() -> Result<()> {
                     .await?;
 
                     println!("✅ Issue created successfully!");
+                    println!("{}", issue_url);
                 }
-                IssueCommands::Comment { milestone, file, current_commit, previous_commit } => {
+                IssueCommands::Comment { milestone, file, current_commit, previous_commit, no_diff } => {
                     // Fetch milestones first
                     let milestones = git_info.get_milestones().await?;
                     
-                    let context = match (milestone, file) {
+                    let comment = match (milestone, file) {
                         (None, None) => {
                             // Interactive mode
-                            CommentContext::from_interactive(&milestones, git_info).await?
+                            QCComment::from_interactive(&milestones, &git_info).await?
                         }
                         (Some(milestone), Some(file)) => {
                             // Non-interactive mode
-                            CommentContext::from_args(
+                            QCComment::from_args(
                                 milestone,
                                 file,
                                 current_commit,
                                 previous_commit,
                                 &milestones,
-                                git_info,
+                                &git_info,
+                                no_diff
                             ).await?
                         }
                         _ => {
                             bail!("Must provide both --milestone and --file arguments or neither to enter interactive mode")
                         }
                     };
-                    
-                    // Display what would happen
-                    println!("Creating comment for file: {}", context.file.display());
-                    println!("Issue: #{} - {}", context.issue.number, context.issue.title);
-                    println!("Current commit: {}", context.current_commit);
-                    if let Some(prev) = &context.previous_commit {
-                        println!("Previous commit: {}", prev);
-                    } else {
-                        println!("Previous commit: None (this is the first commit for this file)");
-                    }
-                    
-                    // TODO: Implement actual comment creation logic
-                    println!("✅ Comment would be created here!");
+
+                    let comment_url = git_info.post_comment(&comment).await?;
+
+                    println!("✅ Comment created!");
+                    println!("{}", comment_url);
                 }
             }
         }

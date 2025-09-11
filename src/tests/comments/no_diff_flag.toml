@@ -1,0 +1,33 @@
+# Test diff comment configuration
+name = "no_diff_flag"
+description = "Test comment generation with no_diff flag set to true"
+
+# Issue configuration
+issue_file = "main_file_issue.json"
+
+# File being tracked
+file_path = "src/lib.rs"
+
+# Commit information
+current_commit = "9876543210fedcba9876543210fedcba98765432"
+previous_commit = "fedcba9876543210fedcba9876543210fedcba98"
+
+# Diff settings - this should suppress diff generation
+no_diff = true
+
+# File content at previous commit (shouldn't be used due to no_diff=true)
+[previous_content]
+content = '''
+pub fn old_function() {
+    println!("This is the old version");
+}
+'''
+
+# File content at current commit (shouldn't be used due to no_diff=true)
+[current_content]
+content = '''
+pub fn new_function() {
+    println!("This is the new version");
+    println!("With additional functionality");
+}
+'''
