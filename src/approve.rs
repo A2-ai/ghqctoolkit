@@ -57,7 +57,11 @@ mod tests {
 
     impl GitHelpers for MockGitHelpers {
         fn file_content_url(&self, commit_sha: &str, file: &Path) -> String {
-            format!("https://github.com/owner/repo/blob/{}/{}", commit_sha, file.display())
+            format!(
+                "https://github.com/owner/repo/blob/{}/{}",
+                commit_sha,
+                file.display()
+            )
         }
 
         fn commit_comparison_url(
@@ -79,7 +83,7 @@ mod tests {
     fn test_qc_approve_body_with_note() {
         let commit = gix::ObjectId::from_hex(b"1234567890abcdef1234567890abcdef12345678").unwrap();
         let issue = load_issue("main_file_issue");
-        
+
         let approve = QCApprove {
             file: PathBuf::from("src/main.rs"),
             commit,
@@ -89,7 +93,7 @@ mod tests {
 
         let git_helpers = MockGitHelpers;
         let body = approve.body(&git_helpers);
-        
+
         insta::assert_snapshot!(body);
     }
 
@@ -97,7 +101,7 @@ mod tests {
     fn test_qc_approve_body_without_note() {
         let commit = gix::ObjectId::from_hex(b"abcdef1234567890abcdef1234567890abcdef12").unwrap();
         let issue = load_issue("config_file_issue");
-        
+
         let approve = QCApprove {
             file: PathBuf::from("src/lib.rs"),
             commit,
@@ -107,21 +111,21 @@ mod tests {
 
         let git_helpers = MockGitHelpers;
         let body = approve.body(&git_helpers);
-        
+
         insta::assert_snapshot!(body);
     }
 
     #[test]
     fn test_qc_unapprove_body() {
         let issue = load_issue("test_file_issue");
-        
+
         let unapprove = QCUnapprove {
             issue,
             reason: "Found critical security vulnerability that needs to be addressed.".to_string(),
         };
 
         let body = unapprove.body();
-        
+
         insta::assert_snapshot!(body);
     }
 }
