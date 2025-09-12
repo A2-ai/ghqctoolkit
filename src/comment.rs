@@ -410,8 +410,19 @@ mod tests {
             Ok(crate::git::local::GitStatus::Clean)
         }
 
-        fn file_status(&self, _file: &std::path::Path) -> Result<crate::git::local::GitStatus, LocalGitError> {
+        fn file_status(
+            &self,
+            _file: &std::path::Path,
+        ) -> Result<crate::git::local::GitStatus, LocalGitError> {
             Ok(crate::git::local::GitStatus::Clean)
+        }
+
+        fn owner(&self) -> &str {
+            "test-owner"
+        }
+
+        fn repo(&self) -> &str {
+            "test-repo"
         }
     }
 

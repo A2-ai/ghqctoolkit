@@ -7,24 +7,51 @@ use std::{
 #[cfg(test)]
 use mockall::automock;
 
+use crate::GitInfo;
+
 #[derive(Debug, Clone)]
 pub struct GitAuthor {
     pub(crate) name: String,
     pub(crate) email: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum GitStatus {
-    Dirty(Vec<PathBuf>),          // local, uncommitted changes - list of dirty files
-    Clean,                        // up to date with remote
-    Behind(usize),                // remote commits not local - count of commits behind
-    Ahead(usize),                 // local commits not remote - count of commits ahead
-    Diverged { ahead: usize, behind: usize }, // local commits not remote AND remote commits not local
-}
-
 impl fmt::Display for GitAuthor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({})", self.name, self.email)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GitStatus {
+    Dirty(Vec<PathBuf>), // local, uncommitted changes - list of dirty files
+    Clean,               // up to date with remote
+    Behind(usize),       // remote commits not local - count of commits behind
+    Ahead(usize),        // local commits not remote - count of commits ahead
+    Diverged { ahead: usize, behind: usize }, // local commits not remote AND remote commits not local
+}
+
+impl fmt::Display for GitStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dirty(files) => {
+                write!(
+                    f,
+                    "❌ Repository has files with uncommitted, local changes: \n\t{}",
+                    files
+                        .iter()
+                        .map(|x| x.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("\n\t- ")
+                )
+            }
+            Self::Clean => write!(f, "✅ Repository is up to date!"),
+            Self::Behind(count) => write!(f, "⏪ Repository is behind by {count} commits"),
+            Self::Ahead(count) => write!(f, "⏩ Repository is ahead by {count} commits"),
+            Self::Diverged { ahead, behind } => write!(
+                f,
+                "↔️ Repository is ahead by {ahead} and behind by {behind} commits"
+            ),
+        }
     }
 }
 
@@ -41,6 +68,8 @@ pub trait LocalGitInfo {
     ) -> Result<String, LocalGitError>;
     fn status(&self) -> Result<GitStatus, LocalGitError>;
     fn file_status(&self, file: &Path) -> Result<GitStatus, LocalGitError>;
+    fn owner(&self) -> &str;
+    fn repo(&self) -> &str;
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -80,8 +109,6 @@ pub enum LocalGitError {
     #[error("Failed to process worktree entry: {0}")]
     StatusEntryError(gix::status::index_worktree::Error),
 }
-
-use crate::git::GitInfo;
 
 impl LocalGitInfo for GitInfo {
     fn commit(&self) -> Result<String, LocalGitError> {
@@ -300,7 +327,7 @@ impl LocalGitInfo for GitInfo {
             .repository
             .status(gix::progress::Discard)
             .map_err(LocalGitError::StatusError)?;
-        
+
         let mut dirty_files = Vec::new();
         for entry in status_platform
             .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
@@ -309,7 +336,7 @@ impl LocalGitInfo for GitInfo {
             let entry = entry.map_err(LocalGitError::StatusEntryError)?;
             dirty_files.push(PathBuf::from(entry.rela_path().to_string()));
         }
-        
+
         if !dirty_files.is_empty() {
             log::debug!("Repository has {} uncommitted changes", dirty_files.len());
             return Ok(GitStatus::Dirty(dirty_files));
@@ -333,12 +360,18 @@ impl LocalGitInfo for GitInfo {
             Ok(r) => r,
             Err(_) => {
                 // Count local commits since no upstream exists
-                let local_revwalk = self.repository.rev_walk([head.id().ok_or(LocalGitError::DetachedHead)?]);
+                let local_revwalk = self
+                    .repository
+                    .rev_walk([head.id().ok_or(LocalGitError::DetachedHead)?]);
                 let local_commit_count = local_revwalk
                     .all()
                     .map_err(LocalGitError::RevWalkError)?
                     .count();
-                log::debug!("No upstream branch found for {}, {} commits ahead", current_branch_name, local_commit_count);
+                log::debug!(
+                    "No upstream branch found for {}, {} commits ahead",
+                    current_branch_name,
+                    local_commit_count
+                );
                 return Ok(GitStatus::Ahead(local_commit_count));
             }
         };
@@ -387,9 +420,9 @@ impl LocalGitInfo for GitInfo {
                     local_only.len(),
                     remote_only.len()
                 );
-                Ok(GitStatus::Diverged { 
-                    ahead: local_only.len(), 
-                    behind: remote_only.len() 
+                Ok(GitStatus::Diverged {
+                    ahead: local_only.len(),
+                    behind: remote_only.len(),
                 })
             }
             (true, true) => {
@@ -408,10 +441,10 @@ impl LocalGitInfo for GitInfo {
             .repository
             .status(gix::progress::Discard)
             .map_err(LocalGitError::StatusError)?;
-        
+
         let file_path_str = file.to_string_lossy();
         let mut file_is_dirty = false;
-        
+
         for entry in status_platform
             .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
             .map_err(LocalGitError::StatusIterError)?
@@ -422,7 +455,7 @@ impl LocalGitInfo for GitInfo {
                 break;
             }
         }
-        
+
         if file_is_dirty {
             log::debug!("File {:?} has uncommitted changes", file);
             return Ok(GitStatus::Dirty(vec![file.to_path_buf()]));
@@ -447,7 +480,11 @@ impl LocalGitInfo for GitInfo {
             Err(_) => {
                 // Count commits that touched this file since no upstream exists
                 let file_commits = self.file_commits(file)?;
-                log::debug!("No upstream branch found for {}, file has {} commits", current_branch_name, file_commits.len());
+                log::debug!(
+                    "No upstream branch found for {}, file has {} commits",
+                    current_branch_name,
+                    file_commits.len()
+                );
                 return Ok(GitStatus::Ahead(file_commits.len()));
             }
         };
@@ -462,7 +499,7 @@ impl LocalGitInfo for GitInfo {
 
         // Get commits that touched this file in both local and remote branches
         let local_file_commits = self.file_commits(file)?;
-        let local_file_commit_ids: std::collections::HashSet<_> = 
+        let local_file_commit_ids: std::collections::HashSet<_> =
             local_file_commits.iter().map(|(id, _)| *id).collect();
 
         // For the remote branch, we need to check commits from the remote commit
@@ -540,19 +577,31 @@ impl LocalGitInfo for GitInfo {
             }
         }
 
-        let remote_file_commit_ids: std::collections::HashSet<_> = 
+        let remote_file_commit_ids: std::collections::HashSet<_> =
             remote_file_commits.iter().cloned().collect();
 
-        let local_only: Vec<_> = local_file_commit_ids.difference(&remote_file_commit_ids).collect();
-        let remote_only: Vec<_> = remote_file_commit_ids.difference(&local_file_commit_ids).collect();
+        let local_only: Vec<_> = local_file_commit_ids
+            .difference(&remote_file_commit_ids)
+            .collect();
+        let remote_only: Vec<_> = remote_file_commit_ids
+            .difference(&local_file_commit_ids)
+            .collect();
 
         match (local_only.is_empty(), remote_only.is_empty()) {
             (true, false) => {
-                log::debug!("File {:?} is behind remote by {} commits", file, remote_only.len());
+                log::debug!(
+                    "File {:?} is behind remote by {} commits",
+                    file,
+                    remote_only.len()
+                );
                 Ok(GitStatus::Behind(remote_only.len()))
             }
             (false, true) => {
-                log::debug!("File {:?} is ahead of remote by {} commits", file, local_only.len());
+                log::debug!(
+                    "File {:?} is ahead of remote by {} commits",
+                    file,
+                    local_only.len()
+                );
                 Ok(GitStatus::Ahead(local_only.len()))
             }
             (false, false) => {
@@ -562,9 +611,9 @@ impl LocalGitInfo for GitInfo {
                     local_only.len(),
                     remote_only.len()
                 );
-                Ok(GitStatus::Diverged { 
-                    ahead: local_only.len(), 
-                    behind: remote_only.len() 
+                Ok(GitStatus::Diverged {
+                    ahead: local_only.len(),
+                    behind: remote_only.len(),
                 })
             }
             (true, true) => {
@@ -572,5 +621,13 @@ impl LocalGitInfo for GitInfo {
                 Ok(GitStatus::Clean)
             }
         }
+    }
+
+    fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    fn repo(&self) -> &str {
+        &self.repo
     }
 }

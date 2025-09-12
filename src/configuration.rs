@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::GitAction;
+use crate::git::{GitAction, LocalGitInfo};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +62,10 @@ impl Checklist {
 
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    fn items(&self) -> usize {
+        self.content.matches("- [ ]").count()
     }
 }
 
@@ -438,6 +442,87 @@ pub fn determine_config_info(
             Ok(dir)
         }
     }
+}
+
+pub fn configuration_status(
+    configuration: &Configuration,
+    git_info: &Option<impl LocalGitInfo>,
+) -> String {
+    let checklist_name = &configuration
+        .options
+        .checklist_display_name
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|c| c.to_uppercase().collect::<String>())
+                .unwrap_or_default()
+                + chars.as_str()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let git_str = if let Some(git_info) = git_info {
+        format!(
+            "\n📦 git repository: {}/{}{}",
+            git_info.owner(),
+            git_info.repo(),
+            if let Ok(status) = git_info.status() {
+                format!("\n{}", status.to_string())
+            } else {
+                String::new()
+            }
+        )
+    } else {
+        String::new()
+    };
+
+    let checklist_sum = format!(
+        "📋 {checklist_name} available in '{}': {}",
+        configuration.options.checklist_directory.display(),
+        configuration.checklists.len()
+    );
+
+    let logo_note = if configuration
+        .path
+        .join(&configuration.options.logo_path)
+        .exists()
+    {
+        format!(
+            "\n✅ Logo found at {}",
+            configuration.options.logo_path.display()
+        )
+    } else if configuration.options.logo_path == PathBuf::from("logo.png") {
+        // if logo path is the default and the file does not exist, no need to warn
+        String::new()
+    } else {
+        // warn if the logo is not found at the specified path
+        format!(
+            "\n ⚠️ Logo was not found at the specified path {}",
+            configuration.options.logo_path.display()
+        )
+    };
+
+    let mut checklist_vec = configuration
+        .checklists
+        .iter()
+        .map(|(name, checklist)| format!("- {name}: {} checklist items", checklist.items()))
+        .collect::<Vec<_>>();
+    checklist_vec.sort_by(|a, b| a.cmp(b));
+
+    format!(
+        "\
+== Directory Information ==
+📁 directory: {}{git_str}
+{checklist_sum}{logo_note}
+        
+== {checklist_name} Information ==
+{}
+",
+        configuration.path.display(),
+        checklist_vec.join("\n")
+    )
 }
 
 #[derive(Debug, thiserror::Error)]
