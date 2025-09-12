@@ -5,42 +5,95 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, GitHubApi, GitInfo, MilestoneStatus, QCApprove, QCUnapprove, RelevantFile,
-    RepoUser,
+    Configuration, GitHubApi, GitInfo, QCApprove, QCIssue, QCUnapprove, RelevantFile, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
     },
     comment::QCComment,
-    configuration::Checklist,
-    create::validate_assignees,
     git::LocalGitInfo,
 };
 
-pub struct CreateContext {
-    pub file: PathBuf,
-    pub milestone_status: MilestoneStatus,
-    pub checklist: Checklist,
-    pub assignees: Vec<String>,
-    pub relevant_files: Vec<RelevantFile>,
-    pub configuration: Configuration,
-    pub git_info: GitInfo,
-}
+impl QCIssue {
+    pub async fn from_args(
+        milestone_name: String,
+        file: PathBuf,
+        checklist_name: String,
+        assignees: Option<Vec<String>>,
+        relevant_files: Option<Vec<RelevantFile>>,
+        milestones: Vec<Milestone>,
+        repo_users: &[RepoUser],
+        configuration: Configuration,
+        git_info: &GitInfo,
+    ) -> Result<Self> {
+        let milestone = if let Some(m) = milestones.into_iter().find(|m| m.title == milestone_name)
+        {
+            log::debug!("Found existing milestone {}", m.number);
+            m
+        } else {
+            git_info.create_milestone(&milestone_name).await?
+        };
 
-impl<'a> CreateContext {
+        let milestone_issues = git_info.get_milestone_issues(&milestone).await?;
+        if milestone_issues
+            .iter()
+            .any(|i| i.title == file.display().to_string())
+        {
+            bail!("File already has a corresponding issue within the milestone");
+        }
+
+        let assignees = if let Some(assignees_vec) = assignees {
+            assignees_vec
+                .into_iter()
+                .filter(|a| {
+                    if repo_users.iter().any(|r| &r.login == a) {
+                        true
+                    } else {
+                        log::warn!("Login {a} is not a valid assignee");
+                        false
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let checklist = configuration
+            .checklists
+            .get(&checklist_name)
+            .ok_or(anyhow!("No checklist named {checklist_name}"))?
+            .clone();
+
+        let issue = QCIssue::new(
+            file,
+            git_info,
+            milestone.number as u64,
+            assignees,
+            relevant_files.unwrap_or_default(),
+            checklist,
+        )?;
+
+        Ok(issue)
+    }
+
     pub async fn from_interactive(
         project_dir: &PathBuf,
         milestones: Vec<Milestone>,
         configuration: Configuration,
-        git_info: GitInfo,
+        git_info: &GitInfo,
     ) -> Result<Self> {
         println!("🚀 Welcome to GHQC Interactive Mode!");
+
         // Fetch users once for validation and interactive prompts
         let repo_users: Vec<RepoUser> = git_info.get_users().await?;
 
         // Interactive prompts
         let milestone_status = prompt_milestone(milestones)?;
-        let file = prompt_file(project_dir)?;
+
+        let milestone = milestone_status.determine_milestone(git_info).await?;
+        let milestone_issues = git_info.get_milestone_issues(milestone.as_ref()).await?;
+
+        let file = prompt_file(project_dir, &milestone_issues)?;
         let checklist = prompt_checklist(&configuration)?;
         let assignees = prompt_assignees(&repo_users)?;
         let relevant_files = prompt_relevant_files(project_dir)?;
@@ -65,60 +118,20 @@ impl<'a> CreateContext {
         }
         println!();
 
-        Ok(Self {
+        // Determine the milestone
+        let milestone = milestone_status.determine_milestone(git_info).await?;
+
+        // Create the QCIssue
+        let issue = QCIssue::new(
             file,
-            milestone_status,
-            checklist,
+            git_info,
+            milestone.number as u64,
             assignees,
             relevant_files,
-            configuration,
-            git_info,
-        })
-    }
-
-    pub async fn from_args(
-        milestone_name: String,
-        milestones: Vec<Milestone>,
-        file: PathBuf,
-        checklist_name: String,
-        assignees: Option<Vec<String>>,
-        relevant_files: Option<Vec<RelevantFile>>,
-        configuration: Configuration,
-        git_info: GitInfo,
-    ) -> Result<Self> {
-        let milestone_status =
-            if let Some(m) = milestones.into_iter().find(|m| m.title == milestone_name) {
-                log::debug!("Found existing milestone {}", m.number);
-                MilestoneStatus::Existing(m)
-            } else {
-                MilestoneStatus::New(milestone_name)
-            };
-
-        let final_assignees = assignees.unwrap_or_default();
-        let final_relevant_files = relevant_files.unwrap_or_default();
-
-        // Fetch users for validation
-        let repo_users: Vec<RepoUser> = git_info.get_users().await?;
-
-        // Validate assignees if provided
-        validate_assignees(&final_assignees, &repo_users)?;
-
-        // Get selected checklist
-        let checklist = configuration
-            .checklists
-            .get(&checklist_name)
-            .ok_or(anyhow!("No checklist named {checklist_name}"))?
-            .clone();
-
-        Ok(Self {
-            file,
-            milestone_status,
             checklist,
-            assignees: final_assignees,
-            relevant_files: final_relevant_files,
-            configuration,
-            git_info,
-        })
+        )?;
+
+        Ok(issue)
     }
 }
 

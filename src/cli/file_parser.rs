@@ -1,4 +1,4 @@
-use crate::issues::RelevantFile;
+use crate::RelevantFile;
 use clap::builder::TypedValueParser;
 use clap::{Arg, Command, error::ErrorKind};
 
