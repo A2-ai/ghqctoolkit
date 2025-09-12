@@ -15,7 +15,7 @@ use crate::utils::EnvProvider;
 #[serde(default)]
 pub(crate) struct ConfigurationOptions {
     // Note to prepend at the top of all checklists
-    pub(crate) prepended_checklist_notes: Option<String>,
+    pub(crate) prepended_checklist_note: Option<String>,
     // What to call the checklist in the app. Default: checklist
     checklist_display_name: String,
     // Path to the logo within the configuration repo. Default: logo
@@ -27,7 +27,7 @@ pub(crate) struct ConfigurationOptions {
 impl Default for ConfigurationOptions {
     fn default() -> Self {
         Self {
-            prepended_checklist_notes: None,
+            prepended_checklist_note: None,
             checklist_display_name: "checklists".to_string(),
             logo_path: PathBuf::from("logo.png"),
             checklist_directory: PathBuf::from("checklists"),
@@ -121,6 +121,8 @@ impl Configuration {
                 ConfigurationOptions::default()
             }
         };
+        log::debug!("checklist note: {:#?}", options.prepended_checklist_note);
+
         Configuration {
             path: path.to_path_buf(),
             options,
@@ -169,7 +171,7 @@ impl Configuration {
                         Ok(key) => {
                             let checklist = Checklist {
                                 name: key.to_string(),
-                                note: self.options.prepended_checklist_notes.clone(),
+                                note: self.options.prepended_checklist_note.clone(),
                                 content,
                             };
                             self.checklists.insert(key, checklist);
@@ -188,7 +190,7 @@ impl Configuration {
                     Ok((title, content)) => {
                         let checklist = Checklist {
                             name: title.to_string(),
-                            note: self.options.prepended_checklist_notes.clone(),
+                            note: self.options.prepended_checklist_note.clone(),
                             content,
                         };
                         self.checklists.insert(title, checklist);
@@ -504,12 +506,24 @@ pub fn configuration_status(
         )
     };
 
+    let checklist_note = if let Some(note) = &configuration.options.prepended_checklist_note {
+        let note = note
+            .lines()
+            .map(|l| format!("│  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n📌 checklist note: \n{note}\n")
+    } else {
+        String::new()
+    };
+
     let mut checklist_vec = configuration
         .checklists
         .iter()
         .map(|(name, checklist)| format!("- {name}: {} checklist items", checklist.items()))
         .collect::<Vec<_>>();
     checklist_vec.sort_by(|a, b| a.cmp(b));
+    let checklists_str = checklist_vec.join("\n");
 
     format!(
         "\
@@ -517,11 +531,10 @@ pub fn configuration_status(
 📁 directory: {}{git_str}
 {checklist_sum}{logo_note}
         
-== {checklist_name} Available ==
-{}
+== {checklist_name} Summary =={checklist_note}
+{checklists_str}
 ",
-        configuration.path.display(),
-        checklist_vec.join("\n")
+        configuration.path.display()
     )
 }
 
@@ -678,7 +691,7 @@ mod tests {
 
         // Verify the custom options were loaded
         assert_eq!(
-            config.options.prepended_checklist_notes,
+            config.options.prepended_checklist_note,
             Some("Please review carefully".to_string())
         );
         assert_eq!(
@@ -796,8 +809,9 @@ Second Checklist:
         }
 
         // Load the custom configuration
-        let config_path = PathBuf::from("tests/custom_configuration");
-        let configuration = Configuration::from_path(&config_path);
+        let config_path = PathBuf::from("src/tests/custom_configuration");
+        let mut configuration = Configuration::from_path(&config_path);
+        configuration.load_checklists();
 
         // Test with git info (clean status)
         let git_info = MockGitInfo {

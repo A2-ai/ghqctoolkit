@@ -1,4 +1,4 @@
-prepended_checklist_notes: "Please review carefully"
+prepended_checklist_note: "Please review carefully"
 checklist_display_name: "Custom Quality Check"  
 logo_path: "assets/custom_logo.svg"
 checklist_directory: "my_custom_checklists"

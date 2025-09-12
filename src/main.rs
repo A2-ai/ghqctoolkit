@@ -352,7 +352,8 @@ async fn main() -> Result<()> {
             ConfigurationCommands::Status => {
                 let env = StdEnvProvider;
                 let config_dir = determine_config_info(cli.config_dir, &env)?;
-                let configuration = Configuration::from_path(&config_dir);
+                let mut configuration = Configuration::from_path(&config_dir);
+                configuration.load_checklists();
                 let git_info = GitInfo::from_path(&config_dir, &env).ok();
 
                 println!("{}", configuration_status(&configuration, &git_info))
