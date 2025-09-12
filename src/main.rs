@@ -22,7 +22,7 @@ struct Cli {
     directory: PathBuf,
 
     /// Configuration directory path
-    #[arg(short, long, global = true)]
+    #[arg(long, global = true)]
     config_dir: Option<PathBuf>,
 
     #[command(flatten)]
@@ -56,7 +56,7 @@ enum IssueCommands {
         file: Option<PathBuf>,
 
         /// Name of the checklist to use (will prompt if not provided)
-        #[arg(short = 'l', long)]
+        #[arg(short, long)]
         checklist_name: Option<String>,
 
         /// Assignees for the issue (usernames)
