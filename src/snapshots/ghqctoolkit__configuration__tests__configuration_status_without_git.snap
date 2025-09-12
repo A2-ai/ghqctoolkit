@@ -1,0 +1,15 @@
+---
+source: src/configuration.rs
+expression: result_without_git
+---
+== Directory Information ==
+📁 directory: src/tests/custom_configuration
+📋 Custom Quality Check available in 'my_custom_checklists': 2
+⚠️ Logo was not found at the specified path assets/custom_logo.svg
+        
+== Custom Quality Check Summary ==
+📌 checklist note: 
+│  Please review carefully
+
+- Custom Checklist: 3 checklist items
+- Custom: 1 checklist items

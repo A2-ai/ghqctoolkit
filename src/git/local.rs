@@ -1,10 +1,13 @@
 use std::{
+    collections::HashSet,
     fmt,
     path::{Path, PathBuf},
 };
 
 #[cfg(test)]
 use mockall::automock;
+
+use crate::GitInfo;
 
 #[derive(Debug, Clone)]
 pub struct GitAuthor {
@@ -15,6 +18,40 @@ pub struct GitAuthor {
 impl fmt::Display for GitAuthor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({})", self.name, self.email)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GitStatus {
+    Dirty(Vec<PathBuf>), // local, uncommitted changes - list of dirty files
+    Clean,               // up to date with remote
+    Behind(usize),       // remote commits not local - count of commits behind
+    Ahead(usize),        // local commits not remote - count of commits ahead
+    Diverged { ahead: usize, behind: usize }, // local commits not remote AND remote commits not local
+}
+
+impl fmt::Display for GitStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dirty(files) => {
+                write!(
+                    f,
+                    "❌ Repository has files with uncommitted, local changes: \n\t- {}",
+                    files
+                        .iter()
+                        .map(|x| x.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("\n\t- ")
+                )
+            }
+            Self::Clean => write!(f, "✅ Repository is up to date!"),
+            Self::Behind(count) => write!(f, "⏪ Repository is behind by {count} commits"),
+            Self::Ahead(count) => write!(f, "⏩ Repository is ahead by {count} commits"),
+            Self::Diverged { ahead, behind } => write!(
+                f,
+                "↔️ Repository is ahead by {ahead} and behind by {behind} commits"
+            ),
+        }
     }
 }
 
@@ -29,6 +66,10 @@ pub trait LocalGitInfo {
         file: &Path,
         commit: &gix::ObjectId,
     ) -> Result<String, LocalGitError>;
+    fn status(&self) -> Result<GitStatus, LocalGitError>;
+    fn file_status(&self, file: &Path) -> Result<GitStatus, LocalGitError>;
+    fn owner(&self) -> &str;
+    fn repo(&self) -> &str;
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -57,9 +98,17 @@ pub enum LocalGitError {
     FileNotFoundAtCommit(PathBuf),
     #[error("Failed to read file content: {0}")]
     BlobError(gix::object::try_into::Error),
+    #[error("Failed to get remote reference: {0}")]
+    RemoteError(gix::reference::find::existing::Error),
+    #[error("No remote found for tracking branch")]
+    NoRemote,
+    #[error("Failed to get worktree status: {0}")]
+    StatusError(gix::status::Error),
+    #[error("Failed to iterate worktree status: {0}")]
+    StatusIterError(gix::status::into_iter::Error),
+    #[error("Failed to process worktree entry: {0}")]
+    StatusEntryError(gix::status::index_worktree::Error),
 }
-
-use crate::git::GitInfo;
 
 impl LocalGitInfo for GitInfo {
     fn commit(&self) -> Result<String, LocalGitError> {
@@ -268,5 +317,317 @@ impl LocalGitInfo for GitInfo {
         );
 
         Ok(content.to_string())
+    }
+
+    fn status(&self) -> Result<GitStatus, LocalGitError> {
+        log::debug!("Getting git repository status");
+
+        // Check for uncommitted changes (dirty working tree)
+        let status_platform = self
+            .repository
+            .status(gix::progress::Discard)
+            .map_err(LocalGitError::StatusError)?;
+
+        let mut dirty_files = Vec::new();
+        for entry in status_platform
+            .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
+            .map_err(LocalGitError::StatusIterError)?
+        {
+            let entry = entry.map_err(LocalGitError::StatusEntryError)?;
+            dirty_files.push(PathBuf::from(entry.rela_path().to_string()));
+        }
+
+        if !dirty_files.is_empty() {
+            log::debug!("Repository has {} uncommitted changes", dirty_files.len());
+            return Ok(GitStatus::Dirty(dirty_files));
+        }
+
+        // Get current branch and its upstream tracking branch
+        let head = self.repository.head().map_err(LocalGitError::HeadError)?;
+        let current_branch_name = if let Some(branch_name) = head.referent_name() {
+            let name_str = branch_name.as_bstr().to_string();
+            name_str
+                .strip_prefix("refs/heads/")
+                .unwrap_or(&name_str)
+                .to_string()
+        } else {
+            return Err(LocalGitError::DetachedHead);
+        };
+
+        // Try to find the upstream tracking branch
+        let upstream_ref_name = format!("refs/remotes/origin/{}", current_branch_name);
+        let upstream_ref = match self.repository.find_reference(&upstream_ref_name) {
+            Ok(r) => r,
+            Err(_) => {
+                // Count local commits since no upstream exists
+                let local_revwalk = self
+                    .repository
+                    .rev_walk([head.id().ok_or(LocalGitError::DetachedHead)?]);
+                let local_commit_count = local_revwalk
+                    .all()
+                    .map_err(LocalGitError::RevWalkError)?
+                    .count();
+                log::debug!(
+                    "No upstream branch found for {}, {} commits ahead",
+                    current_branch_name,
+                    local_commit_count
+                );
+                return Ok(GitStatus::Ahead(local_commit_count));
+            }
+        };
+
+        let local_commit_id = head.id().ok_or(LocalGitError::DetachedHead)?;
+        let remote_commit_id = upstream_ref.id();
+
+        if local_commit_id == remote_commit_id {
+            log::debug!("Local and remote are in sync");
+            return Ok(GitStatus::Clean);
+        }
+
+        // Check if local is ahead, behind, or diverged from remote
+        let local_revwalk = self.repository.rev_walk([local_commit_id]);
+        let remote_revwalk = self.repository.rev_walk([remote_commit_id]);
+
+        // Get all local commits
+        let local_commits = local_revwalk
+            .all()
+            .map_err(LocalGitError::RevWalkError)?
+            .map(|info| info.map(|i| i.id).map_err(LocalGitError::TraverseError))
+            .collect::<Result<HashSet<_>, _>>()?;
+
+        // Get all remote commits
+        let remote_commits = remote_revwalk
+            .all()
+            .map_err(LocalGitError::RevWalkError)?
+            .map(|info| info.map(|i| i.id).map_err(LocalGitError::TraverseError))
+            .collect::<Result<HashSet<_>, _>>()?;
+
+        let local_only: Vec<_> = local_commits.difference(&remote_commits).collect();
+        let remote_only: Vec<_> = remote_commits.difference(&local_commits).collect();
+
+        match (local_only.is_empty(), remote_only.is_empty()) {
+            (true, false) => {
+                log::debug!("Local is behind remote by {} commits", remote_only.len());
+                Ok(GitStatus::Behind(remote_only.len()))
+            }
+            (false, true) => {
+                log::debug!("Local is ahead of remote by {} commits", local_only.len());
+                Ok(GitStatus::Ahead(local_only.len()))
+            }
+            (false, false) => {
+                log::debug!(
+                    "Local and remote have diverged: {} local commits, {} remote commits",
+                    local_only.len(),
+                    remote_only.len()
+                );
+                Ok(GitStatus::Diverged {
+                    ahead: local_only.len(),
+                    behind: remote_only.len(),
+                })
+            }
+            (true, true) => {
+                // This shouldn't happen since we already checked if commits are equal
+                log::debug!("Local and remote are in sync (fallback)");
+                Ok(GitStatus::Clean)
+            }
+        }
+    }
+
+    fn file_status(&self, file: &Path) -> Result<GitStatus, LocalGitError> {
+        log::debug!("Getting git status for file: {:?}", file);
+
+        // Check if the file has uncommitted changes
+        let status_platform = self
+            .repository
+            .status(gix::progress::Discard)
+            .map_err(LocalGitError::StatusError)?;
+
+        let file_path_str = file.to_string_lossy();
+        let mut file_is_dirty = false;
+
+        for entry in status_platform
+            .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
+            .map_err(LocalGitError::StatusIterError)?
+        {
+            let entry = entry.map_err(LocalGitError::StatusEntryError)?;
+            if entry.rela_path().to_string() == file_path_str {
+                file_is_dirty = true;
+                break;
+            }
+        }
+
+        if file_is_dirty {
+            log::debug!("File {:?} has uncommitted changes", file);
+            return Ok(GitStatus::Dirty(vec![file.to_path_buf()]));
+        }
+
+        // Get current branch and its upstream tracking branch
+        let head = self.repository.head().map_err(LocalGitError::HeadError)?;
+        let current_branch_name = if let Some(branch_name) = head.referent_name() {
+            let name_str = branch_name.as_bstr().to_string();
+            name_str
+                .strip_prefix("refs/heads/")
+                .unwrap_or(&name_str)
+                .to_string()
+        } else {
+            return Err(LocalGitError::DetachedHead);
+        };
+
+        // Try to find the upstream tracking branch
+        let upstream_ref_name = format!("refs/remotes/origin/{}", current_branch_name);
+        let upstream_ref = match self.repository.find_reference(&upstream_ref_name) {
+            Ok(r) => r,
+            Err(_) => {
+                // Count commits that touched this file since no upstream exists
+                let file_commits = self.file_commits(file)?;
+                log::debug!(
+                    "No upstream branch found for {}, file has {} commits",
+                    current_branch_name,
+                    file_commits.len()
+                );
+                return Ok(GitStatus::Ahead(file_commits.len()));
+            }
+        };
+
+        let local_commit_id = head.id().ok_or(LocalGitError::DetachedHead)?;
+        let remote_commit_id = upstream_ref.id();
+
+        if local_commit_id == remote_commit_id {
+            log::debug!("File {:?} is clean (local and remote in sync)", file);
+            return Ok(GitStatus::Clean);
+        }
+
+        // Get commits that touched this file in both local and remote branches
+        let local_file_commits = self.file_commits(file)?;
+        let local_file_commit_ids: std::collections::HashSet<_> =
+            local_file_commits.iter().map(|(id, _)| *id).collect();
+
+        // For the remote branch, we need to check commits from the remote commit
+        // We'll use the same logic but walk from the remote commit
+        let remote_revwalk = self.repository.rev_walk([remote_commit_id]);
+        let mut remote_file_commits = Vec::new();
+
+        for commit_info in remote_revwalk.all().map_err(LocalGitError::RevWalkError)? {
+            let commit_info = commit_info.map_err(LocalGitError::TraverseError)?;
+            let commit_id = commit_info.id;
+
+            let commit = self
+                .repository
+                .find_object(commit_id)
+                .map_err(LocalGitError::FindObjectError)?
+                .try_into_commit()
+                .map_err(LocalGitError::CommitError)?;
+
+            // Check if this commit modified the file (same logic as file_commits)
+            let mut file_was_modified = false;
+
+            if commit.parent_ids().count() == 0 {
+                // This is the initial commit - check if file exists in this commit
+                if let Ok(tree) = commit.tree() {
+                    if let Ok(Some(_)) = tree.lookup_entry_by_path(file) {
+                        file_was_modified = true;
+                    }
+                }
+            } else {
+                // Compare this commit's tree with each parent to see if the file changed
+                let current_tree = commit.tree().map_err(LocalGitError::TreeError)?;
+
+                for parent_id in commit.parent_ids() {
+                    let parent_commit = self
+                        .repository
+                        .find_object(parent_id)
+                        .map_err(LocalGitError::FindObjectError)?
+                        .try_into_commit()
+                        .map_err(LocalGitError::CommitError)?;
+
+                    let parent_tree = parent_commit.tree().map_err(LocalGitError::TreeError)?;
+
+                    // Check if file exists in current and parent trees
+                    let file_in_current = current_tree.lookup_entry_by_path(file);
+                    let file_in_parent = parent_tree.lookup_entry_by_path(file);
+
+                    match (file_in_current, file_in_parent) {
+                        (Ok(Some(current_entry)), Ok(Some(parent_entry))) => {
+                            // File exists in both - check if content changed
+                            if current_entry.oid() != parent_entry.oid() {
+                                file_was_modified = true;
+                                break;
+                            }
+                        }
+                        (Ok(Some(_)), Ok(None)) | (Ok(Some(_)), Err(_)) => {
+                            // File added in this commit
+                            file_was_modified = true;
+                            break;
+                        }
+                        (Ok(None), Ok(Some(_))) | (Err(_), Ok(Some(_))) => {
+                            // File deleted in this commit
+                            file_was_modified = true;
+                            break;
+                        }
+                        _ => {
+                            // File doesn't exist in either or other cases - no change for this file
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            if file_was_modified {
+                remote_file_commits.push(commit_id);
+            }
+        }
+
+        let remote_file_commit_ids: std::collections::HashSet<_> =
+            remote_file_commits.iter().cloned().collect();
+
+        let local_only: Vec<_> = local_file_commit_ids
+            .difference(&remote_file_commit_ids)
+            .collect();
+        let remote_only: Vec<_> = remote_file_commit_ids
+            .difference(&local_file_commit_ids)
+            .collect();
+
+        match (local_only.is_empty(), remote_only.is_empty()) {
+            (true, false) => {
+                log::debug!(
+                    "File {:?} is behind remote by {} commits",
+                    file,
+                    remote_only.len()
+                );
+                Ok(GitStatus::Behind(remote_only.len()))
+            }
+            (false, true) => {
+                log::debug!(
+                    "File {:?} is ahead of remote by {} commits",
+                    file,
+                    local_only.len()
+                );
+                Ok(GitStatus::Ahead(local_only.len()))
+            }
+            (false, false) => {
+                log::debug!(
+                    "File {:?} has diverged: {} local commits, {} remote commits",
+                    file,
+                    local_only.len(),
+                    remote_only.len()
+                );
+                Ok(GitStatus::Diverged {
+                    ahead: local_only.len(),
+                    behind: remote_only.len(),
+                })
+            }
+            (true, true) => {
+                log::debug!("File {:?} is clean (no unique commits)", file);
+                Ok(GitStatus::Clean)
+            }
+        }
+    }
+
+    fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    fn repo(&self) -> &str {
+        &self.repo
     }
 }

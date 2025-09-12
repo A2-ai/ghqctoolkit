@@ -8,14 +8,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::GitAction;
+use crate::git::{GitAction, LocalGitInfo};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ConfigurationOptions {
     // Note to prepend at the top of all checklists
-    pub(crate) prepended_checklist_notes: Option<String>,
+    pub(crate) prepended_checklist_note: Option<String>,
     // What to call the checklist in the app. Default: checklist
     checklist_display_name: String,
     // Path to the logo within the configuration repo. Default: logo
@@ -27,7 +27,7 @@ pub(crate) struct ConfigurationOptions {
 impl Default for ConfigurationOptions {
     fn default() -> Self {
         Self {
-            prepended_checklist_notes: None,
+            prepended_checklist_note: None,
             checklist_display_name: "checklists".to_string(),
             logo_path: PathBuf::from("logo.png"),
             checklist_directory: PathBuf::from("checklists"),
@@ -62,6 +62,10 @@ impl Checklist {
 
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    fn items(&self) -> usize {
+        self.content.matches("- [ ]").count()
     }
 }
 
@@ -117,6 +121,8 @@ impl Configuration {
                 ConfigurationOptions::default()
             }
         };
+        log::debug!("checklist note: {:#?}", options.prepended_checklist_note);
+
         Configuration {
             path: path.to_path_buf(),
             options,
@@ -165,7 +171,7 @@ impl Configuration {
                         Ok(key) => {
                             let checklist = Checklist {
                                 name: key.to_string(),
-                                note: self.options.prepended_checklist_notes.clone(),
+                                note: self.options.prepended_checklist_note.clone(),
                                 content,
                             };
                             self.checklists.insert(key, checklist);
@@ -184,7 +190,7 @@ impl Configuration {
                     Ok((title, content)) => {
                         let checklist = Checklist {
                             name: title.to_string(),
-                            note: self.options.prepended_checklist_notes.clone(),
+                            note: self.options.prepended_checklist_note.clone(),
                             content,
                         };
                         self.checklists.insert(title, checklist);
@@ -440,6 +446,98 @@ pub fn determine_config_info(
     }
 }
 
+pub fn configuration_status(
+    configuration: &Configuration,
+    git_info: &Option<impl LocalGitInfo>,
+) -> String {
+    let checklist_name = &configuration
+        .options
+        .checklist_display_name
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|c| c.to_uppercase().collect::<String>())
+                .unwrap_or_default()
+                + chars.as_str()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let git_str = if let Some(git_info) = git_info {
+        format!(
+            "\n📦 git repository: {}/{}{}",
+            git_info.owner(),
+            git_info.repo(),
+            if let Ok(status) = git_info.status() {
+                format!("\n{}", status.to_string())
+            } else {
+                String::new()
+            }
+        )
+    } else {
+        String::new()
+    };
+
+    let checklist_sum = format!(
+        "📋 {checklist_name} available in '{}': {}",
+        configuration.options.checklist_directory.display(),
+        configuration.checklists.len()
+    );
+
+    let logo_note = if configuration
+        .path
+        .join(&configuration.options.logo_path)
+        .exists()
+    {
+        format!(
+            "\n✅ Logo found at {}",
+            configuration.options.logo_path.display()
+        )
+    } else if configuration.options.logo_path == PathBuf::from("logo.png") {
+        // if logo path is the default and the file does not exist, no need to warn
+        String::new()
+    } else {
+        // warn if the logo is not found at the specified path
+        format!(
+            "\n⚠️ Logo was not found at the specified path {}",
+            configuration.options.logo_path.display()
+        )
+    };
+
+    let checklist_note = if let Some(note) = &configuration.options.prepended_checklist_note {
+        let note = note
+            .lines()
+            .map(|l| format!("│  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n📌 checklist note: \n{note}\n")
+    } else {
+        String::new()
+    };
+
+    let mut checklist_vec = configuration
+        .checklists
+        .iter()
+        .map(|(name, checklist)| format!("- {name}: {} checklist items", checklist.items()))
+        .collect::<Vec<_>>();
+    checklist_vec.sort_by(|a, b| a.cmp(b));
+    let checklists_str = checklist_vec.join("\n");
+
+    format!(
+        "\
+== Directory Information ==
+📁 directory: {}{git_str}
+{checklist_sum}{logo_note}
+        
+== {checklist_name} Summary =={checklist_note}
+{checklists_str}
+",
+        configuration.path.display()
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigurationError {
     #[error("IO error: {0}")]
@@ -593,7 +691,7 @@ mod tests {
 
         // Verify the custom options were loaded
         assert_eq!(
-            config.options.prepended_checklist_notes,
+            config.options.prepended_checklist_note,
             Some("Please review carefully".to_string())
         );
         assert_eq!(
@@ -642,5 +740,104 @@ Second Checklist:
         let invalid_yaml2 = "- Just a list\n- Not a mapping";
         let result2 = parse_yaml_checklist(invalid_yaml2);
         assert!(result2.is_err());
+    }
+
+    #[test]
+    fn test_configuration_status() {
+        // Create a mock GitInfo
+        struct MockGitInfo {
+            owner: String,
+            repo: String,
+            status: crate::git::local::GitStatus,
+        }
+
+        impl LocalGitInfo for MockGitInfo {
+            fn commit(&self) -> Result<String, crate::git::local::LocalGitError> {
+                Ok("abc123".to_string())
+            }
+
+            fn branch(&self) -> Result<String, crate::git::local::LocalGitError> {
+                Ok("main".to_string())
+            }
+
+            fn file_commits(
+                &self,
+                _file: &std::path::Path,
+            ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::local::LocalGitError>
+            {
+                Ok(vec![])
+            }
+
+            fn authors(
+                &self,
+                _file: &std::path::Path,
+            ) -> Result<Vec<crate::git::local::GitAuthor>, crate::git::local::LocalGitError>
+            {
+                Ok(vec![])
+            }
+
+            fn file_content_at_commit(
+                &self,
+                _file: &std::path::Path,
+                _commit: &gix::ObjectId,
+            ) -> Result<String, crate::git::local::LocalGitError> {
+                Ok(String::new())
+            }
+
+            fn status(
+                &self,
+            ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError>
+            {
+                Ok(self.status.clone())
+            }
+
+            fn file_status(
+                &self,
+                _file: &std::path::Path,
+            ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError>
+            {
+                Ok(self.status.clone())
+            }
+
+            fn owner(&self) -> &str {
+                &self.owner
+            }
+
+            fn repo(&self) -> &str {
+                &self.repo
+            }
+        }
+
+        // Load the custom configuration
+        let config_path = PathBuf::from("src/tests/custom_configuration");
+        let mut configuration = Configuration::from_path(&config_path);
+        configuration.load_checklists();
+
+        // Test with git info (clean status)
+        let git_info = MockGitInfo {
+            owner: "test-owner".to_string(),
+            repo: "test-repo".to_string(),
+            status: crate::git::local::GitStatus::Clean,
+        };
+
+        let result_with_git = configuration_status(&configuration, &Some(git_info));
+        insta::assert_snapshot!("configuration_status_with_git", result_with_git);
+
+        // Test without git info
+        let result_without_git: String = configuration_status(&configuration, &None::<MockGitInfo>);
+        insta::assert_snapshot!("configuration_status_without_git", result_without_git);
+
+        // Test with dirty status
+        let git_info_dirty = MockGitInfo {
+            owner: "test-owner".to_string(),
+            repo: "test-repo".to_string(),
+            status: crate::git::local::GitStatus::Dirty(vec![
+                PathBuf::from("src/main.rs"),
+                PathBuf::from("README.md"),
+            ]),
+        };
+
+        let result_dirty = configuration_status(&configuration, &Some(git_info_dirty));
+        insta::assert_snapshot!("configuration_status_dirty", result_dirty);
     }
 }

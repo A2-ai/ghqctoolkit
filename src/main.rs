@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use ghqctoolkit::cli::RelevantFileParser;
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, determine_config_info,
-    setup_configuration,
+    Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, configuration_status,
+    determine_config_info, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -22,7 +22,7 @@ struct Cli {
     directory: PathBuf,
 
     /// Configuration directory path
-    #[arg(short, long)]
+    #[arg(long, global = true)]
     config_dir: Option<PathBuf>,
 
     #[command(flatten)]
@@ -56,7 +56,7 @@ enum IssueCommands {
         file: Option<PathBuf>,
 
         /// Name of the checklist to use (will prompt if not provided)
-        #[arg(short = 'l', long)]
+        #[arg(short, long)]
         checklist_name: Option<String>,
 
         /// Assignees for the issue (usernames)
@@ -130,6 +130,7 @@ enum ConfigurationCommands {
         /// git repository url to be cloned to config_dir
         git: Option<String>,
     },
+    Status,
 }
 
 #[cfg(feature = "cli")]
@@ -347,6 +348,15 @@ async fn main() -> Result<()> {
                     "✅ Configuration successfully setup at {}",
                     config_dir.display()
                 );
+            }
+            ConfigurationCommands::Status => {
+                let env = StdEnvProvider;
+                let config_dir = determine_config_info(cli.config_dir, &env)?;
+                let mut configuration = Configuration::from_path(&config_dir);
+                configuration.load_checklists();
+                let git_info = GitInfo::from_path(&config_dir, &env).ok();
+
+                println!("{}", configuration_status(&configuration, &git_info))
             }
         },
     }

@@ -405,6 +405,25 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| LocalGitError::FileNotFoundAtCommit(file.to_path_buf()))
         }
+
+        fn status(&self) -> Result<crate::git::local::GitStatus, LocalGitError> {
+            Ok(crate::git::local::GitStatus::Clean)
+        }
+
+        fn file_status(
+            &self,
+            _file: &std::path::Path,
+        ) -> Result<crate::git::local::GitStatus, LocalGitError> {
+            Ok(crate::git::local::GitStatus::Clean)
+        }
+
+        fn owner(&self) -> &str {
+            "test-owner"
+        }
+
+        fn repo(&self) -> &str {
+            "test-repo"
+        }
     }
 
     fn load_test_config(test_file: &str) -> TestConfig {
