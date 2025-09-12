@@ -130,10 +130,8 @@ pub fn prompt_existing_milestone(milestones: &[Milestone]) -> Result<Milestone> 
 
 pub fn prompt_file(current_dir: &PathBuf, issues: &[Issue]) -> Result<PathBuf> {
     // Extract file paths from existing issues to mark as unavailable
-    let existing_issue_files: Vec<String> = issues
-        .iter()
-        .map(|issue| issue.title.clone())
-        .collect();
+    let existing_issue_files: Vec<String> =
+        issues.iter().map(|issue| issue.title.clone()).collect();
 
     #[derive(Clone)]
     struct FileCompleter {
@@ -233,14 +231,12 @@ pub fn prompt_file(current_dir: &PathBuf, issues: &[Issue]) -> Result<PathBuf> {
             .with_autocomplete(file_completer)
             .with_validator(move |input: &str| {
                 let trimmed = input.trim();
-                
                 // Handle case where user somehow enters the grayed-out format
                 if trimmed.starts_with("🚫 ") {
                     return Ok(Validation::Invalid(
                         "This file already has a corresponding issue in the milestone. Please select a different file.".into(),
                     ));
                 }
-                
                 if trimmed.is_empty() {
                     Ok(Validation::Invalid("File path cannot be empty".into()))
                 } else if trimmed.ends_with('/') {
