@@ -2,12 +2,48 @@ use anyhow::Result;
 use gix::ObjectId;
 use inquire::{Autocomplete, CustomUserError, Select, Text, validator::Validation};
 use octocrab::models::{Milestone, issues::Issue};
-use std::fs;
+use std::borrow::Cow;
 use std::path::PathBuf;
+use std::{fmt, fs};
 
-use crate::{
-    Configuration, RelevantFile, configuration::Checklist, create::MilestoneStatus, git::RepoUser,
-};
+use crate::GitHubApi;
+use crate::{Configuration, RelevantFile, configuration::Checklist, git::RepoUser};
+
+pub enum MilestoneStatus {
+    Existing(Milestone),
+    New(String),
+}
+
+impl fmt::Display for MilestoneStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::New(name) => write!(f, "{name} (new)"),
+            Self::Existing(milestone) => {
+                write!(f, "{} (existing: #{})", milestone.title, milestone.number)
+            }
+        }
+    }
+}
+
+impl MilestoneStatus {
+    pub(crate) async fn determine_milestone<'a>(
+        &'a self,
+        git_info: &impl GitHubApi,
+    ) -> Result<Cow<'a, Milestone>> {
+        match self {
+            Self::Existing(milestone) => Ok(Cow::Borrowed(milestone)),
+            Self::New(milestone_name) => {
+                let m = git_info.create_milestone(milestone_name).await?;
+                log::debug!(
+                    "Created milestone '{}' with ID: {}",
+                    milestone_name,
+                    m.number
+                );
+                Ok(Cow::Owned(m))
+            }
+        }
+    }
+}
 
 /// Modular milestone selection - allows creation of new milestones
 pub fn prompt_milestone(milestones: Vec<Milestone>) -> Result<MilestoneStatus> {
@@ -92,10 +128,15 @@ pub fn prompt_existing_milestone(milestones: &[Milestone]) -> Result<Milestone> 
     }
 }
 
-pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
+pub fn prompt_file(current_dir: &PathBuf, issues: &[Issue]) -> Result<PathBuf> {
+    // Extract file paths from existing issues to mark as unavailable
+    let existing_issue_files: Vec<String> =
+        issues.iter().map(|issue| issue.title.clone()).collect();
+
     #[derive(Clone)]
     struct FileCompleter {
         current_dir: PathBuf,
+        existing_issue_files: Vec<String>,
     }
 
     impl Autocomplete for FileCompleter {
@@ -134,7 +175,13 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
                             };
 
                             if entry.path().is_file() {
-                                files.push(relative_path);
+                                // Check if this file already has an issue
+                                if self.existing_issue_files.contains(&relative_path) {
+                                    // Mark as unavailable with gray styling
+                                    files.push(format!("🚫 {} (already has issue)", relative_path));
+                                } else {
+                                    files.push(relative_path);
+                                }
                             } else if entry.path().is_dir() {
                                 // Add trailing slash to indicate directory
                                 dirs.push(format!("{}/", relative_path));
@@ -159,7 +206,14 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
             highlighted_suggestion: Option<String>,
         ) -> std::result::Result<inquire::autocompletion::Replacement, CustomUserError> {
             Ok(match highlighted_suggestion {
-                Some(suggestion) => inquire::autocompletion::Replacement::Some(suggestion),
+                Some(suggestion) => {
+                    // If the suggestion is marked as unavailable, don't allow completion
+                    if suggestion.starts_with("🚫 ") {
+                        inquire::autocompletion::Replacement::None
+                    } else {
+                        inquire::autocompletion::Replacement::Some(suggestion)
+                    }
+                }
                 None => inquire::autocompletion::Replacement::None,
             })
         }
@@ -167,14 +221,22 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
 
     let file_completer = FileCompleter {
         current_dir: current_dir.clone(),
+        existing_issue_files: existing_issue_files.clone(),
     };
 
+    let existing_files_for_validator = existing_issue_files.clone();
     let validator_dir = current_dir.clone();
     let file_path =
         Text::new("📁 Enter file path (Tab for autocomplete, directories shown with /):")
             .with_autocomplete(file_completer)
             .with_validator(move |input: &str| {
                 let trimmed = input.trim();
+                // Handle case where user somehow enters the grayed-out format
+                if trimmed.starts_with("🚫 ") {
+                    return Ok(Validation::Invalid(
+                        "This file already has a corresponding issue in the milestone. Please select a different file.".into(),
+                    ));
+                }
                 if trimmed.is_empty() {
                     Ok(Validation::Invalid("File path cannot be empty".into()))
                 } else if trimmed.ends_with('/') {
@@ -186,6 +248,10 @@ pub fn prompt_file(current_dir: &PathBuf) -> Result<PathBuf> {
                     if path.exists() && path.is_dir() {
                         Ok(Validation::Invalid(
                             "Path must be a file, not a directory".into(),
+                        ))
+                    } else if existing_files_for_validator.contains(&trimmed.to_string()) {
+                        Ok(Validation::Invalid(
+                            "This file already has a corresponding issue in the milestone. Please select a different file.".into(),
                         ))
                     } else {
                         Ok(Validation::Valid)

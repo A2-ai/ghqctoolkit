@@ -1,482 +1,461 @@
-use core::fmt;
 use std::{
-    borrow::Cow,
+    fmt,
     path::{Path, PathBuf},
+    str::FromStr,
 };
-
-use octocrab::models::Milestone;
 
 use crate::{
-    RelevantFile,
     configuration::Checklist,
-    git::{GitHubApi, GitHubApiError, LocalGitError, LocalGitInfo, RepoUser},
-    issues::QCIssue,
+    git::{GitHelpers, LocalGitError, LocalGitInfo, local::GitAuthor},
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelevantFile {
+    pub name: String,
+    pub path: PathBuf,
+    pub notes: Option<String>,
+}
+
+impl fmt::Display for RelevantFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.path.display())
+    }
+}
+
+impl FromStr for RelevantFile {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some((name, path)) = s.split_once(':') {
+            if path.trim().is_empty() {
+                return Err("Path cannot be empty".to_string());
+            }
+            let path_trimmed = path.trim();
+            let path_buf = PathBuf::from(path_trimmed);
+
+            // If name is empty or just whitespace, use the file name from path as the name
+            let final_name = if name.trim().is_empty() {
+                path_buf
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(path_trimmed)
+                    .to_string()
+            } else {
+                name.trim().to_string()
+            };
+
+            Ok(Self {
+                name: final_name,
+                path: path_buf,
+                notes: None,
+            })
+        } else {
+            // No colon separator - treat the whole string as a path and derive name from it
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Err("Path cannot be empty".to_string());
+            }
+
+            let path_buf = PathBuf::from(trimmed);
+            let name = path_buf
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(trimmed)
+                .to_string();
+
+            Ok(Self {
+                name,
+                path: path_buf,
+                notes: None,
+            })
+        }
+    }
+}
+
+impl RelevantFile {
+    fn as_string(&self, git_info: &impl GitHelpers, branch: &str) -> String {
+        let note = if let Some(n) = &self.notes {
+            // Convert literal \n sequences to actual newlines, then format with proper indentation
+            let converted_notes = n.replace("\\n", "\n");
+            format!("\n\t> {}", converted_notes.replace("\n", "\n\t> "))
+        } else {
+            String::new()
+        };
+
+        format!(
+            "- **{}**\n\t- [`{}`]({}){}",
+            self.name,
+            self.path.display(),
+            git_info.file_content_url(branch, &self.path),
+            note
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
-pub enum MilestoneStatus {
-    Existing(Milestone),
-    New(String),
-}
-
-impl<'a> fmt::Display for MilestoneStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::New(name) => write!(f, "{name} (new)"),
-            Self::Existing(milestone) => {
-                write!(f, "{} (existing: #{})", milestone.title, milestone.number)
-            }
-        }
-    }
-}
-
-impl MilestoneStatus {
-    async fn determine_milestone<'a>(
-        &'a self,
-        file: impl AsRef<Path>,
-        git_info: &impl GitHubApi,
-    ) -> Result<Cow<'a, Milestone>, CreateError> {
-        let file = file.as_ref();
-        match self {
-            Self::Existing(milestone) => {
-                if issue_exists(git_info, milestone, file).await? {
-                    return Err(CreateError::IssueExists(file.to_path_buf()));
-                } else {
-                    Ok(Cow::Borrowed(milestone))
-                }
-            }
-            Self::New(milestone_name) => {
-                let m = git_info.create_milestone(milestone_name).await?;
-                log::debug!(
-                    "Created milestone '{}' with ID: {}",
-                    milestone_name,
-                    m.number
-                );
-                Ok(Cow::Owned(m))
-            }
-        }
-    }
-}
-
-pub fn validate_assignees(
-    assignees: &[String],
-    repo_users: &[RepoUser],
-) -> Result<(), CreateError> {
-    if assignees.is_empty() {
-        return Ok(());
-    }
-
-    log::debug!("Validating {} assignees", assignees.len());
-    let valid_logins: Vec<String> = repo_users.iter().map(|u| u.login.clone()).collect();
-
-    for assignee in assignees {
-        if !valid_logins.contains(assignee) {
-            return Err(CreateError::InvalidAssignee(assignee.clone()));
-        }
-    }
-
-    log::debug!("All assignees are valid repository users");
-    Ok(())
-}
-
-pub async fn create_issue(
-    file: impl AsRef<Path>,
-    milestone_status: &MilestoneStatus,
-    checklist: &Checklist,
-    assignees: Vec<String>,
-    git_info: &(impl LocalGitInfo + GitHubApi),
+pub struct QCIssue {
+    pub(crate) milestone_id: u64,
+    title: PathBuf,
+    commit: String,
+    pub(crate) branch: String,
+    authors: Vec<GitAuthor>,
+    checklist: Checklist,
+    pub(crate) assignees: Vec<String>,
     relevant_files: Vec<RelevantFile>,
-) -> Result<String, CreateError> {
-    let file = file.as_ref();
-
-    let milestone = milestone_status.determine_milestone(file, git_info).await?;
-
-    let issue = QCIssue::new(
-        file,
-        git_info,
-        milestone.number as u64,
-        assignees,
-        relevant_files,
-        checklist.clone(),
-    )?;
-
-    git_info.create_labels_if_needed(&issue.branch).await?;
-
-    let issue_url = git_info.post_issue(&issue).await?;
-
-    Ok(issue_url)
 }
 
-async fn issue_exists(
-    git_info: &impl GitHubApi,
-    milestone: &Milestone,
-    file: impl AsRef<Path>,
-) -> Result<bool, GitHubApiError> {
-    let issues = git_info.get_milestone_issues(milestone).await?;
-    log::debug!("Found {} existing issues in milestone", issues.len());
-    Ok(issues
-        .iter()
-        .any(|i| i.title == file.as_ref().to_string_lossy()))
-}
+impl QCIssue {
+    pub(crate) fn body(&self, git_info: &impl GitHelpers) -> String {
+        let author = self
+            .authors
+            .first()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
 
-#[derive(thiserror::Error, Debug)]
-pub enum CreateError {
-    #[error("Failed to access GitHub API: {0}")]
-    GitHubApiError(#[from] GitHubApiError),
-    #[error("Failed to perform git action: {0}")]
-    LocalGitError(#[from] LocalGitError),
-    #[error("Issue already exists within milestone for {0:?}")]
-    IssueExists(PathBuf),
-    #[error("Invalid assignee: {0} is not a valid user in this repository")]
-    InvalidAssignee(String),
+        let mut metadata = vec![
+            "## Metadata".to_string(),
+            format!("initial qc commit: {}", self.commit),
+            format!("git branch: {}", self.branch),
+            format!("author: {author}"),
+        ];
+
+        if self.authors.len() > 1 {
+            metadata.push(format!(
+                "collaborators: {}",
+                self.authors
+                    .iter()
+                    .skip(1)
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+
+        metadata.push(format!(
+            "[file contents at initial qc commit]({})",
+            git_info.file_content_url(&self.commit[..7], &self.title)
+        ));
+
+        let mut body = vec![metadata.join("\n* ")];
+
+        if !self.relevant_files.is_empty() {
+            let rel_files = self
+                .relevant_files
+                .iter()
+                .map(|r| r.as_string(git_info, &self.branch))
+                .collect::<Vec<_>>()
+                .join("\n");
+            metadata.push(format!("## Relevant files\n\n{rel_files}"));
+        };
+
+        body.push(self.checklist.to_string());
+
+        body.join("\n\n")
+    }
+
+    pub(crate) fn title(&self) -> String {
+        self.title.to_string_lossy().to_string()
+    }
+
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
+    pub(crate) fn new(
+        file: impl AsRef<Path>,
+        git_info: &impl LocalGitInfo,
+        milestone_id: u64,
+        assignees: Vec<String>,
+        relevant_files: Vec<RelevantFile>,
+        checklist: Checklist,
+    ) -> Result<Self, LocalGitError> {
+        Ok(Self {
+            title: file.as_ref().to_path_buf(),
+            commit: git_info.commit()?,
+            branch: git_info.branch()?,
+            authors: git_info.authors(file.as_ref())?,
+            checklist,
+            assignees,
+            milestone_id,
+            relevant_files,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Configuration,
-        git::{
-            api::{MockGitHubApi, RepoUser},
-            local::{GitAuthor, MockLocalGitInfo},
-        },
-    };
-    use mockall::predicate::*;
-    use octocrab::models::{Milestone, issues::Issue};
-    use std::fs;
+    use crate::git::{helpers::MockGitHelpers, local::GitAuthor};
+    use std::path::PathBuf;
 
-    // Mock implementation that combines both traits
+    fn create_test_issue() -> QCIssue {
+        use crate::configuration::Checklist;
+
+        QCIssue {
+            milestone_id: 1,
+            title: PathBuf::from("src/example.rs"),
+            commit: "abc123def456789".to_string(),
+            branch: "feature/new-feature".to_string(),
+            authors: vec![
+                GitAuthor {
+                    name: "John Doe".to_string(),
+                    email: "john@example.com".to_string(),
+                },
+                GitAuthor {
+                    name: "Jane Smith".to_string(),
+                    email: "jane@example.com".to_string(),
+                }
+            ],
+            checklist: Checklist::new(
+                "Code Review Checklist".to_string(),
+                Some("NOTE".to_string()),
+                "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
+            ),
+            assignees: vec!["reviewer1".to_string(), "reviewer2".to_string()],
+            relevant_files: vec![
+                RelevantFile {
+                    name: "rel file".to_string(),
+                    path: PathBuf::from("path/to/file.rel"),
+                    notes: Some("this\nis\na note".to_string())
+                },
+                RelevantFile {
+                    name: "rel file2".to_string(),
+                    path: PathBuf::from("path/to/file2.rel"),
+                    notes: None,
+                }
+            ]
+        }
+    }
+
     struct MockGitInfo {
-        local: MockLocalGitInfo,
-        github: MockGitHubApi,
+        helpers: MockGitHelpers,
     }
 
-    impl LocalGitInfo for MockGitInfo {
-        fn commit(&self) -> Result<String, crate::git::LocalGitError> {
-            self.local.commit()
+    impl GitHelpers for MockGitInfo {
+        fn file_content_url(&self, commit: &str, file: &std::path::Path) -> String {
+            self.helpers.file_content_url(commit, file)
         }
 
-        fn branch(&self) -> Result<String, crate::git::LocalGitError> {
-            self.local.branch()
-        }
-
-        fn file_commits(
+        fn commit_comparison_url(
             &self,
-            file: &Path,
-        ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::LocalGitError> {
-            self.local.file_commits(file)
-        }
-
-        fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, crate::git::LocalGitError> {
-            self.local.authors(file)
-        }
-
-        fn file_content_at_commit(
-            &self,
-            file: &Path,
-            commit: &gix::ObjectId,
-        ) -> Result<String, crate::git::LocalGitError> {
-            self.local.file_content_at_commit(file, commit)
-        }
-    }
-
-    impl GitHubApi for MockGitInfo {
-        async fn get_milestones(&self) -> Result<Vec<Milestone>, GitHubApiError> {
-            self.github.get_milestones().await
-        }
-
-        async fn get_milestone_issues(
-            &self,
-            milestone: &Milestone,
-        ) -> Result<Vec<Issue>, GitHubApiError> {
-            self.github.get_milestone_issues(milestone).await
-        }
-
-        async fn create_milestone(
-            &self,
-            milestone_name: &str,
-        ) -> Result<Milestone, GitHubApiError> {
-            self.github.create_milestone(milestone_name).await
-        }
-
-        async fn post_issue(&self, issue: &QCIssue) -> Result<String, GitHubApiError> {
-            self.github.post_issue(issue).await
-        }
-        async fn post_comment(&self, comment: &crate::QCComment) -> Result<String, GitHubApiError> {
-            self.github.post_comment(comment).await
-        }
-        async fn post_approval(
-            &self,
-            approval: &crate::QCApprove,
-        ) -> Result<String, GitHubApiError> {
-            self.github.post_approval(approval).await
-        }
-        async fn post_unapproval(
-            &self,
-            unapproval: &crate::QCUnapprove,
-        ) -> Result<String, GitHubApiError> {
-            self.github.post_unapproval(unapproval).await
-        }
-        async fn get_users(&self) -> Result<Vec<RepoUser>, GitHubApiError> {
-            self.github.get_users().await
-        }
-        async fn create_labels_if_needed(&self, branch: &str) -> Result<(), GitHubApiError> {
-            self.github.create_labels_if_needed(branch).await
-        }
-    }
-
-    // Test scenario struct for matrix testing
-    #[derive(Clone)]
-    struct CreateIssueTestCase {
-        name: &'static str,
-        milestone_status: MilestoneStatus,
-        checklist_name: &'static str,
-        assignees: Vec<&'static str>,
-        existing_issues: Vec<&'static str>,      // fixture names
-        created_milestone: Option<&'static str>, // fixture name for new milestone
-    }
-
-    // Helper functions to load test fixtures
-    fn load_milestone(name: &str) -> Milestone {
-        let json_str =
-            fs::read_to_string(format!("src/tests/github_api/milestones/{}.json", name)).unwrap();
-        serde_json::from_str(&json_str).unwrap()
-    }
-
-    fn load_issue(name: &str) -> Issue {
-        let json_str =
-            fs::read_to_string(format!("src/tests/github_api/issues/{}.json", name)).unwrap();
-        serde_json::from_str(&json_str).unwrap()
-    }
-
-    fn create_test_configuration() -> Configuration {
-        let mut config = Configuration::from_path("src/tests/default_configuration");
-        config.load_checklists();
-        config
-    }
-
-    fn setup_mock_git_info(test_case: &CreateIssueTestCase) -> MockGitInfo {
-        let mut mock_git_info = MockGitInfo {
-            local: MockLocalGitInfo::new(),
-            github: MockGitHubApi::new(),
-        };
-
-        // Set up expectations based on the milestone status
-        {
-            match &test_case.milestone_status {
-                MilestoneStatus::Existing(milestone) => {
-                    // For existing milestones, we need to check if issue already exists
-                    let issues: Vec<Issue> = test_case
-                        .existing_issues
-                        .iter()
-                        .map(|&name| load_issue(name))
-                        .collect();
-
-                    let expected_milestone_number = milestone.number;
-                    mock_git_info
-                        .github
-                        .expect_get_milestone_issues()
-                        .withf(move |m: &Milestone| m.number == expected_milestone_number)
-                        .times(1)
-                        .returning(move |_| {
-                            let issues = issues.clone();
-                            Box::pin(async move { Ok(issues) })
-                        });
-                }
-                MilestoneStatus::New(_) => {
-                    // For new milestones, expect create_milestone call
-                    if let Some(created_milestone_name) = test_case.created_milestone {
-                        let created_milestone = load_milestone(created_milestone_name);
-                        let milestone_name = match &test_case.milestone_status {
-                            MilestoneStatus::New(name) => name.clone(),
-                            _ => unreachable!(),
-                        };
-
-                        mock_git_info
-                            .github
-                            .expect_create_milestone()
-                            .with(eq(milestone_name))
-                            .times(1)
-                            .returning(move |_| {
-                                let created_milestone = created_milestone.clone();
-                                Box::pin(async move { Ok(created_milestone) })
-                            });
-                    }
-                }
-            }
-        }
-
-        // Set up get_users mock for validation
-        {
-            let valid_users = get_test_repo_users();
-
-            mock_git_info
-                .github
-                .expect_get_users()
-                .times(0..=1) // May not be called if validation fails early
-                .returning({
-                    let users = valid_users.clone();
-                    move || {
-                        let users = users.clone();
-                        Box::pin(async move { Ok(users) })
-                    }
-                });
-        }
-
-        // Set up git and post expectations
-        {
-            mock_git_info
-                .local
-                .expect_commit()
-                .times(1)
-                .returning(|| Ok("abc123".to_string()));
-
-            mock_git_info
-                .local
-                .expect_branch()
-                .times(1)
-                .returning(|| Ok("main".to_string()));
-
-            mock_git_info
-                .local
-                .expect_authors()
-                .times(1)
-                .returning(|_| {
-                    Ok(vec![GitAuthor {
-                        name: "Test Author".to_string(),
-                        email: "test@example.com".to_string(),
-                    }])
-                });
-
-            mock_git_info
-                .github
-                .expect_post_issue()
-                .times(1)
-                .returning(|_| {
-                    Box::pin(
-                        async move { Ok("https://github.com/owner/repo/issues/123".to_string()) },
-                    )
-                });
-
-            mock_git_info
-                .github
-                .expect_create_labels_if_needed()
-                .with(eq("main"))
-                .times(1)
-                .returning(|_| Box::pin(async move { Ok(()) }));
-        }
-
-        mock_git_info
-    }
-
-    // Helper function to get test repo users
-    fn get_test_repo_users() -> Vec<RepoUser> {
-        vec![
-            RepoUser {
-                login: "user1".to_string(),
-                name: Some("User One".to_string()),
-            },
-            RepoUser {
-                login: "user2".to_string(),
-                name: Some("User Two".to_string()),
-            },
-            RepoUser {
-                login: "admin".to_string(),
-                name: None,
-            },
-        ]
-    }
-
-    #[tokio::test]
-    async fn test_create_issue_matrix() {
-        // Load milestone fixtures that will be referenced by the test cases
-        let v1_milestone = load_milestone("v1.0");
-
-        let test_cases = vec![
-            CreateIssueTestCase {
-                name: "success_with_existing_milestone",
-                milestone_status: MilestoneStatus::Existing(v1_milestone),
-                checklist_name: "Simple Tasks",
-                assignees: vec!["user1", "user2"],
-                existing_issues: vec![],
-                created_milestone: None,
-            },
-            CreateIssueTestCase {
-                name: "success_with_new_milestone",
-                milestone_status: MilestoneStatus::New("v2.0".to_string()),
-                checklist_name: "NCA Analysis",
-                assignees: vec!["admin"],
-                existing_issues: vec![],
-                created_milestone: Some("v2.0"),
-            },
-        ];
-
-        let config = create_test_configuration();
-
-        for test_case in test_cases {
-            println!("Running test case: {}", test_case.name);
-
-            let mock_git_info = setup_mock_git_info(&test_case);
-            let repo_users = get_test_repo_users();
-            let assignees: Vec<String> =
-                test_case.assignees.iter().map(|s| s.to_string()).collect();
-
-            // Validate assignees before calling create_issue (simulating main.rs logic)
-            let validation_result = validate_assignees(&assignees, &repo_users);
-
-            let result = if validation_result.is_err() {
-                validation_result.map(|_| ())
-            } else {
-                let checklist = &config.checklists[test_case.checklist_name];
-                create_issue(
-                    PathBuf::from("src/test.rs"),
-                    &test_case.milestone_status,
-                    checklist,
-                    assignees,
-                    &mock_git_info,
-                    vec![],
-                )
-                .await
-                .map(|_| ()) // Ignore the URL, just check for success
-            };
-
-            // All test cases should succeed
-            assert!(
-                result.is_ok(),
-                "Test case '{}' should succeed",
-                test_case.name
-            );
+            current_commit: &gix::ObjectId,
+            previous_commit: &gix::ObjectId,
+        ) -> String {
+            self.helpers
+                .commit_comparison_url(current_commit, previous_commit)
         }
     }
 
     #[test]
-    fn test_validate_assignees() {
-        let repo_users = get_test_repo_users();
+    fn test_issue_body_snapshot_with_rel_files() {
+        let issue = create_test_issue();
 
-        // Test valid assignees
-        assert!(
-            validate_assignees(&["user1".to_string(), "user2".to_string()], &repo_users).is_ok()
-        );
-        assert!(validate_assignees(&["admin".to_string()], &repo_users).is_ok());
-        assert!(validate_assignees(&[], &repo_users).is_ok()); // Empty is valid
+        let mut mock_git_info = MockGitInfo {
+            helpers: MockGitHelpers::new(),
+        };
 
-        // Test invalid assignees
-        let result = validate_assignees(&["invalid_user".to_string()], &repo_users);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            CreateError::InvalidAssignee(_)
-        ));
+        mock_git_info
+            .helpers
+            .expect_file_content_url()
+            .with(
+                mockall::predicate::eq("abc123d"),
+                mockall::predicate::eq(PathBuf::from("src/example.rs")),
+            )
+            .returning(|_, _| {
+                "https://github.com/owner/repo/blob/abc123d/src/example.rs".to_string()
+            });
 
-        // Test mixed valid and invalid
-        let result = validate_assignees(
-            &["user1".to_string(), "invalid_user".to_string()],
-            &repo_users,
-        );
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            CreateError::InvalidAssignee(_)
-        ));
+        // Mock expectation for the relevant file
+        mock_git_info
+            .helpers
+            .expect_file_content_url()
+            .with(
+                mockall::predicate::eq("feature/new-feature"),
+                mockall::predicate::eq(PathBuf::from("path/to/file.rel")),
+            )
+            .returning(|_, _| {
+                "https://github.com/owner/repo/blob/feature/new-feature/path/to/file.rel"
+                    .to_string()
+            });
+        mock_git_info
+            .helpers
+            .expect_file_content_url()
+            .with(
+                mockall::predicate::eq("feature/new-feature"),
+                mockall::predicate::eq(PathBuf::from("path/to/file2.rel")),
+            )
+            .returning(|_, _| {
+                "https://github.com/owner/repo/blob/feature/new-feature/path/to/file2.rel"
+                    .to_string()
+            });
+
+        let body = issue.body(&mock_git_info);
+        insta::assert_snapshot!(body);
+    }
+
+    #[test]
+    fn test_issue_body_snapshot_without_rel_files() {
+        let mut issue = create_test_issue();
+        issue.relevant_files = Vec::new();
+
+        let mut mock_git_info = MockGitInfo {
+            helpers: MockGitHelpers::new(),
+        };
+
+        mock_git_info
+            .helpers
+            .expect_file_content_url()
+            .with(
+                mockall::predicate::eq("abc123d"),
+                mockall::predicate::eq(PathBuf::from("src/example.rs")),
+            )
+            .returning(|_, _| {
+                "https://github.com/owner/repo/blob/abc123d/src/example.rs".to_string()
+            });
+
+        let body = issue.body(&mock_git_info);
+        insta::assert_snapshot!(body);
+    }
+
+    #[test]
+    fn test_named_file_parsing_matrix() {
+        let test_cases = vec![
+            // (input, expected_result, test_description)
+            (
+                "Config File:src/config.rs",
+                Ok(RelevantFile {
+                    name: "Config File".to_string(),
+                    path: PathBuf::from("src/config.rs"),
+                    notes: None,
+                }),
+                "basic parsing with name and path",
+            ),
+            (
+                "  Test File  :  src/test.rs  ",
+                Ok(RelevantFile {
+                    name: "Test File".to_string(),
+                    path: PathBuf::from("src/test.rs"),
+                    notes: None,
+                }),
+                "parsing with extra spaces",
+            ),
+            (
+                "Database:db/models.rs",
+                Ok(RelevantFile {
+                    name: "Database".to_string(),
+                    path: PathBuf::from("db/models.rs"),
+                    notes: None,
+                }),
+                "single word name",
+            ),
+            (
+                "Very Long Config File Name:path/to/very/long/file/name.rs",
+                Ok(RelevantFile {
+                    name: "Very Long Config File Name".to_string(),
+                    path: PathBuf::from("path/to/very/long/file/name.rs"),
+                    notes: None,
+                }),
+                "long names and paths",
+            ),
+            (
+                "File with: colon:src/special.rs",
+                Ok(RelevantFile {
+                    name: "File with".to_string(),
+                    path: PathBuf::from("colon:src/special.rs"),
+                    notes: None,
+                }),
+                "multiple colons (only first is separator)",
+            ),
+            (
+                "src/config.rs",
+                Ok(RelevantFile {
+                    name: "config.rs".to_string(),
+                    path: PathBuf::from("src/config.rs"),
+                    notes: None,
+                }),
+                "no separator - path only, name derived from filename",
+            ),
+            (
+                "path/to/file.txt",
+                Ok(RelevantFile {
+                    name: "file.txt".to_string(),
+                    path: PathBuf::from("path/to/file.txt"),
+                    notes: None,
+                }),
+                "no separator - derive name from file extension",
+            ),
+            (
+                "single_file",
+                Ok(RelevantFile {
+                    name: "single_file".to_string(),
+                    path: PathBuf::from("single_file"),
+                    notes: None,
+                }),
+                "no separator - single filename",
+            ),
+            (
+                ":src/file.rs",
+                Ok(RelevantFile {
+                    name: "file.rs".to_string(),
+                    path: PathBuf::from("src/file.rs"),
+                    notes: None,
+                }),
+                "empty name - derive from filename",
+            ),
+            (
+                "   :  src/test.rs  ",
+                Ok(RelevantFile {
+                    name: "test.rs".to_string(),
+                    path: PathBuf::from("src/test.rs"),
+                    notes: None,
+                }),
+                "whitespace name - derive from filename",
+            ),
+            (
+                "Name:",
+                Err("Path cannot be empty".to_string()),
+                "empty path with colon",
+            ),
+            (
+                "",
+                Err("Path cannot be empty".to_string()),
+                "completely empty",
+            ),
+            (
+                "   ",
+                Err("Path cannot be empty".to_string()),
+                "only whitespace",
+            ),
+        ];
+
+        for (input, expected, description) in test_cases {
+            let result: Result<RelevantFile, String> = input.parse();
+            match (result, expected) {
+                (Ok(actual), Ok(expected)) => {
+                    assert_eq!(actual, expected, "Test case failed: {}", description);
+                }
+                (Err(actual_err), Err(expected_err)) => {
+                    assert!(
+                        actual_err.contains(&expected_err),
+                        "Test case '{}' failed: expected error containing '{}', got '{}'",
+                        description,
+                        expected_err,
+                        actual_err
+                    );
+                }
+                (Ok(actual), Err(expected_err)) => {
+                    panic!(
+                        "Test case '{}' failed: expected error '{}', but got success: {:?}",
+                        description, expected_err, actual
+                    );
+                }
+                (Err(actual_err), Ok(expected)) => {
+                    panic!(
+                        "Test case '{}' failed: expected success {:?}, but got error '{}'",
+                        description, expected, actual_err
+                    );
+                }
+            }
+        }
     }
 }

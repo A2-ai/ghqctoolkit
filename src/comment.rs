@@ -324,6 +324,7 @@ mod tests {
     #[derive(Debug, Deserialize)]
     struct TestConfig {
         name: String,
+        #[allow(dead_code)]
         description: String,
         issue_file: String,
         file_path: String,

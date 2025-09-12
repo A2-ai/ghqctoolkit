@@ -3,13 +3,13 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use ghqctoolkit::cli::{CreateContext, RelevantFileParser};
+use ghqctoolkit::cli::RelevantFileParser;
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, create_issue,
-    determine_config_info, setup_configuration,
+    Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, determine_config_info,
+    setup_configuration,
 };
-use ghqctoolkit::{QCApprove, QCComment, QCUnapprove};
+use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -164,27 +164,29 @@ async fn main() -> Result<()> {
 
                     // Fetch milestones first
                     let milestones = git_info.get_milestones().await?;
+                    let repo_users = git_info.get_users().await?;
 
-                    let context = match (milestone, file, checklist_name) {
+                    let qc_issue = match (milestone, file, checklist_name) {
                         (Some(milestone_name), Some(file), Some(checklist_name)) => {
-                            CreateContext::from_args(
+                            QCIssue::from_args(
                                 milestone_name,
-                                milestones,
                                 file,
                                 checklist_name,
                                 assignees,
                                 relevant_files,
+                                milestones,
+                                &repo_users,
                                 configuration,
-                                git_info,
+                                &git_info,
                             )
                             .await?
                         }
                         (None, None, None) => {
-                            CreateContext::from_interactive(
+                            QCIssue::from_interactive(
                                 &cli.directory,
                                 milestones,
                                 configuration,
-                                git_info,
+                                &git_info,
                             )
                             .await?
                         }
@@ -195,15 +197,9 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    let issue_url = create_issue(
-                        &context.file,
-                        &context.milestone_status,
-                        &context.checklist,
-                        context.assignees,
-                        &context.git_info,
-                        context.relevant_files,
-                    )
-                    .await?;
+                    git_info.create_labels_if_needed(qc_issue.branch()).await?;
+
+                    let issue_url = git_info.post_issue(&qc_issue).await?;
 
                     println!("✅ Issue created successfully!");
                     println!("{}", issue_url);
