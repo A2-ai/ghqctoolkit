@@ -9,7 +9,7 @@ pub(crate) mod helpers;
 pub(crate) mod local;
 
 pub use action::{GitAction, GitActionError, GitActionImpl};
-pub use api::{GitHubApi, GitHubApiError, RepoUser};
+pub use api::{GitHubApi, RepoUser};
 pub use auth::create_authenticated_client;
 pub use helpers::{GitHelpers, GitInfoError, parse_github_url};
 pub use local::{LocalGitError, LocalGitInfo};

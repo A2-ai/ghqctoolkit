@@ -9,7 +9,7 @@ use std::{fmt, fs};
 use crate::GitHubApi;
 use crate::{Configuration, RelevantFile, configuration::Checklist, git::RepoUser};
 
-pub(crate) enum MilestoneStatus {
+pub enum MilestoneStatus {
     Existing(Milestone),
     New(String),
 }

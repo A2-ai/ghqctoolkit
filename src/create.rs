@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     configuration::Checklist,
-    git::{GitHelpers, GitHubApiError, LocalGitError, LocalGitInfo, local::GitAuthor},
+    git::{GitHelpers, LocalGitError, LocalGitInfo, local::GitAuthor},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,14 +180,6 @@ impl QCIssue {
             relevant_files,
         })
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum CreateError {
-    #[error("Failed to access GitHub API: {0}")]
-    GitHubApiError(#[from] GitHubApiError),
-    #[error("Failed to perform git action: {0}")]
-    LocalGitError(#[from] LocalGitError),
 }
 
 #[cfg(test)]
