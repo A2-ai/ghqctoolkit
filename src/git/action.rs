@@ -9,27 +9,6 @@ use gix::{Url, open};
 #[cfg(test)]
 use mockall::automock;
 
-/// Represents the status of a git repository
-// #[derive(Debug, Clone)]
-// pub enum GitStatus {
-//     /// Repository is clean - no uncommitted changes, no unpushed commits, no remote changes
-//     Clean,
-//     /// Local uncommitted changes exist
-//     Dirty { modified_files: Vec<PathBuf> },
-//     /// Local commits that haven't been pushed to remote
-//     Ahead { commits_ahead: usize },
-//     /// Remote changes that haven't been pulled locally
-//     Behind { commits_behind: usize },
-//     /// Both local unpushed commits and remote unpulled changes
-//     Diverged {
-//         commits_ahead: usize,
-//         commits_behind: usize
-//     },
-//     /// Directory is not a git repository
-//     NotARepository,
-// }
-
-/// Trait for performing git operations like clone, pull, and status
 #[cfg_attr(test, automock)]
 pub trait GitAction {
     /// Clone a repository from a URL to a local path
