@@ -1,5 +1,5 @@
 ---
-source: src/issues.rs
+source: src/create.rs
 expression: body
 ---
 ## Metadata

@@ -499,7 +499,7 @@ pub fn configuration_status(
     } else {
         // warn if the logo is not found at the specified path
         format!(
-            "\n ⚠️ Logo was not found at the specified path {}",
+            "\n⚠️ Logo was not found at the specified path {}",
             configuration.options.logo_path.display()
         )
     };
@@ -517,7 +517,7 @@ pub fn configuration_status(
 📁 directory: {}{git_str}
 {checklist_sum}{logo_note}
         
-== {checklist_name} Information ==
+== {checklist_name} Available ==
 {}
 ",
         configuration.path.display(),
@@ -727,5 +727,103 @@ Second Checklist:
         let invalid_yaml2 = "- Just a list\n- Not a mapping";
         let result2 = parse_yaml_checklist(invalid_yaml2);
         assert!(result2.is_err());
+    }
+
+    #[test]
+    fn test_configuration_status() {
+        // Create a mock GitInfo
+        struct MockGitInfo {
+            owner: String,
+            repo: String,
+            status: crate::git::local::GitStatus,
+        }
+
+        impl LocalGitInfo for MockGitInfo {
+            fn commit(&self) -> Result<String, crate::git::local::LocalGitError> {
+                Ok("abc123".to_string())
+            }
+
+            fn branch(&self) -> Result<String, crate::git::local::LocalGitError> {
+                Ok("main".to_string())
+            }
+
+            fn file_commits(
+                &self,
+                _file: &std::path::Path,
+            ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::local::LocalGitError>
+            {
+                Ok(vec![])
+            }
+
+            fn authors(
+                &self,
+                _file: &std::path::Path,
+            ) -> Result<Vec<crate::git::local::GitAuthor>, crate::git::local::LocalGitError>
+            {
+                Ok(vec![])
+            }
+
+            fn file_content_at_commit(
+                &self,
+                _file: &std::path::Path,
+                _commit: &gix::ObjectId,
+            ) -> Result<String, crate::git::local::LocalGitError> {
+                Ok(String::new())
+            }
+
+            fn status(
+                &self,
+            ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError>
+            {
+                Ok(self.status.clone())
+            }
+
+            fn file_status(
+                &self,
+                _file: &std::path::Path,
+            ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError>
+            {
+                Ok(self.status.clone())
+            }
+
+            fn owner(&self) -> &str {
+                &self.owner
+            }
+
+            fn repo(&self) -> &str {
+                &self.repo
+            }
+        }
+
+        // Load the custom configuration
+        let config_path = PathBuf::from("tests/custom_configuration");
+        let configuration = Configuration::from_path(&config_path);
+
+        // Test with git info (clean status)
+        let git_info = MockGitInfo {
+            owner: "test-owner".to_string(),
+            repo: "test-repo".to_string(),
+            status: crate::git::local::GitStatus::Clean,
+        };
+
+        let result_with_git = configuration_status(&configuration, &Some(git_info));
+        insta::assert_snapshot!("configuration_status_with_git", result_with_git);
+
+        // Test without git info
+        let result_without_git: String = configuration_status(&configuration, &None::<MockGitInfo>);
+        insta::assert_snapshot!("configuration_status_without_git", result_without_git);
+
+        // Test with dirty status
+        let git_info_dirty = MockGitInfo {
+            owner: "test-owner".to_string(),
+            repo: "test-repo".to_string(),
+            status: crate::git::local::GitStatus::Dirty(vec![
+                PathBuf::from("src/main.rs"),
+                PathBuf::from("README.md"),
+            ]),
+        };
+
+        let result_dirty = configuration_status(&configuration, &Some(git_info_dirty));
+        insta::assert_snapshot!("configuration_status_dirty", result_dirty);
     }
 }

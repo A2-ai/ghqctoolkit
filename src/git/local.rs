@@ -36,7 +36,7 @@ impl fmt::Display for GitStatus {
             Self::Dirty(files) => {
                 write!(
                     f,
-                    "❌ Repository has files with uncommitted, local changes: \n\t{}",
+                    "❌ Repository has files with uncommitted, local changes: \n\t- {}",
                     files
                         .iter()
                         .map(|x| x.to_string_lossy())

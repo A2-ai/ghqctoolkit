@@ -1,0 +1,14 @@
+---
+source: src/configuration.rs
+expression: result_dirty
+---
+== Directory Information ==
+📁 directory: tests/custom_configuration
+📦 git repository: test-owner/test-repo
+❌ Repository has files with uncommitted, local changes: 
+	- src/main.rs
+	- README.md
+📋 Checklists available in 'checklists': 1
+        
+== Checklists Available ==
+- Custom: 1 checklist items

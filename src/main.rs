@@ -22,7 +22,7 @@ struct Cli {
     directory: PathBuf,
 
     /// Configuration directory path
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     config_dir: Option<PathBuf>,
 
     #[command(flatten)]

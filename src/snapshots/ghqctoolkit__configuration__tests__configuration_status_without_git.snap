@@ -1,0 +1,10 @@
+---
+source: src/configuration.rs
+expression: result_without_git
+---
+== Directory Information ==
+📁 directory: tests/custom_configuration
+📋 Checklists available in 'checklists': 1
+        
+== Checklists Available ==
+- Custom: 1 checklist items

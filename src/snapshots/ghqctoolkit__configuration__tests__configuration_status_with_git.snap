@@ -1,0 +1,12 @@
+---
+source: src/configuration.rs
+expression: result_with_git
+---
+== Directory Information ==
+📁 directory: tests/custom_configuration
+📦 git repository: test-owner/test-repo
+✅ Repository is up to date!
+📋 Checklists available in 'checklists': 1
+        
+== Checklists Available ==
+- Custom: 1 checklist items
