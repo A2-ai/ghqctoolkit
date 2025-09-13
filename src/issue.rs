@@ -3,7 +3,12 @@ use std::{path::PathBuf, str::FromStr};
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
-use crate::{GitHubApi, git::api::GitHubApiError, git::local::{LocalGitInfo, LocalGitError}};
+use crate::{
+    GitHubApi, 
+    cache::{DiskCache, CachedComments},
+    git::api::GitHubApiError, 
+    git::local::{LocalGitInfo, LocalGitError}
+};
 
 struct IssueThread {
     file: PathBuf,
@@ -128,6 +133,53 @@ fn parse_commit_from_pattern(
     }
     
     None
+}
+
+/// Get issue comments with caching based on issue update timestamp
+pub async fn get_cached_issue_comments(
+    cache: Option<&DiskCache>,
+    issue: &Issue,
+    git_info: &impl GitHubApi,
+) -> Result<Vec<String>, GitHubApiError> {
+    // Create cache key from issue number
+    let cache_key = format!("issue_{}", issue.number);
+    
+    // Try to get cached comments first
+    let cached_comments: Option<CachedComments> = if let Some(cache) = cache {
+        cache.read::<CachedComments>(&["issues", "comments"], &cache_key)
+    } else {
+        None
+    };
+    
+    // Check if cached comments are still valid by comparing timestamps
+    if let Some(cached) = cached_comments {
+        if cached.issue_updated_at >= issue.updated_at {
+            log::debug!("Using cached comments for issue #{} (cache timestamp: {}, issue timestamp: {})", 
+                       issue.number, cached.issue_updated_at, issue.updated_at);
+            return Ok(cached.comments);
+        } else {
+            log::debug!("Cached comments for issue #{} are stale (cache: {}, issue: {})", 
+                       issue.number, cached.issue_updated_at, issue.updated_at);
+        }
+    }
+    
+    // Fetch fresh comments from API
+    log::debug!("Fetching fresh comments for issue #{}", issue.number);
+    let comments = git_info.get_issue_comments(issue).await?;
+    
+    // Cache the comments with the current issue timestamp (permanently)
+    if let Some(cache) = cache {
+        let cached_comments = CachedComments {
+            comments: comments.clone(),
+            issue_updated_at: issue.updated_at,
+        };
+        
+        if let Err(e) = cache.write(&["issues", "comments"], &cache_key, &cached_comments, false) {
+            log::warn!("Failed to cache comments for issue #{}: {}", issue.number, e);
+        }
+    }
+    
+    Ok(comments)
 }
 
 #[derive(Debug, thiserror::Error)]

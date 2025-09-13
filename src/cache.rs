@@ -14,6 +14,13 @@ pub struct CacheEntry<T> {
     pub ttl_seconds: Option<u64>,
 }
 
+/// Cached comments with the issue's last updated timestamp
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedComments {
+    pub comments: Vec<String>,
+    pub issue_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl<T> CacheEntry<T> {
     pub fn new(data: T, ttl: Option<Duration>) -> Self {
         let created_at = SystemTime::now()
