@@ -1,0 +1,734 @@
+use std::{path::PathBuf, str::FromStr};
+
+use gix::ObjectId;
+use octocrab::models::issues::Issue;
+
+use crate::{GitHubApi, git::api::GitHubApiError, git::local::{LocalGitInfo, LocalGitError}};
+
+struct IssueThread {
+    file: PathBuf,
+    initial_commit: ObjectId,
+    notification_commits: Vec<ObjectId>,
+    approved_commit: Option<ObjectId>,
+}
+
+impl IssueThread {
+    async fn from_issue(issue: &Issue, git_info: &(impl GitHubApi + LocalGitInfo)) -> Result<Self, IssueError> {
+        let file = PathBuf::from(&issue.title);
+
+        // Get all commits for this file once
+        let file_commits = git_info.file_commits(&file).map_err(|e| IssueError::LocalGitError(e))?;
+        let commit_ids: Vec<ObjectId> = file_commits.iter().map(|(id, _)| *id).collect();
+
+        // 1. Parse the initial commit ObjectId from the issue body
+        let initial_commit = issue.body
+            .as_ref()
+            .and_then(|body| parse_commit_from_pattern(body, "initial qc commit: ", &commit_ids))
+            .ok_or_else(|| IssueError::InitialCommitNotFound)?;
+
+        // 2. Get comment identifiers and fetch their content in parallel
+        let comment_identifiers = git_info.get_issue_comment_identifiers(issue).await?;
+
+        let comment_futures: Vec<_> = comment_identifiers
+            .iter()
+            .map(|comment_id| git_info.get_comment_content(comment_id))
+            .collect();
+
+        let comment_results = futures::future::join_all(comment_futures).await;
+
+        // Filter successful results, log warnings for failures
+        let mut comment_bodies = Vec::new();
+        let mut error_count = 0;
+        let total_comments = comment_results.len();
+
+        for (idx, result) in comment_results.into_iter().enumerate() {
+            let is_last_comment = total_comments > 0 && idx == total_comments - 1;
+
+            match result {
+                Ok(body) => comment_bodies.push(body),
+                Err(e) => {
+                    error_count += 1;
+                    let comment_id = comment_identifiers
+                        .get(idx)
+                        .map(|c| c.comment_id)
+                        .unwrap_or(0);
+
+                    if is_last_comment {
+                        // Last comment failed - this is critical
+                        log::error!(
+                            "Failed to fetch last comment {} for issue #{}: {}",
+                            comment_id,
+                            issue.number,
+                            e
+                        );
+                        return Err(IssueError::LastCommentFailed(comment_id));
+                    } else {
+                        // Non-last comment failed - warn but continue
+                        log::warn!(
+                            "Failed to fetch comment {} for issue #{}: {}",
+                            comment_id,
+                            issue.number,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        // Only error if ALL comments failed to fetch (and we're not already handling last comment failure)
+        if !comment_identifiers.is_empty() && comment_bodies.is_empty() {
+            return Err(IssueError::AllCommentsFailed);
+        }
+
+        if error_count > 0 {
+            log::info!(
+                "Successfully fetched {} out of {} comments for issue #{}",
+                comment_bodies.len(),
+                comment_identifiers.len(),
+                issue.number
+            );
+        }
+
+        // 3. Parse notification and approval commits from comment bodies
+        let (notification_commits, approved_commit) = parse_commits_from_comments(
+            &comment_bodies,
+            &commit_ids,
+            matches!(issue.state, octocrab::models::IssueState::Open),
+        );
+
+        Ok(Self {
+            file,
+            initial_commit,
+            notification_commits,
+            approved_commit,
+        })
+    }
+}
+
+/// Parse notification and approval commits from comment bodies
+/// Returns (notification_commits, approved_commit)
+/// Approval is invalidated if issue is open or if an unapproval occurs after approval
+fn parse_commits_from_comments(
+    comment_bodies: &[String],
+    commit_ids: &[ObjectId],
+    issue_is_open: bool,
+) -> (Vec<ObjectId>, Option<ObjectId>) {
+    let mut notification_commits = Vec::new();
+    let mut approved_commit = None;
+    let mut approval_comment_index = None;
+
+    // Parse all comments in order
+    for (index, body) in comment_bodies.iter().enumerate() {
+        // Check for notification commit: "current commit: {hash}"
+        if let Some(commit) = parse_commit_from_pattern(body, "current commit: ", commit_ids) {
+            notification_commits.push(commit);
+        }
+
+        // Check for approval commit: "approved qc commit: {hash}"
+        if let Some(commit) = parse_commit_from_pattern(body, "approved qc commit: ", commit_ids) {
+            if issue_is_open {
+                // If issue is open, treat approval as notification
+                notification_commits.push(commit);
+            } else {
+                approved_commit = Some(commit);
+                approval_comment_index = Some(index);
+            }
+        }
+
+        // Check for unapproval: "# QC Un-Approval"
+        if body.contains("# QC Un-Approval") {
+            // If this unapproval comes after an approval, invalidate the approval
+            if let Some(approval_index) = approval_comment_index {
+                if index > approval_index {
+                    // Move the approved commit to notifications and clear approval
+                    if let Some(commit) = approved_commit {
+                        notification_commits.push(commit);
+                    }
+                    approved_commit = None;
+                    approval_comment_index = None;
+                }
+            }
+        }
+    }
+
+    (notification_commits, approved_commit)
+}
+
+/// Parse a commit from a body using the given pattern
+/// Supports both full and short SHAs with minimum 7 character length
+fn parse_commit_from_pattern(
+    body: &str,
+    pattern: &str,
+    commit_ids: &[ObjectId],
+) -> Option<ObjectId> {
+    let start = body.find(pattern)?;
+    let commit_start = start + pattern.len();
+    
+    let remaining = &body[commit_start..];
+    let commit_hash = remaining
+        .lines()
+        .next()?
+        .split_whitespace()
+        .next()?;
+    
+    // Try to parse as full ObjectId first
+    if let Ok(full_oid) = ObjectId::from_str(commit_hash) {
+        return Some(full_oid);
+    }
+    
+    // If that fails, try to match as short SHA against file commits
+    // Require at least 7 characters for short SHA to avoid ambiguity
+    if commit_hash.len() >= 7 {
+        for commit_id in commit_ids {
+            let full_hash = commit_id.to_string();
+            if full_hash.starts_with(commit_hash) {
+                return Some(*commit_id);
+            }
+        }
+    }
+    
+    None
+}
+
+#[derive(Debug, thiserror::Error)]
+enum IssueError {
+    #[error(transparent)]
+    GitHubApiError(#[from] GitHubApiError),
+    #[error(transparent)]
+    LocalGitError(#[from] LocalGitError),
+    #[error("Initial commit not found in issue body")]
+    InitialCommitNotFound,
+    #[error("Failed to fetch all comments for issue")]
+    AllCommentsFailed,
+    #[error("Failed to fetch last comment {0} for issue")]
+    LastCommentFailed(u64),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::{GitHelpers, api::CommentIdentifier};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
+    #[derive(Clone)]
+    struct MockGitInfo {
+        file_commits: Vec<(ObjectId, String)>,
+        comment_identifiers: Vec<CommentIdentifier>,
+        comment_contents: HashMap<u64, String>,
+    }
+
+    impl MockGitInfo {
+        fn new() -> Self {
+            Self {
+                file_commits: Vec::new(),
+                comment_identifiers: Vec::new(),
+                comment_contents: HashMap::new(),
+            }
+        }
+
+        fn with_file_commits(mut self, commits: Vec<(ObjectId, String)>) -> Self {
+            self.file_commits = commits;
+            self
+        }
+
+        fn with_comment_identifiers(mut self, identifiers: Vec<CommentIdentifier>) -> Self {
+            self.comment_identifiers = identifiers;
+            self
+        }
+
+        fn with_comment_content(mut self, comment_id: u64, content: String) -> Self {
+            self.comment_contents.insert(comment_id, content);
+            self
+        }
+    }
+
+    impl GitHelpers for MockGitInfo {
+        fn file_content_url(&self, _commit: &str, _file: &std::path::Path) -> String {
+            "https://github.com/owner/repo/blob/commit/file".to_string()
+        }
+
+        fn commit_comparison_url(
+            &self,
+            _current_commit: &gix::ObjectId,
+            _previous_commit: &gix::ObjectId,
+        ) -> String {
+            "https://github.com/owner/repo/compare/prev..current".to_string()
+        }
+    }
+
+    impl LocalGitInfo for MockGitInfo {
+        fn commit(&self) -> Result<String, crate::git::local::LocalGitError> {
+            Ok("test_commit".to_string())
+        }
+
+        fn branch(&self) -> Result<String, crate::git::local::LocalGitError> {
+            Ok("test-branch".to_string())
+        }
+
+        fn file_commits(
+            &self,
+            _file: &std::path::Path,
+        ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::local::LocalGitError> {
+            Ok(self.file_commits.clone())
+        }
+
+        fn authors(
+            &self,
+            _file: &std::path::Path,
+        ) -> Result<Vec<crate::git::local::GitAuthor>, crate::git::local::LocalGitError> {
+            Ok(Vec::new())
+        }
+
+        fn file_content_at_commit(
+            &self,
+            _file: &std::path::Path,
+            _commit: &gix::ObjectId,
+        ) -> Result<String, crate::git::local::LocalGitError> {
+            Ok(String::new())
+        }
+
+        fn status(
+            &self,
+        ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError> {
+            Ok(crate::git::local::GitStatus::Clean)
+        }
+
+        fn file_status(
+            &self,
+            _file: &std::path::Path,
+        ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError> {
+            Ok(crate::git::local::GitStatus::Clean)
+        }
+
+        fn owner(&self) -> &str {
+            "test-owner"
+        }
+
+        fn repo(&self) -> &str {
+            "test-repo"
+        }
+    }
+
+    impl GitHubApi for MockGitInfo {
+        async fn get_milestones(
+            &self,
+        ) -> Result<Vec<octocrab::models::Milestone>, crate::git::api::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_milestone_issues(
+            &self,
+            _milestone: &octocrab::models::Milestone,
+        ) -> Result<Vec<Issue>, crate::git::api::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn create_milestone(
+            &self,
+            _milestone_name: &str,
+        ) -> Result<octocrab::models::Milestone, crate::git::api::GitHubApiError> {
+            unimplemented!()
+        }
+
+        async fn post_issue(
+            &self,
+            _issue: &crate::QCIssue,
+        ) -> Result<String, crate::git::api::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1".to_string())
+        }
+
+        async fn post_comment(
+            &self,
+            _comment: &crate::QCComment,
+        ) -> Result<String, crate::git::api::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
+        }
+
+        async fn post_approval(
+            &self,
+            _approval: &crate::QCApprove,
+        ) -> Result<String, crate::git::api::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
+        }
+
+        async fn post_unapproval(
+            &self,
+            _unapproval: &crate::QCUnapprove,
+        ) -> Result<String, crate::git::api::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
+        }
+
+        async fn get_users(
+            &self,
+        ) -> Result<Vec<crate::git::api::RepoUser>, crate::git::api::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn create_labels_if_needed(
+            &self,
+            _branch: &str,
+        ) -> Result<(), crate::git::api::GitHubApiError> {
+            Ok(())
+        }
+
+        async fn get_issue_comment_identifiers(
+            &self,
+            _issue: &Issue,
+        ) -> Result<Vec<CommentIdentifier>, crate::git::api::GitHubApiError> {
+            Ok(self.comment_identifiers.clone())
+        }
+
+        async fn get_comment_content(
+            &self,
+            comment_id: &CommentIdentifier,
+        ) -> Result<String, crate::git::api::GitHubApiError> {
+            self.comment_contents
+                .get(&comment_id.comment_id)
+                .cloned()
+                .ok_or_else(|| {
+                    crate::git::api::GitHubApiError::APIError(octocrab::Error::Other {
+                        source: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "Comment not found",
+                        )),
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    })
+                })
+        }
+    }
+
+    fn load_issue(file_name: &str) -> Issue {
+        let path = format!("src/tests/issue_threads/{}", file_name);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("Failed to read issue file: {}", path));
+
+        serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse issue file {}: {}", path, e))
+    }
+
+    fn load_comments(file_name: &str) -> Vec<serde_json::Value> {
+        let path = format!("src/tests/issue_threads/comments/{}", file_name);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("Failed to read comments file: {}", path));
+
+        serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse comments file {}: {}", path, e))
+    }
+
+    fn create_test_commits() -> Vec<(ObjectId, String)> {
+        vec![
+            (
+                ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+                "Initial commit".to_string(),
+            ),
+            (
+                ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+                "Second commit".to_string(),
+            ),
+            (
+                ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap(),
+                "Third commit".to_string(),
+            ),
+            (
+                ObjectId::from_str("789abc12def345678901234567890123456789ef").unwrap(),
+                "Fourth commit".to_string(),
+            ),
+            (
+                ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap(),
+                "Fifth commit".to_string(),
+            ),
+            (
+                ObjectId::from_str("123abcdef456789012345678901234567890abcd").unwrap(),
+                "Sixth commit".to_string(),
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn test_from_issue_open_with_notifications() {
+        let issue = load_issue("open_issue_with_notifications.json");
+        let comments = load_comments("open_issue_notifications.json");
+        
+        let comment_identifiers = vec![
+            CommentIdentifier {
+                comment_id: 1001,
+                issue_number: issue.number,
+            },
+            CommentIdentifier {
+                comment_id: 1002,
+                issue_number: issue.number,
+            },
+        ];
+
+        let mut git_info = MockGitInfo::new()
+            .with_file_commits(create_test_commits())
+            .with_comment_identifiers(comment_identifiers);
+
+        // Add comment content
+        for comment in comments {
+            let id = comment["id"].as_u64().unwrap();
+            let body = comment["body"].as_str().unwrap();
+            git_info = git_info.with_comment_content(id, body.to_string());
+        }
+
+        let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
+
+        // Verify initial commit parsing
+        assert_eq!(
+            result.initial_commit,
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()
+        );
+
+        // Verify notification commits (both full and short SHAs should be parsed)
+        assert_eq!(result.notification_commits.len(), 2);
+        assert_eq!(
+            result.notification_commits[0],
+            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap()
+        );
+        assert_eq!(
+            result.notification_commits[1],
+            ObjectId::from_str("123abcdef456789012345678901234567890abcd").unwrap() // 123abcd matches this commit
+        );
+
+        // Open issue should have no approved commit
+        assert_eq!(result.approved_commit, None);
+        assert_eq!(result.file, PathBuf::from("src/main.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_from_issue_closed_with_approval() {
+        let issue = load_issue("closed_approved_issue.json");
+        let comments = load_comments("closed_approved_comments.json");
+        
+        let comment_identifiers = vec![
+            CommentIdentifier {
+                comment_id: 2001,
+                issue_number: issue.number,
+            },
+            CommentIdentifier {
+                comment_id: 2002,
+                issue_number: issue.number,
+            },
+            CommentIdentifier {
+                comment_id: 2003,
+                issue_number: issue.number,
+            },
+        ];
+
+        let mut git_info = MockGitInfo::new()
+            .with_file_commits(create_test_commits())
+            .with_comment_identifiers(comment_identifiers);
+
+        for comment in comments {
+            let id = comment["id"].as_u64().unwrap();
+            let body = comment["body"].as_str().unwrap();
+            git_info = git_info.with_comment_content(id, body.to_string());
+        }
+
+        let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
+
+        // Verify initial commit
+        assert_eq!(
+            result.initial_commit,
+            ObjectId::from_str("def456abc789012345678901234567890123abcd").unwrap()
+        );
+
+        // Should have one notification commit and one approved commit
+        assert_eq!(result.notification_commits.len(), 1);
+        assert_eq!(
+            result.notification_commits[0],
+            ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap()
+        );
+
+        // Closed issue with approval should have approved commit
+        assert_eq!(
+            result.approved_commit,
+            Some(ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap())
+        );
+
+        assert_eq!(result.file, PathBuf::from("src/lib.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_from_issue_with_unapproval() {
+        let issue = load_issue("unapproved_issue.json");
+        let comments = load_comments("unapproved_comments.json");
+        
+        let comment_identifiers = vec![
+            CommentIdentifier {
+                comment_id: 3001,
+                issue_number: issue.number,
+            },
+            CommentIdentifier {
+                comment_id: 3002,
+                issue_number: issue.number,
+            },
+            CommentIdentifier {
+                comment_id: 3003,
+                issue_number: issue.number,
+            },
+            CommentIdentifier {
+                comment_id: 3004,
+                issue_number: issue.number,
+            },
+        ];
+
+        let mut git_info = MockGitInfo::new()
+            .with_file_commits(create_test_commits())
+            .with_comment_identifiers(comment_identifiers);
+
+        for comment in comments {
+            let id = comment["id"].as_u64().unwrap();
+            let body = comment["body"].as_str().unwrap();
+            git_info = git_info.with_comment_content(id, body.to_string());
+        }
+
+        let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
+
+        // Verify initial commit
+        assert_eq!(
+            result.initial_commit,
+            ObjectId::from_str("789abc12def345678901234567890123456789ef").unwrap()
+        );
+
+        // Should have notification commits (issue is open so approval treated as notification)
+        // The same commit appears twice: once from "current commit" and once from "approved qc commit"
+        assert_eq!(result.notification_commits.len(), 2);
+        assert_eq!(
+            result.notification_commits[0],
+            ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
+        );
+        assert_eq!(
+            result.notification_commits[1], 
+            ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
+        );
+
+        // Should have no approved commit due to unapproval
+        assert_eq!(result.approved_commit, None);
+        assert_eq!(result.file, PathBuf::from("src/utils.rs"));
+    }
+
+    #[test]
+    fn test_parse_commit_from_pattern_full_sha() {
+        let body = "approved qc commit: abc123def456789012345678901234567890abcd";
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+        ];
+
+        let result = parse_commit_from_pattern(body, "approved qc commit: ", &commit_ids);
+        assert_eq!(
+            result,
+            Some(ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_commit_from_pattern_short_sha() {
+        let body = "current commit: abc123d";
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+        ];
+
+        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
+        assert_eq!(
+            result,
+            Some(ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_commit_from_pattern_minimum_length() {
+        let body = "current commit: abc123";
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+        ];
+
+        // Should fail because SHA is too short (< 7 characters)
+        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_commit_from_pattern_no_match() {
+        let body = "current commit: nonexistent123";
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+        ];
+
+        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_commit_from_pattern_not_found() {
+        let body = "some other content";
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+        ];
+
+        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_commits_from_comments_open_issue() {
+        let comment_bodies = vec![
+            "current commit: abc123def456789012345678901234567890abcd".to_string(),
+            "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+        ];
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+        ];
+
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, &commit_ids, true);
+
+        // Open issue: both should be notifications
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(approved, None);
+    }
+
+    #[test]
+    fn test_parse_commits_from_comments_closed_issue() {
+        let comment_bodies = vec![
+            "current commit: abc123def456789012345678901234567890abcd".to_string(),
+            "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+        ];
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+        ];
+
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, &commit_ids, false);
+
+        // Closed issue: notification + approval
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(
+            approved,
+            Some(ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_commits_from_comments_with_unapproval() {
+        let comment_bodies = vec![
+            "current commit: abc123def456789012345678901234567890abcd".to_string(),
+            "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+            "# QC Un-Approval\nWithdrawing approval".to_string(),
+        ];
+        let commit_ids = vec![
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+        ];
+
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, &commit_ids, false);
+
+        // Unapproval should invalidate approval and move it to notifications
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(approved, None);
+    }
+}

@@ -13,6 +13,12 @@ pub struct RepoUser {
     pub name: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CommentIdentifier {
+    pub comment_id: u64,
+    pub issue_number: u64,
+}
+
 impl std::fmt::Display for RepoUser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.name {
@@ -55,6 +61,14 @@ pub trait GitHubApi {
         &self,
         branch: &str,
     ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
+    fn get_issue_comment_identifiers(
+        &self,
+        issue: &Issue,
+    ) -> impl Future<Output = Result<Vec<CommentIdentifier>, GitHubApiError>> + Send;
+    fn get_comment_content(
+        &self,
+        comment_id: &CommentIdentifier,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
 }
 
 // TODO: implement caching for milestones and issues. Frequent updates and comments must be considered about each,
@@ -585,6 +599,126 @@ impl GitHubApi for GitInfo {
             }
 
             Ok(())
+        }
+    }
+
+    fn get_issue_comment_identifiers(
+        &self,
+        issue: &Issue,
+    ) -> impl Future<Output = Result<Vec<CommentIdentifier>, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let issue_number = issue.number;
+
+        async move {
+            log::debug!(
+                "Fetching comment identifiers for issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            let mut all_comments = Vec::new();
+            let mut page = 1;
+            let per_page = 100; // Maximum per page
+
+            loop {
+                let url = format!(
+                    "/repos/{}/{}/issues/{}/comments?per_page={}&page={}",
+                    &owner, &repo, issue_number, per_page, page
+                );
+
+                let comments: Vec<serde_json::Value> = octocrab
+                    .get(url, None::<&()>)
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+
+                if comments.is_empty() {
+                    break; // No more pages
+                }
+
+                log::debug!("Fetched {} comments on page {}", comments.len(), page);
+                all_comments.extend(comments);
+                page += 1;
+
+                // Safety check to prevent infinite loops
+                if page > 100 {
+                    log::warn!("Reached maximum page limit (100) for comments");
+                    break;
+                }
+            }
+
+            log::debug!(
+                "Total comments fetched for issue #{}: {}",
+                issue_number,
+                all_comments.len()
+            );
+
+            // Extract comment IDs
+            let comment_identifiers: Vec<CommentIdentifier> = all_comments
+                .into_iter()
+                .filter_map(|comment| {
+                    comment
+                        .get("id")
+                        .and_then(|id| id.as_u64())
+                        .map(|comment_id| CommentIdentifier {
+                            comment_id,
+                            issue_number,
+                        })
+                })
+                .collect();
+
+            log::debug!(
+                "Successfully extracted {} comment identifiers for issue #{}",
+                comment_identifiers.len(),
+                issue_number
+            );
+
+            Ok(comment_identifiers)
+        }
+    }
+
+    fn get_comment_content(
+        &self,
+        comment_id: &CommentIdentifier,
+    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let issue_number = comment_id.issue_number;
+        let comment_id = comment_id.comment_id;
+
+        async move {
+            log::debug!(
+                "Fetching content for comment {} on issue #{} in {}/{}",
+                comment_id,
+                issue_number,
+                owner,
+                repo
+            );
+
+            let comment: serde_json::Value = octocrab
+                .get(
+                    format!("/repos/{}/{}/issues/comments/{}", &owner, &repo, comment_id),
+                    None::<&()>,
+                )
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            let body = comment
+                .get("body")
+                .and_then(|b| b.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            log::debug!(
+                "Successfully fetched comment {} content ({} chars)",
+                comment_id,
+                body.len()
+            );
+
+            Ok(body)
         }
     }
 }

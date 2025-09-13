@@ -4,6 +4,7 @@ mod comment;
 mod configuration;
 mod create;
 mod git;
+mod issue;
 pub mod utils;
 
 #[cfg(feature = "cli")]
@@ -16,4 +17,4 @@ pub use configuration::{
     Configuration, configuration_status, determine_config_info, setup_configuration,
 };
 pub use create::{QCIssue, RelevantFile};
-pub use git::{GitAction, GitActionImpl, GitHubApi, GitInfo, RepoUser};
+pub use git::{GitAction, GitActionImpl, GitHubApi, GitInfo, LocalGitInfo, RepoUser};
