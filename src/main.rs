@@ -7,7 +7,7 @@ use ghqctoolkit::cli::RelevantFileParser;
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, configuration_status,
-    determine_config_info, setup_configuration,
+    determine_config_info, setup_configuration, create_labels_if_needed, get_repo_users, DiskCache,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -165,7 +165,8 @@ async fn main() -> Result<()> {
 
                     // Fetch milestones first
                     let milestones = git_info.get_milestones().await?;
-                    let repo_users = git_info.get_users().await?;
+                    let cache = DiskCache::from_git_info(&git_info).ok();
+                    let repo_users = get_repo_users(cache.as_ref(), &git_info).await?;
 
                     let qc_issue = match (milestone, file, checklist_name) {
                         (Some(milestone_name), Some(file), Some(checklist_name)) => {
@@ -188,6 +189,7 @@ async fn main() -> Result<()> {
                                 milestones,
                                 configuration,
                                 &git_info,
+                                &repo_users,
                             )
                             .await?
                         }
@@ -198,7 +200,7 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    git_info.create_labels_if_needed(qc_issue.branch()).await?;
+                    create_labels_if_needed(cache.as_ref(), qc_issue.branch(), &git_info).await?;
 
                     let issue_url = git_info.post_issue(&qc_issue).await?;
 

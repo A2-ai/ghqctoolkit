@@ -81,11 +81,9 @@ impl QCIssue {
         milestones: Vec<Milestone>,
         configuration: Configuration,
         git_info: &GitInfo,
+        repo_users: &[RepoUser],
     ) -> Result<Self> {
         println!("🚀 Welcome to GHQC Interactive Mode!");
-
-        // Fetch users once for validation and interactive prompts
-        let repo_users: Vec<RepoUser> = git_info.get_users().await?;
 
         // Interactive prompts
         let milestone_status = prompt_milestone(milestones)?;

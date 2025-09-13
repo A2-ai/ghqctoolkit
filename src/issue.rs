@@ -288,15 +288,32 @@ mod tests {
             Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
         }
 
-        async fn get_users(
+        async fn get_assignees(
             &self,
-        ) -> Result<Vec<crate::git::api::RepoUser>, crate::git::api::GitHubApiError> {
+        ) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
             Ok(Vec::new())
         }
 
-        async fn create_labels_if_needed(
+        async fn get_user_details(
             &self,
-            _branch: &str,
+            _username: &str,
+        ) -> Result<crate::git::api::RepoUser, crate::git::api::GitHubApiError> {
+            Ok(crate::git::api::RepoUser {
+                login: _username.to_string(),
+                name: None,
+            })
+        }
+
+        async fn get_labels(
+            &self,
+        ) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn create_label(
+            &self,
+            _name: &str,
+            _color: &str,
         ) -> Result<(), crate::git::api::GitHubApiError> {
             Ok(())
         }
