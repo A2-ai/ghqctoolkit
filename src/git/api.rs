@@ -13,11 +13,6 @@ pub struct RepoUser {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CommentIdentifier {
-    pub comment_id: u64,
-    pub issue_number: u64,
-}
 
 impl std::fmt::Display for RepoUser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -61,14 +56,10 @@ pub trait GitHubApi {
         &self,
         branch: &str,
     ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
-    fn get_issue_comment_identifiers(
+    fn get_issue_comments(
         &self,
         issue: &Issue,
-    ) -> impl Future<Output = Result<Vec<CommentIdentifier>, GitHubApiError>> + Send;
-    fn get_comment_content(
-        &self,
-        comment_id: &CommentIdentifier,
-    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
+    ) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
 }
 
 // TODO: implement caching for milestones and issues. Frequent updates and comments must be considered about each,
@@ -602,10 +593,10 @@ impl GitHubApi for GitInfo {
         }
     }
 
-    fn get_issue_comment_identifiers(
+    fn get_issue_comments(
         &self,
         issue: &Issue,
-    ) -> impl Future<Output = Result<Vec<CommentIdentifier>, GitHubApiError>> + Send {
+    ) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
@@ -613,7 +604,7 @@ impl GitHubApi for GitInfo {
 
         async move {
             log::debug!(
-                "Fetching comment identifiers for issue #{} in {}/{}",
+                "Fetching comments for issue #{} in {}/{}",
                 issue_number,
                 owner,
                 repo
@@ -655,70 +646,70 @@ impl GitHubApi for GitInfo {
                 all_comments.len()
             );
 
-            // Extract comment IDs
-            let comment_identifiers: Vec<CommentIdentifier> = all_comments
-                .into_iter()
-                .filter_map(|comment| {
-                    comment
-                        .get("id")
-                        .and_then(|id| id.as_u64())
-                        .map(|comment_id| CommentIdentifier {
-                            comment_id,
-                            issue_number,
-                        })
-                })
-                .collect();
+            // Extract comment bodies with error handling
+            let mut comment_bodies = Vec::new();
+            let mut error_count = 0;
+            let total_comments = all_comments.len();
 
-            log::debug!(
-                "Successfully extracted {} comment identifiers for issue #{}",
-                comment_identifiers.len(),
-                issue_number
-            );
+            for (idx, comment) in all_comments.into_iter().enumerate() {
+                let is_last_comment = total_comments > 0 && idx == total_comments - 1;
 
-            Ok(comment_identifiers)
-        }
-    }
+                match comment.get("body").and_then(|b| b.as_str()) {
+                    Some(body) => comment_bodies.push(body.to_string()),
+                    None => {
+                        error_count += 1;
+                        let comment_id = comment
+                            .get("id")
+                            .and_then(|id| id.as_u64())
+                            .unwrap_or(0);
 
-    fn get_comment_content(
-        &self,
-        comment_id: &CommentIdentifier,
-    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
-        let octocrab = self.octocrab.clone();
-        let owner = self.owner.clone();
-        let repo = self.repo.clone();
-        let issue_number = comment_id.issue_number;
-        let comment_id = comment_id.comment_id;
+                        if is_last_comment {
+                            // Last comment failed - this is critical
+                            log::error!(
+                                "Failed to extract body from last comment {} for issue #{}",
+                                comment_id,
+                                issue_number
+                            );
+                            return Err(GitHubApiError::APIError(octocrab::Error::Other {
+                                source: Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "Last comment missing body",
+                                )),
+                                backtrace: std::backtrace::Backtrace::capture(),
+                            }));
+                        } else {
+                            // Non-last comment failed - warn but continue
+                            log::warn!(
+                                "Failed to extract body from comment {} for issue #{}: missing body field",
+                                comment_id,
+                                issue_number
+                            );
+                        }
+                    }
+                }
+            }
 
-        async move {
-            log::debug!(
-                "Fetching content for comment {} on issue #{} in {}/{}",
-                comment_id,
-                issue_number,
-                owner,
-                repo
-            );
+            // Only error if ALL comments failed to parse (and we're not already handling last comment failure)
+            if !comment_bodies.is_empty() || total_comments == 0 {
+                if error_count > 0 {
+                    log::info!(
+                        "Successfully extracted {} out of {} comment bodies for issue #{}",
+                        comment_bodies.len(),
+                        total_comments,
+                        issue_number
+                    );
+                }
 
-            let comment: serde_json::Value = octocrab
-                .get(
-                    format!("/repos/{}/{}/issues/comments/{}", &owner, &repo, comment_id),
-                    None::<&()>,
-                )
-                .await
-                .map_err(GitHubApiError::APIError)?;
-
-            let body = comment
-                .get("body")
-                .and_then(|b| b.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            log::debug!(
-                "Successfully fetched comment {} content ({} chars)",
-                comment_id,
-                body.len()
-            );
-
-            Ok(body)
+                Ok(comment_bodies)
+            } else {
+                Err(GitHubApiError::APIError(octocrab::Error::Other {
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Failed to extract all comment bodies",
+                    )),
+                    backtrace: std::backtrace::Backtrace::capture(),
+                }))
+            }
         }
     }
 }

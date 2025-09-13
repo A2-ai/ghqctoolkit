@@ -26,68 +26,8 @@ impl IssueThread {
             .and_then(|body| parse_commit_from_pattern(body, "initial qc commit: ", &commit_ids))
             .ok_or_else(|| IssueError::InitialCommitNotFound)?;
 
-        // 2. Get comment identifiers and fetch their content in parallel
-        let comment_identifiers = git_info.get_issue_comment_identifiers(issue).await?;
-
-        let comment_futures: Vec<_> = comment_identifiers
-            .iter()
-            .map(|comment_id| git_info.get_comment_content(comment_id))
-            .collect();
-
-        let comment_results = futures::future::join_all(comment_futures).await;
-
-        // Filter successful results, log warnings for failures
-        let mut comment_bodies = Vec::new();
-        let mut error_count = 0;
-        let total_comments = comment_results.len();
-
-        for (idx, result) in comment_results.into_iter().enumerate() {
-            let is_last_comment = total_comments > 0 && idx == total_comments - 1;
-
-            match result {
-                Ok(body) => comment_bodies.push(body),
-                Err(e) => {
-                    error_count += 1;
-                    let comment_id = comment_identifiers
-                        .get(idx)
-                        .map(|c| c.comment_id)
-                        .unwrap_or(0);
-
-                    if is_last_comment {
-                        // Last comment failed - this is critical
-                        log::error!(
-                            "Failed to fetch last comment {} for issue #{}: {}",
-                            comment_id,
-                            issue.number,
-                            e
-                        );
-                        return Err(IssueError::LastCommentFailed(comment_id));
-                    } else {
-                        // Non-last comment failed - warn but continue
-                        log::warn!(
-                            "Failed to fetch comment {} for issue #{}: {}",
-                            comment_id,
-                            issue.number,
-                            e
-                        );
-                    }
-                }
-            }
-        }
-
-        // Only error if ALL comments failed to fetch (and we're not already handling last comment failure)
-        if !comment_identifiers.is_empty() && comment_bodies.is_empty() {
-            return Err(IssueError::AllCommentsFailed);
-        }
-
-        if error_count > 0 {
-            log::info!(
-                "Successfully fetched {} out of {} comments for issue #{}",
-                comment_bodies.len(),
-                comment_identifiers.len(),
-                issue.number
-            );
-        }
+        // 2. Get comment bodies directly from the API
+        let comment_bodies = git_info.get_issue_comments(issue).await?;
 
         // 3. Parse notification and approval commits from comment bodies
         let (notification_commits, approved_commit) = parse_commits_from_comments(
@@ -198,33 +138,26 @@ enum IssueError {
     LocalGitError(#[from] LocalGitError),
     #[error("Initial commit not found in issue body")]
     InitialCommitNotFound,
-    #[error("Failed to fetch all comments for issue")]
-    AllCommentsFailed,
-    #[error("Failed to fetch last comment {0} for issue")]
-    LastCommentFailed(u64),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{GitHelpers, api::CommentIdentifier};
-    use std::collections::HashMap;
+    use crate::git::GitHelpers;
     use std::path::PathBuf;
     use std::str::FromStr;
 
     #[derive(Clone)]
     struct MockGitInfo {
         file_commits: Vec<(ObjectId, String)>,
-        comment_identifiers: Vec<CommentIdentifier>,
-        comment_contents: HashMap<u64, String>,
+        comment_bodies: Vec<String>,
     }
 
     impl MockGitInfo {
         fn new() -> Self {
             Self {
                 file_commits: Vec::new(),
-                comment_identifiers: Vec::new(),
-                comment_contents: HashMap::new(),
+                comment_bodies: Vec::new(),
             }
         }
 
@@ -233,13 +166,8 @@ mod tests {
             self
         }
 
-        fn with_comment_identifiers(mut self, identifiers: Vec<CommentIdentifier>) -> Self {
-            self.comment_identifiers = identifiers;
-            self
-        }
-
-        fn with_comment_content(mut self, comment_id: u64, content: String) -> Self {
-            self.comment_contents.insert(comment_id, content);
+        fn with_comment_bodies(mut self, bodies: Vec<String>) -> Self {
+            self.comment_bodies = bodies;
             self
         }
     }
@@ -373,29 +301,11 @@ mod tests {
             Ok(())
         }
 
-        async fn get_issue_comment_identifiers(
+        async fn get_issue_comments(
             &self,
             _issue: &Issue,
-        ) -> Result<Vec<CommentIdentifier>, crate::git::api::GitHubApiError> {
-            Ok(self.comment_identifiers.clone())
-        }
-
-        async fn get_comment_content(
-            &self,
-            comment_id: &CommentIdentifier,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
-            self.comment_contents
-                .get(&comment_id.comment_id)
-                .cloned()
-                .ok_or_else(|| {
-                    crate::git::api::GitHubApiError::APIError(octocrab::Error::Other {
-                        source: Box::new(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "Comment not found",
-                        )),
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    })
-                })
+        ) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
+            Ok(self.comment_bodies.clone())
         }
     }
 
@@ -451,27 +361,15 @@ mod tests {
         let issue = load_issue("open_issue_with_notifications.json");
         let comments = load_comments("open_issue_notifications.json");
         
-        let comment_identifiers = vec![
-            CommentIdentifier {
-                comment_id: 1001,
-                issue_number: issue.number,
-            },
-            CommentIdentifier {
-                comment_id: 1002,
-                issue_number: issue.number,
-            },
-        ];
+        // Extract comment bodies from the test data
+        let comment_bodies: Vec<String> = comments
+            .into_iter()
+            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .collect();
 
-        let mut git_info = MockGitInfo::new()
+        let git_info = MockGitInfo::new()
             .with_file_commits(create_test_commits())
-            .with_comment_identifiers(comment_identifiers);
-
-        // Add comment content
-        for comment in comments {
-            let id = comment["id"].as_u64().unwrap();
-            let body = comment["body"].as_str().unwrap();
-            git_info = git_info.with_comment_content(id, body.to_string());
-        }
+            .with_comment_bodies(comment_bodies);
 
         let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
 
@@ -502,30 +400,15 @@ mod tests {
         let issue = load_issue("closed_approved_issue.json");
         let comments = load_comments("closed_approved_comments.json");
         
-        let comment_identifiers = vec![
-            CommentIdentifier {
-                comment_id: 2001,
-                issue_number: issue.number,
-            },
-            CommentIdentifier {
-                comment_id: 2002,
-                issue_number: issue.number,
-            },
-            CommentIdentifier {
-                comment_id: 2003,
-                issue_number: issue.number,
-            },
-        ];
+        // Extract comment bodies from the test data
+        let comment_bodies: Vec<String> = comments
+            .into_iter()
+            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .collect();
 
-        let mut git_info = MockGitInfo::new()
+        let git_info = MockGitInfo::new()
             .with_file_commits(create_test_commits())
-            .with_comment_identifiers(comment_identifiers);
-
-        for comment in comments {
-            let id = comment["id"].as_u64().unwrap();
-            let body = comment["body"].as_str().unwrap();
-            git_info = git_info.with_comment_content(id, body.to_string());
-        }
+            .with_comment_bodies(comment_bodies);
 
         let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
 
@@ -556,34 +439,15 @@ mod tests {
         let issue = load_issue("unapproved_issue.json");
         let comments = load_comments("unapproved_comments.json");
         
-        let comment_identifiers = vec![
-            CommentIdentifier {
-                comment_id: 3001,
-                issue_number: issue.number,
-            },
-            CommentIdentifier {
-                comment_id: 3002,
-                issue_number: issue.number,
-            },
-            CommentIdentifier {
-                comment_id: 3003,
-                issue_number: issue.number,
-            },
-            CommentIdentifier {
-                comment_id: 3004,
-                issue_number: issue.number,
-            },
-        ];
+        // Extract comment bodies from the test data
+        let comment_bodies: Vec<String> = comments
+            .into_iter()
+            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .collect();
 
-        let mut git_info = MockGitInfo::new()
+        let git_info = MockGitInfo::new()
             .with_file_commits(create_test_commits())
-            .with_comment_identifiers(comment_identifiers);
-
-        for comment in comments {
-            let id = comment["id"].as_u64().unwrap();
-            let body = comment["body"].as_str().unwrap();
-            git_info = git_info.with_comment_content(id, body.to_string());
-        }
+            .with_comment_bodies(comment_bodies);
 
         let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
 
