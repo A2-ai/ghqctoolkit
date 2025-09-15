@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::{fmt, fs};
 
 use crate::GitHubApi;
-use crate::{Configuration, RelevantFile, configuration::Checklist, git::RepoUser};
+use crate::{
+    Configuration, RelevantFile, configuration::Checklist, git::RepoUser, issue::IssueThread,
+};
 
 pub enum MilestoneStatus {
     Existing(Milestone),
@@ -653,6 +655,7 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
 /// Helper function to format commit options for display
 fn format_commit_options(
     file_commits: &[(gix::ObjectId, String)],
+    issue_thread: &IssueThread,
     selected: &[usize],
 ) -> Vec<String> {
     file_commits
@@ -672,18 +675,29 @@ fn format_commit_options(
                 }
             };
 
-            let time_desc = if i == 0 {
-                "latest".to_string()
+            // Determine commit status
+            let status_indicator = if *commit_id == issue_thread.initial_commit {
+                "🌱" // Initial commit
+            } else if issue_thread.notification_commits.contains(commit_id) {
+                "💬" // Has comments
+            } else if issue_thread.approved_commit.as_ref() == Some(commit_id) {
+                "✅" // Approved commit
+            } else if *commit_id == *issue_thread.latest_commit() {
+                "📍" // Latest commit
             } else {
-                format!("{} commits ago", i)
+                "  " // Regular commit
             };
+
             let selection_indicator = if selected.contains(&i) {
                 format!(
-                    "✓ {} - {} - {} (already selected)",
-                    short_hash, short_message, time_desc
+                    "✓ {} {} - {} (already selected)",
+                    status_indicator, short_hash, short_message
                 )
             } else {
-                format!("  {} - {} - {}", short_hash, short_message, time_desc)
+                format!(
+                    "  {} {} - {}",
+                    status_indicator, short_hash, short_message
+                )
             };
 
             selection_indicator
@@ -694,6 +708,7 @@ fn format_commit_options(
 /// Select commits for comparison - returns (current, previous) in chronological order
 pub fn prompt_commits(
     file_commits: &[(gix::ObjectId, String)],
+    issue_thread: &IssueThread,
 ) -> Result<(ObjectId, Option<ObjectId>)> {
     if file_commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
@@ -703,23 +718,33 @@ pub fn prompt_commits(
         return Ok((file_commits[0].0, None));
     }
 
+    println!("📋 Commit Status Legend:");
+    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest");
+    println!();
+
     let mut selected_commits: Vec<usize> = Vec::new();
 
     // First selection
     println!("📝 Select first commit (press Enter for latest):");
-    let options = format_commit_options(file_commits, &selected_commits);
+    let options = format_commit_options(file_commits, issue_thread, &selected_commits);
     let first_selection = Select::new("Pick commit:", options)
         .with_starting_cursor(0) // Default to first (most recent) commit
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
-    // Extract short hash from selection (remove prefixes)
-    let first_short_hash = first_selection
+    // Extract short hash from selection (remove prefixes and status indicators)
+    let cleaned_selection = first_selection
         .trim_start_matches("✓ ")
         .trim_start_matches("  ")
+        .chars()
+        .skip_while(|c| c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍')
+        .collect::<String>();
+    let first_short_hash = cleaned_selection
+        .trim()
         .split(" - ")
         .next()
-        .unwrap_or("");
+        .unwrap_or("")
+        .trim();
 
     // Find the commit index
     let first_index = file_commits
@@ -729,84 +754,54 @@ pub fn prompt_commits(
 
     selected_commits.push(first_index);
 
-    // Second selection with loop to prevent selecting already chosen commits
-    let second_selection = loop {
-        let options = format_commit_options(file_commits, &selected_commits);
-        if options.len() <= 1 {
-            // Only one commit available, return it
-            return Ok((file_commits[first_index].0, None));
-        }
-        // Default to the first unselected commit (usually index 1 if first selection was 0)
-        let (default_index, message) = if selected_commits.contains(&0) {
-            (1, "1 commit ago")
-        } else {
-            (0, "latest")
-        };
-        println!("📝 Select second commit (press Enter for {message}):");
+    // Second selection
+    println!("\n📝 Select second commit for comparison (press Enter to skip):");
+    let mut options_with_skip =
+        format_commit_options(file_commits, issue_thread, &selected_commits);
+    options_with_skip.insert(
+        0,
+        "  ⏭️  Skip second commit (compare with nothing)".to_string(),
+    );
 
-        let selection = Select::new("Pick commit:", options)
-            .with_starting_cursor(default_index)
-            .prompt()
-            .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+    let second_selection = Select::new("Pick commit:", options_with_skip)
+        .with_starting_cursor(0) // Default to skip
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
-        // Extract short hash from the selection
-        let short_hash = selection
+    let second_commit = if second_selection.contains("⏭️") {
+        None
+    } else {
+        // Extract short hash from selection
+        let cleaned_second_selection = second_selection
             .trim_start_matches("✓ ")
             .trim_start_matches("  ")
+            .chars()
+            .skip_while(|c| {
+                c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍'
+            })
+            .collect::<String>();
+        let second_short_hash = cleaned_second_selection
+            .trim()
             .split(" - ")
             .next()
-            .unwrap_or("");
+            .unwrap_or("")
+            .trim();
 
-        // Check if this commit is already selected
-        let is_selected = file_commits
+        let second_index = file_commits
             .iter()
-            .position(|(commit_id, _)| commit_id.to_string().starts_with(short_hash))
-            .map(|idx| selected_commits.contains(&idx))
-            .unwrap_or(false);
+            .position(|(commit_id, _)| commit_id.to_string().starts_with(second_short_hash))
+            .unwrap_or(0);
 
-        if is_selected {
-            println!("⚠️  This commit is already selected. Please choose a different commit.\n");
-            continue;
-        }
-
-        break selection;
+        Some(file_commits[second_index].0)
     };
 
-    // Extract short hash from second selection
-    let second_short_hash = second_selection
-        .trim_start_matches("✓ ")
-        .trim_start_matches("  ")
-        .split(" - ")
-        .next()
-        .unwrap_or("");
-
-    // Find the second commit index
-    let second_index = file_commits
-        .iter()
-        .position(|(commit_id, _)| commit_id.to_string().starts_with(second_short_hash))
-        .unwrap_or(0);
-
-    // Determine chronological order (current should be more recent)
-    let (current_commit, previous_commit) = if first_index <= second_index {
-        // first_index is more recent (smaller index)
-        (
-            file_commits[first_index].0,
-            Some(file_commits[second_index].0),
-        )
-    } else {
-        // second_index is more recent
-        (
-            file_commits[second_index].0,
-            Some(file_commits[first_index].0),
-        )
-    };
-
-    Ok((current_commit, previous_commit))
+    Ok((file_commits[first_index].0, second_commit))
 }
 
 /// Select a single commit from file commits - returns the selected commit
 pub fn prompt_single_commit(
     file_commits: &[(gix::ObjectId, String)],
+    issue_thread: &IssueThread,
     prompt_text: &str,
 ) -> Result<ObjectId> {
     if file_commits.is_empty() {
@@ -817,8 +812,12 @@ pub fn prompt_single_commit(
         return Ok(file_commits[0].0);
     }
 
-    // Create commit options (no selection tracking for single commit)
-    let commit_options = format_commit_options(file_commits, &[]);
+    println!("📋 Commit Status Legend:");
+    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest");
+    println!();
+
+    // Create commit options with status indicators
+    let commit_options = format_commit_options(file_commits, issue_thread, &[]);
 
     println!("{}", prompt_text);
     let commit_selection = Select::new("Pick commit:", commit_options)
@@ -826,11 +825,19 @@ pub fn prompt_single_commit(
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
-    let commit_short_hash = commit_selection
+    // Extract short hash from selection
+    let cleaned_commit_selection = commit_selection
         .trim_start_matches("  ")
+        .chars()
+        .skip_while(|c| c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍')
+        .collect::<String>();
+    let commit_short_hash = cleaned_commit_selection
+        .trim()
         .split(" - ")
         .next()
-        .unwrap_or("");
+        .unwrap_or("")
+        .trim();
+
     let commit_index = file_commits
         .iter()
         .position(|(commit_id, _)| commit_id.to_string().starts_with(commit_short_hash))

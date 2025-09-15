@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use ghqctoolkit::cli::RelevantFileParser;
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, GitActionImpl, GitHubApi, GitInfo, RelevantFile, configuration_status,
-    determine_config_info, setup_configuration, create_labels_if_needed, get_repo_users, DiskCache,
+    Configuration, DiskCache, GitActionImpl, GitHubApi, GitInfo, RelevantFile,
+    configuration_status, create_labels_if_needed, determine_config_info, get_repo_users,
+    setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 

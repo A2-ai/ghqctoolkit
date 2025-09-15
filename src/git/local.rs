@@ -59,7 +59,11 @@ impl fmt::Display for GitStatus {
 pub trait LocalGitInfo {
     fn commit(&self) -> Result<String, LocalGitError>;
     fn branch(&self) -> Result<String, LocalGitError>;
-    fn file_commits(&self, file: &Path) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError>;
+    fn file_commits(
+        &self,
+        file: &Path,
+        branch: &Option<String>,
+    ) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError>;
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, LocalGitError>;
     fn file_content_at_commit(
         &self,
@@ -67,7 +71,8 @@ pub trait LocalGitInfo {
         commit: &gix::ObjectId,
     ) -> Result<String, LocalGitError>;
     fn status(&self) -> Result<GitStatus, LocalGitError>;
-    fn file_status(&self, file: &Path) -> Result<GitStatus, LocalGitError>;
+    fn file_status(&self, file: &Path, branch: &Option<String>)
+    -> Result<GitStatus, LocalGitError>;
     fn owner(&self) -> &str;
     fn repo(&self) -> &str;
 }
@@ -108,6 +113,8 @@ pub enum LocalGitError {
     StatusIterError(gix::status::into_iter::Error),
     #[error("Failed to process worktree entry: {0}")]
     StatusEntryError(gix::status::index_worktree::Error),
+    #[error("Branch not found: {0}")]
+    BranchNotFound(String),
 }
 
 impl LocalGitInfo for GitInfo {
@@ -142,16 +149,34 @@ impl LocalGitInfo for GitInfo {
         }
     }
 
-    fn file_commits(&self, file: &Path) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
-        log::debug!("Finding commits that touched file: {:?}", file);
+    fn file_commits(
+        &self,
+        file: &Path,
+        branch: &Option<String>,
+    ) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
+        log::debug!(
+            "Finding commits that touched file: {:?} on branch: {:?}",
+            file,
+            branch
+        );
         let mut commits = Vec::new();
 
-        let head_id = self
-            .repository
-            .head_id()
-            .map_err(LocalGitError::HeadIdError)?;
+        let start_id = if let Some(branch_name) = branch.as_ref() {
+            // Look up the specific branch
+            let branch_ref_name = format!("refs/heads/{}", branch_name);
+            let branch_ref = self
+                .repository
+                .find_reference(&branch_ref_name)
+                .map_err(|_| LocalGitError::BranchNotFound(branch_name.clone()))?;
+            branch_ref.id()
+        } else {
+            // Use HEAD as before
+            self.repository
+                .head_id()
+                .map_err(LocalGitError::HeadIdError)?
+        };
 
-        let revwalk = self.repository.rev_walk([head_id]);
+        let revwalk = self.repository.rev_walk([start_id]);
 
         for commit_info in revwalk.all().map_err(LocalGitError::RevWalkError)? {
             let commit_info = commit_info.map_err(LocalGitError::TraverseError)?;
@@ -238,7 +263,7 @@ impl LocalGitInfo for GitInfo {
     }
 
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, LocalGitError> {
-        let commits = self.file_commits(file)?;
+        let commits = self.file_commits(file, &None)?;
 
         let mut res: Vec<GitAuthor> = Vec::new();
 
@@ -433,8 +458,16 @@ impl LocalGitInfo for GitInfo {
         }
     }
 
-    fn file_status(&self, file: &Path) -> Result<GitStatus, LocalGitError> {
-        log::debug!("Getting git status for file: {:?}", file);
+    fn file_status(
+        &self,
+        file: &Path,
+        branch: &Option<String>,
+    ) -> Result<GitStatus, LocalGitError> {
+        log::debug!(
+            "Getting git status for file: {:?} on branch: {:?}",
+            file,
+            branch
+        );
 
         // Check if the file has uncommitted changes
         let status_platform = self
@@ -461,16 +494,31 @@ impl LocalGitInfo for GitInfo {
             return Ok(GitStatus::Dirty(vec![file.to_path_buf()]));
         }
 
-        // Get current branch and its upstream tracking branch
-        let head = self.repository.head().map_err(LocalGitError::HeadError)?;
-        let current_branch_name = if let Some(branch_name) = head.referent_name() {
-            let name_str = branch_name.as_bstr().to_string();
-            name_str
-                .strip_prefix("refs/heads/")
-                .unwrap_or(&name_str)
-                .to_string()
+        // Get the branch to check - either specified branch or current branch
+        let (local_commit_id, current_branch_name) = if let Some(branch_name) = branch.as_ref() {
+            // Use the specified branch
+            let branch_ref_name = format!("refs/heads/{}", branch_name);
+            let branch_ref = self
+                .repository
+                .find_reference(&branch_ref_name)
+                .map_err(|_| LocalGitError::BranchNotFound(branch_name.clone()))?;
+            (branch_ref.id(), branch_name.clone())
         } else {
-            return Err(LocalGitError::DetachedHead);
+            // Use current branch
+            let head = self.repository.head().map_err(LocalGitError::HeadError)?;
+            let current_branch_name = if let Some(branch_name) = head.referent_name() {
+                let name_str = branch_name.as_bstr().to_string();
+                name_str
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(&name_str)
+                    .to_string()
+            } else {
+                return Err(LocalGitError::DetachedHead);
+            };
+            (
+                head.id().ok_or(LocalGitError::DetachedHead)?,
+                current_branch_name,
+            )
         };
 
         // Try to find the upstream tracking branch
@@ -479,7 +527,7 @@ impl LocalGitInfo for GitInfo {
             Ok(r) => r,
             Err(_) => {
                 // Count commits that touched this file since no upstream exists
-                let file_commits = self.file_commits(file)?;
+                let file_commits = self.file_commits(file, branch)?;
                 log::debug!(
                     "No upstream branch found for {}, file has {} commits",
                     current_branch_name,
@@ -489,7 +537,6 @@ impl LocalGitInfo for GitInfo {
             }
         };
 
-        let local_commit_id = head.id().ok_or(LocalGitError::DetachedHead)?;
         let remote_commit_id = upstream_ref.id();
 
         if local_commit_id == remote_commit_id {
@@ -498,7 +545,7 @@ impl LocalGitInfo for GitInfo {
         }
 
         // Get commits that touched this file in both local and remote branches
-        let local_file_commits = self.file_commits(file)?;
+        let local_file_commits = self.file_commits(file, branch)?;
         let local_file_commit_ids: std::collections::HashSet<_> =
             local_file_commits.iter().map(|(id, _)| *id).collect();
 

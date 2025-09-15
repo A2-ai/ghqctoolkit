@@ -4,49 +4,87 @@ use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
 use crate::{
-    GitHubApi, 
-    cache::{DiskCache, CachedComments},
-    git::api::GitHubApiError, 
-    git::local::{LocalGitInfo, LocalGitError}
+    GitHubApi,
+    cache::{CachedComments, DiskCache},
+    git::{
+        api::GitHubApiError,
+        local::{GitStatus, LocalGitError, LocalGitInfo},
+    },
 };
 
-struct IssueThread {
+pub struct IssueThread {
     file: PathBuf,
-    initial_commit: ObjectId,
-    notification_commits: Vec<ObjectId>,
-    approved_commit: Option<ObjectId>,
+    branch: String,
+    pub(crate) initial_commit: ObjectId,
+    pub(crate) notification_commits: Vec<ObjectId>,
+    pub(crate) approved_commit: Option<ObjectId>,
+    open: bool,
 }
 
 impl IssueThread {
-    async fn from_issue(issue: &Issue, git_info: &(impl GitHubApi + LocalGitInfo)) -> Result<Self, IssueError> {
+    pub async fn from_issue(
+        issue: &Issue,
+        git_info: &(impl GitHubApi + LocalGitInfo),
+    ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
 
-        // Get all commits for this file once
-        let file_commits = git_info.file_commits(&file).map_err(|e| IssueError::LocalGitError(e))?;
+        // 1. Parse the branch from the issue body first
+        let branch = issue
+            .body
+            .as_ref()
+            .and_then(|body| parse_branch_from_body(body))
+            .ok_or_else(|| IssueError::BranchNotFound)?;
+
+        // 2. Get all commits for this file from the specific branch
+        let file_commits = git_info
+            .file_commits(&file, &Some(branch.clone()))
+            .map_err(|e| IssueError::LocalGitError(e))?;
         let commit_ids: Vec<ObjectId> = file_commits.iter().map(|(id, _)| *id).collect();
 
-        // 1. Parse the initial commit ObjectId from the issue body
-        let initial_commit = issue.body
+        let issue_is_open = matches!(issue.state, octocrab::models::IssueState::Open);
+
+        // 3. Parse the initial commit ObjectId from the issue body
+        let initial_commit = issue
+            .body
             .as_ref()
             .and_then(|body| parse_commit_from_pattern(body, "initial qc commit: ", &commit_ids))
             .ok_or_else(|| IssueError::InitialCommitNotFound)?;
 
-        // 2. Get comment bodies directly from the API
+        // 4. Get comment bodies directly from the API
         let comment_bodies = git_info.get_issue_comments(issue).await?;
 
-        // 3. Parse notification and approval commits from comment bodies
-        let (notification_commits, approved_commit) = parse_commits_from_comments(
-            &comment_bodies,
-            &commit_ids,
-            matches!(issue.state, octocrab::models::IssueState::Open),
-        );
+        // 5. Parse notification and approval commits from comment bodies
+        let (notification_commits, approved_commit) =
+            parse_commits_from_comments(&comment_bodies, &commit_ids, issue_is_open);
 
         Ok(Self {
             file,
+            branch,
             initial_commit,
             notification_commits,
             approved_commit,
+            open: issue_is_open,
         })
+    }
+
+    pub fn latest_commit(&self) -> &ObjectId {
+        if let Some(a_c) = &self.approved_commit {
+            return a_c;
+        }
+
+        if let Some(last_notif) = self.notification_commits.last() {
+            return last_notif;
+        }
+
+        &self.initial_commit
+    }
+
+    pub async fn commits(
+        &self,
+        git_info: &impl LocalGitInfo,
+    ) -> Result<Vec<(ObjectId, String)>, IssueError> {
+        let commits = git_info.file_commits(&self.file, &Some(self.branch.clone()))?;
+        Ok(commits)
     }
 }
 
@@ -108,19 +146,15 @@ fn parse_commit_from_pattern(
 ) -> Option<ObjectId> {
     let start = body.find(pattern)?;
     let commit_start = start + pattern.len();
-    
+
     let remaining = &body[commit_start..];
-    let commit_hash = remaining
-        .lines()
-        .next()?
-        .split_whitespace()
-        .next()?;
-    
+    let commit_hash = remaining.lines().next()?.split_whitespace().next()?;
+
     // Try to parse as full ObjectId first
     if let Ok(full_oid) = ObjectId::from_str(commit_hash) {
         return Some(full_oid);
     }
-    
+
     // If that fails, try to match as short SHA against file commits
     // Require at least 7 characters for short SHA to avoid ambiguity
     if commit_hash.len() >= 7 {
@@ -131,8 +165,25 @@ fn parse_commit_from_pattern(
             }
         }
     }
-    
+
     None
+}
+
+/// Parse branch name from issue body
+/// Looks for pattern: "git branch: <branch-name>"
+fn parse_branch_from_body(body: &str) -> Option<String> {
+    let pattern = "git branch: ";
+    let start = body.find(pattern)?;
+    let branch_start = start + pattern.len();
+
+    let remaining = &body[branch_start..];
+    let branch_name = remaining.lines().next()?.trim();
+
+    if branch_name.is_empty() {
+        return None;
+    }
+
+    Some(branch_name.to_string())
 }
 
 /// Get issue comments with caching based on issue update timestamp
@@ -143,53 +194,93 @@ pub async fn get_cached_issue_comments(
 ) -> Result<Vec<String>, GitHubApiError> {
     // Create cache key from issue number
     let cache_key = format!("issue_{}", issue.number);
-    
+
     // Try to get cached comments first
     let cached_comments: Option<CachedComments> = if let Some(cache) = cache {
         cache.read::<CachedComments>(&["issues", "comments"], &cache_key)
     } else {
         None
     };
-    
+
     // Check if cached comments are still valid by comparing timestamps
     if let Some(cached) = cached_comments {
         if cached.issue_updated_at >= issue.updated_at {
-            log::debug!("Using cached comments for issue #{} (cache timestamp: {}, issue timestamp: {})", 
-                       issue.number, cached.issue_updated_at, issue.updated_at);
+            log::debug!(
+                "Using cached comments for issue #{} (cache timestamp: {}, issue timestamp: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
             return Ok(cached.comments);
         } else {
-            log::debug!("Cached comments for issue #{} are stale (cache: {}, issue: {})", 
-                       issue.number, cached.issue_updated_at, issue.updated_at);
+            log::debug!(
+                "Cached comments for issue #{} are stale (cache: {}, issue: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
         }
     }
-    
+
     // Fetch fresh comments from API
     log::debug!("Fetching fresh comments for issue #{}", issue.number);
     let comments = git_info.get_issue_comments(issue).await?;
-    
+
     // Cache the comments with the current issue timestamp (permanently)
     if let Some(cache) = cache {
         let cached_comments = CachedComments {
             comments: comments.clone(),
             issue_updated_at: issue.updated_at,
         };
-        
+
         if let Err(e) = cache.write(&["issues", "comments"], &cache_key, &cached_comments, false) {
-            log::warn!("Failed to cache comments for issue #{}: {}", issue.number, e);
+            log::warn!(
+                "Failed to cache comments for issue #{}: {}",
+                issue.number,
+                e
+            );
         }
     }
-    
+
     Ok(comments)
 }
 
+struct IssueStatus {
+    file: PathBuf,
+    issue_open: bool,
+    qc_status: QCStatus,
+    git_status: GitStatus,
+}
+
+enum QCStatus {
+    /// QC commit is in the local git log. Either the latest or the uncommitted local commits
+    InProgress,
+    /// QC commit is not in the local git log
+    BehindQC,
+    /// File changes or commits after the issue closure
+    AheadQC,
+    /// File changed after QC commit, but before closure that was not commented
+    MissedComment,
+    /// Remote commits that changed the QC file after the current QC commit
+    CommentNeeded,
+    /// Issue is closed and there are no commits that have changed the file since the QC commit
+    Completed,
+}
+
+fn qc_status(issue_thread: &IssueThread, git_status: &GitStatus) -> Result<String, IssueError> {
+    Ok(String::new())
+}
+
 #[derive(Debug, thiserror::Error)]
-enum IssueError {
+pub enum IssueError {
     #[error(transparent)]
     GitHubApiError(#[from] GitHubApiError),
     #[error(transparent)]
     LocalGitError(#[from] LocalGitError),
     #[error("Initial commit not found in issue body")]
     InitialCommitNotFound,
+    #[error("Branch not found in issue body")]
+    BranchNotFound,
 }
 
 #[cfg(test)]
@@ -250,6 +341,7 @@ mod tests {
         fn file_commits(
             &self,
             _file: &std::path::Path,
+            _branch: &Option<String>,
         ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::local::LocalGitError> {
             Ok(self.file_commits.clone())
         }
@@ -269,15 +361,14 @@ mod tests {
             Ok(String::new())
         }
 
-        fn status(
-            &self,
-        ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError> {
+        fn status(&self) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError> {
             Ok(crate::git::local::GitStatus::Clean)
         }
 
         fn file_status(
             &self,
             _file: &std::path::Path,
+            _branch: &Option<String>,
         ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError> {
             Ok(crate::git::local::GitStatus::Clean)
         }
@@ -340,9 +431,7 @@ mod tests {
             Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
         }
 
-        async fn get_assignees(
-            &self,
-        ) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
+        async fn get_assignees(&self) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
             Ok(Vec::new())
         }
 
@@ -356,9 +445,7 @@ mod tests {
             })
         }
 
-        async fn get_labels(
-            &self,
-        ) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
+        async fn get_labels(&self) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
             Ok(Vec::new())
         }
 
@@ -429,7 +516,7 @@ mod tests {
     async fn test_from_issue_open_with_notifications() {
         let issue = load_issue("open_issue_with_notifications.json");
         let comments = load_comments("open_issue_notifications.json");
-        
+
         // Extract comment bodies from the test data
         let comment_bodies: Vec<String> = comments
             .into_iter()
@@ -462,13 +549,14 @@ mod tests {
         // Open issue should have no approved commit
         assert_eq!(result.approved_commit, None);
         assert_eq!(result.file, PathBuf::from("src/main.rs"));
+        assert_eq!(result.branch, "feature/new-feature");
     }
 
     #[tokio::test]
     async fn test_from_issue_closed_with_approval() {
         let issue = load_issue("closed_approved_issue.json");
         let comments = load_comments("closed_approved_comments.json");
-        
+
         // Extract comment bodies from the test data
         let comment_bodies: Vec<String> = comments
             .into_iter()
@@ -501,13 +589,14 @@ mod tests {
         );
 
         assert_eq!(result.file, PathBuf::from("src/lib.rs"));
+        assert_eq!(result.branch, "bugfix/memory-leak");
     }
 
     #[tokio::test]
     async fn test_from_issue_with_unapproval() {
         let issue = load_issue("unapproved_issue.json");
         let comments = load_comments("unapproved_comments.json");
-        
+
         // Extract comment bodies from the test data
         let comment_bodies: Vec<String> = comments
             .into_iter()
@@ -534,13 +623,14 @@ mod tests {
             ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
         );
         assert_eq!(
-            result.notification_commits[1], 
+            result.notification_commits[1],
             ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
         );
 
         // Should have no approved commit due to unapproval
         assert_eq!(result.approved_commit, None);
         assert_eq!(result.file, PathBuf::from("src/utils.rs"));
+        assert_eq!(result.branch, "feature/utils-refactor");
     }
 
     #[test]
@@ -576,9 +666,8 @@ mod tests {
     #[test]
     fn test_parse_commit_from_pattern_minimum_length() {
         let body = "current commit: abc123";
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-        ];
+        let commit_ids =
+            vec![ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()];
 
         // Should fail because SHA is too short (< 7 characters)
         let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
@@ -588,9 +677,8 @@ mod tests {
     #[test]
     fn test_parse_commit_from_pattern_no_match() {
         let body = "current commit: nonexistent123";
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-        ];
+        let commit_ids =
+            vec![ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()];
 
         let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
         assert_eq!(result, None);
@@ -599,9 +687,8 @@ mod tests {
     #[test]
     fn test_parse_commit_from_pattern_not_found() {
         let body = "some other content";
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-        ];
+        let commit_ids =
+            vec![ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()];
 
         let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
         assert_eq!(result, None);
@@ -618,7 +705,8 @@ mod tests {
             ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, &commit_ids, true);
+        let (notifications, approved) =
+            parse_commits_from_comments(&comment_bodies, &commit_ids, true);
 
         // Open issue: both should be notifications
         assert_eq!(notifications.len(), 2);
@@ -636,7 +724,8 @@ mod tests {
             ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, &commit_ids, false);
+        let (notifications, approved) =
+            parse_commits_from_comments(&comment_bodies, &commit_ids, false);
 
         // Closed issue: notification + approval
         assert_eq!(notifications.len(), 1);
@@ -658,10 +747,53 @@ mod tests {
             ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, &commit_ids, false);
+        let (notifications, approved) =
+            parse_commits_from_comments(&comment_bodies, &commit_ids, false);
 
         // Unapproval should invalidate approval and move it to notifications
         assert_eq!(notifications.len(), 2);
         assert_eq!(approved, None);
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_basic() {
+        let body = "## Metadata\ninitial qc commit: abc123\ngit branch: feature/new-feature\nauthor: John Doe";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("feature/new-feature".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_with_extra_whitespace() {
+        let body = "git branch:   main  \nother content";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_complex_branch_name() {
+        let body = "git branch: feature/JIRA-123_fix-memory-leak\n";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("feature/JIRA-123_fix-memory-leak".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_not_found() {
+        let body = "## Metadata\ninitial qc commit: abc123\nauthor: John Doe";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_empty_branch() {
+        let body = "git branch: \n";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_only_spaces() {
+        let body = "git branch:    \n";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, None);
     }
 }
