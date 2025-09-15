@@ -694,10 +694,7 @@ fn format_commit_options(
                     status_indicator, short_hash, short_message
                 )
             } else {
-                format!(
-                    "  {} {} - {}",
-                    status_indicator, short_hash, short_message
-                )
+                format!("  {} {} - {}", status_indicator, short_hash, short_message)
             };
 
             selection_indicator

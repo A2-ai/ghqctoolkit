@@ -218,11 +218,13 @@ async fn main() -> Result<()> {
                 } => {
                     // Fetch milestones first
                     let milestones = git_info.get_milestones().await?;
+                    let cache = DiskCache::from_git_info(&git_info).ok();
 
                     let comment = match (milestone, file) {
                         (None, None) => {
                             // Interactive mode
-                            QCComment::from_interactive(&milestones, &git_info).await?
+                            QCComment::from_interactive(&milestones, cache.as_ref(), &git_info)
+                                .await?
                         }
                         (Some(milestone), Some(file)) => {
                             // Non-interactive mode
@@ -233,6 +235,7 @@ async fn main() -> Result<()> {
                                 previous_commit,
                                 note,
                                 &milestones,
+                                cache.as_ref(),
                                 &git_info,
                                 no_diff,
                             )
@@ -257,10 +260,12 @@ async fn main() -> Result<()> {
                     note,
                 } => {
                     let milestones = git_info.get_milestones().await?;
+                    let cache = DiskCache::from_git_info(&git_info).ok();
                     let approval = match (milestone, file, &note) {
                         (None, None, None) => {
                             // Interactive Mode
-                            QCApprove::from_interactive(&milestones, &git_info).await?
+                            QCApprove::from_interactive(&milestones, cache.as_ref(), &git_info)
+                                .await?
                         }
                         (Some(milestone), Some(file), _) => {
                             QCApprove::from_args(
@@ -269,6 +274,7 @@ async fn main() -> Result<()> {
                                 approved_commit,
                                 note,
                                 &milestones,
+                                cache.as_ref(),
                                 &git_info,
                             )
                             .await?

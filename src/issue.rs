@@ -8,7 +8,7 @@ use crate::{
     cache::{CachedComments, DiskCache},
     git::{
         api::GitHubApiError,
-        local::{GitStatus, LocalGitError, LocalGitInfo},
+        local::{LocalGitError, LocalGitInfo},
     },
 };
 
@@ -18,12 +18,12 @@ pub struct IssueThread {
     pub(crate) initial_commit: ObjectId,
     pub(crate) notification_commits: Vec<ObjectId>,
     pub(crate) approved_commit: Option<ObjectId>,
-    open: bool,
 }
 
 impl IssueThread {
     pub async fn from_issue(
         issue: &Issue,
+        cache: Option<&DiskCache>,
         git_info: &(impl GitHubApi + LocalGitInfo),
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
@@ -51,7 +51,7 @@ impl IssueThread {
             .ok_or_else(|| IssueError::InitialCommitNotFound)?;
 
         // 4. Get comment bodies directly from the API
-        let comment_bodies = git_info.get_issue_comments(issue).await?;
+        let comment_bodies = get_cached_issue_comments(issue, cache, git_info).await?;
 
         // 5. Parse notification and approval commits from comment bodies
         let (notification_commits, approved_commit) =
@@ -63,7 +63,6 @@ impl IssueThread {
             initial_commit,
             notification_commits,
             approved_commit,
-            open: issue_is_open,
         })
     }
 
@@ -188,8 +187,8 @@ fn parse_branch_from_body(body: &str) -> Option<String> {
 
 /// Get issue comments with caching based on issue update timestamp
 pub async fn get_cached_issue_comments(
-    cache: Option<&DiskCache>,
     issue: &Issue,
+    cache: Option<&DiskCache>,
     git_info: &impl GitHubApi,
 ) -> Result<Vec<String>, GitHubApiError> {
     // Create cache key from issue number
@@ -243,32 +242,6 @@ pub async fn get_cached_issue_comments(
     }
 
     Ok(comments)
-}
-
-struct IssueStatus {
-    file: PathBuf,
-    issue_open: bool,
-    qc_status: QCStatus,
-    git_status: GitStatus,
-}
-
-enum QCStatus {
-    /// QC commit is in the local git log. Either the latest or the uncommitted local commits
-    InProgress,
-    /// QC commit is not in the local git log
-    BehindQC,
-    /// File changes or commits after the issue closure
-    AheadQC,
-    /// File changed after QC commit, but before closure that was not commented
-    MissedComment,
-    /// Remote commits that changed the QC file after the current QC commit
-    CommentNeeded,
-    /// Issue is closed and there are no commits that have changed the file since the QC commit
-    Completed,
-}
-
-fn qc_status(issue_thread: &IssueThread, git_status: &GitStatus) -> Result<String, IssueError> {
-    Ok(String::new())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -527,7 +500,9 @@ mod tests {
             .with_file_commits(create_test_commits())
             .with_comment_bodies(comment_bodies);
 
-        let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
+        let result = IssueThread::from_issue(&issue, None, &git_info)
+            .await
+            .unwrap();
 
         // Verify initial commit parsing
         assert_eq!(
@@ -567,7 +542,9 @@ mod tests {
             .with_file_commits(create_test_commits())
             .with_comment_bodies(comment_bodies);
 
-        let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
+        let result = IssueThread::from_issue(&issue, None, &git_info)
+            .await
+            .unwrap();
 
         // Verify initial commit
         assert_eq!(
@@ -607,7 +584,9 @@ mod tests {
             .with_file_commits(create_test_commits())
             .with_comment_bodies(comment_bodies);
 
-        let result = IssueThread::from_issue(&issue, &git_info).await.unwrap();
+        let result = IssueThread::from_issue(&issue, None, &git_info)
+            .await
+            .unwrap();
 
         // Verify initial commit
         assert_eq!(

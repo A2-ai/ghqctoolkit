@@ -13,7 +13,6 @@ pub struct RepoUser {
     pub name: Option<String>,
 }
 
-
 impl std::fmt::Display for RepoUser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.name {
@@ -52,7 +51,10 @@ pub trait GitHubApi {
         unapproval: &QCUnapprove,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
     fn get_assignees(&self) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
-    fn get_user_details(&self, username: &str) -> impl Future<Output = Result<RepoUser, GitHubApiError>> + Send;
+    fn get_user_details(
+        &self,
+        username: &str,
+    ) -> impl Future<Output = Result<RepoUser, GitHubApiError>> + Send;
     fn get_labels(&self) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
     fn create_label(
         &self,
@@ -464,7 +466,7 @@ impl GitHubApi for GitInfo {
                 .send()
                 .await
                 .map_err(GitHubApiError::APIError)?;
-            
+
             log::debug!("Found {} labels", labels.items.len());
             let names: Vec<String> = labels.items.into_iter().map(|l| l.name).collect();
             Ok(names)
@@ -483,13 +485,19 @@ impl GitHubApi for GitInfo {
         let color = color.to_string();
 
         async move {
-            log::debug!("Creating label '{}' with color '{}' for {}/{}", name, color, owner, repo);
+            log::debug!(
+                "Creating label '{}' with color '{}' for {}/{}",
+                name,
+                color,
+                owner,
+                repo
+            );
             octocrab
                 .issues(&owner, &repo)
                 .create_label(&name, &color, "")
                 .await
                 .map_err(GitHubApiError::APIError)?;
-            
+
             log::debug!("Successfully created label '{}'", name);
             Ok(())
         }
@@ -560,10 +568,7 @@ impl GitHubApi for GitInfo {
                     Some(body) => comment_bodies.push(body.to_string()),
                     None => {
                         error_count += 1;
-                        let comment_id = comment
-                            .get("id")
-                            .and_then(|id| id.as_u64())
-                            .unwrap_or(0);
+                        let comment_id = comment.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
 
                         if is_last_comment {
                             // Last comment failed - this is critical

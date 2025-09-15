@@ -1,17 +1,17 @@
 use anyhow::{Result, anyhow, bail};
-use inquire::Confirm;
+use inquire::{Confirm, Text, validator::Validation};
 use octocrab::models::Milestone;
 
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, GitHubApi, GitInfo, QCApprove, QCIssue, QCUnapprove, RelevantFile, RepoUser,
+    Configuration, DiskCache, GitHubApi, GitInfo, QCApprove, QCIssue, QCUnapprove, RelevantFile,
+    RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
     },
     comment::QCComment,
-    git::LocalGitInfo,
     issue::IssueThread,
 };
 
@@ -142,6 +142,7 @@ impl QCComment {
         previous_commit: Option<String>,
         note: Option<String>,
         milestones: &[Milestone],
+        cache: Option<&DiskCache>,
         git_info: &GitInfo,
         no_diff: bool,
     ) -> Result<Self> {
@@ -168,7 +169,7 @@ impl QCComment {
             })?;
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread = IssueThread::from_issue(&issue, git_info).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let file_commits = issue_thread.commits(git_info).await?;
 
         if file_commits.is_empty() {
@@ -220,7 +221,11 @@ impl QCComment {
         })
     }
 
-    pub async fn from_interactive(milestones: &[Milestone], git_info: &GitInfo) -> Result<Self> {
+    pub async fn from_interactive(
+        milestones: &[Milestone],
+        cache: Option<&DiskCache>,
+        git_info: &GitInfo,
+    ) -> Result<Self> {
         println!("💬 Welcome to GHQC Comment Mode!");
 
         // Select milestone (existing only)
@@ -236,7 +241,7 @@ impl QCComment {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread = IssueThread::from_issue(&issue, git_info).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let file_commits = issue_thread.commits(git_info).await?;
 
         // Select commits for comparison with status annotations
@@ -283,7 +288,11 @@ impl QCComment {
 }
 
 impl QCApprove {
-    pub async fn from_interactive(milestones: &[Milestone], git_info: &GitInfo) -> Result<Self> {
+    pub async fn from_interactive(
+        milestones: &[Milestone],
+        cache: Option<&DiskCache>,
+        git_info: &GitInfo,
+    ) -> Result<Self> {
         println!("✅ Welcome to GHQC Approve Mode!");
 
         // Select milestone (existing only)
@@ -312,7 +321,7 @@ impl QCApprove {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread = IssueThread::from_issue(&issue, git_info).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let file_commits = issue_thread.commits(git_info).await?;
 
         if file_commits.is_empty() {
@@ -354,6 +363,7 @@ impl QCApprove {
         approve_commit: Option<String>,
         note: Option<String>,
         milestones: &[Milestone],
+        cache: Option<&DiskCache>,
         git_info: &GitInfo,
     ) -> Result<Self> {
         let milestone = milestones
@@ -374,7 +384,8 @@ impl QCApprove {
                 "No open issue found for file '{file_str}' in milestone '{milestone_name}'"
             ))?;
 
-        let file_commits = git_info.file_commits(&file, &None)?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
+        let file_commits = issue_thread.commits(git_info).await?;
 
         if file_commits.is_empty() {
             bail!("There are no commits for the selected file");
@@ -448,7 +459,6 @@ impl QCUnapprove {
         let issue = prompt_issue(&closed_issues)?;
 
         // Prompt for reason
-        use inquire::{Text, validator::Validation};
         let reason_input = Text::new("📝 Enter reason for unapproval:")
             .with_validator(|input: &str| {
                 if input.trim().is_empty() {
