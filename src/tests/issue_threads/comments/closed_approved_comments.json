@@ -1,0 +1,107 @@
+[
+  {
+    "url": "https://api.github.com/repos/owner/repo/issues/comments/2001",
+    "html_url": "https://github.com/owner/repo/issues/2#issuecomment-2001",
+    "issue_url": "https://api.github.com/repos/owner/repo/issues/2",
+    "id": 2001,
+    "node_id": "IC_kwDOBrL5P85f7Z91",
+    "user": {
+      "login": "author",
+      "id": 123,
+      "node_id": "MDQ6VXNlcjEyMw==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/123?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/author",
+      "html_url": "https://github.com/author",
+      "type": "User",
+      "site_admin": false
+    },
+    "created_at": "2025-01-15T09:30:00Z",
+    "updated_at": "2025-01-15T09:30:00Z",
+    "author_association": "OWNER",
+    "body": "# QC Notification\n\n@reviewer2\n\n## Metadata\ncurrent commit: 456def789abc012345678901234567890123cdef\nprevious commit: def456abc789012345678901234567890123abcd\n\nImplemented security fixes as requested.",
+    "reactions": {
+      "url": "https://api.github.com/repos/owner/repo/issues/comments/2001/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null
+  },
+  {
+    "url": "https://api.github.com/repos/owner/repo/issues/comments/2002",
+    "html_url": "https://github.com/owner/repo/issues/2#issuecomment-2002",
+    "issue_url": "https://api.github.com/repos/owner/repo/issues/2",
+    "id": 2002,
+    "node_id": "IC_kwDOBrL5P85f7Z92",
+    "user": {
+      "login": "reviewer2",
+      "id": 789,
+      "node_id": "MDQ6VXNlcjc4OQ==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/789?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/reviewer2",
+      "html_url": "https://github.com/reviewer2",
+      "type": "User",
+      "site_admin": false
+    },
+    "created_at": "2025-01-15T11:00:00Z",
+    "updated_at": "2025-01-15T11:00:00Z",
+    "author_association": "COLLABORATOR",
+    "body": "Looks good! All security concerns have been addressed. Ready for merge.",
+    "reactions": {
+      "url": "https://api.github.com/repos/owner/repo/issues/comments/2002/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null
+  },
+  {
+    "url": "https://api.github.com/repos/owner/repo/issues/comments/2003",
+    "html_url": "https://github.com/owner/repo/issues/2#issuecomment-2003",
+    "issue_url": "https://api.github.com/repos/owner/repo/issues/2",
+    "id": 2003,
+    "node_id": "IC_kwDOBrL5P85f7Z93",
+    "user": {
+      "login": "reviewer2",
+      "id": 789,
+      "node_id": "MDQ6VXNlcjc4OQ==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/789?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/reviewer2",
+      "html_url": "https://github.com/reviewer2",
+      "type": "User",
+      "site_admin": false
+    },
+    "created_at": "2025-01-15T12:00:00Z",
+    "updated_at": "2025-01-15T12:00:00Z",
+    "author_association": "COLLABORATOR",
+    "body": "# QC Approval\n\nAll checklist items have been verified and the code meets our security standards.\n\n## Metadata\napproved qc commit: 456def789abc012345678901234567890123cdef\n\n**Approval Status:** ✅ APPROVED\n\nThis code change has been thoroughly reviewed and is ready for production deployment.",
+    "reactions": {
+      "url": "https://api.github.com/repos/owner/repo/issues/comments/2003/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null
+  }
+]

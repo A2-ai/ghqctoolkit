@@ -1,0 +1,142 @@
+[
+  {
+    "url": "https://api.github.com/repos/owner/repo/issues/comments/3001",
+    "html_url": "https://github.com/owner/repo/issues/3#issuecomment-3001",
+    "issue_url": "https://api.github.com/repos/owner/repo/issues/3",
+    "id": 3001,
+    "node_id": "IC_kwDOBrL5P85f7aA1",
+    "user": {
+      "login": "author",
+      "id": 123,
+      "node_id": "MDQ6VXNlcjEyMw==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/123?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/author",
+      "html_url": "https://github.com/author",
+      "type": "User",
+      "site_admin": false
+    },
+    "created_at": "2025-01-15T08:30:00Z",
+    "updated_at": "2025-01-15T08:30:00Z",
+    "author_association": "OWNER",
+    "body": "# QC Notification\n\n@reviewer3\n\n## Metadata\ncurrent commit: 890cdef123abc456789012345678901234567890\nprevious commit: 789abc12def345678901234567890123456789ef\n\nInitial performance optimization implementation.",
+    "reactions": {
+      "url": "https://api.github.com/repos/owner/repo/issues/comments/3001/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null
+  },
+  {
+    "url": "https://api.github.com/repos/owner/repo/issues/comments/3002",
+    "html_url": "https://github.com/owner/repo/issues/3#issuecomment-3002",
+    "issue_url": "https://api.github.com/repos/owner/repo/issues/3",
+    "id": 3002,
+    "node_id": "IC_kwDOBrL5P85f7aA2",
+    "user": {
+      "login": "reviewer3",
+      "id": 101112,
+      "node_id": "MDQ6VXNlcjEwMTExMg==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/101112?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/reviewer3",
+      "html_url": "https://github.com/reviewer3",
+      "type": "User",
+      "site_admin": false
+    },
+    "created_at": "2025-01-15T12:00:00Z",
+    "updated_at": "2025-01-15T12:00:00Z",
+    "author_association": "COLLABORATOR",
+    "body": "# QC Approval\n\nPerformance improvements look good. All benchmarks pass.\n\n## Metadata\napproved qc commit: 890cdef123abc456789012345678901234567890\n\n**Approval Status:** ✅ APPROVED",
+    "reactions": {
+      "url": "https://api.github.com/repos/owner/repo/issues/comments/3002/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null
+  },
+  {
+    "url": "https://api.github.com/repos/owner/repo/issues/comments/3003",
+    "html_url": "https://github.com/owner/repo/issues/3#issuecomment-3003",
+    "issue_url": "https://api.github.com/repos/owner/repo/issues/3",
+    "id": 3003,
+    "node_id": "IC_kwDOBrL5P85f7aA3",
+    "user": {
+      "login": "author",
+      "id": 123,
+      "node_id": "MDQ6VXNlcjEyMw==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/123?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/author",
+      "html_url": "https://github.com/author",
+      "type": "User",
+      "site_admin": false
+    },
+    "created_at": "2025-01-15T13:00:00Z",
+    "updated_at": "2025-01-15T13:00:00Z",
+    "author_association": "OWNER",
+    "body": "# QC Notification\n\n@reviewer3\n\n## Metadata\ncurrent commit: abc1234\nprevious commit: 890cdef\n\nFound a critical bug in the optimization - need to fix before merge.",
+    "reactions": {
+      "url": "https://api.github.com/repos/owner/repo/issues/comments/3003/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null
+  },
+  {
+    "url": "https://api.github.com/repos/owner/repo/issues/comments/3004",
+    "html_url": "https://github.com/owner/repo/issues/3#issuecomment-3004",
+    "issue_url": "https://api.github.com/repos/owner/repo/issues/3",
+    "id": 3004,
+    "node_id": "IC_kwDOBrL5P85f7aA4",
+    "user": {
+      "login": "reviewer3",
+      "id": 101112,
+      "node_id": "MDQ6VXNlcjEwMTExMg==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/101112?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/reviewer3",
+      "html_url": "https://github.com/reviewer3",
+      "type": "User",
+      "site_admin": false
+    },
+    "created_at": "2025-01-15T14:00:00Z",
+    "updated_at": "2025-01-15T14:00:00Z",
+    "author_association": "COLLABORATOR",
+    "body": "# QC Un-Approval\n\nI'm withdrawing my previous approval due to the critical bug discovered. Please address the issue and resubmit.\n\n**Status:** ❌ APPROVAL WITHDRAWN\n\nReason: Critical performance regression found in edge cases.",
+    "reactions": {
+      "url": "https://api.github.com/repos/owner/repo/issues/comments/3004/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 1,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null
+  }
+]

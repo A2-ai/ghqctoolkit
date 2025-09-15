@@ -14,7 +14,7 @@ pub use auth::create_authenticated_client;
 pub use helpers::{GitHelpers, GitInfoError, parse_github_url};
 pub use local::{LocalGitError, LocalGitInfo};
 
-use crate::{cache::DiskCache, utils::EnvProvider};
+use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone)]
 pub struct GitInfo {
@@ -23,7 +23,6 @@ pub struct GitInfo {
     pub(crate) base_url: String,
     pub(crate) repository: Repository,
     pub(crate) octocrab: Octocrab,
-    pub(crate) cache: Option<DiskCache>,
 }
 
 impl GitInfo {
@@ -54,18 +53,6 @@ impl GitInfo {
 
         let octocrab = create_authenticated_client(&base_url, env)?;
 
-        // Initialize cache if possible (log but don't fail if it can't be created)
-        let cache = match DiskCache::new(owner.clone(), repo.clone()) {
-            Ok(cache) => {
-                log::debug!("Cache initialized for {}/{}", owner, repo);
-                Some(cache)
-            }
-            Err(e) => {
-                log::warn!("Failed to initialize cache for {}/{}: {}", owner, repo, e);
-                None
-            }
-        };
-
         log::debug!("Successfully initialized GitInfo for {}/{}", owner, repo);
 
         Ok(Self {
@@ -74,7 +61,6 @@ impl GitInfo {
             base_url,
             repository,
             octocrab,
-            cache,
         })
     }
 }

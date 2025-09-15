@@ -5,8 +5,14 @@ use std::{
 };
 
 use crate::{
+    RepoUser,
+    cache::DiskCache,
     configuration::Checklist,
-    git::{GitHelpers, LocalGitError, LocalGitInfo, local::GitAuthor},
+    git::{
+        GitHelpers, LocalGitError, LocalGitInfo,
+        api::{GitHubApi, GitHubApiError},
+        local::GitAuthor,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,6 +186,142 @@ impl QCIssue {
             relevant_files,
         })
     }
+}
+
+/// Create required labels if they don't exist, using cache for efficiency
+pub async fn create_labels_if_needed(
+    cache: Option<&DiskCache>,
+    branch: &str,
+    git_info: &impl GitHubApi,
+) -> Result<(), GitHubApiError> {
+    // Try to get labels from cache first
+    let cached_labels: Option<Vec<String>> = if let Some(cache) = cache {
+        cache.read::<Vec<String>>(&["labels"], "names")
+    } else {
+        None
+    };
+
+    let label_names = if let Some(names) = cached_labels {
+        log::debug!("Using cached label names");
+        names
+    } else {
+        log::debug!("Label names not found or expired in cache. Fetching...");
+        let names = git_info.get_labels().await?;
+
+        // Cache the label names with TTL
+        if let Some(cache) = cache {
+            if let Err(e) = cache.write(&["labels"], "names", &names, true) {
+                log::warn!("Failed to cache label names: {}", e);
+            }
+        }
+
+        names
+    };
+
+    let original_count = label_names.len();
+    let mut updated_labels = label_names;
+
+    // Ensure "ghqc" label exists
+    if !updated_labels.iter().any(|name| name == "ghqc") {
+        log::debug!("ghqc label does not exist. Creating...");
+        git_info.create_label("ghqc", "FFCB05").await?;
+        updated_labels.push("ghqc".to_string());
+    }
+
+    // Ensure branch label exists
+    if !updated_labels.iter().any(|name| name == branch) {
+        log::debug!("Branch label ({}) does not exist. Creating...", branch);
+        git_info.create_label(branch, "00274C").await?;
+        updated_labels.push(branch.to_string());
+    }
+
+    // Update cache with new labels if we created any
+    if updated_labels.len() != original_count {
+        if let Some(cache) = cache {
+            if let Err(e) = cache.write(&["labels"], "names", &updated_labels, true) {
+                log::warn!("Failed to update cached label names: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Get repository users with caching for efficiency
+pub async fn get_repo_users(
+    cache: Option<&DiskCache>,
+    git_info: &impl GitHubApi,
+) -> Result<Vec<RepoUser>, GitHubApiError> {
+    // Try to get assignees from cache first
+    let cached_assignees: Option<Vec<String>> = if let Some(cache) = cache {
+        cache.read::<Vec<String>>(&["users"], "assignees")
+    } else {
+        None
+    };
+
+    let assignee_logins = if let Some(logins) = cached_assignees {
+        log::debug!("Using cached assignees");
+        logins
+    } else {
+        log::debug!("Assignees not found or expired in cache. Fetching...");
+        let logins = git_info.get_assignees().await?;
+
+        // Cache the assignee list with TTL
+        if let Some(cache) = cache {
+            if let Err(e) = cache.write(&["users"], "assignees", &logins, true) {
+                log::warn!("Failed to cache assignees: {}", e);
+            }
+        }
+
+        logins
+    };
+
+    // Parallelize user detail fetching with permanent cache
+    let user_futures: Vec<_> = assignee_logins
+        .into_iter()
+        .map(|username| {
+            async move {
+                // Try to get user details from cache first (permanent cache)
+                let cached_user = if let Some(cache) = cache {
+                    cache.read::<RepoUser>(&["users", "details"], &username)
+                } else {
+                    None
+                };
+
+                if let Some(user) = cached_user {
+                    log::trace!("Using cached user details for: {}", username);
+                    return Ok(user);
+                }
+
+                log::debug!(
+                    "User details for {} not found in cache. Fetching...",
+                    username
+                );
+                let user = git_info.get_user_details(&username).await?;
+
+                // Cache user details permanently (no TTL)
+                if let Some(cache) = cache {
+                    if let Err(e) = cache.write(&["users", "details"], &username, &user, false) {
+                        log::warn!("Failed to cache user details for {}: {}", username, e);
+                    }
+                }
+
+                Ok(user)
+            }
+        })
+        .collect();
+
+    // Execute all futures concurrently
+    let results: Vec<Result<RepoUser, GitHubApiError>> =
+        futures::future::join_all(user_futures).await;
+
+    let users = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+    log::debug!(
+        "Successfully fetched {} assignees with user details",
+        users.len()
+    );
+    Ok(users)
 }
 
 #[cfg(test)]

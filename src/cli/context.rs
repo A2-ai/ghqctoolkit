@@ -1,17 +1,18 @@
 use anyhow::{Result, anyhow, bail};
-use inquire::Confirm;
-use octocrab::models::{Milestone, issues::Issue};
+use inquire::{Confirm, Text, validator::Validation};
+use octocrab::models::Milestone;
 
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, GitHubApi, GitInfo, QCApprove, QCIssue, QCUnapprove, RelevantFile, RepoUser,
+    Configuration, DiskCache, GitHubApi, GitInfo, QCApprove, QCIssue, QCUnapprove, RelevantFile,
+    RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
     },
     comment::QCComment,
-    git::LocalGitInfo,
+    issue::IssueThread,
 };
 
 impl QCIssue {
@@ -81,11 +82,9 @@ impl QCIssue {
         milestones: Vec<Milestone>,
         configuration: Configuration,
         git_info: &GitInfo,
+        repo_users: &[RepoUser],
     ) -> Result<Self> {
         println!("🚀 Welcome to GHQC Interactive Mode!");
-
-        // Fetch users once for validation and interactive prompts
-        let repo_users: Vec<RepoUser> = git_info.get_users().await?;
 
         // Interactive prompts
         let milestone_status = prompt_milestone(milestones)?;
@@ -143,6 +142,7 @@ impl QCComment {
         previous_commit: Option<String>,
         note: Option<String>,
         milestones: &[Milestone],
+        cache: Option<&DiskCache>,
         git_info: &GitInfo,
         no_diff: bool,
     ) -> Result<Self> {
@@ -168,8 +168,9 @@ impl QCComment {
                 )
             })?;
 
-        // Get file commits to determine defaults if needed
-        let file_commits = git_info.file_commits(&file)?;
+        // Create IssueThread to get commits from the issue's specific branch
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
+        let file_commits = issue_thread.commits(git_info).await?;
 
         if file_commits.is_empty() {
             return Err(anyhow!("No commits found for file: {}", file.display()));
@@ -220,7 +221,11 @@ impl QCComment {
         })
     }
 
-    pub async fn from_interactive(milestones: &[Milestone], git_info: &GitInfo) -> Result<Self> {
+    pub async fn from_interactive(
+        milestones: &[Milestone],
+        cache: Option<&DiskCache>,
+        git_info: &GitInfo,
+    ) -> Result<Self> {
         println!("💬 Welcome to GHQC Comment Mode!");
 
         // Select milestone (existing only)
@@ -233,13 +238,14 @@ impl QCComment {
         let issue = prompt_issue(&issues)?;
 
         // Extract file path from issue - we need to determine which file this issue is about
-        let file_path = extract_file_path_from_issue(&issue)?;
+        let file_path = PathBuf::from(&issue.title);
 
-        // Get commits for this file
-        let file_commits = git_info.file_commits(&file_path)?;
+        // Create IssueThread to get commits from the issue's specific branch
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
+        let file_commits = issue_thread.commits(git_info).await?;
 
-        // Select commits for comparison
-        let (current_commit, previous_commit) = prompt_commits(&file_commits)?;
+        // Select commits for comparison with status annotations
+        let (current_commit, previous_commit) = prompt_commits(&file_commits, &issue_thread)?;
 
         // Prompt for optional note
         let note = prompt_note()?;
@@ -281,52 +287,12 @@ impl QCComment {
     }
 }
 
-/// Extract file path from issue title or body
-fn extract_file_path_from_issue(issue: &Issue) -> Result<PathBuf> {
-    // Look for file paths in the title first
-    if let Some(path) = find_file_path_in_text(&issue.title) {
-        return Ok(PathBuf::from(path));
-    }
-
-    // Look in the body if available
-    if let Some(body) = &issue.body {
-        if let Some(path) = find_file_path_in_text(body) {
-            return Ok(PathBuf::from(path));
-        }
-    }
-
-    Err(anyhow!(
-        "Could not determine file path from issue #{} - {}",
-        issue.number,
-        issue.title
-    ))
-}
-
-/// Simple heuristic to find file paths in text
-fn find_file_path_in_text(text: &str) -> Option<String> {
-    // Look for common file patterns: src/something.rs, path/to/file.ext, etc.
-    let words: Vec<&str> = text.split_whitespace().collect();
-
-    for word in words {
-        // Remove markdown backticks if present
-        let clean_word = word.trim_matches('`');
-
-        // Check if it looks like a file path
-        if clean_word.contains('/') && clean_word.contains('.') {
-            // Basic validation - should have an extension
-            if let Some(extension) = clean_word.split('.').last() {
-                if extension.len() <= 10 && extension.chars().all(|c| c.is_alphanumeric()) {
-                    return Some(clean_word.to_string());
-                }
-            }
-        }
-    }
-
-    None
-}
-
 impl QCApprove {
-    pub async fn from_interactive(milestones: &[Milestone], git_info: &GitInfo) -> Result<Self> {
+    pub async fn from_interactive(
+        milestones: &[Milestone],
+        cache: Option<&DiskCache>,
+        git_info: &GitInfo,
+    ) -> Result<Self> {
         println!("✅ Welcome to GHQC Approve Mode!");
 
         // Select milestone (existing only)
@@ -352,18 +318,20 @@ impl QCApprove {
         let issue = prompt_issue(&open_issues)?;
 
         // Extract file path from issue - we need to determine which file this issue is about
-        let file_path = extract_file_path_from_issue(&issue)?;
+        let file_path = PathBuf::from(&issue.title);
 
-        // Get commits for this file
-        let file_commits = git_info.file_commits(&file_path)?;
+        // Create IssueThread to get commits from the issue's specific branch
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
+        let file_commits = issue_thread.commits(git_info).await?;
 
         if file_commits.is_empty() {
             bail!("No commits found for file: {}", file_path.display());
         }
 
-        // Select single commit to approve
+        // Select single commit to approve with status annotations
         let approved_commit = prompt_single_commit(
             &file_commits,
+            &issue_thread,
             "📝 Select commit to approve (press Enter for latest):",
         )?;
 
@@ -395,6 +363,7 @@ impl QCApprove {
         approve_commit: Option<String>,
         note: Option<String>,
         milestones: &[Milestone],
+        cache: Option<&DiskCache>,
         git_info: &GitInfo,
     ) -> Result<Self> {
         let milestone = milestones
@@ -415,7 +384,8 @@ impl QCApprove {
                 "No open issue found for file '{file_str}' in milestone '{milestone_name}'"
             ))?;
 
-        let file_commits = git_info.file_commits(&file)?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
+        let file_commits = issue_thread.commits(git_info).await?;
 
         if file_commits.is_empty() {
             bail!("There are no commits for the selected file");
@@ -489,7 +459,6 @@ impl QCUnapprove {
         let issue = prompt_issue(&closed_issues)?;
 
         // Prompt for reason
-        use inquire::{Text, validator::Validation};
         let reason_input = Text::new("📝 Enter reason for unapproval:")
             .with_validator(|input: &str| {
                 if input.trim().is_empty() {

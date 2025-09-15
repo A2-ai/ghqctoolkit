@@ -763,6 +763,7 @@ Second Checklist:
             fn file_commits(
                 &self,
                 _file: &std::path::Path,
+                _branch: &Option<String>,
             ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::local::LocalGitError>
             {
                 Ok(vec![])
@@ -794,6 +795,7 @@ Second Checklist:
             fn file_status(
                 &self,
                 _file: &std::path::Path,
+                _branch: &Option<String>,
             ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError>
             {
                 Ok(self.status.clone())

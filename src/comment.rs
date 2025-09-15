@@ -383,6 +383,7 @@ mod tests {
         fn file_commits(
             &self,
             _file: &std::path::Path,
+            _branch: &Option<String>,
         ) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
             Ok(Vec::new())
         }
@@ -413,6 +414,7 @@ mod tests {
         fn file_status(
             &self,
             _file: &std::path::Path,
+            _branch: &Option<String>,
         ) -> Result<crate::git::local::GitStatus, LocalGitError> {
             Ok(crate::git::local::GitStatus::Clean)
         }
