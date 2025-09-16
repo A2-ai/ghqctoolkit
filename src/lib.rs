@@ -18,6 +18,8 @@ pub use configuration::{
 };
 pub use create::{QCIssue, RelevantFile, create_labels_if_needed, get_repo_users};
 pub use git::{
-    GitAction, GitActionImpl, GitAuthor, GitCommitAnalysis, GitFileOps, GitHubApi, GitInfo,
-    GitRepository, GitStatus, GitStatusOps, RepoUser,
+    AuthError, GitAction, GitActionError, GitActionImpl, GitAuthor, GitCommitAnalysis,
+    GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+    GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
+    GitStatusError, GitStatusOps, RepoUser,
 };

@@ -4,10 +4,10 @@ use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
 use crate::{
-    GitHubApi,
     cache::{CachedComments, DiskCache},
     git::{
-        GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, get_file_commits_robust,
+        GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+        get_file_commits_robust,
     },
 };
 
@@ -23,7 +23,7 @@ impl IssueThread {
     pub async fn from_issue(
         issue: &Issue,
         cache: Option<&DiskCache>,
-        git_info: &(impl GitHubApi + GitFileOps + GitCommitAnalysis),
+        git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
         let issue_is_open = matches!(issue.state, octocrab::models::IssueState::Open);
@@ -235,7 +235,7 @@ fn parse_branch_from_body(body: &str) -> Option<String> {
 pub async fn get_cached_issue_comments(
     issue: &Issue,
     cache: Option<&DiskCache>,
-    git_info: &impl GitHubApi,
+    git_info: &impl GitHubReader,
 ) -> Result<Vec<String>, GitHubApiError> {
     // Create cache key from issue number
     let cache_key = format!("issue_{}", issue.number);
@@ -308,8 +308,7 @@ pub enum IssueError {
 mod tests {
     use super::*;
     use crate::GitAuthor;
-    use crate::git::GitCommitAnalysisError;
-    use crate::git::GitHelpers;
+    use crate::git::{GitCommitAnalysisError, GitHelpers, GitHubWriter};
     use std::path::PathBuf;
     use std::str::FromStr;
 
@@ -778,7 +777,7 @@ mod tests {
         }
     }
 
-    impl GitHubApi for RobustMockGitInfo {
+    impl GitHubReader for RobustMockGitInfo {
         async fn get_milestones(
             &self,
         ) -> Result<Vec<octocrab::models::Milestone>, crate::git::GitHubApiError> {
@@ -792,6 +791,33 @@ mod tests {
             Ok(Vec::new())
         }
 
+        async fn get_assignees(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_user_details(
+            &self,
+            _username: &str,
+        ) -> Result<crate::RepoUser, crate::git::GitHubApiError> {
+            Ok(crate::RepoUser {
+                login: _username.to_string(),
+                name: None,
+            })
+        }
+
+        async fn get_labels(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_issue_comments(
+            &self,
+            _issue: &Issue,
+        ) -> Result<Vec<String>, crate::git::GitHubApiError> {
+            Ok(self.comment_bodies.clone())
+        }
+    }
+
+    impl GitHubWriter for RobustMockGitInfo {
         async fn create_milestone(
             &self,
             _milestone_name: &str,
@@ -827,37 +853,12 @@ mod tests {
             Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
         }
 
-        async fn get_assignees(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
-            Ok(Vec::new())
-        }
-
-        async fn get_user_details(
-            &self,
-            _username: &str,
-        ) -> Result<crate::RepoUser, crate::git::GitHubApiError> {
-            Ok(crate::RepoUser {
-                login: _username.to_string(),
-                name: None,
-            })
-        }
-
-        async fn get_labels(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
-            Ok(Vec::new())
-        }
-
         async fn create_label(
             &self,
             _name: &str,
             _color: &str,
         ) -> Result<(), crate::git::GitHubApiError> {
             Ok(())
-        }
-
-        async fn get_issue_comments(
-            &self,
-            _issue: &Issue,
-        ) -> Result<Vec<String>, crate::git::GitHubApiError> {
-            Ok(self.comment_bodies.clone())
         }
     }
 

@@ -9,8 +9,8 @@ use crate::{
     cache::DiskCache,
     configuration::Checklist,
     git::{
-        GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitHubApi, GitHubApiError,
-        GitRepository, GitRepositoryError,
+        GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
+        GitHubWriter, GitRepository, GitRepositoryError,
     },
 };
 
@@ -199,7 +199,7 @@ impl QCIssue {
 pub async fn create_labels_if_needed(
     cache: Option<&DiskCache>,
     branch: &str,
-    git_info: &impl GitHubApi,
+    git_info: &(impl GitHubReader + GitHubWriter),
 ) -> Result<(), GitHubApiError> {
     // Try to get labels from cache first
     let cached_labels: Option<Vec<String>> = if let Some(cache) = cache {
@@ -257,7 +257,7 @@ pub async fn create_labels_if_needed(
 /// Get repository users with caching for efficiency
 pub async fn get_repo_users(
     cache: Option<&DiskCache>,
-    git_info: &impl GitHubApi,
+    git_info: &(impl GitHubReader + GitHubWriter),
 ) -> Result<Vec<RepoUser>, GitHubApiError> {
     // Try to get assignees from cache first
     let cached_assignees: Option<Vec<String>> = if let Some(cache) = cache {

@@ -12,11 +12,11 @@ mod repository;
 mod status;
 
 pub use action::{GitAction, GitActionError, GitActionImpl};
-pub use api::{GitHubApi, GitHubApiError, RepoUser};
-pub use auth::create_authenticated_client;
+pub use api::{GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
+pub use auth::{AuthError, create_authenticated_client};
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{GitAuthor, GitFileOps, GitFileOpsError, get_file_commits_robust};
-pub use helpers::{GitHelpers, GitRemote};
+pub use helpers::GitHelpers;
 pub use repository::{GitRepository, GitRepositoryError};
 pub use status::{GitStatus, GitStatusError, GitStatusOps};
 

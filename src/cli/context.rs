@@ -5,8 +5,8 @@ use octocrab::models::Milestone;
 use std::path::PathBuf;
 
 use crate::{
-    Configuration, DiskCache, GitHubApi, GitInfo, QCApprove, QCIssue, QCUnapprove, RelevantFile,
-    RepoUser,
+    Configuration, DiskCache, GitHubReader, GitHubWriter, GitInfo, QCApprove, QCIssue, QCUnapprove,
+    RelevantFile, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
