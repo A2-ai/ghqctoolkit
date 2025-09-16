@@ -4,7 +4,7 @@ use diff::{Result as DiffResult, lines};
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
-use crate::git::{GitHelpers, LocalGitError, LocalGitInfo};
+use crate::git::{GitFileOps, GitFileOpsError, GitHelpers};
 
 pub struct QCComment {
     pub(crate) file: PathBuf,
@@ -18,8 +18,8 @@ pub struct QCComment {
 impl QCComment {
     pub(crate) fn body(
         &self,
-        git_info: &(impl GitHelpers + LocalGitInfo),
-    ) -> Result<String, CommentError> {
+        git_info: &(impl GitHelpers + GitFileOps),
+    ) -> Result<String, GitFileOpsError> {
         let mut metadata = vec![
             "## Metadata".to_string(),
             format!("current commit: {}", self.current_commit),
@@ -305,14 +305,10 @@ fn format_hunk(hunk: &DiffHunk) -> String {
     result.join("\n")
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum CommentError {
-    #[error("Git command failed: {0}")]
-    LocalGitError(#[from] LocalGitError),
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::GitAuthor;
+
     use super::*;
     use gix::ObjectId;
     use octocrab::models::issues::Issue;
@@ -371,27 +367,16 @@ mod tests {
         }
     }
 
-    impl LocalGitInfo for MockGitInfo {
-        fn commit(&self) -> Result<String, LocalGitError> {
-            Ok("test_commit".to_string())
-        }
-
-        fn branch(&self) -> Result<String, LocalGitError> {
-            Ok("test-branch".to_string())
-        }
-
+    impl GitFileOps for MockGitInfo {
         fn file_commits(
             &self,
             _file: &std::path::Path,
             _branch: &Option<String>,
-        ) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
+        ) -> Result<Vec<(gix::ObjectId, String)>, GitFileOpsError> {
             Ok(Vec::new())
         }
 
-        fn authors(
-            &self,
-            _file: &std::path::Path,
-        ) -> Result<Vec<crate::git::local::GitAuthor>, LocalGitError> {
+        fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
             Ok(Vec::new())
         }
 
@@ -399,32 +384,12 @@ mod tests {
             &self,
             file: &std::path::Path,
             commit: &gix::ObjectId,
-        ) -> Result<String, LocalGitError> {
+        ) -> Result<String, GitFileOpsError> {
             let key = (file.to_path_buf(), commit.to_string());
             self.file_contents
                 .get(&key)
                 .cloned()
-                .ok_or_else(|| LocalGitError::FileNotFoundAtCommit(file.to_path_buf()))
-        }
-
-        fn status(&self) -> Result<crate::git::local::GitStatus, LocalGitError> {
-            Ok(crate::git::local::GitStatus::Clean)
-        }
-
-        fn file_status(
-            &self,
-            _file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<crate::git::local::GitStatus, LocalGitError> {
-            Ok(crate::git::local::GitStatus::Clean)
-        }
-
-        fn owner(&self) -> &str {
-            "test-owner"
-        }
-
-        fn repo(&self) -> &str {
-            "test-repo"
+                .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
         }
     }
 

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use ghqctoolkit::cli::RelevantFileParser;
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, DiskCache, GitActionImpl, GitHubApi, GitInfo, RelevantFile,
+    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, RelevantFile,
     configuration_status, create_labels_if_needed, determine_config_info, get_repo_users,
     setup_configuration,
 };

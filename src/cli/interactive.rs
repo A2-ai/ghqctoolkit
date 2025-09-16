@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::{fmt, fs};
 
-use crate::GitHubApi;
+use crate::GitHubWriter;
 use crate::{
     Configuration, RelevantFile, configuration::Checklist, git::RepoUser, issue::IssueThread,
 };
@@ -30,7 +30,7 @@ impl fmt::Display for MilestoneStatus {
 impl MilestoneStatus {
     pub(crate) async fn determine_milestone<'a>(
         &'a self,
-        git_info: &impl GitHubApi,
+        git_info: &impl GitHubWriter,
     ) -> Result<Cow<'a, Milestone>> {
         match self {
             Self::Existing(milestone) => Ok(Cow::Borrowed(milestone)),

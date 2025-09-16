@@ -4,11 +4,10 @@ use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
 use crate::{
-    GitHubApi,
     cache::{CachedComments, DiskCache},
     git::{
-        api::GitHubApiError,
-        local::{LocalGitError, LocalGitInfo},
+        GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+        get_file_commits_robust,
     },
 };
 
@@ -24,9 +23,10 @@ impl IssueThread {
     pub async fn from_issue(
         issue: &Issue,
         cache: Option<&DiskCache>,
-        git_info: &(impl GitHubApi + LocalGitInfo),
+        git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
+        let issue_is_open = matches!(issue.state, octocrab::models::IssueState::Open);
 
         // 1. Parse the branch from the issue body first
         let branch = issue
@@ -35,27 +35,73 @@ impl IssueThread {
             .and_then(|body| parse_branch_from_body(body))
             .ok_or_else(|| IssueError::BranchNotFound)?;
 
-        // 2. Get all commits for this file from the specific branch
-        let file_commits = git_info
-            .file_commits(&file, &Some(branch.clone()))
-            .map_err(|e| IssueError::LocalGitError(e))?;
-        let commit_ids: Vec<ObjectId> = file_commits.iter().map(|(id, _)| *id).collect();
-
-        let issue_is_open = matches!(issue.state, octocrab::models::IssueState::Open);
-
-        // 3. Parse the initial commit ObjectId from the issue body
-        let initial_commit = issue
+        // 2. Parse the commit string from the issue body
+        let initial_commit_str = issue
             .body
             .as_ref()
-            .and_then(|body| parse_commit_from_pattern(body, "initial qc commit: ", &commit_ids))
+            .and_then(|body| parse_commit_from_pattern(body, "initial qc commit: "))
             .ok_or_else(|| IssueError::InitialCommitNotFound)?;
 
-        // 4. Get comment bodies directly from the API
+        // 3. Get the comment bodies (cached based on issue update time)
         let comment_bodies = get_cached_issue_comments(issue, cache, git_info).await?;
 
-        // 5. Parse notification and approval commits from comment bodies
-        let (notification_commits, approved_commit) =
-            parse_commits_from_comments(&comment_bodies, &commit_ids, issue_is_open);
+        // 4. Parse notification and approval commit strings from comments
+        let (notification_commit_strs, approved_commit_str) =
+            parse_commits_from_comments(&comment_bodies, issue_is_open);
+
+        // 5. Try to parse all commit strings to ObjectIds
+        let mut all_commit_strs = vec![initial_commit_str];
+        all_commit_strs.extend(notification_commit_strs.iter().copied());
+        if let Some(approved_str) = approved_commit_str {
+            all_commit_strs.push(approved_str);
+        }
+
+        let mut parsed_commits = Vec::new();
+        let mut unparsable_commits = Vec::new();
+
+        for commit_str in &all_commit_strs {
+            match ObjectId::from_str(commit_str) {
+                Ok(object_id) => parsed_commits.push(object_id),
+                Err(_) => unparsable_commits.push(commit_str),
+            }
+        }
+
+        // 6. Only get file commits if we have unparsable commits (as fallback)
+        let commit_ids = if !unparsable_commits.is_empty() {
+            log::debug!(
+                "Found {} unparsable commits, fetching file commits as fallback: {:?}",
+                unparsable_commits.len(),
+                unparsable_commits
+            );
+            if !parsed_commits.is_empty() {
+                // Use any parsed commit as the reference commit for get_file_commits_robust
+                let file_commits =
+                    get_file_commits_robust(git_info, &file, &branch, &parsed_commits[0])?;
+                file_commits.iter().map(|(id, _)| *id).collect()
+            } else {
+                // No parsed commits available, fall back to basic file_commits call
+                let file_commits = git_info.file_commits(&file, &Some(branch.clone()))?;
+                file_commits.iter().map(|(id, _)| *id).collect()
+            }
+        } else {
+            // All commits parsed successfully, use them directly
+            parsed_commits
+        };
+
+        // 7. Parse final ObjectIds using file commits as reference if needed
+        let initial_commit = parse_commit_to_object_id(initial_commit_str, &commit_ids)?;
+
+        let notification_commits: Result<Vec<_>, _> = notification_commit_strs
+            .iter()
+            .map(|s| parse_commit_to_object_id(s, &commit_ids))
+            .collect();
+        let notification_commits = notification_commits?;
+
+        let approved_commit = if let Some(approved_str) = approved_commit_str {
+            Some(parse_commit_to_object_id(approved_str, &commit_ids)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             file,
@@ -80,21 +126,20 @@ impl IssueThread {
 
     pub async fn commits(
         &self,
-        git_info: &impl LocalGitInfo,
+        git_info: &(impl GitFileOps + GitCommitAnalysis),
     ) -> Result<Vec<(ObjectId, String)>, IssueError> {
-        let commits = git_info.file_commits(&self.file, &Some(self.branch.clone()))?;
-        Ok(commits)
+        get_file_commits_robust(git_info, &self.file, &self.branch, &self.initial_commit)
+            .map_err(|e| e.into())
     }
 }
 
 /// Parse notification and approval commits from comment bodies
 /// Returns (notification_commits, approved_commit)
 /// Approval is invalidated if issue is open or if an unapproval occurs after approval
-fn parse_commits_from_comments(
-    comment_bodies: &[String],
-    commit_ids: &[ObjectId],
+fn parse_commits_from_comments<'a>(
+    comment_bodies: &'a [String],
     issue_is_open: bool,
-) -> (Vec<ObjectId>, Option<ObjectId>) {
+) -> (Vec<&'a str>, Option<&'a str>) {
     let mut notification_commits = Vec::new();
     let mut approved_commit = None;
     let mut approval_comment_index = None;
@@ -102,12 +147,12 @@ fn parse_commits_from_comments(
     // Parse all comments in order
     for (index, body) in comment_bodies.iter().enumerate() {
         // Check for notification commit: "current commit: {hash}"
-        if let Some(commit) = parse_commit_from_pattern(body, "current commit: ", commit_ids) {
+        if let Some(commit) = parse_commit_from_pattern(body, "current commit: ") {
             notification_commits.push(commit);
         }
 
         // Check for approval commit: "approved qc commit: {hash}"
-        if let Some(commit) = parse_commit_from_pattern(body, "approved qc commit: ", commit_ids) {
+        if let Some(commit) = parse_commit_from_pattern(body, "approved qc commit: ") {
             if issue_is_open {
                 // If issue is open, treat approval as notification
                 notification_commits.push(commit);
@@ -138,34 +183,35 @@ fn parse_commits_from_comments(
 
 /// Parse a commit from a body using the given pattern
 /// Supports both full and short SHAs with minimum 7 character length
-fn parse_commit_from_pattern(
-    body: &str,
-    pattern: &str,
-    commit_ids: &[ObjectId],
-) -> Option<ObjectId> {
+fn parse_commit_from_pattern<'a>(body: &'a str, pattern: &str) -> Option<&'a str> {
     let start = body.find(pattern)?;
     let commit_start = start + pattern.len();
 
     let remaining = &body[commit_start..];
-    let commit_hash = remaining.lines().next()?.split_whitespace().next()?;
+    remaining.lines().next()?.split_whitespace().next()
+}
 
-    // Try to parse as full ObjectId first
-    if let Ok(full_oid) = ObjectId::from_str(commit_hash) {
-        return Some(full_oid);
+/// Try to parse a commit string to an ObjectId, with fallback lookup in commit list
+fn parse_commit_to_object_id(
+    commit_str: &str,
+    available_commits: &[ObjectId],
+) -> Result<ObjectId, IssueError> {
+    // First try to parse as a full ObjectId
+    if let Ok(object_id) = ObjectId::from_str(commit_str) {
+        return Ok(object_id);
     }
 
-    // If that fails, try to match as short SHA against file commits
-    // Require at least 7 characters for short SHA to avoid ambiguity
-    if commit_hash.len() >= 7 {
-        for commit_id in commit_ids {
-            let full_hash = commit_id.to_string();
-            if full_hash.starts_with(commit_hash) {
-                return Some(*commit_id);
+    // If that fails, try to match against available commits (for short SHAs)
+    if commit_str.len() >= 7 {
+        for commit in available_commits {
+            let commit_str_full = commit.to_string();
+            if commit_str_full.starts_with(commit_str) {
+                return Ok(*commit);
             }
         }
     }
 
-    None
+    Err(IssueError::CommitNotParseable(commit_str.to_string()))
 }
 
 /// Parse branch name from issue body
@@ -189,7 +235,7 @@ fn parse_branch_from_body(body: &str) -> Option<String> {
 pub async fn get_cached_issue_comments(
     issue: &Issue,
     cache: Option<&DiskCache>,
-    git_info: &impl GitHubApi,
+    git_info: &impl GitHubReader,
 ) -> Result<Vec<String>, GitHubApiError> {
     // Create cache key from issue number
     let cache_key = format!("issue_{}", issue.number);
@@ -249,194 +295,22 @@ pub enum IssueError {
     #[error(transparent)]
     GitHubApiError(#[from] GitHubApiError),
     #[error(transparent)]
-    LocalGitError(#[from] LocalGitError),
+    GitFileOpsError(#[from] GitFileOpsError),
     #[error("Initial commit not found in issue body")]
     InitialCommitNotFound,
     #[error("Branch not found in issue body")]
     BranchNotFound,
+    #[error("Commit string '{0}' could not be parsed to a valid ObjectId")]
+    CommitNotParseable(String),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::GitHelpers;
+    use crate::GitAuthor;
+    use crate::git::{GitCommitAnalysisError, GitHelpers, GitHubWriter};
     use std::path::PathBuf;
     use std::str::FromStr;
-
-    #[derive(Clone)]
-    struct MockGitInfo {
-        file_commits: Vec<(ObjectId, String)>,
-        comment_bodies: Vec<String>,
-    }
-
-    impl MockGitInfo {
-        fn new() -> Self {
-            Self {
-                file_commits: Vec::new(),
-                comment_bodies: Vec::new(),
-            }
-        }
-
-        fn with_file_commits(mut self, commits: Vec<(ObjectId, String)>) -> Self {
-            self.file_commits = commits;
-            self
-        }
-
-        fn with_comment_bodies(mut self, bodies: Vec<String>) -> Self {
-            self.comment_bodies = bodies;
-            self
-        }
-    }
-
-    impl GitHelpers for MockGitInfo {
-        fn file_content_url(&self, _commit: &str, _file: &std::path::Path) -> String {
-            "https://github.com/owner/repo/blob/commit/file".to_string()
-        }
-
-        fn commit_comparison_url(
-            &self,
-            _current_commit: &gix::ObjectId,
-            _previous_commit: &gix::ObjectId,
-        ) -> String {
-            "https://github.com/owner/repo/compare/prev..current".to_string()
-        }
-    }
-
-    impl LocalGitInfo for MockGitInfo {
-        fn commit(&self) -> Result<String, crate::git::local::LocalGitError> {
-            Ok("test_commit".to_string())
-        }
-
-        fn branch(&self) -> Result<String, crate::git::local::LocalGitError> {
-            Ok("test-branch".to_string())
-        }
-
-        fn file_commits(
-            &self,
-            _file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::local::LocalGitError> {
-            Ok(self.file_commits.clone())
-        }
-
-        fn authors(
-            &self,
-            _file: &std::path::Path,
-        ) -> Result<Vec<crate::git::local::GitAuthor>, crate::git::local::LocalGitError> {
-            Ok(Vec::new())
-        }
-
-        fn file_content_at_commit(
-            &self,
-            _file: &std::path::Path,
-            _commit: &gix::ObjectId,
-        ) -> Result<String, crate::git::local::LocalGitError> {
-            Ok(String::new())
-        }
-
-        fn status(&self) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError> {
-            Ok(crate::git::local::GitStatus::Clean)
-        }
-
-        fn file_status(
-            &self,
-            _file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError> {
-            Ok(crate::git::local::GitStatus::Clean)
-        }
-
-        fn owner(&self) -> &str {
-            "test-owner"
-        }
-
-        fn repo(&self) -> &str {
-            "test-repo"
-        }
-    }
-
-    impl GitHubApi for MockGitInfo {
-        async fn get_milestones(
-            &self,
-        ) -> Result<Vec<octocrab::models::Milestone>, crate::git::api::GitHubApiError> {
-            Ok(Vec::new())
-        }
-
-        async fn get_milestone_issues(
-            &self,
-            _milestone: &octocrab::models::Milestone,
-        ) -> Result<Vec<Issue>, crate::git::api::GitHubApiError> {
-            Ok(Vec::new())
-        }
-
-        async fn create_milestone(
-            &self,
-            _milestone_name: &str,
-        ) -> Result<octocrab::models::Milestone, crate::git::api::GitHubApiError> {
-            unimplemented!()
-        }
-
-        async fn post_issue(
-            &self,
-            _issue: &crate::QCIssue,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
-            Ok("https://github.com/owner/repo/issues/1".to_string())
-        }
-
-        async fn post_comment(
-            &self,
-            _comment: &crate::QCComment,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
-            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
-        }
-
-        async fn post_approval(
-            &self,
-            _approval: &crate::QCApprove,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
-            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
-        }
-
-        async fn post_unapproval(
-            &self,
-            _unapproval: &crate::QCUnapprove,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
-            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
-        }
-
-        async fn get_assignees(&self) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
-            Ok(Vec::new())
-        }
-
-        async fn get_user_details(
-            &self,
-            _username: &str,
-        ) -> Result<crate::git::api::RepoUser, crate::git::api::GitHubApiError> {
-            Ok(crate::git::api::RepoUser {
-                login: _username.to_string(),
-                name: None,
-            })
-        }
-
-        async fn get_labels(&self) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
-            Ok(Vec::new())
-        }
-
-        async fn create_label(
-            &self,
-            _name: &str,
-            _color: &str,
-        ) -> Result<(), crate::git::api::GitHubApiError> {
-            Ok(())
-        }
-
-        async fn get_issue_comments(
-            &self,
-            _issue: &Issue,
-        ) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
-            Ok(self.comment_bodies.clone())
-        }
-    }
 
     fn load_issue(file_name: &str) -> Issue {
         let path = format!("src/tests/issue_threads/{}", file_name);
@@ -482,6 +356,10 @@ mod tests {
                 ObjectId::from_str("123abcdef456789012345678901234567890abcd").unwrap(),
                 "Sixth commit".to_string(),
             ),
+            (
+                ObjectId::from_str("abc123456789012345678901234567890123abcd").unwrap(),
+                "Seventh commit".to_string(),
+            ),
         ]
     }
 
@@ -496,8 +374,11 @@ mod tests {
             .map(|comment| comment["body"].as_str().unwrap().to_string())
             .collect();
 
-        let git_info = MockGitInfo::new()
-            .with_file_commits(create_test_commits())
+        let git_info = RobustMockGitInfo::new()
+            .with_file_commits_result(
+                Some("feature/new-feature".to_string()),
+                Ok(create_test_commits()),
+            )
             .with_comment_bodies(comment_bodies);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
@@ -538,8 +419,11 @@ mod tests {
             .map(|comment| comment["body"].as_str().unwrap().to_string())
             .collect();
 
-        let git_info = MockGitInfo::new()
-            .with_file_commits(create_test_commits())
+        let git_info = RobustMockGitInfo::new()
+            .with_file_commits_result(
+                Some("bugfix/memory-leak".to_string()),
+                Ok(create_test_commits()),
+            )
             .with_comment_bodies(comment_bodies);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
@@ -580,8 +464,11 @@ mod tests {
             .map(|comment| comment["body"].as_str().unwrap().to_string())
             .collect();
 
-        let git_info = MockGitInfo::new()
-            .with_file_commits(create_test_commits())
+        let branch = "feature/utils-refactor";
+        let test_commits = create_test_commits();
+
+        let git_info = RobustMockGitInfo::new()
+            .with_file_commits_result(Some(branch.to_string()), Ok(test_commits.clone()))
             .with_comment_bodies(comment_bodies);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
@@ -595,8 +482,8 @@ mod tests {
         );
 
         // Should have notification commits (issue is open so approval treated as notification)
-        // The same commit appears twice: once from "current commit" and once from "approved qc commit"
-        assert_eq!(result.notification_commits.len(), 2);
+        // Three commits: two "890cdef..." (current + approved-as-notification) and one resolved "abc1234"
+        assert_eq!(result.notification_commits.len(), 3);
         assert_eq!(
             result.notification_commits[0],
             ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
@@ -604,6 +491,10 @@ mod tests {
         assert_eq!(
             result.notification_commits[1],
             ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
+        );
+        assert_eq!(
+            result.notification_commits[2],
+            ObjectId::from_str("abc123456789012345678901234567890123abcd").unwrap()
         );
 
         // Should have no approved commit due to unapproval
@@ -615,61 +506,40 @@ mod tests {
     #[test]
     fn test_parse_commit_from_pattern_full_sha() {
         let body = "approved qc commit: abc123def456789012345678901234567890abcd";
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
-        ];
 
-        let result = parse_commit_from_pattern(body, "approved qc commit: ", &commit_ids);
-        assert_eq!(
-            result,
-            Some(ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap())
-        );
+        let result = parse_commit_from_pattern(body, "approved qc commit: ");
+        assert_eq!(result, Some("abc123def456789012345678901234567890abcd"));
     }
 
     #[test]
     fn test_parse_commit_from_pattern_short_sha() {
         let body = "current commit: abc123d";
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
-        ];
 
-        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
-        assert_eq!(
-            result,
-            Some(ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap())
-        );
+        let result = parse_commit_from_pattern(body, "current commit: ");
+        assert_eq!(result, Some("abc123d"));
     }
 
     #[test]
     fn test_parse_commit_from_pattern_minimum_length() {
         let body = "current commit: abc123";
-        let commit_ids =
-            vec![ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()];
 
-        // Should fail because SHA is too short (< 7 characters)
-        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
-        assert_eq!(result, None);
+        let result = parse_commit_from_pattern(body, "current commit: ");
+        assert_eq!(result, Some("abc123"));
     }
 
     #[test]
     fn test_parse_commit_from_pattern_no_match() {
         let body = "current commit: nonexistent123";
-        let commit_ids =
-            vec![ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()];
 
-        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
-        assert_eq!(result, None);
+        let result = parse_commit_from_pattern(body, "current commit: ");
+        assert_eq!(result, Some("nonexistent123"));
     }
 
     #[test]
     fn test_parse_commit_from_pattern_not_found() {
         let body = "some other content";
-        let commit_ids =
-            vec![ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()];
 
-        let result = parse_commit_from_pattern(body, "current commit: ", &commit_ids);
+        let result = parse_commit_from_pattern(body, "current commit: ");
         assert_eq!(result, None);
     }
 
@@ -679,13 +549,8 @@ mod tests {
             "current commit: abc123def456789012345678901234567890abcd".to_string(),
             "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
         ];
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
-        ];
 
-        let (notifications, approved) =
-            parse_commits_from_comments(&comment_bodies, &commit_ids, true);
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, true);
 
         // Open issue: both should be notifications
         assert_eq!(notifications.len(), 2);
@@ -698,20 +563,12 @@ mod tests {
             "current commit: abc123def456789012345678901234567890abcd".to_string(),
             "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
         ];
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
-        ];
 
-        let (notifications, approved) =
-            parse_commits_from_comments(&comment_bodies, &commit_ids, false);
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, false);
 
         // Closed issue: notification + approval
         assert_eq!(notifications.len(), 1);
-        assert_eq!(
-            approved,
-            Some(ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap())
-        );
+        assert_eq!(approved, Some("def456789abc012345678901234567890123abcd"));
     }
 
     #[test]
@@ -721,13 +578,8 @@ mod tests {
             "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
             "# QC Un-Approval\nWithdrawing approval".to_string(),
         ];
-        let commit_ids = vec![
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
-            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
-        ];
 
-        let (notifications, approved) =
-            parse_commits_from_comments(&comment_bodies, &commit_ids, false);
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, false);
 
         // Unapproval should invalidate approval and move it to notifications
         assert_eq!(notifications.len(), 2);
@@ -774,5 +626,419 @@ mod tests {
         let body = "git branch:    \n";
         let result = parse_branch_from_body(body);
         assert_eq!(result, None);
+    }
+
+    // Enhanced MockGitInfo for testing robust branch handling
+    struct RobustMockGitInfo {
+        file_commits_responses: std::collections::HashMap<
+            Option<String>,
+            Result<Vec<(ObjectId, String)>, GitFileOpsError>,
+        >,
+        merge_commits: Vec<ObjectId>,
+        commit_parents: std::collections::HashMap<ObjectId, Vec<ObjectId>>,
+        ancestor_relationships: std::collections::HashMap<(ObjectId, ObjectId), bool>,
+        branches_containing_commits: std::collections::HashMap<ObjectId, Vec<String>>,
+        comment_bodies: Vec<String>,
+    }
+
+    impl RobustMockGitInfo {
+        fn new() -> Self {
+            Self {
+                file_commits_responses: std::collections::HashMap::new(),
+                merge_commits: Vec::new(),
+                commit_parents: std::collections::HashMap::new(),
+                ancestor_relationships: std::collections::HashMap::new(),
+                branches_containing_commits: std::collections::HashMap::new(),
+                comment_bodies: Vec::new(),
+            }
+        }
+
+        fn with_file_commits_result(
+            mut self,
+            branch: Option<String>,
+            result: Result<Vec<(ObjectId, String)>, GitFileOpsError>,
+        ) -> Self {
+            self.file_commits_responses.insert(branch, result);
+            self
+        }
+
+        fn with_merge_commits(mut self, commits: Vec<ObjectId>) -> Self {
+            self.merge_commits = commits;
+            self
+        }
+
+        fn with_commit_parents(mut self, commit: ObjectId, parents: Vec<ObjectId>) -> Self {
+            self.commit_parents.insert(commit, parents);
+            self
+        }
+
+        fn with_ancestor_relationship(
+            mut self,
+            ancestor: ObjectId,
+            descendant: ObjectId,
+            is_ancestor: bool,
+        ) -> Self {
+            self.ancestor_relationships
+                .insert((ancestor, descendant), is_ancestor);
+            self
+        }
+
+        fn with_branches_containing_commit(
+            mut self,
+            commit: ObjectId,
+            branches: Vec<String>,
+        ) -> Self {
+            self.branches_containing_commits.insert(commit, branches);
+            self
+        }
+
+        fn with_comment_bodies(mut self, bodies: Vec<String>) -> Self {
+            self.comment_bodies = bodies;
+            self
+        }
+    }
+
+    impl GitHelpers for RobustMockGitInfo {
+        fn file_content_url(&self, _commit: &str, _file: &std::path::Path) -> String {
+            "https://github.com/owner/repo/blob/commit/file".to_string()
+        }
+
+        fn commit_comparison_url(
+            &self,
+            _current_commit: &gix::ObjectId,
+            _previous_commit: &gix::ObjectId,
+        ) -> String {
+            "https://github.com/owner/repo/compare/prev..current".to_string()
+        }
+    }
+
+    impl GitFileOps for RobustMockGitInfo {
+        fn file_commits(
+            &self,
+            _file: &std::path::Path,
+            branch: &Option<String>,
+        ) -> Result<Vec<(gix::ObjectId, String)>, GitFileOpsError> {
+            match self.file_commits_responses.get(branch) {
+                Some(Ok(commits)) => Ok(commits.clone()),
+                Some(Err(GitFileOpsError::BranchNotFound(branch_name))) => {
+                    Err(GitFileOpsError::BranchNotFound(branch_name.clone()))
+                }
+                Some(Err(_e)) => Err(GitFileOpsError::AuthorNotFound(PathBuf::from("test"))), // Fallback error for testing
+                None => Ok(Vec::new()),
+            }
+        }
+
+        fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn file_content_at_commit(
+            &self,
+            _file: &std::path::Path,
+            _commit: &gix::ObjectId,
+        ) -> Result<String, GitFileOpsError> {
+            Ok(String::new())
+        }
+    }
+
+    impl GitCommitAnalysis for RobustMockGitInfo {
+        fn get_all_merge_commits(&self) -> Result<Vec<gix::ObjectId>, GitCommitAnalysisError> {
+            Ok(self.merge_commits.clone())
+        }
+
+        fn get_commit_parents(
+            &self,
+            commit: &gix::ObjectId,
+        ) -> Result<Vec<gix::ObjectId>, GitCommitAnalysisError> {
+            Ok(self.commit_parents.get(commit).cloned().unwrap_or_default())
+        }
+
+        fn is_ancestor(
+            &self,
+            ancestor: &gix::ObjectId,
+            descendant: &gix::ObjectId,
+        ) -> Result<bool, GitCommitAnalysisError> {
+            Ok(self
+                .ancestor_relationships
+                .get(&(*ancestor, *descendant))
+                .copied()
+                .unwrap_or(false))
+        }
+
+        fn get_branches_containing_commit(
+            &self,
+            commit: &gix::ObjectId,
+        ) -> Result<Vec<String>, GitCommitAnalysisError> {
+            Ok(self
+                .branches_containing_commits
+                .get(commit)
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    impl GitHubReader for RobustMockGitInfo {
+        async fn get_milestones(
+            &self,
+        ) -> Result<Vec<octocrab::models::Milestone>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_milestone_issues(
+            &self,
+            _milestone: &octocrab::models::Milestone,
+        ) -> Result<Vec<Issue>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_assignees(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_user_details(
+            &self,
+            _username: &str,
+        ) -> Result<crate::RepoUser, crate::git::GitHubApiError> {
+            Ok(crate::RepoUser {
+                login: _username.to_string(),
+                name: None,
+            })
+        }
+
+        async fn get_labels(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_issue_comments(
+            &self,
+            _issue: &Issue,
+        ) -> Result<Vec<String>, crate::git::GitHubApiError> {
+            Ok(self.comment_bodies.clone())
+        }
+    }
+
+    impl GitHubWriter for RobustMockGitInfo {
+        async fn create_milestone(
+            &self,
+            _milestone_name: &str,
+        ) -> Result<octocrab::models::Milestone, crate::git::GitHubApiError> {
+            unimplemented!()
+        }
+
+        async fn post_issue(
+            &self,
+            _issue: &crate::QCIssue,
+        ) -> Result<String, crate::git::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1".to_string())
+        }
+
+        async fn post_comment(
+            &self,
+            _comment: &crate::QCComment,
+        ) -> Result<String, crate::git::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
+        }
+
+        async fn post_approval(
+            &self,
+            _approval: &crate::QCApprove,
+        ) -> Result<String, crate::git::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
+        }
+
+        async fn post_unapproval(
+            &self,
+            _unapproval: &crate::QCUnapprove,
+        ) -> Result<String, crate::git::GitHubApiError> {
+            Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
+        }
+
+        async fn create_label(
+            &self,
+            _name: &str,
+            _color: &str,
+        ) -> Result<(), crate::git::GitHubApiError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits_robust_success_on_first_try() {
+        let test_commits = create_test_commits();
+        let file = PathBuf::from("src/main.rs");
+        let branch = "feature-branch";
+        let initial_commit =
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap();
+
+        let git_info = RobustMockGitInfo::new()
+            .with_file_commits_result(Some(branch.to_string()), Ok(test_commits.clone()));
+
+        let result = get_file_commits_robust(&git_info, &file, branch, &initial_commit).unwrap();
+
+        assert_eq!(result.len(), test_commits.len());
+        assert_eq!(result, test_commits);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits_robust_branch_not_found_uses_merge_detection() {
+        let test_commits = create_test_commits();
+        let file = PathBuf::from("src/main.rs");
+        let branch = "deleted-branch";
+        let initial_commit =
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap();
+        let merge_commit = ObjectId::from_str("1234567890abcdef123456789012345678901234").unwrap();
+        let parent1 = ObjectId::from_str("2345678901234567890123456789012345678901").unwrap();
+        let parent2 = ObjectId::from_str("3456789012345678901234567890123456789012").unwrap();
+
+        let git_info = RobustMockGitInfo::new()
+            // Original branch fails
+            .with_file_commits_result(
+                Some(branch.to_string()),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+            )
+            // Merge detection finds the target branch
+            .with_merge_commits(vec![merge_commit])
+            .with_commit_parents(merge_commit, vec![parent1, parent2])
+            .with_ancestor_relationship(initial_commit, parent2, true) // initial_commit is ancestor of parent2 (merged branch)
+            .with_branches_containing_commit(merge_commit, vec!["main".to_string()])
+            // Target branch has the commits
+            .with_file_commits_result(Some("main".to_string()), Ok(test_commits.clone()));
+
+        let result = get_file_commits_robust(&git_info, &file, branch, &initial_commit).unwrap();
+
+        assert_eq!(result.len(), test_commits.len());
+        assert_eq!(result, test_commits);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits_robust_fallback_to_branches_containing_commit() {
+        let test_commits = create_test_commits();
+        let file = PathBuf::from("src/main.rs");
+        let branch = "deleted-branch";
+        let initial_commit =
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap();
+
+        let git_info = RobustMockGitInfo::new()
+            // Original branch fails
+            .with_file_commits_result(
+                Some(branch.to_string()),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+            )
+            // No merge commits found
+            .with_merge_commits(vec![])
+            // But initial commit is found in some branches
+            .with_branches_containing_commit(
+                initial_commit,
+                vec!["main".to_string(), "develop".to_string()],
+            )
+            // First branch with file commits wins
+            .with_file_commits_result(Some("main".to_string()), Ok(test_commits.clone()))
+            .with_file_commits_result(Some("develop".to_string()), Ok(Vec::new()));
+
+        let result = get_file_commits_robust(&git_info, &file, branch, &initial_commit).unwrap();
+
+        assert_eq!(result.len(), test_commits.len());
+        assert_eq!(result, test_commits);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits_robust_final_fallback_to_all_commits() {
+        let test_commits = create_test_commits();
+        let file = PathBuf::from("src/main.rs");
+        let branch = "deleted-branch";
+        let initial_commit =
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap();
+
+        let git_info = RobustMockGitInfo::new()
+            // Original branch fails
+            .with_file_commits_result(
+                Some(branch.to_string()),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+            )
+            // No merge commits found
+            .with_merge_commits(vec![])
+            // No branches contain the commit
+            .with_branches_containing_commit(initial_commit, vec![])
+            // Fall back to all commits (no branch restriction)
+            .with_file_commits_result(None, Ok(test_commits.clone()));
+
+        let result = get_file_commits_robust(&git_info, &file, branch, &initial_commit).unwrap();
+
+        assert_eq!(result.len(), test_commits.len());
+        assert_eq!(result, test_commits);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits_robust_no_initial_commit_in_issue_body() {
+        let file = PathBuf::from("src/main.rs");
+        let branch = "deleted-branch";
+        let invalid_commit =
+            ObjectId::from_str("0000000000000000000000000000000000000000").unwrap();
+
+        let git_info = RobustMockGitInfo::new().with_file_commits_result(
+            Some(branch.to_string()),
+            Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+        );
+
+        let result = get_file_commits_robust(&git_info, &file, branch, &invalid_commit);
+
+        // Should succeed but return empty commits since all fallbacks return empty
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits_robust_git_error_propagated() {
+        let file = PathBuf::from("src/main.rs");
+        let branch = "test-branch";
+        let initial_commit =
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap();
+
+        let git_info = RobustMockGitInfo::new().with_file_commits_result(
+            Some(branch.to_string()),
+            Err(GitFileOpsError::AuthorNotFound(PathBuf::from("test"))),
+        );
+
+        let result = get_file_commits_robust(&git_info, &file, branch, &initial_commit);
+
+        assert!(matches!(result, Err(GitFileOpsError::AuthorNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits_robust_multiple_merge_commits() {
+        let test_commits = create_test_commits();
+        let file = PathBuf::from("src/main.rs");
+        let branch = "deleted-branch";
+        let initial_commit =
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap();
+        let merge_commit1 = ObjectId::from_str("1111111111111111111111111111111111111111").unwrap();
+        let merge_commit2 = ObjectId::from_str("2222222222222222222222222222222222222222").unwrap();
+        let parent1_1 = ObjectId::from_str("3333333333333333333333333333333333333333").unwrap();
+        let parent2_1 = ObjectId::from_str("4444444444444444444444444444444444444444").unwrap();
+        let parent1_2 = ObjectId::from_str("5555555555555555555555555555555555555555").unwrap();
+        let parent2_2 = ObjectId::from_str("6666666666666666666666666666666666666666").unwrap();
+
+        let git_info = RobustMockGitInfo::new()
+            // Original branch fails
+            .with_file_commits_result(
+                Some(branch.to_string()),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+            )
+            // Multiple merge commits
+            .with_merge_commits(vec![merge_commit1, merge_commit2])
+            .with_commit_parents(merge_commit1, vec![parent1_1, parent2_1])
+            .with_commit_parents(merge_commit2, vec![parent1_2, parent2_2])
+            // First merge commit doesn't match
+            .with_ancestor_relationship(initial_commit, parent2_1, false)
+            // Second merge commit matches
+            .with_ancestor_relationship(initial_commit, parent2_2, true)
+            .with_branches_containing_commit(merge_commit2, vec!["develop".to_string()])
+            // Target branch has the commits
+            .with_file_commits_result(Some("develop".to_string()), Ok(test_commits.clone()));
+
+        let result = get_file_commits_robust(&git_info, &file, branch, &initial_commit).unwrap();
+
+        assert_eq!(result.len(), test_commits.len());
+        assert_eq!(result, test_commits);
     }
 }

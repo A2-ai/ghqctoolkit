@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::{GitAction, LocalGitInfo};
+use crate::git::{GitAction, GitRepository, GitStatusOps};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -448,7 +448,7 @@ pub fn determine_config_info(
 
 pub fn configuration_status(
     configuration: &Configuration,
-    git_info: &Option<impl LocalGitInfo>,
+    git_info: &Option<impl GitRepository + GitStatusOps>,
 ) -> String {
     let checklist_name = &configuration
         .options
@@ -748,57 +748,16 @@ Second Checklist:
         struct MockGitInfo {
             owner: String,
             repo: String,
-            status: crate::git::local::GitStatus,
+            status: crate::git::GitStatus,
         }
 
-        impl LocalGitInfo for MockGitInfo {
-            fn commit(&self) -> Result<String, crate::git::local::LocalGitError> {
+        impl crate::git::GitRepository for MockGitInfo {
+            fn commit(&self) -> Result<String, crate::git::GitRepositoryError> {
                 Ok("abc123".to_string())
             }
 
-            fn branch(&self) -> Result<String, crate::git::local::LocalGitError> {
+            fn branch(&self) -> Result<String, crate::git::GitRepositoryError> {
                 Ok("main".to_string())
-            }
-
-            fn file_commits(
-                &self,
-                _file: &std::path::Path,
-                _branch: &Option<String>,
-            ) -> Result<Vec<(gix::ObjectId, String)>, crate::git::local::LocalGitError>
-            {
-                Ok(vec![])
-            }
-
-            fn authors(
-                &self,
-                _file: &std::path::Path,
-            ) -> Result<Vec<crate::git::local::GitAuthor>, crate::git::local::LocalGitError>
-            {
-                Ok(vec![])
-            }
-
-            fn file_content_at_commit(
-                &self,
-                _file: &std::path::Path,
-                _commit: &gix::ObjectId,
-            ) -> Result<String, crate::git::local::LocalGitError> {
-                Ok(String::new())
-            }
-
-            fn status(
-                &self,
-            ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError>
-            {
-                Ok(self.status.clone())
-            }
-
-            fn file_status(
-                &self,
-                _file: &std::path::Path,
-                _branch: &Option<String>,
-            ) -> Result<crate::git::local::GitStatus, crate::git::local::LocalGitError>
-            {
-                Ok(self.status.clone())
             }
 
             fn owner(&self) -> &str {
@@ -807,6 +766,20 @@ Second Checklist:
 
             fn repo(&self) -> &str {
                 &self.repo
+            }
+        }
+
+        impl crate::git::GitStatusOps for MockGitInfo {
+            fn status(&self) -> Result<crate::git::GitStatus, crate::git::GitStatusError> {
+                Ok(self.status.clone())
+            }
+
+            fn file_status(
+                &self,
+                _file: &std::path::Path,
+                _branch: &Option<String>,
+            ) -> Result<crate::git::GitStatus, crate::git::GitStatusError> {
+                Ok(self.status.clone())
             }
         }
 
@@ -819,7 +792,7 @@ Second Checklist:
         let git_info = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::git::local::GitStatus::Clean,
+            status: crate::git::GitStatus::Clean,
         };
 
         let result_with_git = configuration_status(&configuration, &Some(git_info));
@@ -833,7 +806,7 @@ Second Checklist:
         let git_info_dirty = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::git::local::GitStatus::Dirty(vec![
+            status: crate::git::GitStatus::Dirty(vec![
                 PathBuf::from("src/main.rs"),
                 PathBuf::from("README.md"),
             ]),
