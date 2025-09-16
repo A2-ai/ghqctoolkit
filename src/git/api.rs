@@ -628,5 +628,5 @@ pub enum GitHubApiError {
     #[error("GitHub API URL access failed due to: {0}")]
     APIError(octocrab::Error),
     #[error("Failed to generate comment body: {0}")]
-    CommentGenerationError(#[from] crate::comment::CommentError),
+    CommentGenerationError(#[from] crate::git::file_ops::GitFileOpsError),
 }

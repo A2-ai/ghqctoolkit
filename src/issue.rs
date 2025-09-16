@@ -7,8 +7,7 @@ use crate::{
     GitHubApi,
     cache::{CachedComments, DiskCache},
     git::{
-        api::GitHubApiError,
-        local::{LocalGitError, LocalGitInfo, get_file_commits_robust},
+        GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, get_file_commits_robust,
     },
 };
 
@@ -24,7 +23,7 @@ impl IssueThread {
     pub async fn from_issue(
         issue: &Issue,
         cache: Option<&DiskCache>,
-        git_info: &(impl GitHubApi + LocalGitInfo),
+        git_info: &(impl GitHubApi + GitFileOps + GitCommitAnalysis),
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
         let issue_is_open = matches!(issue.state, octocrab::models::IssueState::Open);
@@ -127,7 +126,7 @@ impl IssueThread {
 
     pub async fn commits(
         &self,
-        git_info: &impl LocalGitInfo,
+        git_info: &(impl GitFileOps + GitCommitAnalysis),
     ) -> Result<Vec<(ObjectId, String)>, IssueError> {
         get_file_commits_robust(git_info, &self.file, &self.branch, &self.initial_commit)
             .map_err(|e| e.into())
@@ -296,7 +295,7 @@ pub enum IssueError {
     #[error(transparent)]
     GitHubApiError(#[from] GitHubApiError),
     #[error(transparent)]
-    LocalGitError(#[from] LocalGitError),
+    GitFileOpsError(#[from] GitFileOpsError),
     #[error("Initial commit not found in issue body")]
     InitialCommitNotFound,
     #[error("Branch not found in issue body")]
@@ -308,6 +307,8 @@ pub enum IssueError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::GitAuthor;
+    use crate::git::GitCommitAnalysisError;
     use crate::git::GitHelpers;
     use std::path::PathBuf;
     use std::str::FromStr;
@@ -632,7 +633,7 @@ mod tests {
     struct RobustMockGitInfo {
         file_commits_responses: std::collections::HashMap<
             Option<String>,
-            Result<Vec<(ObjectId, String)>, LocalGitError>,
+            Result<Vec<(ObjectId, String)>, GitFileOpsError>,
         >,
         merge_commits: Vec<ObjectId>,
         commit_parents: std::collections::HashMap<ObjectId, Vec<ObjectId>>,
@@ -656,7 +657,7 @@ mod tests {
         fn with_file_commits_result(
             mut self,
             branch: Option<String>,
-            result: Result<Vec<(ObjectId, String)>, LocalGitError>,
+            result: Result<Vec<(ObjectId, String)>, GitFileOpsError>,
         ) -> Self {
             self.file_commits_responses.insert(branch, result);
             self
@@ -712,34 +713,23 @@ mod tests {
         }
     }
 
-    impl LocalGitInfo for RobustMockGitInfo {
-        fn commit(&self) -> Result<String, LocalGitError> {
-            Ok("test_commit".to_string())
-        }
-
-        fn branch(&self) -> Result<String, LocalGitError> {
-            Ok("test-branch".to_string())
-        }
-
+    impl GitFileOps for RobustMockGitInfo {
         fn file_commits(
             &self,
             _file: &std::path::Path,
             branch: &Option<String>,
-        ) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
+        ) -> Result<Vec<(gix::ObjectId, String)>, GitFileOpsError> {
             match self.file_commits_responses.get(branch) {
                 Some(Ok(commits)) => Ok(commits.clone()),
-                Some(Err(LocalGitError::BranchNotFound(branch_name))) => {
-                    Err(LocalGitError::BranchNotFound(branch_name.clone()))
+                Some(Err(GitFileOpsError::BranchNotFound(branch_name))) => {
+                    Err(GitFileOpsError::BranchNotFound(branch_name.clone()))
                 }
-                Some(Err(_e)) => Err(LocalGitError::AuthorNotFound(PathBuf::from("test"))), // Fallback error for testing
+                Some(Err(_e)) => Err(GitFileOpsError::AuthorNotFound(PathBuf::from("test"))), // Fallback error for testing
                 None => Ok(Vec::new()),
             }
         }
 
-        fn authors(
-            &self,
-            _file: &std::path::Path,
-        ) -> Result<Vec<crate::git::local::GitAuthor>, LocalGitError> {
+        fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
             Ok(Vec::new())
         }
 
@@ -747,30 +737,20 @@ mod tests {
             &self,
             _file: &std::path::Path,
             _commit: &gix::ObjectId,
-        ) -> Result<String, LocalGitError> {
+        ) -> Result<String, GitFileOpsError> {
             Ok(String::new())
         }
+    }
 
-        fn status(&self) -> Result<crate::git::local::GitStatus, LocalGitError> {
-            Ok(crate::git::local::GitStatus::Clean)
-        }
-
-        fn file_status(
-            &self,
-            _file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<crate::git::local::GitStatus, LocalGitError> {
-            Ok(crate::git::local::GitStatus::Clean)
-        }
-
-        fn get_all_merge_commits(&self) -> Result<Vec<gix::ObjectId>, LocalGitError> {
+    impl GitCommitAnalysis for RobustMockGitInfo {
+        fn get_all_merge_commits(&self) -> Result<Vec<gix::ObjectId>, GitCommitAnalysisError> {
             Ok(self.merge_commits.clone())
         }
 
         fn get_commit_parents(
             &self,
             commit: &gix::ObjectId,
-        ) -> Result<Vec<gix::ObjectId>, LocalGitError> {
+        ) -> Result<Vec<gix::ObjectId>, GitCommitAnalysisError> {
             Ok(self.commit_parents.get(commit).cloned().unwrap_or_default())
         }
 
@@ -778,7 +758,7 @@ mod tests {
             &self,
             ancestor: &gix::ObjectId,
             descendant: &gix::ObjectId,
-        ) -> Result<bool, LocalGitError> {
+        ) -> Result<bool, GitCommitAnalysisError> {
             Ok(self
                 .ancestor_relationships
                 .get(&(*ancestor, *descendant))
@@ -789,87 +769,79 @@ mod tests {
         fn get_branches_containing_commit(
             &self,
             commit: &gix::ObjectId,
-        ) -> Result<Vec<String>, LocalGitError> {
+        ) -> Result<Vec<String>, GitCommitAnalysisError> {
             Ok(self
                 .branches_containing_commits
                 .get(commit)
                 .cloned()
                 .unwrap_or_default())
         }
-
-        fn owner(&self) -> &str {
-            "test-owner"
-        }
-
-        fn repo(&self) -> &str {
-            "test-repo"
-        }
     }
 
     impl GitHubApi for RobustMockGitInfo {
         async fn get_milestones(
             &self,
-        ) -> Result<Vec<octocrab::models::Milestone>, crate::git::api::GitHubApiError> {
+        ) -> Result<Vec<octocrab::models::Milestone>, crate::git::GitHubApiError> {
             Ok(Vec::new())
         }
 
         async fn get_milestone_issues(
             &self,
             _milestone: &octocrab::models::Milestone,
-        ) -> Result<Vec<Issue>, crate::git::api::GitHubApiError> {
+        ) -> Result<Vec<Issue>, crate::git::GitHubApiError> {
             Ok(Vec::new())
         }
 
         async fn create_milestone(
             &self,
             _milestone_name: &str,
-        ) -> Result<octocrab::models::Milestone, crate::git::api::GitHubApiError> {
+        ) -> Result<octocrab::models::Milestone, crate::git::GitHubApiError> {
             unimplemented!()
         }
 
         async fn post_issue(
             &self,
             _issue: &crate::QCIssue,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
+        ) -> Result<String, crate::git::GitHubApiError> {
             Ok("https://github.com/owner/repo/issues/1".to_string())
         }
 
         async fn post_comment(
             &self,
             _comment: &crate::QCComment,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
+        ) -> Result<String, crate::git::GitHubApiError> {
             Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
         }
 
         async fn post_approval(
             &self,
             _approval: &crate::QCApprove,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
+        ) -> Result<String, crate::git::GitHubApiError> {
             Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
         }
 
         async fn post_unapproval(
             &self,
             _unapproval: &crate::QCUnapprove,
-        ) -> Result<String, crate::git::api::GitHubApiError> {
+        ) -> Result<String, crate::git::GitHubApiError> {
             Ok("https://github.com/owner/repo/issues/1#issuecomment-1".to_string())
         }
 
-        async fn get_assignees(&self) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
+        async fn get_assignees(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
             Ok(Vec::new())
         }
 
         async fn get_user_details(
             &self,
             _username: &str,
-        ) -> Result<crate::git::api::RepoUser, crate::git::api::GitHubApiError> {
-            Ok(crate::git::api::RepoUser {
+        ) -> Result<crate::RepoUser, crate::git::GitHubApiError> {
+            Ok(crate::RepoUser {
                 login: _username.to_string(),
                 name: None,
             })
         }
 
-        async fn get_labels(&self) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
+        async fn get_labels(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
             Ok(Vec::new())
         }
 
@@ -877,14 +849,14 @@ mod tests {
             &self,
             _name: &str,
             _color: &str,
-        ) -> Result<(), crate::git::api::GitHubApiError> {
+        ) -> Result<(), crate::git::GitHubApiError> {
             Ok(())
         }
 
         async fn get_issue_comments(
             &self,
             _issue: &Issue,
-        ) -> Result<Vec<String>, crate::git::api::GitHubApiError> {
+        ) -> Result<Vec<String>, crate::git::GitHubApiError> {
             Ok(self.comment_bodies.clone())
         }
     }
@@ -921,7 +893,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(LocalGitError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
             )
             // Merge detection finds the target branch
             .with_merge_commits(vec![merge_commit])
@@ -949,7 +921,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(LocalGitError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
             )
             // No merge commits found
             .with_merge_commits(vec![])
@@ -980,7 +952,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(LocalGitError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
             )
             // No merge commits found
             .with_merge_commits(vec![])
@@ -1004,7 +976,7 @@ mod tests {
 
         let git_info = RobustMockGitInfo::new().with_file_commits_result(
             Some(branch.to_string()),
-            Err(LocalGitError::BranchNotFound(branch.to_string())),
+            Err(GitFileOpsError::BranchNotFound(branch.to_string())),
         );
 
         let result = get_file_commits_robust(&git_info, &file, branch, &invalid_commit);
@@ -1023,12 +995,12 @@ mod tests {
 
         let git_info = RobustMockGitInfo::new().with_file_commits_result(
             Some(branch.to_string()),
-            Err(LocalGitError::AuthorNotFound(PathBuf::from("test"))),
+            Err(GitFileOpsError::AuthorNotFound(PathBuf::from("test"))),
         );
 
         let result = get_file_commits_robust(&git_info, &file, branch, &initial_commit);
 
-        assert!(matches!(result, Err(LocalGitError::AuthorNotFound(_))));
+        assert!(matches!(result, Err(GitFileOpsError::AuthorNotFound(_))));
     }
 
     #[tokio::test]
@@ -1049,7 +1021,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(LocalGitError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
             )
             // Multiple merge commits
             .with_merge_commits(vec![merge_commit1, merge_commit2])

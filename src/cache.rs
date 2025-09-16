@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::LocalGitInfo;
+use crate::git::GitRepository;
 
 /// Cache entry with optional TTL
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +59,9 @@ pub struct DiskCache {
 
 impl DiskCache {
     /// Create a new DiskCache instance from GitInfo
-    pub fn from_git_info(git_info: &impl LocalGitInfo) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_git_info(
+        git_info: &impl GitRepository,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         Self::new(git_info.owner().to_string(), git_info.repo().to_string())
     }
 

@@ -9,11 +9,18 @@ use crate::{
     cache::DiskCache,
     configuration::Checklist,
     git::{
-        GitHelpers, LocalGitError, LocalGitInfo,
-        api::{GitHubApi, GitHubApiError},
-        local::GitAuthor,
+        GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitHubApi, GitHubApiError,
+        GitRepository, GitRepositoryError,
     },
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum QCIssueError {
+    #[error(transparent)]
+    GitRepositoryError(#[from] GitRepositoryError),
+    #[error(transparent)]
+    GitFileOpsError(#[from] GitFileOpsError),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelevantFile {
@@ -169,12 +176,12 @@ impl QCIssue {
 
     pub(crate) fn new(
         file: impl AsRef<Path>,
-        git_info: &impl LocalGitInfo,
+        git_info: &(impl GitRepository + GitFileOps),
         milestone_id: u64,
         assignees: Vec<String>,
         relevant_files: Vec<RelevantFile>,
         checklist: Checklist,
-    ) -> Result<Self, LocalGitError> {
+    ) -> Result<Self, QCIssueError> {
         Ok(Self {
             title: file.as_ref().to_path_buf(),
             commit: git_info.commit()?,
@@ -327,7 +334,7 @@ pub async fn get_repo_users(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{helpers::MockGitHelpers, local::GitAuthor};
+    use crate::git::{GitAuthor, GitHelpers};
     use std::path::PathBuf;
 
     fn create_test_issue() -> QCIssue {
@@ -369,13 +376,15 @@ mod tests {
         }
     }
 
-    struct MockGitInfo {
-        helpers: MockGitHelpers,
-    }
+    struct TestGitHelpers;
 
-    impl GitHelpers for MockGitInfo {
+    impl GitHelpers for TestGitHelpers {
         fn file_content_url(&self, commit: &str, file: &std::path::Path) -> String {
-            self.helpers.file_content_url(commit, file)
+            format!(
+                "https://github.com/owner/repo/blob/{}/{}",
+                commit,
+                file.display()
+            )
         }
 
         fn commit_comparison_url(
@@ -383,55 +392,19 @@ mod tests {
             current_commit: &gix::ObjectId,
             previous_commit: &gix::ObjectId,
         ) -> String {
-            self.helpers
-                .commit_comparison_url(current_commit, previous_commit)
+            format!(
+                "https://github.com/owner/repo/compare/{}..{}",
+                previous_commit, current_commit
+            )
         }
     }
 
     #[test]
     fn test_issue_body_snapshot_with_rel_files() {
         let issue = create_test_issue();
+        let git_helpers = TestGitHelpers;
 
-        let mut mock_git_info = MockGitInfo {
-            helpers: MockGitHelpers::new(),
-        };
-
-        mock_git_info
-            .helpers
-            .expect_file_content_url()
-            .with(
-                mockall::predicate::eq("abc123d"),
-                mockall::predicate::eq(PathBuf::from("src/example.rs")),
-            )
-            .returning(|_, _| {
-                "https://github.com/owner/repo/blob/abc123d/src/example.rs".to_string()
-            });
-
-        // Mock expectation for the relevant file
-        mock_git_info
-            .helpers
-            .expect_file_content_url()
-            .with(
-                mockall::predicate::eq("feature/new-feature"),
-                mockall::predicate::eq(PathBuf::from("path/to/file.rel")),
-            )
-            .returning(|_, _| {
-                "https://github.com/owner/repo/blob/feature/new-feature/path/to/file.rel"
-                    .to_string()
-            });
-        mock_git_info
-            .helpers
-            .expect_file_content_url()
-            .with(
-                mockall::predicate::eq("feature/new-feature"),
-                mockall::predicate::eq(PathBuf::from("path/to/file2.rel")),
-            )
-            .returning(|_, _| {
-                "https://github.com/owner/repo/blob/feature/new-feature/path/to/file2.rel"
-                    .to_string()
-            });
-
-        let body = issue.body(&mock_git_info);
+        let body = issue.body(&git_helpers);
         insta::assert_snapshot!(body);
     }
 
@@ -440,22 +413,9 @@ mod tests {
         let mut issue = create_test_issue();
         issue.relevant_files = Vec::new();
 
-        let mut mock_git_info = MockGitInfo {
-            helpers: MockGitHelpers::new(),
-        };
+        let git_helpers = TestGitHelpers;
 
-        mock_git_info
-            .helpers
-            .expect_file_content_url()
-            .with(
-                mockall::predicate::eq("abc123d"),
-                mockall::predicate::eq(PathBuf::from("src/example.rs")),
-            )
-            .returning(|_, _| {
-                "https://github.com/owner/repo/blob/abc123d/src/example.rs".to_string()
-            });
-
-        let body = issue.body(&mock_git_info);
+        let body = issue.body(&git_helpers);
         insta::assert_snapshot!(body);
     }
 
