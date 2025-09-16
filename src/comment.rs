@@ -419,19 +419,31 @@ mod tests {
             Ok(crate::git::local::GitStatus::Clean)
         }
 
-        fn get_all_merge_commits(&self) -> Result<Vec<gix::ObjectId>, crate::git::local::LocalGitError> {
+        fn get_all_merge_commits(
+            &self,
+        ) -> Result<Vec<gix::ObjectId>, crate::git::local::LocalGitError> {
             Ok(Vec::new())
         }
 
-        fn get_commit_parents(&self, _commit: &gix::ObjectId) -> Result<Vec<gix::ObjectId>, crate::git::local::LocalGitError> {
+        fn get_commit_parents(
+            &self,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<gix::ObjectId>, crate::git::local::LocalGitError> {
             Ok(Vec::new())
         }
 
-        fn is_ancestor(&self, _ancestor: &gix::ObjectId, _descendant: &gix::ObjectId) -> Result<bool, crate::git::local::LocalGitError> {
+        fn is_ancestor(
+            &self,
+            _ancestor: &gix::ObjectId,
+            _descendant: &gix::ObjectId,
+        ) -> Result<bool, crate::git::local::LocalGitError> {
             Ok(false)
         }
 
-        fn get_branches_containing_commit(&self, _commit: &gix::ObjectId) -> Result<Vec<String>, crate::git::local::LocalGitError> {
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<String>, crate::git::local::LocalGitError> {
             Ok(Vec::new())
         }
 
