@@ -5,6 +5,7 @@ mod configuration;
 mod create;
 mod git;
 mod issue;
+mod status;
 pub mod utils;
 
 #[cfg(feature = "cli")]

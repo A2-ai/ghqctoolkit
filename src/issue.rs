@@ -17,6 +17,7 @@ pub struct IssueThread {
     pub(crate) initial_commit: ObjectId,
     pub(crate) notification_commits: Vec<ObjectId>,
     pub(crate) approved_commit: Option<ObjectId>,
+    pub(crate) open: bool,
 }
 
 impl IssueThread {
@@ -47,7 +48,7 @@ impl IssueThread {
 
         // 4. Parse notification and approval commit strings from comments
         let (notification_commit_strs, approved_commit_str) =
-            parse_commits_from_comments(&comment_bodies, issue_is_open);
+            parse_commits_from_comments(&comment_bodies);
 
         // 5. Try to parse all commit strings to ObjectIds
         let mut all_commit_strs = vec![initial_commit_str];
@@ -109,6 +110,7 @@ impl IssueThread {
             initial_commit,
             notification_commits,
             approved_commit,
+            open: issue_is_open,
         })
     }
 
@@ -135,10 +137,9 @@ impl IssueThread {
 
 /// Parse notification and approval commits from comment bodies
 /// Returns (notification_commits, approved_commit)
-/// Approval is invalidated if issue is open or if an unapproval occurs after approval
+/// Approval is only invalidated if an unapproval occurs after approval
 fn parse_commits_from_comments<'a>(
     comment_bodies: &'a [String],
-    issue_is_open: bool,
 ) -> (Vec<&'a str>, Option<&'a str>) {
     let mut notification_commits = Vec::new();
     let mut approved_commit = None;
@@ -153,13 +154,8 @@ fn parse_commits_from_comments<'a>(
 
         // Check for approval commit: "approved qc commit: {hash}"
         if let Some(commit) = parse_commit_from_pattern(body, "approved qc commit: ") {
-            if issue_is_open {
-                // If issue is open, treat approval as notification
-                notification_commits.push(commit);
-            } else {
-                approved_commit = Some(commit);
-                approval_comment_index = Some(index);
-            }
+            approved_commit = Some(commit);
+            approval_comment_index = Some(index);
         }
 
         // Check for unapproval: "# QC Un-Approval"
@@ -365,6 +361,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_issue_open_with_notifications() {
+        // Comment sequence:
+        // 1. Initial commit: abc123def456789012345678901234567890abcd (from issue body)
+        // 2. Notification: current commit: def456789abc012345678901234567890123abcd
+        // 3. Notification: current commit: 123abcd (short SHA)
+        // No approval commits in this test
+
         let issue = load_issue("open_issue_with_notifications.json");
         let comments = load_comments("open_issue_notifications.json");
 
@@ -410,6 +412,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_issue_closed_with_approval() {
+        // Comment sequence:
+        // 1. Initial commit: def456abc789012345678901234567890123abcd (from issue body)
+        // 2. Notification: current commit: 456def789abc012345678901234567890123cdef
+        // 3. Approval: approved qc commit: 456def789abc012345678901234567890123cdef
+        // No unapproval - approval remains valid
+
         let issue = load_issue("closed_approved_issue.json");
         let comments = load_comments("closed_approved_comments.json");
 
@@ -455,6 +463,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_issue_with_unapproval() {
+        // Comment sequence:
+        // 1. Initial commit: 789abc12def345678901234567890123456789ef (from issue body)
+        // 2. Notification: current commit: 890cdef123abc456789012345678901234567890
+        // 3. Approval: approved qc commit: 890cdef123abc456789012345678901234567890
+        // 4. Notification: current commit: abc1234 (short SHA)
+        // 5. Unapproval: # QC Un-Approval (invalidates the approval from step 3)
+
         let issue = load_issue("unapproved_issue.json");
         let comments = load_comments("unapproved_comments.json");
 
@@ -481,8 +496,8 @@ mod tests {
             ObjectId::from_str("789abc12def345678901234567890123456789ef").unwrap()
         );
 
-        // Should have notification commits (issue is open so approval treated as notification)
-        // Three commits: two "890cdef..." (current + approved-as-notification) and one resolved "abc1234"
+        // Should have notification commits: original notification, later notification, and invalidated approval
+        // Three commits: "890cdef..." (current), "abc1234" (later current), "890cdef..." (invalidated approval)
         assert_eq!(result.notification_commits.len(), 3);
         assert_eq!(
             result.notification_commits[0],
@@ -490,17 +505,78 @@ mod tests {
         );
         assert_eq!(
             result.notification_commits[1],
-            ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
+            ObjectId::from_str("abc123456789012345678901234567890123abcd").unwrap()
         );
         assert_eq!(
             result.notification_commits[2],
-            ObjectId::from_str("abc123456789012345678901234567890123abcd").unwrap()
+            ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
         );
 
         // Should have no approved commit due to unapproval
         assert_eq!(result.approved_commit, None);
         assert_eq!(result.file, PathBuf::from("src/utils.rs"));
         assert_eq!(result.branch, "feature/utils-refactor");
+    }
+
+    #[tokio::test]
+    async fn test_from_issue_open_with_approval_and_notification() {
+        // Comment sequence:
+        // 1. Initial commit: 111def456789012345678901234567890123abcd (from issue body)
+        // 2. Notification: current commit: 222abc123456789012345678901234567890def
+        // 3. Approval: approved qc commit: 222abc123456789012345678901234567890def
+        // 4. Notification: current commit: 333cdef78 (short SHA)
+        // Issue is open but approval remains valid (no unapproval)
+
+        let issue = load_issue("open_issue_with_approval_and_notification.json");
+        let comments = load_comments("open_issue_approval_and_notification.json");
+
+        // Extract comment bodies from the test data
+        let comment_bodies: Vec<String> = comments
+            .into_iter()
+            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .collect();
+
+        let branch = "feature/test-branch";
+        let test_commits = vec![
+            (ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap(), "Initial".to_string()),
+            (ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap(), "Second".to_string()),
+            (ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap(), "Third".to_string()),
+        ];
+
+        let git_info = RobustMockGitInfo::new()
+            .with_file_commits_result(Some(branch.to_string()), Ok(test_commits.clone()))
+            .with_comment_bodies(comment_bodies);
+
+        let result = IssueThread::from_issue(&issue, None, &git_info)
+            .await
+            .unwrap();
+
+        // Verify initial commit
+        assert_eq!(
+            result.initial_commit,
+            ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap()
+        );
+
+        // Should have 2 notification commits: one before approval, one after
+        assert_eq!(result.notification_commits.len(), 2);
+        assert_eq!(
+            result.notification_commits[0],
+            ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap()
+        );
+        assert_eq!(
+            result.notification_commits[1],
+            ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap() // Resolved from short SHA
+        );
+
+        // Should have approved commit (remains valid despite issue being open)
+        assert_eq!(
+            result.approved_commit,
+            Some(ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap())
+        );
+
+        assert_eq!(result.file, PathBuf::from("src/test.rs"));
+        assert_eq!(result.branch, "feature/test-branch");
+        assert_eq!(result.open, true);
     }
 
     #[test]
@@ -544,31 +620,31 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_commits_from_comments_open_issue() {
+    fn test_parse_commits_from_comments_with_approval() {
         let comment_bodies = vec![
             "current commit: abc123def456789012345678901234567890abcd".to_string(),
             "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, true);
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies);
 
-        // Open issue: both should be notifications
-        assert_eq!(notifications.len(), 2);
-        assert_eq!(approved, None);
+        // Should have notification + approval (regardless of issue open/closed status)
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(approved, Some("def456789abc012345678901234567890123abcd"));
     }
 
     #[test]
-    fn test_parse_commits_from_comments_closed_issue() {
+    fn test_parse_commits_from_comments_notifications_only() {
         let comment_bodies = vec![
             "current commit: abc123def456789012345678901234567890abcd".to_string(),
-            "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+            "current commit: def456789abc012345678901234567890123abcd".to_string(),
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, false);
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies);
 
-        // Closed issue: notification + approval
-        assert_eq!(notifications.len(), 1);
-        assert_eq!(approved, Some("def456789abc012345678901234567890123abcd"));
+        // Only notifications, no approval
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(approved, None);
     }
 
     #[test]
@@ -579,7 +655,7 @@ mod tests {
             "# QC Un-Approval\nWithdrawing approval".to_string(),
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies, false);
+        let (notifications, approved) = parse_commits_from_comments(&comment_bodies);
 
         // Unapproval should invalidate approval and move it to notifications
         assert_eq!(notifications.len(), 2);
