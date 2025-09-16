@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use gix::ObjectId;
 #[cfg(test)]
 use mockall::automock;
 
@@ -73,6 +74,20 @@ pub trait LocalGitInfo {
     fn status(&self) -> Result<GitStatus, LocalGitError>;
     fn file_status(&self, file: &Path, branch: &Option<String>)
     -> Result<GitStatus, LocalGitError>;
+    fn get_all_merge_commits(&self) -> Result<Vec<gix::ObjectId>, LocalGitError>;
+    fn get_commit_parents(
+        &self,
+        commit: &gix::ObjectId,
+    ) -> Result<Vec<gix::ObjectId>, LocalGitError>;
+    fn is_ancestor(
+        &self,
+        ancestor: &gix::ObjectId,
+        descendant: &gix::ObjectId,
+    ) -> Result<bool, LocalGitError>;
+    fn get_branches_containing_commit(
+        &self,
+        commit: &gix::ObjectId,
+    ) -> Result<Vec<String>, LocalGitError>;
     fn owner(&self) -> &str;
     fn repo(&self) -> &str;
 }
@@ -670,6 +685,138 @@ impl LocalGitInfo for GitInfo {
         }
     }
 
+    fn get_all_merge_commits(&self) -> Result<Vec<gix::ObjectId>, LocalGitError> {
+        log::debug!("Finding all merge commits in repository");
+
+        let mut merge_commits = Vec::new();
+        // Get all references and walk from all of them to ensure we see all merge commits
+        let mut start_points: Vec<gix::ObjectId> = Vec::new();
+
+        // Add HEAD
+        if let Ok(head_id) = self.repository.head_id() {
+            start_points.push(head_id.into());
+        }
+
+        // Add all local and remote branch tips
+        if let Ok(refs) = self.repository.references() {
+            if let Ok(all_refs) = refs.all() {
+                for reference_result in all_refs {
+                    if let Ok(reference) = reference_result {
+                        if let Some(target) = reference.target().try_id() {
+                            start_points.push(target.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Ensure we have at least HEAD to walk from
+        if start_points.is_empty() {
+            let head_id = self
+                .repository
+                .head_id()
+                .map_err(LocalGitError::HeadIdError)?;
+            start_points.push(head_id.into());
+        }
+
+        let revwalk = self.repository.rev_walk(start_points);
+
+        for commit_info in revwalk.all().map_err(LocalGitError::RevWalkError)? {
+            let commit_info = commit_info.map_err(LocalGitError::TraverseError)?;
+            let commit_id = commit_info.id;
+
+            let commit = self
+                .repository
+                .find_object(commit_id)
+                .map_err(LocalGitError::FindObjectError)?
+                .try_into_commit()
+                .map_err(LocalGitError::CommitError)?;
+
+            // Check if this is a merge commit (has multiple parents)
+            if commit.parent_ids().count() > 1 {
+                merge_commits.push(commit_id);
+            }
+        }
+
+        log::debug!("Found {} merge commits", merge_commits.len());
+        Ok(merge_commits)
+    }
+
+    fn get_commit_parents(
+        &self,
+        commit: &gix::ObjectId,
+    ) -> Result<Vec<gix::ObjectId>, LocalGitError> {
+        let commit_obj = self
+            .repository
+            .find_object(*commit)
+            .map_err(LocalGitError::FindObjectError)?
+            .try_into_commit()
+            .map_err(LocalGitError::CommitError)?;
+
+        Ok(commit_obj.parent_ids().map(|id| id.detach()).collect())
+    }
+
+    fn is_ancestor(
+        &self,
+        ancestor: &gix::ObjectId,
+        descendant: &gix::ObjectId,
+    ) -> Result<bool, LocalGitError> {
+        // Walk from descendant to see if we can reach ancestor
+        let revwalk = self.repository.rev_walk([*descendant]);
+
+        for commit_info in revwalk.all().map_err(LocalGitError::RevWalkError)? {
+            let commit_info = commit_info.map_err(LocalGitError::TraverseError)?;
+            if commit_info.id == *ancestor {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn get_branches_containing_commit(
+        &self,
+        commit: &gix::ObjectId,
+    ) -> Result<Vec<String>, LocalGitError> {
+        log::debug!("Finding branches containing commit {}", commit);
+
+        let Ok(refs) = self.repository.references() else {
+            return Ok(Vec::new());
+        };
+
+        let Ok(all_refs) = refs.all() else {
+            return Ok(Vec::new());
+        };
+
+        let branches = all_refs
+            .filter_map(Result::ok)
+            .map(|r| (r.name().as_bstr().to_string(), r))
+            .filter(|(name, _)| {
+                name.starts_with("refs/heads/") || name.starts_with("refs/remotes/")
+            })
+            .filter(|(_, r)| {
+                if let Some(id) = r.target().try_id() {
+                    self.is_ancestor(commit, &id.into()).unwrap_or_default()
+                } else {
+                    false
+                }
+            })
+            .map(|(name, _)| {
+                name.strip_prefix("refs/heads/")
+                    .or(name.strip_prefix("refs/remotes/"))
+                    .unwrap_or(&name)
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        log::debug!(
+            "Found {} branches containing commit {}",
+            branches.len(),
+            commit
+        );
+        Ok(branches)
+    }
+
     fn owner(&self) -> &str {
         &self.owner
     }
@@ -677,4 +824,161 @@ impl LocalGitInfo for GitInfo {
     fn repo(&self) -> &str {
         &self.repo
     }
+}
+
+/// Get file commits with robust branch handling
+/// 1. Try the specified branch first
+/// 2. If branch not found, parse initial commit from issue body and find merged branch
+/// 3. Fall back to searching all branches containing the initial commit
+pub(crate) fn get_file_commits_robust(
+    git_info: &impl LocalGitInfo,
+    file: &Path,
+    branch: &str,
+    commit: &ObjectId,
+) -> Result<Vec<(gix::ObjectId, String)>, LocalGitError> {
+    // First, try to get commits from the specified branch
+    match git_info.file_commits(file, &Some(branch.to_string())) {
+        Ok(commits) => {
+            log::debug!(
+                "Found {} commits for file {:?} on branch {}",
+                commits.len(),
+                file,
+                branch
+            );
+            return Ok(commits);
+        }
+        Err(LocalGitError::BranchNotFound(_)) => {
+            log::debug!(
+                "Branch {} not found locally, searching for merged commits for file {:?}",
+                branch,
+                file
+            );
+        }
+        Err(e) => {
+            return Err(e);
+        }
+    }
+
+    log::debug!(
+        "Using commit {} to find merged branch for file {:?}",
+        commit,
+        file
+    );
+
+    // Try to find which branch this commit was merged into
+    if let Some(target_branch) = find_merged_into_branch(git_info, commit)? {
+        log::debug!(
+            "Found that commit {} was merged into branch {}",
+            commit,
+            target_branch
+        );
+
+        // Try to get commits from the target branch
+        match git_info.file_commits(file, &Some(target_branch.clone())) {
+            Ok(commits) => {
+                log::debug!(
+                    "Found {} commits for file {:?} on merged target branch {}",
+                    commits.len(),
+                    file,
+                    target_branch
+                );
+                return Ok(commits);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to get commits from target branch {}: {}",
+                    target_branch,
+                    e
+                );
+            }
+        }
+    }
+
+    // Fallback: Get commits from branches containing the commit
+    let branches_containing_commit = git_info.get_branches_containing_commit(commit)?;
+
+    if !branches_containing_commit.is_empty() {
+        log::debug!(
+            "Found {} branches containing commit {}: {:?}",
+            branches_containing_commit.len(),
+            commit,
+            branches_containing_commit
+        );
+
+        // Try each branch until we find one with file commits
+        for branch_name in branches_containing_commit {
+            match git_info.file_commits(file, &Some(branch_name.clone())) {
+                Ok(commits) if !commits.is_empty() => {
+                    log::debug!(
+                        "Found {} commits for file {:?} on branch {} (contains commit)",
+                        commits.len(),
+                        file,
+                        branch_name
+                    );
+                    return Ok(commits);
+                }
+                Ok(_) => {
+                    log::debug!("Branch {} contains commit but no file changes", branch_name);
+                }
+                Err(e) => {
+                    log::debug!("Failed to get commits from branch {}: {}", branch_name, e);
+                }
+            }
+        }
+    }
+
+    // Final fallback: Get all file commits (no branch restriction)
+    log::warn!(
+        "Could not find specific branch for file {:?}, falling back to all commits",
+        file
+    );
+
+    let all_commits = git_info.file_commits(file, &None)?;
+
+    log::debug!(
+        "Found {} commits for file {:?} across all branches",
+        all_commits.len(),
+        file
+    );
+
+    Ok(all_commits)
+}
+
+/// Find which branch a commit was merged into using merge commit analysis
+/// Based on the R algorithm: looks for merge commits where the target commit
+/// is an ancestor of the second parent (merged-in branch)
+fn find_merged_into_branch(
+    git_info: &impl LocalGitInfo,
+    target_commit: &gix::ObjectId,
+) -> Result<Option<String>, LocalGitError> {
+    let merge_commits = git_info.get_all_merge_commits()?;
+
+    for merge_commit in merge_commits {
+        let parents = git_info.get_commit_parents(&merge_commit)?;
+
+        if parents.len() >= 2 {
+            let _parent1 = parents[0]; // Branch that received the merge
+            let parent2 = parents[1]; // Branch that was merged in
+
+            // Check if target_commit is ancestor of parent2 (the merged-in branch)
+            if git_info.is_ancestor(target_commit, &parent2)? {
+                // Find branches that contain the merge commit
+                let candidate_branches = git_info.get_branches_containing_commit(&merge_commit)?;
+
+                // Filter to branches where parent1 is in their ancestry
+                for branch in candidate_branches {
+                    // Skip remote HEAD references
+                    if branch.contains("HEAD") {
+                        continue;
+                    }
+
+                    // We found a candidate branch, return it
+                    // (In a more sophisticated implementation, we might validate further)
+                    return Ok(Some(branch));
+                }
+            }
+        }
+    }
+
+    Ok(None)
 }
