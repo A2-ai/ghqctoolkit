@@ -3,7 +3,10 @@ use gix::ObjectId;
 use octocrab::models::Milestone;
 
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
-use crate::{DiskCache, GitHubReader, GitInfo, GitStatus, GitStatusOps, IssueThread, QCStatus};
+use crate::{
+    ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitStatus, GitStatusOps, IssueThread,
+    QCStatus, analyze_issue_checklists,
+};
 
 pub async fn interactive_status(
     milestones: &[Milestone],
@@ -29,6 +32,7 @@ pub async fn interactive_status(
 
     // Select issue by title
     let issue = prompt_issue(&issues)?;
+    let checklist_summary = analyze_issue_checklists(&issue);
 
     // Create IssueThread from the selected issue
     let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
@@ -48,7 +52,13 @@ pub async fn interactive_status(
     // Display the status
     println!(
         "\n{}",
-        single_issue_status(&issue_thread, &git_status, &qc_status, &file_commits)
+        single_issue_status(
+            &issue_thread,
+            &git_status,
+            &qc_status,
+            &file_commits,
+            &checklist_summary
+        )
     );
 
     Ok(())
@@ -59,6 +69,7 @@ pub fn single_issue_status(
     git_status: &GitStatus,
     qc_status: &QCStatus,
     file_commits: &Option<Vec<ObjectId>>,
+    checklist_summaries: &[(String, ChecklistSummary)],
 ) -> String {
     let mut res = vec![
         format!("- File:        {}", issue_thread.file.display()),
@@ -156,8 +167,18 @@ pub fn single_issue_status(
             }
         }
     };
+    let indiv_checklist = checklist_summaries
+        .iter()
+        .map(|(name, sum)| format!("{name}: {sum}"))
+        .collect::<Vec<_>>();
+    let checklist_sum = ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
+
     res.push(format!("- QC Status:   {qc_str}"));
     res.push(format!("- Git Status:  {git_str}"));
+    res.push(format!(
+        "- Checklist Summary: {checklist_sum}\n  - {}",
+        indiv_checklist.join("\n  - ")
+    ));
 
     res.join("\n")
 }
@@ -170,6 +191,7 @@ pub struct MilestoneStatusRow {
     pub issue_state: String,
     pub qc_status: String,
     pub git_status: String,
+    pub checklist_summary: ChecklistSummary,
 }
 
 pub async fn interactive_milestone_status(
@@ -288,6 +310,10 @@ async fn get_milestone_status_rows(
                     &issue_thread,
                     file_commits.as_ref().unwrap_or(&Vec::new()),
                 ) {
+                    let checklist_summaries = analyze_issue_checklists(&issue);
+                    let checklist_summary =
+                        ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
+
                     let row = MilestoneStatusRow {
                         file: issue_thread.file.display().to_string(),
                         milestone: milestone.title.clone(),
@@ -303,6 +329,7 @@ async fn get_milestone_status_rows(
                             &issue_thread,
                             &file_commits,
                         ),
+                        checklist_summary,
                     };
                     rows.push(row);
                 }
@@ -423,28 +450,37 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
         .max()
         .unwrap_or(10)
         .max(10);
+    let checklist_width = rows
+        .iter()
+        .map(|r| r.checklist_summary.to_string().len())
+        .max()
+        .unwrap_or(9)
+        .max(9);
 
     // Print header
     println!();
     println!(
-        "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$}",
+        "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$} | {:<checklist_width$}",
         "File",
         "Milestone",
         "Branch",
         "Issue State",
         "QC Status",
         "Git Status",
+        "Checklist",
         file_width = file_width,
         milestone_width = milestone_width,
         branch_width = branch_width,
         issue_state_width = issue_state_width,
         qc_status_width = qc_status_width,
         git_status_width = git_status_width,
+        checklist_width = checklist_width,
     );
 
     // Print separator
     println!(
-        "{:-<file_width$}-+-{:-<milestone_width$}-+-{:-<branch_width$}-+-{:-<issue_state_width$}-+-{:-<qc_status_width$}-+-{:-<git_status_width$}",
+        "{:-<file_width$}-+-{:-<milestone_width$}-+-{:-<branch_width$}-+-{:-<issue_state_width$}-+-{:-<qc_status_width$}-+-{:-<git_status_width$}-+-{:-<checklist_width$}",
+        "",
         "",
         "",
         "",
@@ -457,24 +493,27 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
         issue_state_width = issue_state_width,
         qc_status_width = qc_status_width,
         git_status_width = git_status_width,
+        checklist_width = checklist_width,
     );
 
     // Print rows
     for row in rows {
         println!(
-            "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$}",
+            "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$} | {:<checklist_width$}",
             row.file,
             row.milestone,
             row.branch,
             row.issue_state,
             row.qc_status,
             row.git_status,
+            row.checklist_summary,
             file_width = file_width,
             milestone_width = milestone_width,
             branch_width = branch_width,
             issue_state_width = issue_state_width,
             qc_status_width = qc_status_width,
             git_status_width = git_status_width,
+            checklist_width = checklist_width,
         );
     }
     println!();
