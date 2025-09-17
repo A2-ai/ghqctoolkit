@@ -46,7 +46,7 @@ impl ConfigurationOptions {
 
 #[derive(Debug, Clone)]
 pub struct Checklist {
-    name: String,
+    pub(crate) name: String,
     note: Option<String>,
     content: String,
 }
@@ -58,10 +58,6 @@ impl Checklist {
             note,
             content,
         }
-    }
-
-    pub(crate) fn name(&self) -> &str {
-        &self.name
     }
 
     fn items(&self) -> usize {
@@ -773,14 +769,6 @@ Second Checklist:
             fn status(&self) -> Result<crate::git::GitStatus, crate::git::GitStatusError> {
                 Ok(self.status.clone())
             }
-
-            fn file_status(
-                &self,
-                _file: &std::path::Path,
-                _branch: &Option<String>,
-            ) -> Result<crate::git::GitStatus, crate::git::GitStatusError> {
-                Ok(self.status.clone())
-            }
         }
 
         // Load the custom configuration
@@ -806,7 +794,7 @@ Second Checklist:
         let git_info_dirty = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::git::GitStatus::Dirty(vec![
+            status: crate::GitStatus::Dirty(vec![
                 PathBuf::from("src/main.rs"),
                 PathBuf::from("README.md"),
             ]),

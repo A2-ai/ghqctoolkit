@@ -1,9 +1,6 @@
-use std::{
-    collections::HashSet,
-    fmt,
-    path::{Path, PathBuf},
-};
+use std::{fmt, path::PathBuf};
 
+use gix::ObjectId;
 #[cfg(test)]
 use mockall::automock;
 
@@ -11,33 +8,36 @@ use crate::GitInfo;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GitStatus {
-    Dirty(Vec<PathBuf>), // local, uncommitted changes - list of dirty files
-    Clean,               // up to date with remote
-    Behind(usize),       // remote commits not local - count of commits behind
-    Ahead(usize),        // local commits not remote - count of commits ahead
-    Diverged { ahead: usize, behind: usize }, // local commits not remote AND remote commits not local
+    Dirty(Vec<PathBuf>),   // local, uncommitted changes - list of dirty files
+    Clean,                 // up to date with remote
+    Behind(Vec<ObjectId>), // remote commits not local - count of commits behind
+    Ahead(Vec<ObjectId>),  // local commits not remote - count of commits ahead
+    Diverged {
+        ahead: Vec<ObjectId>,
+        behind: Vec<ObjectId>,
+    }, // local commits not remote AND remote commits not local
 }
 
 impl fmt::Display for GitStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Dirty(files) => {
-                write!(
-                    f,
-                    "❌ Repository has files with uncommitted, local changes: \n\t- {}",
-                    files
-                        .iter()
-                        .map(|x| x.to_string_lossy())
-                        .collect::<Vec<_>>()
-                        .join("\n\t- ")
-                )
-            }
-            Self::Clean => write!(f, "✅ Repository is up to date!"),
-            Self::Behind(count) => write!(f, "⏪ Repository is behind by {count} commits"),
-            Self::Ahead(count) => write!(f, "⏩ Repository is ahead by {count} commits"),
+            Self::Dirty(files) => write!(
+                f,
+                "Repository has files with uncommitted, local changes: \n\t- {}",
+                files
+                    .iter()
+                    .map(|x| x.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("\n\t- ")
+            ),
+            Self::Clean => write!(f, "Repository is up to date!"),
+            Self::Behind(commits) => write!(f, "Repository is behind by {} commits", commits.len()),
+            Self::Ahead(commits) => write!(f, "Repository is ahead by {} commits", commits.len()),
             Self::Diverged { ahead, behind } => write!(
                 f,
-                "↔️ Repository is ahead by {ahead} and behind by {behind} commits"
+                "Repository is ahead by {} and behind by {} commits",
+                ahead.len(),
+                behind.len()
             ),
         }
     }
@@ -68,13 +68,6 @@ pub enum GitStatusError {
 pub trait GitStatusOps {
     /// Get overall repository status
     fn status(&self) -> Result<GitStatus, GitStatusError>;
-
-    /// Get status for a specific file
-    fn file_status(
-        &self,
-        file: &Path,
-        branch: &Option<String>,
-    ) -> Result<GitStatus, GitStatusError>;
 }
 
 impl GitStatusOps for GitInfo {
@@ -128,16 +121,17 @@ impl GitStatusOps for GitInfo {
                         name: gix::refs::PartialName::try_from("HEAD").unwrap(),
                     })
                 })?]);
-                let local_commit_count = local_revwalk
+                let local_commits: Vec<ObjectId> = local_revwalk
                     .all()
                     .map_err(GitStatusError::RevWalkError)?
-                    .count();
+                    .map(|info| info.map(|i| i.id).map_err(GitStatusError::TraverseError))
+                    .collect::<Result<Vec<_>, _>>()?;
                 log::debug!(
                     "No upstream branch found for {}, {} commits ahead",
                     current_branch_name,
-                    local_commit_count
+                    local_commits.len()
                 );
-                return Ok(GitStatus::Ahead(local_commit_count));
+                return Ok(GitStatus::Ahead(local_commits));
             }
         };
 
@@ -157,31 +151,42 @@ impl GitStatusOps for GitInfo {
         let local_revwalk = self.repository.rev_walk([local_commit_id]);
         let remote_revwalk = self.repository.rev_walk([remote_commit_id]);
 
-        // Get all local commits
+        // Get all local commits (preserving chronological order)
         let local_commits = local_revwalk
             .all()
             .map_err(GitStatusError::RevWalkError)?
             .map(|info| info.map(|i| i.id).map_err(GitStatusError::TraverseError))
-            .collect::<Result<HashSet<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // Get all remote commits
+        // Get all remote commits (preserving chronological order)
         let remote_commits = remote_revwalk
             .all()
             .map_err(GitStatusError::RevWalkError)?
             .map(|info| info.map(|i| i.id).map_err(GitStatusError::TraverseError))
-            .collect::<Result<HashSet<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let local_only: Vec<_> = local_commits.difference(&remote_commits).collect();
-        let remote_only: Vec<_> = remote_commits.difference(&local_commits).collect();
+        // Find commits that exist only in local (ahead commits) - preserve order
+        let local_only: Vec<ObjectId> = local_commits
+            .iter()
+            .filter(|commit| !remote_commits.contains(commit))
+            .cloned()
+            .collect();
+
+        // Find commits that exist only in remote (behind commits) - preserve order
+        let remote_only: Vec<ObjectId> = remote_commits
+            .iter()
+            .filter(|commit| !local_commits.contains(commit))
+            .cloned()
+            .collect();
 
         match (local_only.is_empty(), remote_only.is_empty()) {
             (true, false) => {
                 log::debug!("Local is behind remote by {} commits", remote_only.len());
-                Ok(GitStatus::Behind(remote_only.len()))
+                Ok(GitStatus::Behind(remote_only))
             }
             (false, true) => {
                 log::debug!("Local is ahead of remote by {} commits", local_only.len());
-                Ok(GitStatus::Ahead(local_only.len()))
+                Ok(GitStatus::Ahead(local_only))
             }
             (false, false) => {
                 log::debug!(
@@ -190,8 +195,8 @@ impl GitStatusOps for GitInfo {
                     remote_only.len()
                 );
                 Ok(GitStatus::Diverged {
-                    ahead: local_only.len(),
-                    behind: remote_only.len(),
+                    ahead: local_only,
+                    behind: remote_only,
                 })
             }
             (true, true) => {
@@ -200,46 +205,5 @@ impl GitStatusOps for GitInfo {
                 Ok(GitStatus::Clean)
             }
         }
-    }
-
-    fn file_status(
-        &self,
-        file: &Path,
-        branch: &Option<String>,
-    ) -> Result<GitStatus, GitStatusError> {
-        log::debug!(
-            "Getting git status for file: {:?} on branch: {:?}",
-            file,
-            branch
-        );
-
-        // Check if the file has uncommitted changes
-        let status_platform = self
-            .repository
-            .status(gix::progress::Discard)
-            .map_err(GitStatusError::StatusError)?;
-
-        let file_path_str = file.to_string_lossy();
-        let mut file_is_dirty = false;
-
-        for entry in status_platform
-            .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
-            .map_err(GitStatusError::StatusIterError)?
-        {
-            let entry = entry.map_err(GitStatusError::StatusEntryError)?;
-            if entry.rela_path().to_string() == file_path_str {
-                file_is_dirty = true;
-                break;
-            }
-        }
-
-        if file_is_dirty {
-            log::debug!("File {:?} has uncommitted changes", file);
-            return Ok(GitStatus::Dirty(vec![file.to_path_buf()]));
-        }
-
-        // For now, return clean if no uncommitted changes
-        log::debug!("File {:?} is clean", file);
-        Ok(GitStatus::Clean)
     }
 }
