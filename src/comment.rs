@@ -53,17 +53,18 @@ impl QCComment {
 
         if !self.no_diff {
             if let Some(previous_commit) = self.previous_commit {
-                let current_content =
-                    git_info.file_content_at_commit(&self.file, &self.current_commit)?;
-                let previous_content =
-                    git_info.file_content_at_commit(&self.file, &previous_commit)?;
+                let current_res = git_info.file_content_at_commit(&self.file, &self.current_commit);
+                let previous_res = git_info.file_content_at_commit(&self.file, &previous_commit);
+                if let (Ok(current_content), Ok(previous_content)) = (current_res, previous_res) {
+                    let difference = format!(
+                        "## File Difference\n{}",
+                        diff(&previous_content, &current_content)
+                    );
 
-                let difference = format!(
-                    "## File Difference\n{}",
-                    diff(&previous_content, &current_content)
-                );
-
-                body.push(difference);
+                    body.push(difference);
+                } else {
+                    log::warn!("Could not read file content at commit. Cannot generate diff...");
+                }
             } else {
                 log::debug!("Previous Commit not specified. Cannot generate diff...");
             }
