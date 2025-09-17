@@ -3,12 +3,12 @@ use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use std::path::PathBuf;
 
-use ghqctoolkit::cli::RelevantFileParser;
+use ghqctoolkit::cli::{RelevantFileParser, find_issue, interactive_status, single_issue_status};
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, RelevantFile,
-    configuration_status, create_labels_if_needed, determine_config_info, get_repo_users,
-    setup_configuration,
+    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitStatusOps,
+    IssueThread, QCStatus, RelevantFile, configuration_status, create_labels_if_needed,
+    determine_config_info, get_repo_users, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -122,6 +122,15 @@ enum IssueCommands {
         /// Reason to re-open issue (will prompt if not provided)
         #[arg(short, long)]
         reason: Option<String>,
+    },
+    Status {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path of issue to check status for (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
     },
 }
 
@@ -323,6 +332,45 @@ async fn main() -> Result<()> {
 
                     println!("🚫 Issue unapproved and reopened!");
                     println!("{}", unapproval_url);
+                }
+                IssueCommands::Status { milestone, file } => {
+                    let milestones = git_info.get_milestones().await?;
+                    let cache = DiskCache::from_git_info(&git_info).ok();
+                    match (milestone, file) {
+                        (Some(milestone), Some(file)) => {
+                            let issue =
+                                find_issue(&milestone, &file, &milestones, &git_info).await?;
+                            let issue_thread =
+                                IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
+                            let file_commits = issue_thread
+                                .commits(&git_info)
+                                .await
+                                .ok()
+                                .map(|v| v.into_iter().map(|(c, _)| c).collect::<Vec<_>>());
+                            let git_status = git_info.status()?;
+                            let qc_status =
+                                QCStatus::determine_status(&issue_thread, &git_status, &git_info)
+                                    .await?;
+                            println!(
+                                "{}",
+                                single_issue_status(
+                                    &issue_thread,
+                                    &git_status,
+                                    &qc_status,
+                                    &file_commits
+                                )
+                            );
+                        }
+                        (None, None) => {
+                            // Interactive mode
+                            interactive_status(&milestones, cache.as_ref(), &git_info).await?;
+                        }
+                        _ => {
+                            bail!(
+                                "Must provide both --milestone and --file arguments or neither to enter interactive mode"
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -24,3 +24,5 @@ pub use git::{
     GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
     GitStatusError, GitStatusOps, RepoUser,
 };
+pub use issue::{IssueError, IssueThread};
+pub use status::{QCStatus, QCStatusError};

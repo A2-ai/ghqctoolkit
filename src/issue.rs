@@ -12,8 +12,8 @@ use crate::{
 };
 
 pub struct IssueThread {
-    file: PathBuf,
-    branch: String,
+    pub(crate) file: PathBuf,
+    pub branch: String,
     pub(crate) initial_commit: ObjectId,
     pub(crate) notification_commits: Vec<ObjectId>,
     pub(crate) approved_commit: Option<ObjectId>,
@@ -21,6 +21,7 @@ pub struct IssueThread {
 }
 
 impl IssueThread {
+    // TODO: order the notification commits based on commit timeline
     pub async fn from_issue(
         issue: &Issue,
         cache: Option<&DiskCache>,
@@ -538,9 +539,18 @@ mod tests {
 
         let branch = "feature/test-branch";
         let test_commits = vec![
-            (ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap(), "Initial".to_string()),
-            (ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap(), "Second".to_string()),
-            (ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap(), "Third".to_string()),
+            (
+                ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap(),
+                "Initial".to_string(),
+            ),
+            (
+                ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap(),
+                "Second".to_string(),
+            ),
+            (
+                ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap(),
+                "Third".to_string(),
+            ),
         ];
 
         let git_info = RobustMockGitInfo::new()

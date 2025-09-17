@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow, bail};
 use inquire::{Confirm, Text, validator::Validation};
-use octocrab::models::Milestone;
+use octocrab::models::{Milestone, issues::Issue};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     Configuration, DiskCache, GitHubReader, GitHubWriter, GitInfo, QCApprove, QCIssue, QCUnapprove,
@@ -146,27 +146,7 @@ impl QCComment {
         git_info: &GitInfo,
         no_diff: bool,
     ) -> Result<Self> {
-        // Find the milestone
-        let milestone = milestones
-            .iter()
-            .find(|m| m.title == milestone_name)
-            .ok_or_else(|| anyhow!("Milestone '{}' not found", milestone_name))?;
-
-        // Get issues for this milestone
-        let issues = git_info.get_milestone_issues(milestone).await?;
-
-        // Find issue that matches the file path
-        let file_str = file.display().to_string();
-        let issue = issues
-            .into_iter()
-            .find(|issue| issue.title.contains(&file_str))
-            .ok_or_else(|| {
-                anyhow!(
-                    "No issue found for file '{}' in milestone '{}'",
-                    file_str,
-                    milestone_name
-                )
-            })?;
+        let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
 
         // Create IssueThread to get commits from the issue's specific branch
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
@@ -366,29 +346,19 @@ impl QCApprove {
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
     ) -> Result<Self> {
-        let milestone = milestones
-            .iter()
-            .find(|m| m.title == milestone_name)
-            .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
-
-        let issues = git_info.get_milestone_issues(milestone).await?;
-
-        let file_str = file.to_string_lossy();
-        let issue = issues
-            .into_iter()
-            .find(|issue| {
-                issue.title.contains(file_str.as_ref())
-                    && matches!(issue.state, octocrab::models::IssueState::Open)
-            })
-            .ok_or(anyhow!(
-                "No open issue found for file '{file_str}' in milestone '{milestone_name}'"
-            ))?;
+        let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
+        if issue.state == octocrab::models::IssueState::Closed {
+            bail!("")
+        }
 
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let file_commits = issue_thread.commits(git_info).await?;
 
         if file_commits.is_empty() {
-            bail!("There are no commits for the selected file");
+            bail!(
+                "No open issue found for file '{}' in milestone '{milestone_name}'",
+                file.display()
+            )
         }
 
         let approved_commit =
@@ -489,38 +459,40 @@ impl QCUnapprove {
         milestones: &[Milestone],
         git_info: &GitInfo,
     ) -> Result<Self> {
-        let milestone = milestones
-            .iter()
-            .find(|m| m.title == milestone_name)
-            .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
-
-        let issues = git_info.get_milestone_issues(milestone).await?;
-        log::debug!(
-            "Found {} total issues in milestone '{}'",
-            issues.len(),
-            milestone_name
-        );
-
-        let file_str = file.to_string_lossy();
-        let issue = issues
-            .into_iter()
-            .find(|issue| {
-                let title_matches = issue.title.contains(file_str.as_ref());
-                let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
-                log::debug!(
-                    "Issue #{}: '{}' (state: {:?}) -> title_match: {}, closed: {}",
-                    issue.number,
-                    issue.title,
-                    issue.state,
-                    title_matches,
-                    is_closed
-                );
-                title_matches && is_closed
-            })
-            .ok_or(anyhow!(
-                "No closed issue found for file '{file_str}' in milestone '{milestone_name}'"
-            ))?;
+        let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
+        if issue.state == octocrab::models::IssueState::Closed {
+            bail!(
+                "No closed issue found for file '{}' in milestone '{milestone_name}'",
+                file.display()
+            )
+        }
 
         Ok(Self { issue, reason })
     }
+}
+
+pub async fn find_issue(
+    milestone_name: &str,
+    file: impl AsRef<Path>,
+    milestones: &[Milestone],
+    git_info: &impl GitHubReader,
+) -> Result<Issue> {
+    let milestone = milestones
+        .iter()
+        .find(|m| m.title == milestone_name)
+        .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
+
+    let issues = git_info.get_milestone_issues(milestone).await?;
+
+    let file_str = file.as_ref().to_string_lossy();
+    let issue = issues
+        .into_iter()
+        .find(|issue| {
+            issue.title.contains(file_str.as_ref())
+                && matches!(issue.state, octocrab::models::IssueState::Open)
+        })
+        .ok_or(anyhow!(
+            "No open issue found for file '{file_str}' in milestone '{milestone_name}'"
+        ))?;
+    Ok(issue)
 }
