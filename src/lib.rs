@@ -25,4 +25,4 @@ pub use git::{
     GitStatusError, GitStatusOps, RepoUser,
 };
 pub use issue::{IssueError, IssueThread};
-pub use qc_status::{QCStatus, QCStatusError};
+pub use qc_status::{ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists};

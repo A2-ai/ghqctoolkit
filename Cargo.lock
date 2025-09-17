@@ -746,6 +746,7 @@ dependencies = [
  "log",
  "mockall",
  "octocrab",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",

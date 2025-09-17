@@ -359,8 +359,11 @@ async fn main() -> Result<()> {
                     let cache = DiskCache::from_git_info(&git_info).ok();
                     match (milestone, file) {
                         (Some(milestone), Some(file)) => {
+                            use ghqctoolkit::analyze_issue_checklists;
+
                             let issue =
                                 find_issue(&milestone, &file, &milestones, &git_info).await?;
+                            let checklist_summaries = analyze_issue_checklists(&issue);
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
                             let file_commits = issue_thread
@@ -379,7 +382,8 @@ async fn main() -> Result<()> {
                                     &issue_thread,
                                     &git_status,
                                     &qc_status,
-                                    &file_commits
+                                    &file_commits,
+                                    &checklist_summaries,
                                 )
                             );
                         }
