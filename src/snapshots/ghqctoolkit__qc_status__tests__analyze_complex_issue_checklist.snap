@@ -1,0 +1,55 @@
+---
+source: src/qc_status.rs
+expression: result
+---
+[
+    (
+        "Code Review Checklist",
+        ChecklistSummary {
+            completed: 3,
+            total: 7,
+        },
+    ),
+    (
+        "Security Assessment",
+        ChecklistSummary {
+            completed: 3,
+            total: 6,
+        },
+    ),
+    (
+        "Performance Review",
+        ChecklistSummary {
+            completed: 2,
+            total: 4,
+        },
+    ),
+    (
+        "Testing Requirements",
+        ChecklistSummary {
+            completed: 3,
+            total: 5,
+        },
+    ),
+    (
+        "Documentation Updates",
+        ChecklistSummary {
+            completed: 1,
+            total: 4,
+        },
+    ),
+    (
+        "Final Checklist",
+        ChecklistSummary {
+            completed: 2,
+            total: 3,
+        },
+    ),
+    (
+        "Another Section With Mixed Content",
+        ChecklistSummary {
+            completed: 2,
+            total: 4,
+        },
+    ),
+]

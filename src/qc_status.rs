@@ -134,17 +134,28 @@ pub fn analyze_issue_checklists(issue: &Issue) -> Vec<(String, ChecklistSummary)
 }
 
 /// Split the issue body into sections based on markdown headers
-/// Only processes content starting from the first header (ignoring Metadata section)
+/// Only processes content starting from the first level 1 header (ignoring Metadata section)
 fn split_body_into_sections(body: &str) -> Vec<(String, String)> {
     let mut sections = Vec::new();
     let mut current_section = String::new();
     let mut current_header: Option<String> = None;
-    let mut found_first_header = false;
+    let mut found_first_level1_header = false;
 
     for line in body.lines() {
         if let Some(header_text) = extract_header_text(line) {
+            let is_level1_header = line.trim_start().starts_with("# ") && !line.trim_start().starts_with("## ");
+
+            // Only start processing after we find the first level 1 header
+            if !found_first_level1_header && !is_level1_header {
+                continue; // Skip non-level-1 headers before the first level 1 header
+            }
+
+            if !found_first_level1_header && is_level1_header {
+                found_first_level1_header = true;
+            }
+
             // Save the previous section if it has content and a header
-            if found_first_header {
+            if found_first_level1_header {
                 if let Some(ref header) = current_header {
                     if !current_section.trim().is_empty() {
                         sections.push((header.clone(), current_section.clone()));
@@ -155,17 +166,16 @@ fn split_body_into_sections(body: &str) -> Vec<(String, String)> {
             // Start new section
             current_header = Some(header_text);
             current_section.clear();
-            found_first_header = true;
-        } else if found_first_header {
-            // Only collect content after we've found the first header
+        } else if found_first_level1_header {
+            // Only collect content after we've found the first level 1 header
             current_section.push_str(line);
             current_section.push('\n');
         }
-        // Ignore everything before the first header (like Metadata section)
+        // Ignore everything before the first level 1 header (like Metadata section)
     }
 
     // Don't forget the last section
-    if found_first_header {
+    if found_first_level1_header {
         if let Some(header) = current_header {
             if !current_section.trim().is_empty() {
                 sections.push((header, current_section));
