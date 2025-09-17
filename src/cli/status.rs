@@ -311,7 +311,8 @@ async fn get_milestone_status_rows(
                     file_commits.as_ref().unwrap_or(&Vec::new()),
                 ) {
                     let checklist_summaries = analyze_issue_checklists(&issue);
-                    let checklist_summary = ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
+                    let checklist_summary =
+                        ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
 
                     let row = MilestoneStatusRow {
                         file: issue_thread.file.display().to_string(),
