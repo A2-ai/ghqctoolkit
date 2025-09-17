@@ -46,7 +46,7 @@ impl ConfigurationOptions {
 
 #[derive(Debug, Clone)]
 pub struct Checklist {
-    name: String,
+    pub(crate) name: String,
     note: Option<String>,
     content: String,
 }
@@ -58,10 +58,6 @@ impl Checklist {
             note,
             content,
         }
-    }
-
-    pub(crate) fn name(&self) -> &str {
-        &self.name
     }
 
     fn items(&self) -> usize {

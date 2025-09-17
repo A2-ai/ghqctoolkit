@@ -5,7 +5,7 @@ expression: result_with_git
 == Directory Information ==
 📁 directory: src/tests/custom_configuration
 📦 git repository: test-owner/test-repo
-✅ Repository is up to date!
+Repository is up to date!
 📋 Custom Quality Check available in 'my_custom_checklists': 2
 ⚠️ Logo was not found at the specified path assets/custom_logo.svg
         

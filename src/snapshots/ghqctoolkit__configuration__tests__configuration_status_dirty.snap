@@ -5,7 +5,7 @@ expression: result_dirty
 == Directory Information ==
 📁 directory: src/tests/custom_configuration
 📦 git repository: test-owner/test-repo
-❌ Repository has files with uncommitted, local changes: 
+Repository has files with uncommitted, local changes: 
 	- src/main.rs
 	- README.md
 📋 Custom Quality Check available in 'my_custom_checklists': 2
