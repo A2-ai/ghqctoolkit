@@ -182,7 +182,7 @@ pub async fn interactive_milestone_status(
         bail!("No milestones found in repository");
     }
 
-    use inquire::{Select, MultiSelect};
+    use inquire::{MultiSelect, Select};
 
     // First ask if they want to select all or choose specific ones
     let choice = Select::new(
@@ -201,16 +201,19 @@ pub async fn interactive_milestone_status(
             .map(|m| format!("{} ({})", m.title, m.number))
             .collect();
 
-        let selected_strings = MultiSelect::new("📊 Select milestones to check:", milestone_options)
-            .with_validator(|selection: &[inquire::list_option::ListOption<&String>]| {
-                if selection.is_empty() {
-                    Ok(inquire::validator::Validation::Invalid("Please select at least one milestone".into()))
-                } else {
-                    Ok(inquire::validator::Validation::Valid)
-                }
-            })
-            .prompt()
-            .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+        let selected_strings =
+            MultiSelect::new("📊 Select milestones to check:", milestone_options)
+                .with_validator(|selection: &[inquire::list_option::ListOption<&String>]| {
+                    if selection.is_empty() {
+                        Ok(inquire::validator::Validation::Invalid(
+                            "Please select at least one milestone".into(),
+                        ))
+                    } else {
+                        Ok(inquire::validator::Validation::Valid)
+                    }
+                })
+                .prompt()
+                .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
         // Filter milestones based on selected strings
         milestones
@@ -280,14 +283,24 @@ async fn get_milestone_status_rows(
                 let git_status = git_info.status().unwrap_or(GitStatus::Clean);
 
                 // Determine QC status
-                if let Ok(qc_status) = QCStatus::determine_status(&issue_thread, &git_status, git_info).await {
+                if let Ok(qc_status) =
+                    QCStatus::determine_status(&issue_thread, &git_status, git_info).await
+                {
                     let row = MilestoneStatusRow {
                         file: issue_thread.file.display().to_string(),
                         milestone: milestone.title.clone(),
                         branch: issue_thread.branch.clone(),
-                        issue_state: if issue_thread.open { "open".to_string() } else { "closed".to_string() },
+                        issue_state: if issue_thread.open {
+                            "open".to_string()
+                        } else {
+                            "closed".to_string()
+                        },
                         qc_status: format_qc_status(&qc_status),
-                        git_status: format_git_status_for_file(&git_status, &issue_thread, &file_commits),
+                        git_status: format_git_status_for_file(
+                            &git_status,
+                            &issue_thread,
+                            &file_commits,
+                        ),
                     };
                     rows.push(row);
                 }
@@ -297,7 +310,8 @@ async fn get_milestone_status_rows(
 
     // Sort by milestone name, then by file name
     rows.sort_by(|a, b| {
-        a.milestone.cmp(&b.milestone)
+        a.milestone
+            .cmp(&b.milestone)
             .then_with(|| a.file.cmp(&b.file))
     });
 
@@ -377,17 +391,47 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
 
     // Calculate column widths
     let file_width = rows.iter().map(|r| r.file.len()).max().unwrap_or(4).max(4);
-    let milestone_width = rows.iter().map(|r| r.milestone.len()).max().unwrap_or(9).max(9);
-    let branch_width = rows.iter().map(|r| r.branch.len()).max().unwrap_or(6).max(6);
-    let issue_state_width = rows.iter().map(|r| r.issue_state.len()).max().unwrap_or(11).max(11);
-    let qc_status_width = rows.iter().map(|r| r.qc_status.len()).max().unwrap_or(9).max(9);
-    let git_status_width = rows.iter().map(|r| r.git_status.len()).max().unwrap_or(10).max(10);
+    let milestone_width = rows
+        .iter()
+        .map(|r| r.milestone.len())
+        .max()
+        .unwrap_or(9)
+        .max(9);
+    let branch_width = rows
+        .iter()
+        .map(|r| r.branch.len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
+    let issue_state_width = rows
+        .iter()
+        .map(|r| r.issue_state.len())
+        .max()
+        .unwrap_or(11)
+        .max(11);
+    let qc_status_width = rows
+        .iter()
+        .map(|r| r.qc_status.len())
+        .max()
+        .unwrap_or(9)
+        .max(9);
+    let git_status_width = rows
+        .iter()
+        .map(|r| r.git_status.len())
+        .max()
+        .unwrap_or(10)
+        .max(10);
 
     // Print header
     println!();
     println!(
         "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$}",
-        "File", "Milestone", "Branch", "Issue State", "QC Status", "Git Status",
+        "File",
+        "Milestone",
+        "Branch",
+        "Issue State",
+        "QC Status",
+        "Git Status",
         file_width = file_width,
         milestone_width = milestone_width,
         branch_width = branch_width,
@@ -399,7 +443,12 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
     // Print separator
     println!(
         "{:-<file_width$}-+-{:-<milestone_width$}-+-{:-<branch_width$}-+-{:-<issue_state_width$}-+-{:-<qc_status_width$}-+-{:-<git_status_width$}",
-        "", "", "", "", "", "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
         file_width = file_width,
         milestone_width = milestone_width,
         branch_width = branch_width,
@@ -412,7 +461,12 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
     for row in rows {
         println!(
             "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$}",
-            row.file, row.milestone, row.branch, row.issue_state, row.qc_status, row.git_status,
+            row.file,
+            row.milestone,
+            row.branch,
+            row.issue_state,
+            row.qc_status,
+            row.git_status,
             file_width = file_width,
             milestone_width = milestone_width,
             branch_width = branch_width,

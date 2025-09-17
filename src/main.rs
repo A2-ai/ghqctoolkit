@@ -4,7 +4,10 @@ use clap_verbosity_flag::{InfoLevel, Verbosity};
 use octocrab::models::Milestone;
 use std::path::PathBuf;
 
-use ghqctoolkit::cli::{RelevantFileParser, find_issue, interactive_milestone_status, interactive_status, milestone_status, single_issue_status};
+use ghqctoolkit::cli::{
+    RelevantFileParser, find_issue, interactive_milestone_status, interactive_status,
+    milestone_status, single_issue_status,
+};
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitStatusOps,
@@ -396,18 +399,27 @@ async fn main() -> Result<()> {
             let git_info = GitInfo::from_path(&cli.directory, &env)?;
 
             match milestone_command {
-                MilestoneCommands::Status { milestones, all_milestones } => {
+                MilestoneCommands::Status {
+                    milestones,
+                    all_milestones,
+                } => {
                     let cache = DiskCache::from_git_info(&git_info).ok();
                     let all_milestones_data = git_info.get_milestones().await?;
 
                     match (milestones.is_empty(), all_milestones) {
                         (true, false) => {
                             // Interactive mode - no milestones specified and not all_milestones
-                            interactive_milestone_status(&all_milestones_data, cache.as_ref(), &git_info).await?;
+                            interactive_milestone_status(
+                                &all_milestones_data,
+                                cache.as_ref(),
+                                &git_info,
+                            )
+                            .await?;
                         }
                         (true, true) => {
                             // All milestones requested
-                            milestone_status(&all_milestones_data, cache.as_ref(), &git_info).await?;
+                            milestone_status(&all_milestones_data, cache.as_ref(), &git_info)
+                                .await?;
                         }
                         (false, false) => {
                             // Specific milestones provided - filter by name
@@ -417,10 +429,14 @@ async fn main() -> Result<()> {
                                 .collect();
 
                             if selected_milestones.is_empty() {
-                                bail!("No matching milestones found for: {}", milestones.join(", "));
+                                bail!(
+                                    "No matching milestones found for: {}",
+                                    milestones.join(", ")
+                                );
                             }
 
-                            milestone_status(&selected_milestones, cache.as_ref(), &git_info).await?;
+                            milestone_status(&selected_milestones, cache.as_ref(), &git_info)
+                                .await?;
                         }
                         (false, true) => {
                             bail!("Cannot specify both milestone names and --all-milestones flag");
