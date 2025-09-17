@@ -5,7 +5,7 @@ mod configuration;
 mod create;
 mod git;
 mod issue;
-mod status;
+mod qc_status;
 pub mod utils;
 
 #[cfg(feature = "cli")]
@@ -25,4 +25,4 @@ pub use git::{
     GitStatusError, GitStatusOps, RepoUser,
 };
 pub use issue::{IssueError, IssueThread};
-pub use status::{QCStatus, QCStatusError};
+pub use qc_status::{QCStatus, QCStatusError};

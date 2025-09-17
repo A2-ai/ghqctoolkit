@@ -42,7 +42,8 @@ pub async fn interactive_status(
     let git_status = git_info.status()?;
 
     // Determine QC status
-    let qc_status = QCStatus::determine_status(&issue_thread, &git_status, git_info).await?;
+    let qc_status =
+        QCStatus::determine_status(&issue_thread, file_commits.as_ref().unwrap_or(&Vec::new()))?;
 
     // Display the status
     println!(
@@ -283,9 +284,10 @@ async fn get_milestone_status_rows(
                 let git_status = git_info.status().unwrap_or(GitStatus::Clean);
 
                 // Determine QC status
-                if let Ok(qc_status) =
-                    QCStatus::determine_status(&issue_thread, &git_status, git_info).await
-                {
+                if let Ok(qc_status) = QCStatus::determine_status(
+                    &issue_thread,
+                    file_commits.as_ref().unwrap_or(&Vec::new()),
+                ) {
                     let row = MilestoneStatusRow {
                         file: issue_thread.file.display().to_string(),
                         milestone: milestone.title.clone(),
