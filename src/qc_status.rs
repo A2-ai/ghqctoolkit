@@ -143,7 +143,8 @@ fn split_body_into_sections(body: &str) -> Vec<(String, String)> {
 
     for line in body.lines() {
         if let Some(header_text) = extract_header_text(line) {
-            let is_level1_header = line.trim_start().starts_with("# ") && !line.trim_start().starts_with("## ");
+            let is_level1_header =
+                line.trim_start().starts_with("# ") && !line.trim_start().starts_with("## ");
 
             // Only start processing after we find the first level 1 header
             if !found_first_level1_header && !is_level1_header {
