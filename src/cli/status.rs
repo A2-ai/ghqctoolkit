@@ -160,3 +160,266 @@ pub fn single_issue_status(
 
     res.join("\n")
 }
+
+#[derive(Debug, Clone)]
+pub struct MilestoneStatusRow {
+    pub file: String,
+    pub milestone: String,
+    pub branch: String,
+    pub issue_state: String,
+    pub qc_status: String,
+    pub git_status: String,
+}
+
+pub async fn interactive_milestone_status(
+    milestones: &[Milestone],
+    cache: Option<&DiskCache>,
+    git_info: &GitInfo,
+) -> Result<()> {
+    println!("📊 Welcome to GHQC Milestone Status Mode!");
+
+    if milestones.is_empty() {
+        bail!("No milestones found in repository");
+    }
+
+    use inquire::{Select, MultiSelect};
+
+    // First ask if they want to select all or choose specific ones
+    let choice = Select::new(
+        "📊 How would you like to select milestones?",
+        vec!["📋 Select All Milestones", "🎯 Choose Specific Milestones"],
+    )
+    .prompt()
+    .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    let selected_milestones: Vec<&Milestone> = if choice == "📋 Select All Milestones" {
+        milestones.iter().collect()
+    } else {
+        // Multi-select specific milestones
+        let milestone_options: Vec<String> = milestones
+            .iter()
+            .map(|m| format!("{} ({})", m.title, m.number))
+            .collect();
+
+        let selected_strings = MultiSelect::new("📊 Select milestones to check:", milestone_options)
+            .with_validator(|selection: &[inquire::list_option::ListOption<&String>]| {
+                if selection.is_empty() {
+                    Ok(inquire::validator::Validation::Invalid("Please select at least one milestone".into()))
+                } else {
+                    Ok(inquire::validator::Validation::Valid)
+                }
+            })
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+        // Filter milestones based on selected strings
+        milestones
+            .iter()
+            .filter(|m| {
+                let milestone_display = format!("{} ({})", m.title, m.number);
+                selected_strings.contains(&milestone_display)
+            })
+            .collect()
+    };
+
+    if selected_milestones.is_empty() {
+        bail!("No milestones selected");
+    }
+
+    // Get status for all selected milestones
+    let status_rows = get_milestone_status_rows(&selected_milestones, cache, git_info).await?;
+
+    // Display results
+    display_milestone_status_table(&status_rows);
+
+    Ok(())
+}
+
+pub async fn milestone_status(
+    milestones: &[Milestone],
+    cache: Option<&DiskCache>,
+    git_info: &GitInfo,
+) -> Result<()> {
+    if milestones.is_empty() {
+        bail!("No milestones provided");
+    }
+
+    // Convert to &[&Milestone] for the function call
+    let milestone_refs: Vec<&Milestone> = milestones.iter().collect();
+
+    // Get status for all milestones
+    let status_rows = get_milestone_status_rows(&milestone_refs, cache, git_info).await?;
+
+    // Display results
+    display_milestone_status_table(&status_rows);
+
+    Ok(())
+}
+
+async fn get_milestone_status_rows(
+    milestones: &[&Milestone],
+    cache: Option<&DiskCache>,
+    git_info: &GitInfo,
+) -> Result<Vec<MilestoneStatusRow>> {
+    let mut rows = Vec::new();
+
+    for milestone in milestones {
+        // Get all issues for this milestone
+        let issues = git_info.get_milestone_issues(milestone).await?;
+
+        for issue in issues {
+            // Create IssueThread for each issue
+            if let Ok(issue_thread) = IssueThread::from_issue(&issue, cache, git_info).await {
+                let file_commits = issue_thread
+                    .commits(git_info)
+                    .await
+                    .ok()
+                    .map(|v| v.into_iter().map(|(c, _)| c).collect::<Vec<_>>());
+
+                // Get git status
+                let git_status = git_info.status().unwrap_or(GitStatus::Clean);
+
+                // Determine QC status
+                if let Ok(qc_status) = QCStatus::determine_status(&issue_thread, &git_status, git_info).await {
+                    let row = MilestoneStatusRow {
+                        file: issue_thread.file.display().to_string(),
+                        milestone: milestone.title.clone(),
+                        branch: issue_thread.branch.clone(),
+                        issue_state: if issue_thread.open { "open".to_string() } else { "closed".to_string() },
+                        qc_status: format_qc_status(&qc_status),
+                        git_status: format_git_status_for_file(&git_status, &issue_thread, &file_commits),
+                    };
+                    rows.push(row);
+                }
+            }
+        }
+    }
+
+    // Sort by milestone name, then by file name
+    rows.sort_by(|a, b| {
+        a.milestone.cmp(&b.milestone)
+            .then_with(|| a.file.cmp(&b.file))
+    });
+
+    Ok(rows)
+}
+
+fn format_qc_status(qc_status: &QCStatus) -> String {
+    match qc_status {
+        QCStatus::Approved => "Approved".to_string(),
+        QCStatus::ChangesAfterApproval(_) => "Approved (with changes)".to_string(),
+        QCStatus::AwaitingApproval => "Awaiting approval".to_string(),
+        QCStatus::InProgress => "In progress".to_string(),
+        QCStatus::ApprovalRequired => "Approval required".to_string(),
+        QCStatus::ChangesToComment(_) => "Changes to comment".to_string(),
+    }
+}
+
+fn format_git_status_for_file(
+    git_status: &GitStatus,
+    issue_thread: &IssueThread,
+    file_commits: &Option<Vec<ObjectId>>,
+) -> String {
+    match git_status {
+        GitStatus::Clean => "Up to date".to_string(),
+        GitStatus::Dirty(files) => {
+            if files.contains(&issue_thread.file) {
+                "Local changes".to_string()
+            } else {
+                "Up to date".to_string()
+            }
+        }
+        GitStatus::Ahead(commits) => {
+            if let Some(file_commits) = file_commits {
+                if file_commits.iter().any(|c| commits.contains(c)) {
+                    "Local commits".to_string()
+                } else {
+                    "Up to date".to_string()
+                }
+            } else {
+                "Ahead".to_string()
+            }
+        }
+        GitStatus::Behind(commits) => {
+            if let Some(file_commits) = file_commits {
+                if file_commits.iter().any(|c| commits.contains(c)) {
+                    "Remote changes".to_string()
+                } else {
+                    "Up to date".to_string()
+                }
+            } else {
+                "Behind".to_string()
+            }
+        }
+        GitStatus::Diverged { ahead, behind } => {
+            if let Some(file_commits) = file_commits {
+                let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
+                let is_behind = file_commits.iter().any(|c| behind.contains(c));
+
+                match (is_ahead, is_behind) {
+                    (true, true) => "Diverged".to_string(),
+                    (true, false) => "Local commits".to_string(),
+                    (false, true) => "Remote changes".to_string(),
+                    (false, false) => "Up to date".to_string(),
+                }
+            } else {
+                "Diverged".to_string()
+            }
+        }
+    }
+}
+
+fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
+    if rows.is_empty() {
+        println!("No issues found in selected milestones.");
+        return;
+    }
+
+    // Calculate column widths
+    let file_width = rows.iter().map(|r| r.file.len()).max().unwrap_or(4).max(4);
+    let milestone_width = rows.iter().map(|r| r.milestone.len()).max().unwrap_or(9).max(9);
+    let branch_width = rows.iter().map(|r| r.branch.len()).max().unwrap_or(6).max(6);
+    let issue_state_width = rows.iter().map(|r| r.issue_state.len()).max().unwrap_or(11).max(11);
+    let qc_status_width = rows.iter().map(|r| r.qc_status.len()).max().unwrap_or(9).max(9);
+    let git_status_width = rows.iter().map(|r| r.git_status.len()).max().unwrap_or(10).max(10);
+
+    // Print header
+    println!();
+    println!(
+        "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$}",
+        "File", "Milestone", "Branch", "Issue State", "QC Status", "Git Status",
+        file_width = file_width,
+        milestone_width = milestone_width,
+        branch_width = branch_width,
+        issue_state_width = issue_state_width,
+        qc_status_width = qc_status_width,
+        git_status_width = git_status_width,
+    );
+
+    // Print separator
+    println!(
+        "{:-<file_width$}-+-{:-<milestone_width$}-+-{:-<branch_width$}-+-{:-<issue_state_width$}-+-{:-<qc_status_width$}-+-{:-<git_status_width$}",
+        "", "", "", "", "", "",
+        file_width = file_width,
+        milestone_width = milestone_width,
+        branch_width = branch_width,
+        issue_state_width = issue_state_width,
+        qc_status_width = qc_status_width,
+        git_status_width = git_status_width,
+    );
+
+    // Print rows
+    for row in rows {
+        println!(
+            "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$}",
+            row.file, row.milestone, row.branch, row.issue_state, row.qc_status, row.git_status,
+            file_width = file_width,
+            milestone_width = milestone_width,
+            branch_width = branch_width,
+            issue_state_width = issue_state_width,
+            qc_status_width = qc_status_width,
+            git_status_width = git_status_width,
+        );
+    }
+    println!();
+}
