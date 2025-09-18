@@ -4,7 +4,7 @@ use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
 use crate::{
-    cache::{CachedComments, DiskCache},
+    cache::{DiskCache, get_issue_comments},
     git::{
         GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
         get_file_commits_robust,
@@ -21,11 +21,11 @@ pub struct IssueThread {
 }
 
 impl IssueThread {
-    // TODO: order the notification commits based on commit timeline
-    pub async fn from_issue(
+    /// Create IssueThread from issue and pre-fetched comments
+    pub async fn from_issue_comments(
         issue: &Issue,
-        cache: Option<&DiskCache>,
-        git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
+        comments: &[String],
+        git_info: &(impl GitFileOps + GitCommitAnalysis),
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
         let issue_is_open = matches!(issue.state, octocrab::models::IssueState::Open);
@@ -44,14 +44,11 @@ impl IssueThread {
             .and_then(|body| parse_commit_from_pattern(body, "initial qc commit: "))
             .ok_or_else(|| IssueError::InitialCommitNotFound)?;
 
-        // 3. Get the comment bodies (cached based on issue update time)
-        let comment_bodies = get_cached_issue_comments(issue, cache, git_info).await?;
-
-        // 4. Parse notification and approval commit strings from comments
+        // 3. Parse notification and approval commit strings from comments
         let (notification_commit_strs, approved_commit_str) =
-            parse_commits_from_comments(&comment_bodies);
+            parse_commits_from_comments(comments);
 
-        // 5. Try to parse all commit strings to ObjectIds
+        // 4. Try to parse all commit strings to ObjectIds
         let mut all_commit_strs = vec![initial_commit_str];
         all_commit_strs.extend(notification_commit_strs.iter().copied());
         if let Some(approved_str) = approved_commit_str {
@@ -68,7 +65,7 @@ impl IssueThread {
             }
         }
 
-        // 6. Only get file commits if we have unparsable commits (as fallback)
+        // 5. Only get file commits if we have unparsable commits (as fallback)
         let commit_ids = if !unparsable_commits.is_empty() {
             log::debug!(
                 "Found {} unparsable commits, fetching file commits as fallback: {:?}",
@@ -90,7 +87,7 @@ impl IssueThread {
             parsed_commits
         };
 
-        // 7. Parse final ObjectIds using file commits as reference if needed
+        // 6. Parse final ObjectIds using file commits as reference if needed
         let initial_commit = parse_commit_to_object_id(initial_commit_str, &commit_ids)?;
 
         let notification_commits: Result<Vec<_>, _> = notification_commit_strs
@@ -105,7 +102,7 @@ impl IssueThread {
             None
         };
 
-        Ok(Self {
+        Ok(IssueThread {
             file,
             branch,
             initial_commit,
@@ -113,6 +110,19 @@ impl IssueThread {
             approved_commit,
             open: issue_is_open,
         })
+    }
+
+    // TODO: order the notification commits based on commit timeline
+    pub async fn from_issue(
+        issue: &Issue,
+        cache: Option<&DiskCache>,
+        git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
+    ) -> Result<Self, IssueError> {
+        // Get the comment bodies (cached based on issue update time)
+        let comment_bodies = get_issue_comments(issue, cache, git_info).await?;
+
+        // Delegate to from_issue_comments with the fetched comments
+        Self::from_issue_comments(issue, &comment_bodies, git_info).await
     }
 
     pub fn latest_commit(&self) -> &ObjectId {
@@ -228,64 +238,6 @@ fn parse_branch_from_body(body: &str) -> Option<String> {
     Some(branch_name.to_string())
 }
 
-/// Get issue comments with caching based on issue update timestamp
-pub async fn get_cached_issue_comments(
-    issue: &Issue,
-    cache: Option<&DiskCache>,
-    git_info: &impl GitHubReader,
-) -> Result<Vec<String>, GitHubApiError> {
-    // Create cache key from issue number
-    let cache_key = format!("issue_{}", issue.number);
-
-    // Try to get cached comments first
-    let cached_comments: Option<CachedComments> = if let Some(cache) = cache {
-        cache.read::<CachedComments>(&["issues", "comments"], &cache_key)
-    } else {
-        None
-    };
-
-    // Check if cached comments are still valid by comparing timestamps
-    if let Some(cached) = cached_comments {
-        if cached.issue_updated_at >= issue.updated_at {
-            log::debug!(
-                "Using cached comments for issue #{} (cache timestamp: {}, issue timestamp: {})",
-                issue.number,
-                cached.issue_updated_at,
-                issue.updated_at
-            );
-            return Ok(cached.comments);
-        } else {
-            log::debug!(
-                "Cached comments for issue #{} are stale (cache: {}, issue: {})",
-                issue.number,
-                cached.issue_updated_at,
-                issue.updated_at
-            );
-        }
-    }
-
-    // Fetch fresh comments from API
-    log::debug!("Fetching fresh comments for issue #{}", issue.number);
-    let comments = git_info.get_issue_comments(issue).await?;
-
-    // Cache the comments with the current issue timestamp (permanently)
-    if let Some(cache) = cache {
-        let cached_comments = CachedComments {
-            comments: comments.clone(),
-            issue_updated_at: issue.updated_at,
-        };
-
-        if let Err(e) = cache.write(&["issues", "comments"], &cache_key, &cached_comments, false) {
-            log::warn!(
-                "Failed to cache comments for issue #{}: {}",
-                issue.number,
-                e
-            );
-        }
-    }
-
-    Ok(comments)
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum IssueError {

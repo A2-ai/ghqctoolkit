@@ -1,0 +1,111 @@
+---
+title: "QC Record: {{ milestone_names }}"
+subtitle: "Git repository: {{ repository_name }}"
+{% if author %}
+author: "{{ author }}"
+{% endif %}
+date: "{{ date }}"
+{% raw %}
+header-includes:
+  - \usepackage{fontspec}
+  - \setmainfont{Times New Roman}
+  - \setsansfont{Times New Roman}
+  - \setmonofont{Times New Roman}
+  - \usepackage[fontsize=10pt]{fontsize}
+  - \renewcommand{\familydefault}{\rmdefault}
+  - \usepackage{sectsty}
+  - \allsectionsfont{\normalfont\rmfamily}
+  - \usepackage{float}
+  - \usepackage{longtable}
+  - \usepackage{booktabs}
+  - \usepackage{makecell}
+  - \usepackage{graphicx}
+  - \usepackage{array}
+  - \usepackage{fancyhdr}
+  - \usepackage{xcolor}
+  - \pagestyle{fancy}
+  - \newcolumntype{R}[1]{>{\raggedright\arraybackslash}p{#1}}
+  - \setlength{\headheight}{30pt}
+  - \fancyfoot[C]{Page \thepage\ of \pageref{LastPage}}
+  - \usepackage{lastpage}
+  - \usepackage{microtype}
+  - \usepackage{ragged2e}
+  - \usepackage{fvextra}
+  - \usepackage[normalem]{ulem}
+  - \usepackage{listings}
+  - \justifying
+  - \sloppy
+  - \lstset{breaklines=true}
+{% endraw -%}
+{% if logo_path %}
+  - \fancyhead[R]{\includegraphics[width=2cm, height=1.5cm, keepaspectratio]{{ "{" }}{{ logo_path }}{{ "}" }}}
+  - \fancyhead[C]{}
+  - \fancyhead[L]{}
+  - \fancypagestyle{plain}{\renewcommand{\headrulewidth}{0.4pt}}
+{% endif %}
+output:
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies: ["xcolor"]
+    pandoc_args: --listings
+    toc: true
+    toc_depth: 2
+---
+
+\newpage
+
+# Milestone Summary
+
+{% raw %}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.20\textwidth}l>{\raggedright\arraybackslash}p{0.43\textwidth}}
+\toprule
+Title & Description & Status & Issues\\
+\midrule
+\endfirsthead
+\multicolumn{4}{@{}l}{\textit{(continued)}}\\
+\toprule
+Title & Description & Status & Issues\\
+\midrule
+\endhead
+
+\endfoot
+\bottomrule
+\multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{U} Unapproved Issue}\\
+\multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
+\endlastfoot
+{% endraw -%}
+{{ render_milestone_table_rows(data=milestone_data) }}
+{% raw %}
+\end{longtable}
+{% endraw %}
+
+{% for section in milestone_sections %}
+\newpage
+
+# {{ section.name }}
+
+## Issue Summary
+
+{% if section.issues %}
+{% raw %}
+\begin{longtable}{>{\raggedright\arraybackslash}p{10em}>{\raggedright\arraybackslash}p{7em}>{\raggedright\arraybackslash}p{10em}ll}
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endfirsthead
+\multicolumn{5}{@{}l}{\textit{(continued)}}\\
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endhead
+
+\endfoot
+\bottomrule
+\endlastfoot
+{% endraw -%}
+{{ render_issue_summary_table_rows(data=section.issues) }}
+{% raw %}
+\end{longtable}
+{% endraw %}
+{% endif %}
+{% endfor %}

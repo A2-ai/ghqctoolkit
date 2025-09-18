@@ -88,7 +88,7 @@ impl Default for Checklist {
 
 #[derive(Debug, Clone)]
 pub struct Configuration {
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     // checklist name and content
     pub(crate) checklists: HashMap<String, Checklist>,
     pub(crate) options: ConfigurationOptions,
@@ -204,6 +204,10 @@ impl Configuration {
         }
 
         log::debug!("Found checklists with titles: {:?}", self.checklists.keys());
+    }
+
+    pub fn logo_path(&self) -> PathBuf {
+        self.path.join(&self.options.logo_path)
     }
 }
 

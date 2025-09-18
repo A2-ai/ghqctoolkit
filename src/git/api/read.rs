@@ -27,6 +27,10 @@ pub trait GitHubReader {
         &self,
         issue: &Issue,
     ) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
+    fn get_issue_events(
+        &self,
+        issue: &Issue,
+    ) -> impl Future<Output = Result<Vec<serde_json::Value>, GitHubApiError>> + Send;
 }
 
 impl GitHubReader for GitInfo {
@@ -319,6 +323,63 @@ impl GitHubReader for GitInfo {
                     backtrace: std::backtrace::Backtrace::capture(),
                 }))
             }
+        }
+    }
+
+    fn get_issue_events(
+        &self,
+        issue: &Issue,
+    ) -> impl Future<Output = Result<Vec<serde_json::Value>, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let issue_number = issue.number;
+
+        async move {
+            log::debug!(
+                "Fetching events for issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            let mut all_events = Vec::new();
+            let mut page = 1;
+            let per_page = 100; // Maximum per page
+
+            loop {
+                let url = format!(
+                    "/repos/{}/{}/issues/{}/events?per_page={}&page={}",
+                    &owner, &repo, issue_number, per_page, page
+                );
+
+                let events: Vec<serde_json::Value> = octocrab
+                    .get(url, None::<&()>)
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+
+                if events.is_empty() {
+                    break; // No more pages
+                }
+
+                log::debug!("Fetched {} events on page {}", events.len(), page);
+                all_events.extend(events);
+                page += 1;
+
+                // Safety check to prevent infinite loops
+                if page > 100 {
+                    log::warn!("Reached maximum page limit (100) for events");
+                    break;
+                }
+            }
+
+            log::debug!(
+                "Total events fetched for issue #{}: {}",
+                issue_number,
+                all_events.len()
+            );
+
+            Ok(all_events)
         }
     }
 }
