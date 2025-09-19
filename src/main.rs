@@ -10,9 +10,9 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitStatusOps,
-    IssueThread, QCStatus, RelevantFile, configuration_status, create_labels_if_needed,
-    determine_config_info, get_repo_users, record, setup_configuration,
+    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitRepository,
+    GitStatusOps, IssueThread, QCStatus, RelevantFile, configuration_status,
+    create_labels_if_needed, determine_config_info, get_repo_users, record, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -166,6 +166,10 @@ enum MilestoneCommands {
         /// Make record for all milestones
         #[arg(long)]
         all_milestones: bool,
+
+        /// File name to save the record pdf as. Will default to <repo>_<milestone names>.pdf
+        #[arg(short, long)]
+        record_path: Option<PathBuf>,
     },
 }
 
@@ -467,7 +471,10 @@ async fn main() -> Result<()> {
                 MilestoneCommands::Record {
                     milestones,
                     all_milestones,
+                    record_path,
                 } => {
+                    use ghqctoolkit::render;
+
                     let config_dir = determine_config_info(cli.config_dir, &env)?;
                     let configuration = Configuration::from_path(&config_dir);
 
@@ -483,7 +490,7 @@ async fn main() -> Result<()> {
                             .collect()
                     };
 
-                    let res = record(
+                    let (milestone_names, record_str) = record(
                         &selected_milestones,
                         &configuration,
                         &git_info,
@@ -491,7 +498,23 @@ async fn main() -> Result<()> {
                         cache.as_ref(),
                     )
                     .await?;
-                    println!("{res}");
+                    let record_path = if let Some(mut record_path) = record_path {
+                        record_path.set_extension(".pdf");
+                        record_path
+                    } else {
+                        PathBuf::from(format!(
+                            "{}_{}.pdf",
+                            git_info.repo(),
+                            milestone_names.join("_").replace(" ", "_")
+                        ))
+                    };
+
+                    render(&record_str, &record_path)?;
+
+                    println!(
+                        "✅ Record successfully generated at {}",
+                        record_path.display()
+                    );
                 }
             }
         }

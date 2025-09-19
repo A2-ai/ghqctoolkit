@@ -6,9 +6,7 @@ use std::{
 
 use crate::{
     configuration::Checklist,
-    git::{
-        GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitRepository, GitRepositoryError,
-    },
+    git::{GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitRepository, GitRepositoryError},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -191,8 +189,6 @@ impl QCIssue {
         })
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

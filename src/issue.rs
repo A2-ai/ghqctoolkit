@@ -148,9 +148,7 @@ impl IssueThread {
 /// Parse notification and approval commits from comment bodies
 /// Returns (notification_commits, approved_commit)
 /// Approval is only invalidated if an unapproval occurs after approval
-fn parse_commits_from_comments<'a>(
-    comments: &'a [GitComment],
-) -> (Vec<&'a str>, Option<&'a str>) {
+fn parse_commits_from_comments<'a>(comments: &'a [GitComment]) -> (Vec<&'a str>, Option<&'a str>) {
     let mut notification_commits = Vec::new();
     let mut approved_commit = None;
     let mut approval_comment_index = None;
@@ -326,7 +324,10 @@ mod tests {
             .into_iter()
             .map(|comment| GitComment {
                 body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                author_login: comment["user"]["login"]
+                    .as_str()
+                    .unwrap_or("test-user")
+                    .to_string(),
                 created_at: chrono::Utc::now(),
             })
             .collect();
@@ -381,7 +382,10 @@ mod tests {
             .into_iter()
             .map(|comment| GitComment {
                 body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                author_login: comment["user"]["login"]
+                    .as_str()
+                    .unwrap_or("test-user")
+                    .to_string(),
                 created_at: chrono::Utc::now(),
             })
             .collect();
@@ -437,7 +441,10 @@ mod tests {
             .into_iter()
             .map(|comment| GitComment {
                 body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                author_login: comment["user"]["login"]
+                    .as_str()
+                    .unwrap_or("test-user")
+                    .to_string(),
                 created_at: chrono::Utc::now(),
             })
             .collect();
@@ -498,7 +505,10 @@ mod tests {
             .into_iter()
             .map(|comment| GitComment {
                 body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                author_login: comment["user"]["login"]
+                    .as_str()
+                    .unwrap_or("test-user")
+                    .to_string(),
                 created_at: chrono::Utc::now(),
             })
             .collect();
