@@ -12,7 +12,7 @@ mod repository;
 mod status;
 
 pub use action::{GitAction, GitActionError, GitActionImpl};
-pub use api::{GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
+pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
 pub use auth::{AuthError, create_authenticated_client};
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{GitAuthor, GitFileOps, GitFileOpsError, get_file_commits_robust};

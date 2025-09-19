@@ -7,11 +7,6 @@ author: "{{ author }}"
 date: "{{ date }}"
 {% raw %}
 header-includes:
-  - \usepackage{fontspec}
-  - \setmainfont{Times New Roman}
-  - \setsansfont{Times New Roman}
-  - \setmonofont{Times New Roman}
-  - \usepackage[fontsize=10pt]{fontsize}
   - \renewcommand{\familydefault}{\rmdefault}
   - \usepackage{sectsty}
   - \allsectionsfont{\normalfont\rmfamily}
@@ -36,6 +31,11 @@ header-includes:
   - \justifying
   - \sloppy
   - \lstset{breaklines=true}
+  - \usepackage{titlesec}
+  - \titleformat{\paragraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
+  - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
+  - \titleformat{\subparagraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
+  - \titlespacing*{\subparagraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
 {% endraw -%}
 {% if logo_path %}
   - \fancyhead[R]{\includegraphics[width=2cm, height=1.5cm, keepaspectratio]{{ "{" }}{{ logo_path }}{{ "}" }}}
@@ -43,13 +43,13 @@ header-includes:
   - \fancyhead[L]{}
   - \fancypagestyle{plain}{\renewcommand{\headrulewidth}{0.4pt}}
 {% endif %}
-output:
-  pdf_document:
-    latex_engine: xelatex
-    extra_dependencies: ["xcolor"]
-    pandoc_args: --listings
+format:
+  pdf:
+    pdf-engine: xelatex
     toc: true
-    toc_depth: 2
+    toc-depth: 2
+    code-overflow: wrap
+    mainfont: Times New Roman
 ---
 
 \newpage
@@ -84,9 +84,8 @@ Title & Description & Status & Issues\\
 
 # {{ section.name }}
 
-## Issue Summary
+## **Issue Summary**
 
-{% if section.issues %}
 {% raw %}
 \begin{longtable}{>{\raggedright\arraybackslash}p{10em}>{\raggedright\arraybackslash}p{7em}>{\raggedright\arraybackslash}p{10em}ll}
 \toprule
@@ -107,5 +106,37 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 {% raw %}
 \end{longtable}
 {% endraw %}
+\newpage
+
+{% for issue in section.issues %}
+## {{ issue.title }}
+
+### **Issue Information**
+
+* **Issue Number:** {{ issue.number }}
+* **Milestone:** `{{ issue.milestone }}`
+* **Created by:** {{ issue.created_by }}
+* **Created at:** {{ issue.created_at }}
+* **QCer:** {{ issue.qcer }}
+* **QC Status:** {{ issue.qc_status }}
+* **{{ checklist_name | title}} Summary:** {{ issue.checklist_summary}}
+* **Git Status:** {{ issue.git_status }}
+* **Initial QC Commit:** {{ issue.initial_qc_commit }}
+* **Latest QC Commit:** {{ issue.latest_qc_commit }}
+* **Issue URL:** {{ issue.issue_url }}
+* **Issue state:** {{ issue.state }}
+{% if issue.closed_by %}
+* **Closed by:** {{ issue.closed_by }}
+* **Closed at:** {{ issue.closed_at }}
 {% endif %}
+### **Issue Body**
+
+{{ issue.body }}
+
+### **Comments**
+
+{{ issue.comments }}
+
+\newpage
+{% endfor %}
 {% endfor %}

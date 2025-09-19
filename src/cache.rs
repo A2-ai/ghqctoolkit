@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::git::{GitRepository, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
+use crate::git::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, GitRepository, RepoUser};
 
 /// Cache entry with optional TTL
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,7 +18,14 @@ pub struct CacheEntry<T> {
 /// Cached comments with the issue's last updated timestamp
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedComments {
-    pub comments: Vec<String>,
+    pub comments: Vec<GitComment>,
+    pub issue_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Cached events with the issue's last updated timestamp
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedEvents {
+    pub events: Vec<serde_json::Value>,
     pub issue_updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -294,7 +301,7 @@ pub async fn get_issue_comments(
     issue: &Issue,
     cache: Option<&DiskCache>,
     git_info: &impl GitHubReader,
-) -> Result<Vec<String>, GitHubApiError> {
+) -> Result<Vec<GitComment>, GitHubApiError> {
     // Create cache key from issue number
     let cache_key = format!("issue_{}", issue.number);
 
@@ -346,6 +353,61 @@ pub async fn get_issue_comments(
     }
 
     Ok(comments)
+}
+
+/// Get issue events with caching based on issue update timestamp
+pub async fn get_issue_events(
+    issue: &Issue,
+    cache: Option<&DiskCache>,
+    git_info: &impl GitHubReader,
+) -> Result<Vec<serde_json::Value>, GitHubApiError> {
+    // Create cache key from issue number
+    let cache_key = format!("issue_{}", issue.number);
+
+    // Try to get cached events first
+    let cached_events: Option<CachedEvents> = if let Some(cache) = cache {
+        cache.read::<CachedEvents>(&["issues", "events"], &cache_key)
+    } else {
+        None
+    };
+
+    // Check if cached events are still valid by comparing timestamps
+    if let Some(cached) = cached_events {
+        if cached.issue_updated_at >= issue.updated_at {
+            log::debug!(
+                "Using cached events for issue #{} (cache timestamp: {}, issue timestamp: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
+            return Ok(cached.events);
+        } else {
+            log::debug!(
+                "Cached events for issue #{} are stale (cache: {}, issue: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
+        }
+    }
+
+    // Fetch fresh events from API
+    log::debug!("Fetching fresh events for issue #{}", issue.number);
+    let events = git_info.get_issue_events(issue).await?;
+
+    // Cache the events with the current issue timestamp (permanently)
+    if let Some(cache) = cache {
+        let cached_events = CachedEvents {
+            events: events.clone(),
+            issue_updated_at: issue.updated_at,
+        };
+
+        if let Err(e) = cache.write(&["issues", "events"], &cache_key, &cached_events, false) {
+            log::warn!("Failed to cache events for issue #{}: {}", issue.number, e);
+        }
+    }
+
+    Ok(events)
 }
 
 #[cfg(test)]

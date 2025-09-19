@@ -6,7 +6,7 @@ use octocrab::models::issues::Issue;
 use crate::{
     cache::{DiskCache, get_issue_comments},
     git::{
-        GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+        GitComment, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
         get_file_commits_robust,
     },
 };
@@ -24,7 +24,7 @@ impl IssueThread {
     /// Create IssueThread from issue and pre-fetched comments
     pub async fn from_issue_comments(
         issue: &Issue,
-        comments: &[String],
+        comments: &[GitComment],
         git_info: &(impl GitFileOps + GitCommitAnalysis),
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
@@ -45,8 +45,7 @@ impl IssueThread {
             .ok_or_else(|| IssueError::InitialCommitNotFound)?;
 
         // 3. Parse notification and approval commit strings from comments
-        let (notification_commit_strs, approved_commit_str) =
-            parse_commits_from_comments(comments);
+        let (notification_commit_strs, approved_commit_str) = parse_commits_from_comments(comments);
 
         // 4. Try to parse all commit strings to ObjectIds
         let mut all_commit_strs = vec![initial_commit_str];
@@ -118,11 +117,11 @@ impl IssueThread {
         cache: Option<&DiskCache>,
         git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     ) -> Result<Self, IssueError> {
-        // Get the comment bodies (cached based on issue update time)
-        let comment_bodies = get_issue_comments(issue, cache, git_info).await?;
+        // Get the comments (cached based on issue update time)
+        let comments = get_issue_comments(issue, cache, git_info).await?;
 
         // Delegate to from_issue_comments with the fetched comments
-        Self::from_issue_comments(issue, &comment_bodies, git_info).await
+        Self::from_issue_comments(issue, &comments, git_info).await
     }
 
     pub fn latest_commit(&self) -> &ObjectId {
@@ -150,27 +149,27 @@ impl IssueThread {
 /// Returns (notification_commits, approved_commit)
 /// Approval is only invalidated if an unapproval occurs after approval
 fn parse_commits_from_comments<'a>(
-    comment_bodies: &'a [String],
+    comments: &'a [GitComment],
 ) -> (Vec<&'a str>, Option<&'a str>) {
     let mut notification_commits = Vec::new();
     let mut approved_commit = None;
     let mut approval_comment_index = None;
 
     // Parse all comments in order
-    for (index, body) in comment_bodies.iter().enumerate() {
+    for (index, comment) in comments.iter().enumerate() {
         // Check for notification commit: "current commit: {hash}"
-        if let Some(commit) = parse_commit_from_pattern(body, "current commit: ") {
+        if let Some(commit) = parse_commit_from_pattern(&comment.body, "current commit: ") {
             notification_commits.push(commit);
         }
 
         // Check for approval commit: "approved qc commit: {hash}"
-        if let Some(commit) = parse_commit_from_pattern(body, "approved qc commit: ") {
+        if let Some(commit) = parse_commit_from_pattern(&comment.body, "approved qc commit: ") {
             approved_commit = Some(commit);
             approval_comment_index = Some(index);
         }
 
         // Check for unapproval: "# QC Un-Approval"
-        if body.contains("# QC Un-Approval") {
+        if comment.body.contains("# QC Un-Approval") {
             // If this unapproval comes after an approval, invalidate the approval
             if let Some(approval_index) = approval_comment_index {
                 if index > approval_index {
@@ -237,7 +236,6 @@ fn parse_branch_from_body(body: &str) -> Option<String> {
 
     Some(branch_name.to_string())
 }
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum IssueError {
@@ -323,10 +321,14 @@ mod tests {
         let issue = load_issue("open_issue_with_notifications.json");
         let comments = load_comments("open_issue_notifications.json");
 
-        // Extract comment bodies from the test data
-        let comment_bodies: Vec<String> = comments
+        // Convert JSON comments to GitComment objects
+        let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .map(|comment| GitComment {
+                body: comment["body"].as_str().unwrap().to_string(),
+                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                created_at: chrono::Utc::now(),
+            })
             .collect();
 
         let git_info = RobustMockGitInfo::new()
@@ -334,7 +336,7 @@ mod tests {
                 Some("feature/new-feature".to_string()),
                 Ok(create_test_commits()),
             )
-            .with_comment_bodies(comment_bodies);
+            .with_comments(git_comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
@@ -374,10 +376,14 @@ mod tests {
         let issue = load_issue("closed_approved_issue.json");
         let comments = load_comments("closed_approved_comments.json");
 
-        // Extract comment bodies from the test data
-        let comment_bodies: Vec<String> = comments
+        // Convert JSON comments to GitComment objects
+        let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .map(|comment| GitComment {
+                body: comment["body"].as_str().unwrap().to_string(),
+                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                created_at: chrono::Utc::now(),
+            })
             .collect();
 
         let git_info = RobustMockGitInfo::new()
@@ -385,7 +391,7 @@ mod tests {
                 Some("bugfix/memory-leak".to_string()),
                 Ok(create_test_commits()),
             )
-            .with_comment_bodies(comment_bodies);
+            .with_comments(git_comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
@@ -426,10 +432,14 @@ mod tests {
         let issue = load_issue("unapproved_issue.json");
         let comments = load_comments("unapproved_comments.json");
 
-        // Extract comment bodies from the test data
-        let comment_bodies: Vec<String> = comments
+        // Convert JSON comments to GitComment objects
+        let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .map(|comment| GitComment {
+                body: comment["body"].as_str().unwrap().to_string(),
+                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                created_at: chrono::Utc::now(),
+            })
             .collect();
 
         let branch = "feature/utils-refactor";
@@ -437,7 +447,7 @@ mod tests {
 
         let git_info = RobustMockGitInfo::new()
             .with_file_commits_result(Some(branch.to_string()), Ok(test_commits.clone()))
-            .with_comment_bodies(comment_bodies);
+            .with_comments(git_comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
@@ -483,10 +493,14 @@ mod tests {
         let issue = load_issue("open_issue_with_approval_and_notification.json");
         let comments = load_comments("open_issue_approval_and_notification.json");
 
-        // Extract comment bodies from the test data
-        let comment_bodies: Vec<String> = comments
+        // Convert JSON comments to GitComment objects
+        let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| comment["body"].as_str().unwrap().to_string())
+            .map(|comment| GitComment {
+                body: comment["body"].as_str().unwrap().to_string(),
+                author_login: comment["user"]["login"].as_str().unwrap_or("test-user").to_string(),
+                created_at: chrono::Utc::now(),
+            })
             .collect();
 
         let branch = "feature/test-branch";
@@ -507,7 +521,7 @@ mod tests {
 
         let git_info = RobustMockGitInfo::new()
             .with_file_commits_result(Some(branch.to_string()), Ok(test_commits.clone()))
-            .with_comment_bodies(comment_bodies);
+            .with_comments(git_comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
@@ -583,12 +597,20 @@ mod tests {
 
     #[test]
     fn test_parse_commits_from_comments_with_approval() {
-        let comment_bodies = vec![
-            "current commit: abc123def456789012345678901234567890abcd".to_string(),
-            "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+        let comments = vec![
+            GitComment {
+                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies);
+        let (notifications, approved) = parse_commits_from_comments(&comments);
 
         // Should have notification + approval (regardless of issue open/closed status)
         assert_eq!(notifications.len(), 1);
@@ -597,12 +619,20 @@ mod tests {
 
     #[test]
     fn test_parse_commits_from_comments_notifications_only() {
-        let comment_bodies = vec![
-            "current commit: abc123def456789012345678901234567890abcd".to_string(),
-            "current commit: def456789abc012345678901234567890123abcd".to_string(),
+        let comments = vec![
+            GitComment {
+                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "current commit: def456789abc012345678901234567890123abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies);
+        let (notifications, approved) = parse_commits_from_comments(&comments);
 
         // Only notifications, no approval
         assert_eq!(notifications.len(), 2);
@@ -611,13 +641,25 @@ mod tests {
 
     #[test]
     fn test_parse_commits_from_comments_with_unapproval() {
-        let comment_bodies = vec![
-            "current commit: abc123def456789012345678901234567890abcd".to_string(),
-            "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
-            "# QC Un-Approval\nWithdrawing approval".to_string(),
+        let comments = vec![
+            GitComment {
+                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "# QC Un-Approval\nWithdrawing approval".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
         ];
 
-        let (notifications, approved) = parse_commits_from_comments(&comment_bodies);
+        let (notifications, approved) = parse_commits_from_comments(&comments);
 
         // Unapproval should invalidate approval and move it to notifications
         assert_eq!(notifications.len(), 2);
@@ -676,7 +718,7 @@ mod tests {
         commit_parents: std::collections::HashMap<ObjectId, Vec<ObjectId>>,
         ancestor_relationships: std::collections::HashMap<(ObjectId, ObjectId), bool>,
         branches_containing_commits: std::collections::HashMap<ObjectId, Vec<String>>,
-        comment_bodies: Vec<String>,
+        comments: Vec<GitComment>,
     }
 
     impl RobustMockGitInfo {
@@ -687,7 +729,7 @@ mod tests {
                 commit_parents: std::collections::HashMap::new(),
                 ancestor_relationships: std::collections::HashMap::new(),
                 branches_containing_commits: std::collections::HashMap::new(),
-                comment_bodies: Vec::new(),
+                comments: Vec::new(),
             }
         }
 
@@ -730,8 +772,8 @@ mod tests {
             self
         }
 
-        fn with_comment_bodies(mut self, bodies: Vec<String>) -> Self {
-            self.comment_bodies = bodies;
+        fn with_comments(mut self, comments: Vec<GitComment>) -> Self {
+            self.comments = comments;
             self
         }
     }
@@ -850,8 +892,8 @@ mod tests {
         async fn get_issue_comments(
             &self,
             _issue: &Issue,
-        ) -> Result<Vec<String>, crate::git::GitHubApiError> {
-            Ok(self.comment_bodies.clone())
+        ) -> Result<Vec<GitComment>, crate::git::GitHubApiError> {
+            Ok(self.comments.clone())
         }
     }
 

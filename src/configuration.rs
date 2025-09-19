@@ -17,7 +17,7 @@ pub(crate) struct ConfigurationOptions {
     // Note to prepend at the top of all checklists
     pub(crate) prepended_checklist_note: Option<String>,
     // What to call the checklist in the app. Default: checklist
-    checklist_display_name: String,
+    pub(crate) checklist_display_name: String,
     // Path to the logo within the configuration repo. Default: logo
     logo_path: PathBuf,
     // Path to the checklist directory within the configuration repo. Default: checklists

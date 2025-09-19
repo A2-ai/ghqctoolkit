@@ -23,7 +23,7 @@ impl std::fmt::Display for QCStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let status_text = match self {
             QCStatus::Approved => "Approved",
-            QCStatus::ChangesAfterApproval(_) => "Approved (with changes)",
+            QCStatus::ChangesAfterApproval(_) => "Approved; subsequent file changes",
             QCStatus::AwaitingApproval => "Awaiting approval",
             QCStatus::InProgress => "In progress",
             QCStatus::ApprovalRequired => "Approval required",

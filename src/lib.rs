@@ -19,7 +19,7 @@ pub use configuration::{
     Configuration, configuration_status, determine_config_info, setup_configuration,
 };
 pub use create::{QCIssue, RelevantFile};
-pub use cache::{create_labels_if_needed, get_repo_users, get_issue_comments};
+pub use cache::{create_labels_if_needed, get_repo_users, get_issue_comments, get_issue_events, CachedEvents};
 pub use git::{
     AuthError, GitAction, GitActionError, GitActionImpl, GitAuthor, GitCommitAnalysis,
     GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,

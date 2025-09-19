@@ -323,12 +323,8 @@ async fn get_milestone_status_rows(
                         } else {
                             "closed".to_string()
                         },
-                        qc_status: format_qc_status(&qc_status),
-                        git_status: format_git_status_for_file(
-                            &git_status,
-                            &issue_thread,
-                            &file_commits,
-                        ),
+                        qc_status: qc_status.to_string(),
+                        git_status: git_status.format_for_file(&issue_thread, &file_commits),
                         checklist_summary,
                     };
                     rows.push(row);
@@ -345,71 +341,6 @@ async fn get_milestone_status_rows(
     });
 
     Ok(rows)
-}
-
-fn format_qc_status(qc_status: &QCStatus) -> String {
-    match qc_status {
-        QCStatus::Approved => "Approved".to_string(),
-        QCStatus::ChangesAfterApproval(_) => "Approved (with changes)".to_string(),
-        QCStatus::AwaitingApproval => "Awaiting approval".to_string(),
-        QCStatus::InProgress => "In progress".to_string(),
-        QCStatus::ApprovalRequired => "Approval required".to_string(),
-        QCStatus::ChangesToComment(_) => "Changes to comment".to_string(),
-    }
-}
-
-fn format_git_status_for_file(
-    git_status: &GitStatus,
-    issue_thread: &IssueThread,
-    file_commits: &Option<Vec<ObjectId>>,
-) -> String {
-    match git_status {
-        GitStatus::Clean => "Up to date".to_string(),
-        GitStatus::Dirty(files) => {
-            if files.contains(&issue_thread.file) {
-                "Local changes".to_string()
-            } else {
-                "Up to date".to_string()
-            }
-        }
-        GitStatus::Ahead(commits) => {
-            if let Some(file_commits) = file_commits {
-                if file_commits.iter().any(|c| commits.contains(c)) {
-                    "Local commits".to_string()
-                } else {
-                    "Up to date".to_string()
-                }
-            } else {
-                "Ahead".to_string()
-            }
-        }
-        GitStatus::Behind(commits) => {
-            if let Some(file_commits) = file_commits {
-                if file_commits.iter().any(|c| commits.contains(c)) {
-                    "Remote changes".to_string()
-                } else {
-                    "Up to date".to_string()
-                }
-            } else {
-                "Behind".to_string()
-            }
-        }
-        GitStatus::Diverged { ahead, behind } => {
-            if let Some(file_commits) = file_commits {
-                let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
-                let is_behind = file_commits.iter().any(|c| behind.contains(c));
-
-                match (is_ahead, is_behind) {
-                    (true, true) => "Diverged".to_string(),
-                    (true, false) => "Local commits".to_string(),
-                    (false, true) => "Remote changes".to_string(),
-                    (false, false) => "Up to date".to_string(),
-                }
-            } else {
-                "Diverged".to_string()
-            }
-        }
-    }
 }
 
 fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
