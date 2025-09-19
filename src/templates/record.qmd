@@ -135,7 +135,36 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 
 ### **Comments**
 
-{{ issue.comments }}
+{% if issue.comments %}
+{% for comment in issue.comments %}
+#### {{ comment.0 }}
+
+{{ comment.1 }}
+
+{% endfor %}
+{% else %}
+No comments found.
+{% endif %}
+
+### **Events**
+
+{% if issue.events %}
+{% for event in issue.events %}
+* {{ event }}
+{% endfor %}
+{% else %}
+No events found.
+{% endif %}
+
+### **Detailed Timeline**
+
+{% if issue.timeline %}
+{% for item in issue.timeline %}
+* {{ item }}
+{% endfor %}
+{% else %}
+No timeline items found.
+{% endif %}
 
 \newpage
 {% endfor %}

@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use tera::{Context, Result as TeraResult, Tera, Value};
 
 use crate::{
-    ChecklistSummary, Configuration, GitHubReader, GitRepository,
-    git::{GitCommitAnalysis, GitFileOps, GitStatus, GitStatusOps},
+    ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, RepoUser,
+    get_issue_comments, get_issue_events, get_repo_users,
+    git::{GitComment, GitCommitAnalysis, GitFileOps, GitStatus, GitStatusOps},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
     utils::EnvProvider,
@@ -34,7 +35,7 @@ pub async fn record(
     configuration: &Configuration,
     git_info: &(impl GitHubReader + GitRepository + GitFileOps + GitCommitAnalysis + GitStatusOps),
     env: impl EnvProvider,
-    cache: Option<&crate::cache::DiskCache>,
+    cache: Option<&DiskCache>,
 ) -> Result<String, RecordError> {
     let mut context = Context::new();
 
@@ -249,9 +250,7 @@ fn insert_breaks(text: &str, max_width: usize) -> String {
 }
 
 /// Tera function to render milestone table rows only
-fn render_milestone_table_rows(
-    args: &std::collections::HashMap<String, Value>,
-) -> TeraResult<Value> {
+fn render_milestone_table_rows(args: &HashMap<String, Value>) -> TeraResult<Value> {
     let data = args
         .get("data")
         .ok_or_else(|| tera::Error::msg("Missing 'data' argument for milestone table"))?;
@@ -281,9 +280,7 @@ fn render_milestone_table_rows(
 }
 
 /// Tera function to render issue summary table rows only
-fn render_issue_summary_table_rows(
-    args: &std::collections::HashMap<String, Value>,
-) -> TeraResult<Value> {
+fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraResult<Value> {
     let data = args
         .get("data")
         .ok_or_else(|| tera::Error::msg("Missing 'data' argument for issue summary table"))?;
@@ -360,7 +357,9 @@ pub struct IssueInformation {
     pub closed_by: Option<String>,
     pub closed_at: Option<String>,
     pub body: String,
-    pub comments: String,
+    pub comments: Vec<(String, String)>,
+    pub events: Vec<String>,
+    pub timeline: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,7 +376,7 @@ pub async fn create_milestone_sections(
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps),
 ) -> Result<Vec<MilestoneSection>, RecordError> {
     // Get all repository users with cache for efficient lookup
-    let repo_users = crate::cache::get_repo_users(cache, git_info).await?;
+    let repo_users = get_repo_users(cache, git_info).await?;
 
     // Get git status once and reuse it across all issues
     let git_status = git_info.status()?;
@@ -410,8 +409,7 @@ pub async fn create_milestone_sections(
             .collect();
 
         let issue_results = futures::future::join_all(issue_futures).await;
-        let issue_information: Result<Vec<_>, RecordError> = issue_results.into_iter().collect();
-        let issue_information = issue_information?;
+        let issue_information = issue_results.into_iter().collect::<Result<Vec<_>, _>>()?;
 
         sections.push(MilestoneSection {
             name: milestone.title.clone(),
@@ -426,16 +424,17 @@ pub async fn create_milestone_sections(
 async fn create_issue_information(
     issue: &Issue,
     milestone_name: &str,
-    repo_users: &[crate::git::RepoUser],
+    repo_users: &[RepoUser],
     git_status: &GitStatus,
-    cache: Option<&crate::cache::DiskCache>,
+    cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
 ) -> Result<IssueInformation, RecordError> {
     // Get comments and create issue thread
-    let comments = crate::cache::get_issue_comments(issue, cache, git_info).await?;
+    let comments = get_issue_comments(issue, cache, git_info).await?;
     let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info).await?;
     let file_commits = issue_thread.commits(git_info).await?;
     let commit_ids: Vec<_> = file_commits.iter().map(|(id, _)| *id).collect();
+    let open = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status
     let qc_status = QCStatus::determine_status(&issue_thread, &commit_ids)?.to_string();
@@ -476,9 +475,12 @@ async fn create_issue_information(
         qcer_names.join(", ")
     };
 
+    // Get issue events (used for both closer detection and event timeline)
+    let events = get_issue_events(issue, cache, git_info).await?;
+
     // Issue closer (with name lookup)
-    let closed_by = if matches!(issue.state, octocrab::models::IssueState::Closed) {
-        match get_issue_closer_username(issue, cache, git_info).await {
+    let closed_by = if !open {
+        match get_issue_closer_username(&events) {
             Some(closer_login) => {
                 let closer_display = repo_users
                     .iter()
@@ -511,8 +513,14 @@ async fn create_issue_information(
         .map(|b| format_markdown_with_min_level(b, 4))
         .unwrap_or_else(|| "No description provided.".to_string());
 
-    // Format comments with proper header structure
+    // Format comments as header-body pairs
     let formatted_comments = format_comments(&comments, repo_users);
+
+    // Format events timeline
+    let formatted_events = format_events(&events, repo_users);
+
+    // Create combined timeline from formatted events and comment headers
+    let timeline = create_combined_timeline(&formatted_events, &formatted_comments);
 
     Ok(IssueInformation {
         title: issue.title.clone(),
@@ -527,65 +535,154 @@ async fn create_issue_information(
         initial_qc_commit,
         latest_qc_commit,
         issue_url: issue.html_url.to_string(),
-        state: match issue.state {
-            octocrab::models::IssueState::Open => "Open".to_string(),
-            octocrab::models::IssueState::Closed => "Closed".to_string(),
-            _ => "Unknown".to_string(),
-        },
+        state: if open { "Open" } else { "Closed" }.to_string(),
         closed_by,
         closed_at,
         body,
         comments: formatted_comments,
+        events: formatted_events,
+        timeline,
     })
 }
 
-/// Extract the username of who closed the issue from issue events
-async fn get_issue_closer_username(
-    issue: &Issue,
-    cache: Option<&crate::cache::DiskCache>,
-    git_info: &impl GitHubReader,
-) -> Option<String> {
-    if !matches!(issue.state, octocrab::models::IssueState::Closed) {
-        return None;
-    }
+/// Create combined timeline from formatted events and comment headers, sorted chronologically
+fn create_combined_timeline(
+    formatted_events: &[String],
+    formatted_comments: &[(String, String)],
+) -> Vec<String> {
+    let mut timeline_items = Vec::new();
 
-    match crate::cache::get_issue_events(issue, cache, git_info).await {
-        Ok(events) => {
-            // Find the last "closed" event
-            events
-                .iter()
-                .rev() // Start from the most recent
-                .find(|event| {
-                    event
-                        .get("event")
-                        .and_then(|e| e.as_str())
-                        .map(|s| s == "closed")
-                        .unwrap_or(false)
-                })
-                .and_then(|event| {
-                    event
-                        .get("actor")
-                        .and_then(|actor| actor.get("login"))
-                        .and_then(|login| login.as_str())
-                        .map(|s| s.to_string())
-                })
-        }
-        Err(e) => {
-            log::warn!("Failed to fetch events for issue #{}: {}", issue.number, e);
-            None
-        }
-    }
+    // Add formatted events (they already have timestamp and description)
+    timeline_items.extend(formatted_events.iter().cloned());
+
+    // Add comment headers (the .0 elements which have timestamp and author)
+    // Lowercase "Comment" to "comment" for timeline consistency
+    timeline_items.extend(
+        formatted_comments
+            .iter()
+            .map(|(header, _)| header.replace(" - Comment by ", " - commented by ")),
+    );
+
+    // Sort by the timestamp at the beginning of each string (YYYY-MM-DD HH:MM:SS format)
+    timeline_items.sort_by(|a, b| {
+        // Extract timestamp from the beginning of each string
+        let timestamp_a = a.split(" - ").next().unwrap_or("");
+        let timestamp_b = b.split(" - ").next().unwrap_or("");
+        timestamp_a.cmp(timestamp_b)
+    });
+
+    timeline_items
 }
 
-/// Format comments with proper header structure
-fn format_comments(
-    comments: &[crate::git::GitComment],
-    repo_users: &[crate::git::RepoUser],
-) -> String {
-    if comments.is_empty() {
-        return "No comments found.".to_string();
+/// Extract the username of who closed the issue from pre-fetched events
+fn get_issue_closer_username(events: &[serde_json::Value]) -> Option<String> {
+    // Find the last "closed" event
+    events
+        .iter()
+        .rev() // Start from the most recent
+        .find(|event| {
+            event
+                .get("event")
+                .and_then(|e| e.as_str())
+                .map(|s| s == "closed")
+                .unwrap_or(false)
+        })
+        .and_then(|event| {
+            event
+                .get("actor")
+                .and_then(|actor| actor.get("login"))
+                .and_then(|login| login.as_str())
+                .map(|s| s.to_string())
+        })
+}
+
+/// Format events timeline as bullet points
+fn format_events(events: &[serde_json::Value], repo_users: &[RepoUser]) -> Vec<String> {
+    let mut formatted_events = Vec::new();
+
+    for event in events {
+        let event_type = event.get("event").and_then(|e| e.as_str()).unwrap_or("");
+
+        let created_at = event
+            .get("created_at")
+            .and_then(|dt| dt.as_str())
+            .and_then(|dt_str| chrono::DateTime::parse_from_rfc3339(dt_str).ok())
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "Unknown time".to_string());
+
+        let actor_login = event
+            .get("actor")
+            .and_then(|actor| actor.get("login"))
+            .and_then(|login| login.as_str())
+            .unwrap_or("Unknown user");
+
+        // Look up display name for actor
+        let actor_display = repo_users
+            .iter()
+            .find(|user| user.login == actor_login)
+            .and_then(|user| user.name.as_ref())
+            .map(|name| format!("{} ({})", name, actor_login))
+            .unwrap_or_else(|| actor_login.to_string());
+
+        let formatted_event = match event_type {
+            "milestoned" => {
+                let milestone_title = event
+                    .get("milestone")
+                    .and_then(|m| m.get("title"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("Unknown milestone");
+                format!(
+                    "{} - milestone set to '{}' by {}",
+                    created_at, milestone_title, actor_display
+                )
+            }
+            "assigned" => {
+                let assignee_login = event
+                    .get("assignee")
+                    .and_then(|a| a.get("login"))
+                    .and_then(|l| l.as_str())
+                    .unwrap_or("Unknown user");
+
+                let assignee_display = repo_users
+                    .iter()
+                    .find(|user| user.login == assignee_login)
+                    .and_then(|user| user.name.as_ref())
+                    .map(|name| format!("{} ({})", name, assignee_login))
+                    .unwrap_or_else(|| assignee_login.to_string());
+
+                format!(
+                    "{} - {} assigned by {}",
+                    created_at, assignee_display, actor_display
+                )
+            }
+            "labeled" => {
+                let label_name = event
+                    .get("label")
+                    .and_then(|l| l.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("Unknown label");
+                format!(
+                    "{} - added label '{}' by {}",
+                    created_at, label_name, actor_display
+                )
+            }
+            "closed" => {
+                format!("{} - closed by {}", created_at, actor_display)
+            }
+            "reopened" => {
+                format!("{} - reopened by {}", created_at, actor_display)
+            }
+            _ => continue, // Skip other event types
+        };
+
+        formatted_events.push(formatted_event);
     }
 
+    formatted_events
+}
+
+/// Format comments as header-body pairs
+fn format_comments(comments: &[GitComment], repo_users: &[RepoUser]) -> Vec<(String, String)> {
     let mut formatted_comments = Vec::new();
 
     for comment in comments {
@@ -597,20 +694,17 @@ fn format_comments(
             .map(|name| format!("{} ({})", name, comment.author_login))
             .unwrap_or_else(|| comment.author_login.clone());
 
-        // Format timestamp
+        // Format timestamp and header
         let created_at = comment.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
+        let header = format!("{} - Comment by {}", created_at, author_display);
 
-        // Format comment body (min level 5 since under #### Comment header)
-        let body = format_markdown_with_min_level(&comment.body, 5);
+        // Format comment body (min level 4 since it will be under #### header in template)
+        let body = format_markdown_with_min_level(&comment.body, 4);
 
-        // Format the comment with level 4 header
-        formatted_comments.push(format!(
-            "#### Comment by {} at {}\n\n{}",
-            author_display, created_at, body
-        ));
+        formatted_comments.push((header, body));
     }
 
-    formatted_comments.join("\n\n")
+    formatted_comments
 }
 
 /// Translate markdown headers to ensure minimum level and wrap long diff lines
@@ -650,7 +744,10 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
         }
     }
 
-    result.join("\n").replace("---", "`---`").replace("```diff", "``` diff")
+    result
+        .join("\n")
+        .replace("---", "`---`")
+        .replace("```diff", "``` diff")
 }
 
 /// Wrap a diff line if it's too long, preserving the diff marker
