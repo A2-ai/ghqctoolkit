@@ -1,11 +1,15 @@
 ---
-title: "QC Record: {{ milestone_names }}"
-subtitle: "Git repository: {{ repository_name }}"
-{% if author %}
-author: "{{ author }}"
-{% endif %}
-date: "{{ date }}"
-{% raw %}
+source: src/record.rs
+expression: result.unwrap()
+---
+---
+title: "QC Record: v1.0"
+subtitle: "Git repository: repo"
+
+author: "testuser"
+
+date: "September 19, 2025"
+
 header-includes:
   - \renewcommand{\familydefault}{\rmdefault}
   - \usepackage{sectsty}
@@ -36,13 +40,7 @@ header-includes:
   - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
   - \titleformat{\subparagraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
   - \titlespacing*{\subparagraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
-{% endraw -%}
-{% if logo_path %}
-  - \fancyhead[R]{\includegraphics[width=2cm, height=1.5cm, keepaspectratio]{{ "{" }}{{ logo_path }}{{ "}" }}}
-  - \fancyhead[C]{}
-  - \fancyhead[L]{}
-  - \fancypagestyle{plain}{\renewcommand{\headrulewidth}{0.4pt}}
-{% endif %}
+
 format:
   pdf:
     pdf-engine: xelatex
@@ -56,7 +54,7 @@ format:
 
 # Milestone Summary
 
-{% raw %}
+
 \begin{longtable}{>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.20\textwidth}l>{\raggedright\arraybackslash}p{0.43\textwidth}}
 \toprule
 Title & Description & Status & Issues\\
@@ -73,20 +71,20 @@ Title & Description & Status & Issues\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{U} Unapproved Issue}\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
 \endlastfoot
-{% endraw -%}
-{{ render_milestone_table_rows(data=milestone_data) }}
-{% raw %}
-\end{longtable}
-{% endraw %}
+v1.0 & First release
+milestone & open & src/config.rs\\*
 
-{% for section in milestone_sections %}
+\end{longtable}
+
+
+
 \newpage
 
-# {{ section.name }}
+# v1.0
 
 ## **Issue Summary**
 
-{% raw %}
+
 \begin{longtable}{>{\raggedright\arraybackslash}p{7em}
                   >{\raggedright\arraybackslash}p{7em}
                   >{\raggedright\arraybackslash}p{7em}
@@ -105,71 +103,71 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 \endfoot
 \bottomrule
 \endlastfoot
-{% endraw -%}
-{{ render_issue_summary_table_rows(data=section.issues) }}
-{% raw %}
+src/config.rs & Approval required & Jane Developer & Alice Reviewer,\newline Bob Reviewer & NA\\*
+
 \end{longtable}
-{% endraw %}
+
 \newpage
 
-{% for issue in section.issues %}
-## {{ issue.title }}
+
+## src/config.rs
 
 ### **Issue Information**
 
-* **Issue Number:** {{ issue.number }}
-* **Milestone:** `{{ issue.milestone }}`
-* **Created by:** {{ issue.created_by }}
-* **Created at:** {{ issue.created_at }}
-* **QCer:** {{ issue.qcer | join(sep=", ") }}
-* **QC Status:** {{ issue.qc_status }}
-* **{{ checklist_name | title}} Summary:** {{ issue.checklist_summary}}
-* **Git Status:** {{ issue.git_status }}
-* **Initial QC Commit:** {{ issue.initial_qc_commit }}
-* **Latest QC Commit:** {{ issue.latest_qc_commit }}
-* **Issue URL:** {{ issue.issue_url }}
-* **Issue state:** {{ issue.state }}
-{% if issue.closed_by %}
-* **Closed by:** {{ issue.closed_by }}
-* **Closed at:** {{ issue.closed_at }}
-{% endif %}
+* **Issue Number:** 2
+* **Milestone:** `v1.0`
+* **Created by:** Jane Developer (developer)
+* **Created at:** 2011-04-22 14:33:48
+* **QCer:** Alice Reviewer (reviewer1), Bob Reviewer (reviewer2)
+* **QC Status:** Approval required
+* **Test Checklist Summary:** 0/0 (100.0%)
+* **Git Status:** Up to date
+* **Initial QC Commit:** 456def789abc012345678901234567890123cdef
+* **Latest QC Commit:** 456def789abc012345678901234567890123cdef
+* **Issue URL:** https://github.com/owner/repo/issues/2
+* **Issue state:** Open
+
 ### **Issue Body**
 
-{{ issue.body }}
+Quality check issue for src/config.rs
+
+#### Metadata
+initial qc commit: 456def789abc012345678901234567890123cdef
+git branch: feature/config-update
+author: Jane Developer <developer@example.com>
 
 ### **Comments**
 
-{% if issue.comments %}
-{% for comment in issue.comments %}
-#### {{ comment.0 }}
 
-{{ comment.1 }}
-
-{% endfor %}
-{% else %}
 No comments found.
-{% endif %}
+
 
 ### **Events**
 
-{% if issue.events %}
-{% for event in issue.events %}
-* {{ event }}
-{% endfor %}
-{% else %}
-No events found.
-{% endif %}
+
+
+* 2011-04-20 10:00:00 - milestone set to 'v1.0' by John Maintainer (maintainer)
+
+* 2011-04-20 10:15:00 - Alice Reviewer (reviewer1) assigned by John Maintainer (maintainer)
+
+* 2011-04-20 10:30:00 - added label 'ghqc' by John Maintainer (maintainer)
+
+* 2011-04-23 14:30:00 - closed by Alice Reviewer (reviewer1)
+
+
 
 ### **Detailed Timeline**
 
-{% if issue.timeline %}
-{% for item in issue.timeline %}
-* {{ item }}
-{% endfor %}
-{% else %}
-No timeline items found.
-{% endif %}
+
+
+* 2011-04-20 10:00:00 - milestone set to 'v1.0' by John Maintainer (maintainer)
+
+* 2011-04-20 10:15:00 - Alice Reviewer (reviewer1) assigned by John Maintainer (maintainer)
+
+* 2011-04-20 10:30:00 - added label 'ghqc' by John Maintainer (maintainer)
+
+* 2011-04-23 14:30:00 - closed by Alice Reviewer (reviewer1)
+
+
 
 \newpage
-{% endfor %}
-{% endfor %}

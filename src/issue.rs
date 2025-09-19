@@ -895,6 +895,13 @@ mod tests {
         ) -> Result<Vec<GitComment>, crate::git::GitHubApiError> {
             Ok(self.comments.clone())
         }
+
+        async fn get_issue_events(
+            &self,
+            _issue: &Issue,
+        ) -> Result<Vec<serde_json::Value>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
     }
 
     impl GitHubWriter for RobustMockGitInfo {

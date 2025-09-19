@@ -1,11 +1,15 @@
 ---
-title: "QC Record: {{ milestone_names }}"
-subtitle: "Git repository: {{ repository_name }}"
-{% if author %}
-author: "{{ author }}"
-{% endif %}
-date: "{{ date }}"
-{% raw %}
+source: src/record.rs
+expression: result.unwrap()
+---
+---
+title: "QC Record: v2.0"
+subtitle: "Git repository: repo"
+
+author: "testuser"
+
+date: "September 19, 2025"
+
 header-includes:
   - \renewcommand{\familydefault}{\rmdefault}
   - \usepackage{sectsty}
@@ -36,13 +40,7 @@ header-includes:
   - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
   - \titleformat{\subparagraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
   - \titlespacing*{\subparagraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
-{% endraw -%}
-{% if logo_path %}
-  - \fancyhead[R]{\includegraphics[width=2cm, height=1.5cm, keepaspectratio]{{ "{" }}{{ logo_path }}{{ "}" }}}
-  - \fancyhead[C]{}
-  - \fancyhead[L]{}
-  - \fancypagestyle{plain}{\renewcommand{\headrulewidth}{0.4pt}}
-{% endif %}
+
 format:
   pdf:
     pdf-engine: xelatex
@@ -56,7 +54,7 @@ format:
 
 # Milestone Summary
 
-{% raw %}
+
 \begin{longtable}{>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.20\textwidth}l>{\raggedright\arraybackslash}p{0.43\textwidth}}
 \toprule
 Title & Description & Status & Issues\\
@@ -73,20 +71,20 @@ Title & Description & Status & Issues\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{U} Unapproved Issue}\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
 \endlastfoot
-{% endraw -%}
-{{ render_milestone_table_rows(data=milestone_data) }}
-{% raw %}
-\end{longtable}
-{% endraw %}
+v2.0 & Second release
+milestone & open & src/test.rs\textcolor{red}{U}\\*
 
-{% for section in milestone_sections %}
+\end{longtable}
+
+
+
 \newpage
 
-# {{ section.name }}
+# v2.0
 
 ## **Issue Summary**
 
-{% raw %}
+
 \begin{longtable}{>{\raggedright\arraybackslash}p{7em}
                   >{\raggedright\arraybackslash}p{7em}
                   >{\raggedright\arraybackslash}p{7em}
@@ -105,71 +103,74 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 \endfoot
 \bottomrule
 \endlastfoot
-{% endraw -%}
-{{ render_issue_summary_table_rows(data=section.issues) }}
-{% raw %}
+src/test.rs & Awaiting approval & The Octocat & NA & Bob Reviewer\\*
+
 \end{longtable}
-{% endraw %}
+
 \newpage
 
-{% for issue in section.issues %}
-## {{ issue.title }}
+
+## src/test.rs
 
 ### **Issue Information**
 
-* **Issue Number:** {{ issue.number }}
-* **Milestone:** `{{ issue.milestone }}`
-* **Created by:** {{ issue.created_by }}
-* **Created at:** {{ issue.created_at }}
-* **QCer:** {{ issue.qcer | join(sep=", ") }}
-* **QC Status:** {{ issue.qc_status }}
-* **{{ checklist_name | title}} Summary:** {{ issue.checklist_summary}}
-* **Git Status:** {{ issue.git_status }}
-* **Initial QC Commit:** {{ issue.initial_qc_commit }}
-* **Latest QC Commit:** {{ issue.latest_qc_commit }}
-* **Issue URL:** {{ issue.issue_url }}
-* **Issue state:** {{ issue.state }}
-{% if issue.closed_by %}
-* **Closed by:** {{ issue.closed_by }}
-* **Closed at:** {{ issue.closed_at }}
-{% endif %}
+* **Issue Number:** 1
+* **Milestone:** `v2.0`
+* **Created by:** The Octocat (octocat)
+* **Created at:** 2011-04-22 13:33:48
+* **QCer:** NA
+* **QC Status:** Awaiting approval
+* **Test Checklist Summary:** 0/0 (100.0%)
+* **Git Status:** Local changes
+* **Initial QC Commit:** def456789abc012345678901234567890123abcd
+* **Latest QC Commit:** def456789abc012345678901234567890123abcd
+* **Issue URL:** https://github.com/owner/repo/issues/1
+* **Issue state:** Closed
+
+* **Closed by:** Bob Reviewer (reviewer2)
+* **Closed at:** 
+
 ### **Issue Body**
 
-{{ issue.body }}
+Quality check issue for src/test.rs
+
+#### Metadata
+initial qc commit: def456789abc012345678901234567890123abcd
+git branch: main
+author: The Octocat <octocat@example.com>
 
 ### **Comments**
 
-{% if issue.comments %}
-{% for comment in issue.comments %}
-#### {{ comment.0 }}
 
-{{ comment.1 }}
-
-{% endfor %}
-{% else %}
 No comments found.
-{% endif %}
+
 
 ### **Events**
 
-{% if issue.events %}
-{% for event in issue.events %}
-* {{ event }}
-{% endfor %}
-{% else %}
-No events found.
-{% endif %}
+
+
+* 2011-04-18 09:00:00 - milestone set to 'v2.0' by John Maintainer (maintainer)
+
+* 2011-04-18 09:15:00 - Bob Reviewer (reviewer2) assigned by John Maintainer (maintainer)
+
+* 2011-04-19 12:00:00 - closed by Bob Reviewer (reviewer2)
+
+* 2011-04-19 16:00:00 - reopened by John Maintainer (maintainer)
+
+
 
 ### **Detailed Timeline**
 
-{% if issue.timeline %}
-{% for item in issue.timeline %}
-* {{ item }}
-{% endfor %}
-{% else %}
-No timeline items found.
-{% endif %}
+
+
+* 2011-04-18 09:00:00 - milestone set to 'v2.0' by John Maintainer (maintainer)
+
+* 2011-04-18 09:15:00 - Bob Reviewer (reviewer2) assigned by John Maintainer (maintainer)
+
+* 2011-04-19 12:00:00 - closed by Bob Reviewer (reviewer2)
+
+* 2011-04-19 16:00:00 - reopened by John Maintainer (maintainer)
+
+
 
 \newpage
-{% endfor %}
-{% endfor %}

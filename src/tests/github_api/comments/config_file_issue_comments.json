@@ -1,0 +1,17 @@
+[
+  {
+    "body": "# QC Notification\n\n@developer @reviewer2\n\n## Metadata\ncurrent commit: 456def789abc012345678901234567890123cdef\nprevious commit: 123abc456def789012345678901234567890abcd\n\n## File Difference\n\nReviewing the configuration changes in src/config.rs:\n\n- New configuration structure looks clean\n- Validation logic is well implemented\n- Consider adding more comprehensive error messages",
+    "author_login": "reviewer1",
+    "created_at": "2011-04-22T15:00:00Z"
+  },
+  {
+    "body": "# QC Notification\n\n@developer\n\n## Metadata\ncurrent commit: 456def789abc012345678901234567890123cdef\nprevious commit: 123abc456def789012345678901234567890abcd\n\nAgreed with @reviewer1's feedback. Additionally:\n\n- The new config format is much more intuitive\n- Migration path from old config is well handled\n- Tests coverage looks comprehensive",
+    "author_login": "reviewer2",
+    "created_at": "2011-04-22T16:15:00Z"
+  },
+  {
+    "body": "# QC Approve\n\n## Note\n\nThank you both @reviewer1 @reviewer2 for the thorough review!\n\nI've implemented all suggested improvements:\n\n✅ Enhanced error messages with detailed context\n✅ Added backward compatibility warnings\n✅ Expanded test suite with edge cases\n✅ Updated documentation with migration guide\n\nThe configuration system is now ready for production use.",
+    "author_login": "developer",
+    "created_at": "2011-04-23T09:00:00Z"
+  }
+]

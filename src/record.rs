@@ -302,10 +302,10 @@ fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraResult<
         // Extract qcer name(s) from "Name (login)" format, fallback to full string
         let qcer_display = row
             .qcer
-            .split(", ")
+            .iter()
             .map(|qcer| qcer.split(" (").next().unwrap_or(qcer))
             .collect::<Vec<_>>()
-            .join(", ");
+            .join(",\\newline ");
 
         // Extract closer name from "Name (login)" format, fallback to full string
         let closer_display = row
@@ -346,7 +346,7 @@ pub struct IssueInformation {
     pub milestone: String,
     pub created_by: String,
     pub created_at: String,
-    pub qcer: String,
+    pub qcer: Vec<String>,
     pub qc_status: String,
     pub checklist_summary: String,
     pub git_status: String,
@@ -458,9 +458,9 @@ async fn create_issue_information(
 
     // QCers (with name lookup)
     let qcer = if issue.assignees.is_empty() {
-        "NA".to_string()
+        vec!["NA".to_string()]
     } else {
-        let qcer_names: Vec<String> = issue
+        issue
             .assignees
             .iter()
             .map(|assignee| {
@@ -471,8 +471,7 @@ async fn create_issue_information(
                     .map(|name| format!("{} ({})", name, assignee.login))
                     .unwrap_or_else(|| assignee.login.clone())
             })
-            .collect();
-        qcer_names.join(", ")
+            .collect()
     };
 
     // Get issue events (used for both closer detection and event timeline)
@@ -825,4 +824,558 @@ pub enum RecordError {
     QCStatus(#[from] crate::qc_status::QCStatusError),
     #[error("Git Status Error: {0}")]
     GitStatus(#[from] crate::git::GitStatusError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        GitAuthor, RepoUser,
+        git::{
+            GitComment, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError,
+            GitHelpers, GitHubApiError, GitRepository, GitRepositoryError, GitStatus,
+            GitStatusError, GitStatusOps,
+        },
+    };
+    use gix::ObjectId;
+    use octocrab::models::{Milestone, issues::Issue};
+    use std::{collections::HashMap, path::PathBuf, str::FromStr};
+
+    /// Mock implementation for record testing
+    pub struct RecordMockGitInfo {
+        pub milestones: Vec<Milestone>,
+        pub milestone_issues: HashMap<String, Vec<Issue>>,
+        pub issue_comments: HashMap<u64, Vec<GitComment>>,
+        pub issue_events: HashMap<u64, Vec<serde_json::Value>>,
+        pub repo_users: Vec<RepoUser>,
+        pub git_status: GitStatus,
+        pub owner: String,
+        pub repo: String,
+        pub current_branch: String,
+        pub current_commit: String,
+        pub file_commits: HashMap<PathBuf, Vec<(ObjectId, String)>>,
+    }
+
+    impl RecordMockGitInfo {
+        pub fn new() -> Self {
+            Self {
+                milestones: Vec::new(),
+                milestone_issues: HashMap::new(),
+                issue_comments: HashMap::new(),
+                issue_events: HashMap::new(),
+                repo_users: Vec::new(),
+                git_status: GitStatus::Clean,
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+                current_branch: "main".to_string(),
+                current_commit: "abc123def456789012345678901234567890abcd".to_string(),
+                file_commits: HashMap::new(),
+            }
+        }
+
+        pub fn with_milestones(mut self, milestones: Vec<Milestone>) -> Self {
+            self.milestones = milestones;
+            self
+        }
+
+        pub fn with_milestone_issues(mut self, issues: HashMap<String, Vec<Issue>>) -> Self {
+            self.milestone_issues = issues;
+            self
+        }
+
+
+        pub fn with_issue_events(mut self, events: HashMap<u64, Vec<serde_json::Value>>) -> Self {
+            self.issue_events = events;
+            self
+        }
+
+        pub fn with_issue_comments(mut self, comments: HashMap<u64, Vec<GitComment>>) -> Self {
+            self.issue_comments = comments;
+            self
+        }
+
+        pub fn with_repo_users(mut self, users: Vec<RepoUser>) -> Self {
+            self.repo_users = users;
+            self
+        }
+
+        pub fn with_git_status(mut self, status: GitStatus) -> Self {
+            self.git_status = status;
+            self
+        }
+
+        pub fn with_file_commits(
+            mut self,
+            file: PathBuf,
+            commits: Vec<(ObjectId, String)>,
+        ) -> Self {
+            self.file_commits.insert(file, commits);
+            self
+        }
+    }
+
+    impl GitHubReader for RecordMockGitInfo {
+        async fn get_milestones(&self) -> Result<Vec<Milestone>, GitHubApiError> {
+            Ok(self.milestones.clone())
+        }
+
+        async fn get_milestone_issues(
+            &self,
+            milestone: &Milestone,
+        ) -> Result<Vec<Issue>, GitHubApiError> {
+            Ok(self
+                .milestone_issues
+                .get(&milestone.title)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn get_assignees(&self) -> Result<Vec<String>, GitHubApiError> {
+            Ok(self.repo_users.iter().map(|u| u.login.clone()).collect())
+        }
+
+        async fn get_user_details(&self, username: &str) -> Result<RepoUser, GitHubApiError> {
+            Ok(self
+                .repo_users
+                .iter()
+                .find(|u| u.login == username)
+                .cloned()
+                .unwrap_or_else(|| RepoUser {
+                    login: username.to_string(),
+                    name: None,
+                }))
+        }
+
+        async fn get_labels(&self) -> Result<Vec<String>, GitHubApiError> {
+            Ok(vec!["ghqc".to_string(), "urgent".to_string()])
+        }
+
+        async fn get_issue_comments(
+            &self,
+            issue: &Issue,
+        ) -> Result<Vec<GitComment>, GitHubApiError> {
+            Ok(self
+                .issue_comments
+                .get(&issue.number)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn get_issue_events(
+            &self,
+            issue: &Issue,
+        ) -> Result<Vec<serde_json::Value>, GitHubApiError> {
+            Ok(self
+                .issue_events
+                .get(&issue.number)
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    impl GitRepository for RecordMockGitInfo {
+        fn commit(&self) -> Result<String, GitRepositoryError> {
+            Ok(self.current_commit.clone())
+        }
+
+        fn branch(&self) -> Result<String, GitRepositoryError> {
+            Ok(self.current_branch.clone())
+        }
+
+        fn owner(&self) -> &str {
+            &self.owner
+        }
+
+        fn repo(&self) -> &str {
+            &self.repo
+        }
+    }
+
+    impl GitStatusOps for RecordMockGitInfo {
+        fn status(&self) -> Result<GitStatus, GitStatusError> {
+            Ok(self.git_status.clone())
+        }
+    }
+
+    impl GitFileOps for RecordMockGitInfo {
+        fn file_commits(
+            &self,
+            file: &std::path::Path,
+            _branch: &Option<String>,
+        ) -> Result<Vec<(ObjectId, String)>, GitFileOpsError> {
+            Ok(self.file_commits.get(file).cloned().unwrap_or_else(|| {
+                vec![(
+                    ObjectId::from_str(&self.current_commit).unwrap(),
+                    "Test commit".to_string(),
+                )]
+            }))
+        }
+
+        fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
+            Ok(vec![GitAuthor {
+                name: "Test Author".to_string(),
+                email: "test@example.com".to_string(),
+            }])
+        }
+
+        fn file_content_at_commit(
+            &self,
+            _file: &std::path::Path,
+            _commit: &ObjectId,
+        ) -> Result<String, GitFileOpsError> {
+            Ok("test content".to_string())
+        }
+    }
+
+    impl GitCommitAnalysis for RecordMockGitInfo {
+        fn get_all_merge_commits(&self) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
+            Ok(Vec::new())
+        }
+
+        fn get_commit_parents(
+            &self,
+            _commit: &ObjectId,
+        ) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
+            Ok(Vec::new())
+        }
+
+        fn is_ancestor(
+            &self,
+            _ancestor: &ObjectId,
+            _descendant: &ObjectId,
+        ) -> Result<bool, GitCommitAnalysisError> {
+            Ok(false)
+        }
+
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &ObjectId,
+        ) -> Result<Vec<String>, GitCommitAnalysisError> {
+            Ok(vec![self.current_branch.clone()])
+        }
+    }
+
+    impl GitHelpers for RecordMockGitInfo {
+        fn file_content_url(&self, commit: &str, file: &std::path::Path) -> String {
+            format!(
+                "https://github.com/{}/{}/blob/{}/{}",
+                self.owner,
+                self.repo,
+                commit,
+                file.display()
+            )
+        }
+
+        fn commit_comparison_url(
+            &self,
+            current_commit: &ObjectId,
+            previous_commit: &ObjectId,
+        ) -> String {
+            format!(
+                "https://github.com/{}/{}/compare/{}...{}",
+                self.owner, self.repo, previous_commit, current_commit
+            )
+        }
+    }
+
+    // Test helper functions
+    fn load_test_milestone(file_name: &str) -> Milestone {
+        let path = format!("src/tests/github_api/milestones/{}", file_name);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("Failed to read milestone file: {}", path));
+        serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse milestone file {}: {}", path, e))
+    }
+
+    fn load_test_issue(file_name: &str) -> Issue {
+        let path = format!("src/tests/github_api/issues/{}", file_name);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("Failed to read issue file: {}", path));
+        serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse issue file {}: {}", path, e))
+    }
+
+    fn load_test_events(file_name: &str) -> Vec<serde_json::Value> {
+        let path = format!("src/tests/github_api/events/{}", file_name);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("Failed to read events file: {}", path));
+        serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse events file {}: {}", path, e))
+    }
+
+    fn load_test_users() -> Vec<RepoUser> {
+        let path = "src/tests/github_api/users/repository_users.json";
+        let content = std::fs::read_to_string(path)
+            .unwrap_or_else(|_| panic!("Failed to read users file: {}", path));
+        serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse users file {}: {}", path, e))
+    }
+
+    fn load_test_comments(file_name: &str) -> Vec<GitComment> {
+        let path = format!("src/tests/github_api/comments/{}", file_name);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("Failed to read comments file: {}", path));
+        serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse comments file {}: {}", path, e))
+    }
+
+    fn create_test_configuration() -> Configuration {
+        Configuration::from_path("src/tests/default_configuration")
+    }
+
+    // Mock environment provider for testing
+    struct TestEnvProvider {
+        vars: HashMap<String, String>,
+    }
+
+    impl crate::utils::EnvProvider for TestEnvProvider {
+        fn var(&self, key: &str) -> Result<String, std::env::VarError> {
+            self.vars
+                .get(key)
+                .cloned()
+                .ok_or(std::env::VarError::NotPresent)
+        }
+    }
+
+    fn create_test_env() -> TestEnvProvider {
+        TestEnvProvider {
+            vars: [("USER".to_string(), "testuser".to_string())]
+                .iter()
+                .cloned()
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_record_complete_v1_milestone() {
+        let v1_milestone = load_test_milestone("v1.0.json");
+        let milestones = vec![v1_milestone.clone()];
+
+        let main_issue = load_test_issue("main_file_issue.json");
+        let test_issue = load_test_issue("test_file_issue.json");
+
+        let main_events = load_test_events("main_file_issue_events.json");
+        let test_events = load_test_events("test_file_issue_events.json");
+        let repo_users = load_test_users();
+
+        let mut milestone_issues = HashMap::new();
+        milestone_issues.insert(
+            "v1.0".to_string(),
+            vec![main_issue.clone(), test_issue.clone()],
+        );
+
+        let mut issue_events = HashMap::new();
+        issue_events.insert(main_issue.number, main_events);
+        issue_events.insert(test_issue.number, test_events);
+
+        let git_info = RecordMockGitInfo::new()
+            .with_milestones(milestones.clone())
+            .with_milestone_issues(milestone_issues)
+            .with_issue_events(issue_events)
+            .with_repo_users(repo_users)
+            .with_git_status(GitStatus::Clean)
+            .with_file_commits(
+                PathBuf::from("src/main.rs"),
+                vec![(
+                    ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+                    "Initial commit".to_string(),
+                )],
+            )
+            .with_file_commits(
+                PathBuf::from("src/test.rs"),
+                vec![(
+                    ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+                    "Test commit".to_string(),
+                )],
+            );
+
+        let config = create_test_configuration();
+        let env = create_test_env();
+
+        let result = record(&milestones, &config, &git_info, env, None).await;
+        assert!(result.is_ok());
+
+        insta::assert_snapshot!("record_v1_milestone", result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_record_multiple_milestones_with_events() {
+        let v1_milestone = load_test_milestone("v1.0.json");
+        let v2_milestone = load_test_milestone("v2.0.json");
+        let milestones = vec![v1_milestone.clone(), v2_milestone.clone()];
+
+        let main_issue = load_test_issue("main_file_issue.json");
+        let test_issue = load_test_issue("test_file_issue.json");
+        let config_issue = load_test_issue("config_file_issue.json");
+
+        let main_events = load_test_events("main_file_issue_events.json");
+        let test_events = load_test_events("test_file_issue_events.json");
+        let config_events = load_test_events("config_file_issue_events.json");
+
+        let main_comments = load_test_comments("main_file_issue_comments.json");
+        let test_comments = load_test_comments("test_file_issue_comments.json");
+        let config_comments = load_test_comments("config_file_issue_comments.json");
+
+        let repo_users = load_test_users();
+
+        let mut milestone_issues = HashMap::new();
+        milestone_issues.insert(
+            "v1.0".to_string(),
+            vec![main_issue.clone(), test_issue.clone()],
+        );
+        milestone_issues.insert("v2.0".to_string(), vec![config_issue.clone()]);
+
+        let mut issue_events = HashMap::new();
+        issue_events.insert(main_issue.number, main_events);
+        issue_events.insert(test_issue.number, test_events);
+        issue_events.insert(config_issue.number, config_events);
+
+        let mut issue_comments = HashMap::new();
+        issue_comments.insert(main_issue.number, main_comments);
+        issue_comments.insert(test_issue.number, test_comments);
+        issue_comments.insert(config_issue.number, config_comments);
+
+        let git_info = RecordMockGitInfo::new()
+            .with_milestones(milestones.clone())
+            .with_milestone_issues(milestone_issues)
+            .with_issue_events(issue_events)
+            .with_issue_comments(issue_comments)
+            .with_repo_users(repo_users)
+            .with_git_status(GitStatus::Clean)
+            .with_file_commits(
+                PathBuf::from("src/main.rs"),
+                vec![(
+                    ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+                    "Initial commit".to_string(),
+                )],
+            )
+            .with_file_commits(
+                PathBuf::from("src/test.rs"),
+                vec![(
+                    ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+                    "Test commit".to_string(),
+                )],
+            )
+            .with_file_commits(
+                PathBuf::from("src/config.rs"),
+                vec![(
+                    ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap(),
+                    "Config commit".to_string(),
+                )],
+            );
+
+        let config = create_test_configuration();
+        let env = create_test_env();
+
+        let result = record(&milestones, &config, &git_info, env, None).await;
+        assert!(result.is_ok());
+
+        insta::assert_snapshot!("record_multiple_milestones", result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_record_closed_issue_with_events() {
+        let v1_milestone = load_test_milestone("v1.0.json");
+        let milestones = vec![v1_milestone.clone()];
+
+        // Use config issue but mark it as closed and add close events
+        let mut closed_issue = load_test_issue("config_file_issue.json");
+        closed_issue.state = octocrab::models::IssueState::Closed;
+        closed_issue.closed_at = Some(
+            chrono::DateTime::parse_from_rfc3339("2011-04-23T14:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+
+        let closed_events = load_test_events("closed_approved_issue_events.json");
+        let repo_users = load_test_users();
+
+        let mut milestone_issues = HashMap::new();
+        milestone_issues.insert("v1.0".to_string(), vec![closed_issue.clone()]);
+
+        let mut issue_events = HashMap::new();
+        issue_events.insert(closed_issue.number, closed_events);
+
+        let git_info = RecordMockGitInfo::new()
+            .with_milestones(milestones.clone())
+            .with_milestone_issues(milestone_issues)
+            .with_issue_events(issue_events)
+            .with_repo_users(repo_users)
+            .with_git_status(GitStatus::Behind(vec![
+                ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+                ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+            ]))
+            .with_file_commits(
+                PathBuf::from("src/config.rs"),
+                vec![(
+                    ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap(),
+                    "Config commit".to_string(),
+                )],
+            );
+
+        let config = create_test_configuration();
+        let env = create_test_env();
+
+        let result = record(&milestones, &config, &git_info, env, None).await;
+        assert!(result.is_ok());
+
+        insta::assert_snapshot!("record_closed_issue", result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_record_reopened_issue_lifecycle() {
+        let v2_milestone = load_test_milestone("v2.0.json");
+        let milestones = vec![v2_milestone.clone()];
+
+        let reopened_issue = load_test_issue("test_file_issue.json");
+        let reopened_events = load_test_events("reopened_issue_events.json");
+        let repo_users = load_test_users();
+
+        let mut milestone_issues = HashMap::new();
+        milestone_issues.insert("v2.0".to_string(), vec![reopened_issue.clone()]);
+
+        let mut issue_events = HashMap::new();
+        issue_events.insert(reopened_issue.number, reopened_events);
+
+        let git_info = RecordMockGitInfo::new()
+            .with_milestones(milestones.clone())
+            .with_milestone_issues(milestone_issues)
+            .with_issue_events(issue_events)
+            .with_repo_users(repo_users)
+            .with_git_status(GitStatus::Dirty(vec![
+                PathBuf::from("src/test.rs"),
+                PathBuf::from("src/lib.rs"),
+            ]))
+            .with_file_commits(
+                PathBuf::from("src/test.rs"),
+                vec![(
+                    ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+                    "Test commit".to_string(),
+                )],
+            );
+
+        let config = create_test_configuration();
+        let env = create_test_env();
+
+        let result = record(&milestones, &config, &git_info, env, None).await;
+        assert!(result.is_ok());
+
+        insta::assert_snapshot!("record_reopened_issue", result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_record_empty_milestones() {
+        let milestones = vec![];
+        let git_info = RecordMockGitInfo::new()
+            .with_repo_users(load_test_users())
+            .with_git_status(GitStatus::Clean);
+
+        let config = create_test_configuration();
+        let env = create_test_env();
+
+        let result = record(&milestones, &config, &git_info, env, None).await;
+        assert!(result.is_ok());
+
+        insta::assert_snapshot!("record_empty_milestones", result.unwrap());
+    }
 }

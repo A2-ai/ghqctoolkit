@@ -113,7 +113,7 @@
   "active_lock_reason": null,
   "draft": false,
   "pull_request": null,
-  "body": "Quality check issue for src/config.rs",
+  "body": "Quality check issue for src/config.rs\n\n## Metadata\ninitial qc commit: 456def789abc012345678901234567890123cdef\ngit branch: feature/config-update\nauthor: Jane Developer <developer@example.com>",
   "reactions": {
     "url": "https://api.github.com/repos/owner/repo/issues/2/reactions",
     "total_count": 0,
