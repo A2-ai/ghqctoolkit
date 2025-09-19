@@ -1,0 +1,175 @@
+---
+title: "QC Record: {{ milestone_names }}"
+subtitle: "Git repository: {{ repository_name }}"
+{% if author %}
+author: "{{ author }}"
+{% endif %}
+date: "{{ date }}"
+{% raw %}
+header-includes:
+  - \renewcommand{\familydefault}{\rmdefault}
+  - \usepackage{sectsty}
+  - \allsectionsfont{\normalfont\rmfamily}
+  - \usepackage{float}
+  - \usepackage{longtable}
+  - \usepackage{booktabs}
+  - \usepackage{makecell}
+  - \usepackage{graphicx}
+  - \usepackage{array}
+  - \usepackage{fancyhdr}
+  - \usepackage{xcolor}
+  - \pagestyle{fancy}
+  - \newcolumntype{R}[1]{>{\raggedright\arraybackslash}p{#1}}
+  - \setlength{\headheight}{30pt}
+  - \fancyfoot[C]{Page \thepage\ of \pageref{LastPage}}
+  - \usepackage{lastpage}
+  - \usepackage{microtype}
+  - \usepackage{ragged2e}
+  - \usepackage{fvextra}
+  - \usepackage[normalem]{ulem}
+  - \usepackage{listings}
+  - \justifying
+  - \sloppy
+  - \lstset{breaklines=true}
+  - \usepackage{titlesec}
+  - \titleformat{\paragraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
+  - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
+  - \titleformat{\subparagraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
+  - \titlespacing*{\subparagraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
+{% endraw -%}
+{% if logo_path %}
+  - \fancyhead[R]{\includegraphics[width=2cm, height=1.5cm, keepaspectratio]{{ "{" }}{{ logo_path }}{{ "}" }}}
+  - \fancyhead[C]{}
+  - \fancyhead[L]{}
+  - \fancypagestyle{plain}{\renewcommand{\headrulewidth}{0.4pt}}
+{% endif %}
+format:
+  pdf:
+    pdf-engine: xelatex
+    toc: true
+    toc-depth: 2
+    code-overflow: wrap
+    mainfont: Times New Roman
+---
+
+\newpage
+
+# Milestone Summary
+
+{% raw %}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.20\textwidth}l>{\raggedright\arraybackslash}p{0.43\textwidth}}
+\toprule
+Title & Description & Status & Issues\\
+\midrule
+\endfirsthead
+\multicolumn{4}{@{}l}{\textit{(continued)}}\\
+\toprule
+Title & Description & Status & Issues\\
+\midrule
+\endhead
+
+\endfoot
+\bottomrule
+\multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{U} Unapproved Issue}\\
+\multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
+\endlastfoot
+{% endraw -%}
+{{ render_milestone_table_rows(data=milestone_data) }}
+{% raw %}
+\end{longtable}
+{% endraw %}
+
+{% for section in milestone_sections %}
+\newpage
+
+# {{ section.name }}
+
+## **Issue Summary**
+
+{% raw %}
+\begin{longtable}{>{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}}
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endfirsthead
+\multicolumn{5}{@{}l}{\textit{(continued)}}\\
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endhead
+
+\endfoot
+\bottomrule
+\endlastfoot
+{% endraw -%}
+{{ render_issue_summary_table_rows(data=section.issues) }}
+{% raw %}
+\end{longtable}
+{% endraw %}
+\newpage
+
+{% for issue in section.issues %}
+## {{ issue.title }}
+
+### **Issue Information**
+
+* **Issue Number:** {{ issue.number }}
+* **Milestone:** `{{ issue.milestone }}`
+* **Created by:** {{ issue.created_by }}
+* **Created at:** {{ issue.created_at }}
+* **QCer:** {{ issue.qcer | join(sep=", ") }}
+* **QC Status:** {{ issue.qc_status }}
+* **{{ checklist_name | title}} Summary:** {{ issue.checklist_summary}}
+* **Git Status:** {{ issue.git_status }}
+* **Initial QC Commit:** {{ issue.initial_qc_commit }}
+* **Latest QC Commit:** {{ issue.latest_qc_commit }}
+* **Issue URL:** {{ issue.issue_url }}
+* **Issue state:** {{ issue.state }}
+{% if issue.closed_by %}
+* **Closed by:** {{ issue.closed_by }}
+* **Closed at:** {{ issue.closed_at }}
+{% endif %}
+### **Issue Body**
+
+{{ issue.body }}
+
+### **Comments**
+
+{% if issue.comments %}
+{% for comment in issue.comments %}
+#### {{ comment.0 }}
+
+{{ comment.1 }}
+
+{% endfor %}
+{% else %}
+No comments found.
+{% endif %}
+
+### **Events**
+
+{% if issue.events %}
+{% for event in issue.events %}
+* {{ event }}
+{% endfor %}
+{% else %}
+No events found.
+{% endif %}
+
+### **Detailed Timeline**
+
+{% if issue.timeline %}
+{% for item in issue.timeline %}
+* {{ item }}
+{% endfor %}
+{% else %}
+No timeline items found.
+{% endif %}
+
+\newpage
+{% endfor %}
+{% endfor %}

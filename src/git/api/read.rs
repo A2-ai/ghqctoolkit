@@ -2,9 +2,18 @@ use std::future::Future;
 
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
+use serde::{Deserialize, Serialize};
 
 use super::{GitHubApiError, RepoUser};
 use crate::git::GitInfo;
+
+/// Git comment data structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitComment {
+    pub body: String,
+    pub author_login: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
 
 #[cfg(test)]
 use mockall::automock;
@@ -26,7 +35,11 @@ pub trait GitHubReader {
     fn get_issue_comments(
         &self,
         issue: &Issue,
-    ) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
+    ) -> impl Future<Output = Result<Vec<GitComment>, GitHubApiError>> + Send;
+    fn get_issue_events(
+        &self,
+        issue: &Issue,
+    ) -> impl Future<Output = Result<Vec<serde_json::Value>, GitHubApiError>> + Send;
 }
 
 impl GitHubReader for GitInfo {
@@ -208,7 +221,7 @@ impl GitHubReader for GitInfo {
     fn get_issue_comments(
         &self,
         issue: &Issue,
-    ) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send {
+    ) -> impl Future<Output = Result<Vec<GitComment>, GitHubApiError>> + Send {
         let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
@@ -258,22 +271,21 @@ impl GitHubReader for GitInfo {
                 all_comments.len()
             );
 
-            // Extract comment bodies with error handling
-            let mut comment_bodies = Vec::new();
+            // Extract comment data with error handling
+            let mut git_comments = Vec::new();
             let mut error_count = 0;
             let total_comments = all_comments.len();
 
             for (idx, comment) in all_comments.into_iter().enumerate() {
                 let is_last_comment = total_comments > 0 && idx == total_comments - 1;
+                let comment_id = comment.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
 
-                match comment.get("body").and_then(|b| b.as_str()) {
-                    Some(body) => comment_bodies.push(body.to_string()),
+                // Extract body
+                let body = match comment.get("body").and_then(|b| b.as_str()) {
+                    Some(body) => body.to_string(),
                     None => {
                         error_count += 1;
-                        let comment_id = comment.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
-
                         if is_last_comment {
-                            // Last comment failed - this is critical
                             log::error!(
                                 "Failed to extract body from last comment {} for issue #{}",
                                 comment_id,
@@ -287,38 +299,106 @@ impl GitHubReader for GitInfo {
                                 backtrace: std::backtrace::Backtrace::capture(),
                             }));
                         } else {
-                            // Non-last comment failed - warn but continue
                             log::warn!(
                                 "Failed to extract body from comment {} for issue #{}: missing body field",
                                 comment_id,
                                 issue_number
                             );
+                            continue;
                         }
                     }
+                };
+
+                // Extract author login
+                let author_login = comment
+                    .get("user")
+                    .and_then(|u| u.get("login"))
+                    .and_then(|l| l.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                // Extract created_at timestamp
+                let created_at = comment
+                    .get("created_at")
+                    .and_then(|t| t.as_str())
+                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|| chrono::Utc::now());
+
+                git_comments.push(GitComment {
+                    body,
+                    author_login,
+                    created_at,
+                });
+            }
+
+            if error_count > 0 {
+                log::info!(
+                    "Successfully extracted {} out of {} comments for issue #{}",
+                    git_comments.len(),
+                    total_comments,
+                    issue_number
+                );
+            }
+
+            Ok(git_comments)
+        }
+    }
+
+    fn get_issue_events(
+        &self,
+        issue: &Issue,
+    ) -> impl Future<Output = Result<Vec<serde_json::Value>, GitHubApiError>> + Send {
+        let octocrab = self.octocrab.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let issue_number = issue.number;
+
+        async move {
+            log::debug!(
+                "Fetching events for issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            let mut all_events = Vec::new();
+            let mut page = 1;
+            let per_page = 100; // Maximum per page
+
+            loop {
+                let url = format!(
+                    "/repos/{}/{}/issues/{}/events?per_page={}&page={}",
+                    &owner, &repo, issue_number, per_page, page
+                );
+
+                let events: Vec<serde_json::Value> = octocrab
+                    .get(url, None::<&()>)
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+
+                if events.is_empty() {
+                    break; // No more pages
+                }
+
+                log::debug!("Fetched {} events on page {}", events.len(), page);
+                all_events.extend(events);
+                page += 1;
+
+                // Safety check to prevent infinite loops
+                if page > 100 {
+                    log::warn!("Reached maximum page limit (100) for events");
+                    break;
                 }
             }
 
-            // Only error if ALL comments failed to parse (and we're not already handling last comment failure)
-            if !comment_bodies.is_empty() || total_comments == 0 {
-                if error_count > 0 {
-                    log::info!(
-                        "Successfully extracted {} out of {} comment bodies for issue #{}",
-                        comment_bodies.len(),
-                        total_comments,
-                        issue_number
-                    );
-                }
+            log::debug!(
+                "Total events fetched for issue #{}: {}",
+                issue_number,
+                all_events.len()
+            );
 
-                Ok(comment_bodies)
-            } else {
-                Err(GitHubApiError::APIError(octocrab::Error::Other {
-                    source: Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Failed to extract all comment bodies",
-                    )),
-                    backtrace: std::backtrace::Backtrace::capture(),
-                }))
-            }
+            Ok(all_events)
         }
     }
 }

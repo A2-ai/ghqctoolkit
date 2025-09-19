@@ -1,0 +1,22 @@
+[
+  {
+    "login": "octocat",
+    "name": "The Octocat"
+  },
+  {
+    "login": "developer",
+    "name": "Jane Developer"
+  },
+  {
+    "login": "maintainer",
+    "name": "John Maintainer"
+  },
+  {
+    "login": "reviewer1",
+    "name": "Alice Reviewer"
+  },
+  {
+    "login": "reviewer2",
+    "name": "Bob Reviewer"
+  }
+]

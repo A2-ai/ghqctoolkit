@@ -19,6 +19,20 @@ pub enum QCStatus {
     ChangesToComment(ObjectId),
 }
 
+impl std::fmt::Display for QCStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let status_text = match self {
+            QCStatus::Approved => "Approved",
+            QCStatus::ChangesAfterApproval(_) => "Approved; subsequent file changes",
+            QCStatus::AwaitingApproval => "Awaiting approval",
+            QCStatus::InProgress => "In progress",
+            QCStatus::ApprovalRequired => "Approval required",
+            QCStatus::ChangesToComment(_) => "Changes to comment",
+        };
+        write!(f, "{}", status_text)
+    }
+}
+
 impl QCStatus {
     pub fn determine_status(
         issue_thread: &IssueThread,

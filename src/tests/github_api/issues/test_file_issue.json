@@ -53,7 +53,7 @@
   "active_lock_reason": null,
   "draft": false,
   "pull_request": null,
-  "body": "Quality check issue for src/test.rs",
+  "body": "Quality check issue for src/test.rs\n\n## Metadata\ninitial qc commit: def456789abc012345678901234567890123abcd\ngit branch: main\nauthor: The Octocat <octocat@example.com>",
   "reactions": {
     "url": "https://api.github.com/repos/owner/repo/issues/1/reactions",
     "total_count": 0,

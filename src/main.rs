@@ -10,9 +10,9 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitStatusOps,
-    IssueThread, QCStatus, RelevantFile, configuration_status, create_labels_if_needed,
-    determine_config_info, get_repo_users, setup_configuration,
+    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitRepository,
+    GitStatusOps, IssueThread, QCStatus, RelevantFile, configuration_status,
+    create_labels_if_needed, determine_config_info, get_repo_users, record, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -77,6 +77,7 @@ enum IssueCommands {
         #[arg(short = 'r', long, value_parser = RelevantFileParser)]
         relevant_files: Option<Vec<RelevantFile>>,
     },
+    /// Comment on an existing issue, providing updated context
     Comment {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
@@ -102,6 +103,7 @@ enum IssueCommands {
         #[arg(long)]
         no_diff: bool,
     },
+    /// Approve and close an existing issue
     Approve {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
@@ -119,6 +121,7 @@ enum IssueCommands {
         #[arg(short, long)]
         note: Option<String>,
     },
+    /// Unapprove a closed issue
     Unapprove {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
@@ -132,6 +135,7 @@ enum IssueCommands {
         #[arg(short, long)]
         reason: Option<String>,
     },
+    /// detailed status of the ongoing qc issue
     Status {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
@@ -145,6 +149,7 @@ enum IssueCommands {
 
 #[derive(Subcommand)]
 enum MilestoneCommands {
+    /// Overview of the status of the issues within the milestone(s)
     Status {
         /// Milestone names to check status for
         milestones: Vec<String>,
@@ -153,14 +158,29 @@ enum MilestoneCommands {
         #[arg(long)]
         all_milestones: bool,
     },
+    /// Generate a record for the milestones within the repository
+    Record {
+        /// Milestone names to create record for
+        milestones: Vec<String>,
+
+        /// Make record for all milestones
+        #[arg(long)]
+        all_milestones: bool,
+
+        /// File name to save the record pdf as. Will default to <repo>_<milestone names>.pdf
+        #[arg(short, long)]
+        record_path: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
 enum ConfigurationCommands {
+    /// Set-up the custom configuration to be used by the tool
     Setup {
-        /// git repository url to be cloned to config_dir
+        /// git repository url to be cloned
         git: Option<String>,
     },
+    /// Status of the configuration repository
     Status,
 }
 
@@ -447,6 +467,54 @@ async fn main() -> Result<()> {
                             bail!("Cannot specify both milestone names and --all-milestones flag");
                         }
                     }
+                }
+                MilestoneCommands::Record {
+                    milestones,
+                    all_milestones,
+                    record_path,
+                } => {
+                    use ghqctoolkit::render;
+
+                    let config_dir = determine_config_info(cli.config_dir, &env)?;
+                    let configuration = Configuration::from_path(&config_dir);
+
+                    let cache = DiskCache::from_git_info(&git_info).ok();
+
+                    let milestones_data = git_info.get_milestones().await?;
+                    let selected_milestones = if all_milestones {
+                        milestones_data
+                    } else {
+                        milestones_data
+                            .into_iter()
+                            .filter(|m| milestones.contains(&m.title))
+                            .collect()
+                    };
+
+                    let (milestone_names, record_str) = record(
+                        &selected_milestones,
+                        &configuration,
+                        &git_info,
+                        env,
+                        cache.as_ref(),
+                    )
+                    .await?;
+                    let record_path = if let Some(mut record_path) = record_path {
+                        record_path.set_extension(".pdf");
+                        record_path
+                    } else {
+                        PathBuf::from(format!(
+                            "{}_{}.pdf",
+                            git_info.repo(),
+                            milestone_names.join("_").replace(" ", "_")
+                        ))
+                    };
+
+                    render(&record_str, &record_path)?;
+
+                    println!(
+                        "✅ Record successfully generated at {}",
+                        record_path.display()
+                    );
                 }
             }
         }

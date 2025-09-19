@@ -1,7 +1,7 @@
 mod read;
 mod write;
 
-pub use read::GitHubReader;
+pub use read::{GitComment, GitHubReader};
 pub use write::GitHubWriter;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

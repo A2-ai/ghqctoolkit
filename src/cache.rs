@@ -1,10 +1,11 @@
 use etcetera::BaseStrategy;
+use octocrab::models::issues::Issue;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::git::GitRepository;
+use crate::git::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, GitRepository, RepoUser};
 
 /// Cache entry with optional TTL
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +18,14 @@ pub struct CacheEntry<T> {
 /// Cached comments with the issue's last updated timestamp
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedComments {
-    pub comments: Vec<String>,
+    pub comments: Vec<GitComment>,
+    pub issue_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Cached events with the issue's last updated timestamp
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedEvents {
+    pub events: Vec<serde_json::Value>,
     pub issue_updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -149,6 +157,257 @@ fn default_ttl() -> Duration {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(3600); // 1 hour default
     Duration::from_secs(ttl_seconds)
+}
+
+/// Get repository users with caching for efficiency
+pub async fn get_repo_users(
+    cache: Option<&DiskCache>,
+    git_info: &impl GitHubReader,
+) -> Result<Vec<RepoUser>, GitHubApiError> {
+    // Try to get assignees from cache first
+    let cached_assignees: Option<Vec<String>> = if let Some(cache) = cache {
+        cache.read::<Vec<String>>(&["users"], "assignees")
+    } else {
+        None
+    };
+
+    let assignee_logins = if let Some(logins) = cached_assignees {
+        log::debug!("Using cached assignees");
+        logins
+    } else {
+        log::debug!("Assignees not found or expired in cache. Fetching...");
+        let logins = git_info.get_assignees().await?;
+
+        // Cache the assignee list with TTL
+        if let Some(cache) = cache {
+            if let Err(e) = cache.write(&["users"], "assignees", &logins, true) {
+                log::warn!("Failed to cache assignees: {}", e);
+            }
+        }
+
+        logins
+    };
+
+    // Parallelize user detail fetching with permanent cache
+    let user_futures: Vec<_> = assignee_logins
+        .into_iter()
+        .map(|username| {
+            async move {
+                // Try to get user details from cache first (permanent cache)
+                let cached_user = if let Some(cache) = cache {
+                    cache.read::<RepoUser>(&["users", "details"], &username)
+                } else {
+                    None
+                };
+
+                if let Some(user) = cached_user {
+                    log::trace!("Using cached user details for: {}", username);
+                    return Ok(user);
+                }
+
+                log::debug!(
+                    "User details for {} not found in cache. Fetching...",
+                    username
+                );
+                let user = git_info.get_user_details(&username).await?;
+
+                // Cache user details permanently (no TTL)
+                if let Some(cache) = cache {
+                    if let Err(e) = cache.write(&["users", "details"], &username, &user, false) {
+                        log::warn!("Failed to cache user details for {}: {}", username, e);
+                    }
+                }
+
+                Ok(user)
+            }
+        })
+        .collect();
+
+    // Execute all futures concurrently
+    let results: Vec<Result<RepoUser, GitHubApiError>> =
+        futures::future::join_all(user_futures).await;
+
+    let users = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+    log::debug!(
+        "Successfully fetched {} assignees with user details",
+        users.len()
+    );
+
+    Ok(users)
+}
+
+/// Create required labels if they don't exist, with caching
+pub async fn create_labels_if_needed(
+    cache: Option<&DiskCache>,
+    branch: &str,
+    git_info: &(impl GitHubReader + GitHubWriter),
+) -> Result<(), GitHubApiError> {
+    // Try to get labels from cache first
+    let cached_labels: Option<Vec<String>> = if let Some(cache) = cache {
+        cache.read::<Vec<String>>(&["labels"], "names")
+    } else {
+        None
+    };
+
+    let label_names = if let Some(names) = cached_labels {
+        log::debug!("Using cached label names");
+        names
+    } else {
+        log::debug!("Label names not found or expired in cache. Fetching...");
+        let names = git_info.get_labels().await?;
+
+        // Cache the label names with TTL
+        if let Some(cache) = cache {
+            if let Err(e) = cache.write(&["labels"], "names", &names, true) {
+                log::warn!("Failed to cache label names: {}", e);
+            }
+        }
+
+        names
+    };
+
+    let original_count = label_names.len();
+    let mut updated_labels = label_names;
+
+    // Ensure "ghqc" label exists
+    if !updated_labels.iter().any(|name| name == "ghqc") {
+        log::debug!("ghqc label does not exist. Creating...");
+        git_info.create_label("ghqc", "FFCB05").await?;
+        updated_labels.push("ghqc".to_string());
+    }
+
+    // Ensure branch label exists
+    if !updated_labels.iter().any(|name| name == branch) {
+        log::debug!("Branch label ({}) does not exist. Creating...", branch);
+        git_info.create_label(branch, "00274C").await?;
+        updated_labels.push(branch.to_string());
+    }
+
+    // Update cache with new labels if we created any
+    if updated_labels.len() != original_count {
+        if let Some(cache) = cache {
+            if let Err(e) = cache.write(&["labels"], "names", &updated_labels, true) {
+                log::warn!("Failed to update cached label names: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Get issue comments with caching based on issue update timestamp
+pub async fn get_issue_comments(
+    issue: &Issue,
+    cache: Option<&DiskCache>,
+    git_info: &impl GitHubReader,
+) -> Result<Vec<GitComment>, GitHubApiError> {
+    // Create cache key from issue number
+    let cache_key = format!("issue_{}", issue.number);
+
+    // Try to get cached comments first
+    let cached_comments: Option<CachedComments> = if let Some(cache) = cache {
+        cache.read::<CachedComments>(&["issues", "comments"], &cache_key)
+    } else {
+        None
+    };
+
+    // Check if cached comments are still valid by comparing timestamps
+    if let Some(cached) = cached_comments {
+        if cached.issue_updated_at >= issue.updated_at {
+            log::debug!(
+                "Using cached comments for issue #{} (cache timestamp: {}, issue timestamp: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
+            return Ok(cached.comments);
+        } else {
+            log::debug!(
+                "Cached comments for issue #{} are stale (cache: {}, issue: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
+        }
+    }
+
+    // Fetch fresh comments from API
+    log::debug!("Fetching fresh comments for issue #{}", issue.number);
+    let comments = git_info.get_issue_comments(issue).await?;
+
+    // Cache the comments with the current issue timestamp (permanently)
+    if let Some(cache) = cache {
+        let cached_comments = CachedComments {
+            comments: comments.clone(),
+            issue_updated_at: issue.updated_at,
+        };
+
+        if let Err(e) = cache.write(&["issues", "comments"], &cache_key, &cached_comments, false) {
+            log::warn!(
+                "Failed to cache comments for issue #{}: {}",
+                issue.number,
+                e
+            );
+        }
+    }
+
+    Ok(comments)
+}
+
+/// Get issue events with caching based on issue update timestamp
+pub async fn get_issue_events(
+    issue: &Issue,
+    cache: Option<&DiskCache>,
+    git_info: &impl GitHubReader,
+) -> Result<Vec<serde_json::Value>, GitHubApiError> {
+    // Create cache key from issue number
+    let cache_key = format!("issue_{}", issue.number);
+
+    // Try to get cached events first
+    let cached_events: Option<CachedEvents> = if let Some(cache) = cache {
+        cache.read::<CachedEvents>(&["issues", "events"], &cache_key)
+    } else {
+        None
+    };
+
+    // Check if cached events are still valid by comparing timestamps
+    if let Some(cached) = cached_events {
+        if cached.issue_updated_at >= issue.updated_at {
+            log::debug!(
+                "Using cached events for issue #{} (cache timestamp: {}, issue timestamp: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
+            return Ok(cached.events);
+        } else {
+            log::debug!(
+                "Cached events for issue #{} are stale (cache: {}, issue: {})",
+                issue.number,
+                cached.issue_updated_at,
+                issue.updated_at
+            );
+        }
+    }
+
+    // Fetch fresh events from API
+    log::debug!("Fetching fresh events for issue #{}", issue.number);
+    let events = git_info.get_issue_events(issue).await?;
+
+    // Cache the events with the current issue timestamp (permanently)
+    if let Some(cache) = cache {
+        let cached_events = CachedEvents {
+            events: events.clone(),
+            issue_updated_at: issue.updated_at,
+        };
+
+        if let Err(e) = cache.write(&["issues", "events"], &cache_key, &cached_events, false) {
+            log::warn!("Failed to cache events for issue #{}: {}", issue.number, e);
+        }
+    }
+
+    Ok(events)
 }
 
 #[cfg(test)]

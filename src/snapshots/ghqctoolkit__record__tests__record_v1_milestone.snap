@@ -1,0 +1,229 @@
+---
+source: src/record.rs
+expression: result.unwrap()
+---
+---
+title: "QC Record: v1.0"
+subtitle: "Git repository: repo"
+
+author: "testuser"
+
+date: "September 19, 2025"
+
+header-includes:
+  - \renewcommand{\familydefault}{\rmdefault}
+  - \usepackage{sectsty}
+  - \allsectionsfont{\normalfont\rmfamily}
+  - \usepackage{float}
+  - \usepackage{longtable}
+  - \usepackage{booktabs}
+  - \usepackage{makecell}
+  - \usepackage{graphicx}
+  - \usepackage{array}
+  - \usepackage{fancyhdr}
+  - \usepackage{xcolor}
+  - \pagestyle{fancy}
+  - \newcolumntype{R}[1]{>{\raggedright\arraybackslash}p{#1}}
+  - \setlength{\headheight}{30pt}
+  - \fancyfoot[C]{Page \thepage\ of \pageref{LastPage}}
+  - \usepackage{lastpage}
+  - \usepackage{microtype}
+  - \usepackage{ragged2e}
+  - \usepackage{fvextra}
+  - \usepackage[normalem]{ulem}
+  - \usepackage{listings}
+  - \justifying
+  - \sloppy
+  - \lstset{breaklines=true}
+  - \usepackage{titlesec}
+  - \titleformat{\paragraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
+  - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
+  - \titleformat{\subparagraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
+  - \titlespacing*{\subparagraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
+
+format:
+  pdf:
+    pdf-engine: xelatex
+    toc: true
+    toc-depth: 2
+    code-overflow: wrap
+    mainfont: Times New Roman
+---
+
+\newpage
+
+# Milestone Summary
+
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.20\textwidth}l>{\raggedright\arraybackslash}p{0.43\textwidth}}
+\toprule
+Title & Description & Status & Issues\\
+\midrule
+\endfirsthead
+\multicolumn{4}{@{}l}{\textit{(continued)}}\\
+\toprule
+Title & Description & Status & Issues\\
+\midrule
+\endhead
+
+\endfoot
+\bottomrule
+\multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{U} Unapproved Issue}\\
+\multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
+\endlastfoot
+v1.0 & First release
+milestone & open & src/main.rs\textcolor{red}{U}\newline \newline src/test.rs\textcolor{red}{U}\\*
+
+\end{longtable}
+
+
+
+\newpage
+
+# v1.0
+
+## **Issue Summary**
+
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}}
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endfirsthead
+\multicolumn{5}{@{}l}{\textit{(continued)}}\\
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endhead
+
+\endfoot
+\bottomrule
+\endlastfoot
+src/main.rs & Awaiting approval & John Maintainer & NA & NA\\
+\addlinespace\addlinespace
+src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
+
+\end{longtable}
+
+\newpage
+
+
+## src/main.rs
+
+### **Issue Information**
+
+* **Issue Number:** 3
+* **Milestone:** `v1.0`
+* **Created by:** John Maintainer (maintainer)
+* **Created at:** 2011-04-22 15:33:48
+* **QCer:** NA
+* **QC Status:** Awaiting approval
+* **Test Checklist Summary:** 0/0 (100.0%)
+* **Git Status:** Up to date
+* **Initial QC Commit:** abc123def456789012345678901234567890abcd
+* **Latest QC Commit:** abc123def456789012345678901234567890abcd
+* **Issue URL:** https://github.com/owner/repo/issues/3
+* **Issue state:** Closed
+
+### **Issue Body**
+
+Quality check issue for src/main.rs - critical changes
+
+#### Metadata
+initial qc commit: abc123def456789012345678901234567890abcd
+git branch: main
+author: John Maintainer <maintainer@example.com>
+
+### **Comments**
+
+
+No comments found.
+
+
+### **Events**
+
+
+
+* 2011-04-22 15:30:00 - milestone set to 'v1.0' by John Maintainer (maintainer)
+
+* 2011-04-22 15:31:00 - Alice Reviewer (reviewer1) assigned by John Maintainer (maintainer)
+
+* 2011-04-22 15:32:00 - added label 'ghqc' by John Maintainer (maintainer)
+
+* 2011-04-22 15:33:00 - added label 'urgent' by John Maintainer (maintainer)
+
+
+
+### **Detailed Timeline**
+
+
+
+* 2011-04-22 15:30:00 - milestone set to 'v1.0' by John Maintainer (maintainer)
+
+* 2011-04-22 15:31:00 - Alice Reviewer (reviewer1) assigned by John Maintainer (maintainer)
+
+* 2011-04-22 15:32:00 - added label 'ghqc' by John Maintainer (maintainer)
+
+* 2011-04-22 15:33:00 - added label 'urgent' by John Maintainer (maintainer)
+
+
+
+\newpage
+
+## src/test.rs
+
+### **Issue Information**
+
+* **Issue Number:** 1
+* **Milestone:** `v1.0`
+* **Created by:** The Octocat (octocat)
+* **Created at:** 2011-04-22 13:33:48
+* **QCer:** NA
+* **QC Status:** Awaiting approval
+* **Test Checklist Summary:** 0/0 (100.0%)
+* **Git Status:** Up to date
+* **Initial QC Commit:** def456789abc012345678901234567890123abcd
+* **Latest QC Commit:** def456789abc012345678901234567890123abcd
+* **Issue URL:** https://github.com/owner/repo/issues/1
+* **Issue state:** Closed
+
+### **Issue Body**
+
+Quality check issue for src/test.rs
+
+#### Metadata
+initial qc commit: def456789abc012345678901234567890123abcd
+git branch: main
+author: The Octocat <octocat@example.com>
+
+### **Comments**
+
+
+No comments found.
+
+
+### **Events**
+
+
+
+* 2011-04-22 13:30:00 - milestone set to 'v1.0' by The Octocat (octocat)
+
+* 2011-04-22 13:32:00 - added label 'ghqc' by The Octocat (octocat)
+
+
+
+### **Detailed Timeline**
+
+
+
+* 2011-04-22 13:30:00 - milestone set to 'v1.0' by The Octocat (octocat)
+
+* 2011-04-22 13:32:00 - added label 'ghqc' by The Octocat (octocat)
+
+
+
+\newpage

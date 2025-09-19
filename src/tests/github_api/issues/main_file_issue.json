@@ -62,7 +62,7 @@
   "active_lock_reason": null,
   "draft": false,
   "pull_request": null,
-  "body": "Quality check issue for src/main.rs - critical changes",
+  "body": "Quality check issue for src/main.rs - critical changes\n\n## Metadata\ninitial qc commit: abc123def456789012345678901234567890abcd\ngit branch: main\nauthor: John Maintainer <maintainer@example.com>",
   "reactions": {
     "url": "https://api.github.com/repos/owner/repo/issues/3/reactions",
     "total_count": 1,
