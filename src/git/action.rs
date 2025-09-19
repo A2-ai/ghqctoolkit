@@ -62,7 +62,7 @@ impl GitAction for GitActionImpl {
             let open_opts = open::Options::default()
                 .config_overrides(auth_configs.iter().map(|s| BString::from(s.as_str())));
 
-            match self.try_clone_with_opts(&url, path, &open_opts) {
+            match try_clone_with_opts(&url, path, &open_opts) {
                 Ok(()) => {
                     log::debug!("Successfully cloned repository with credential helper");
                     return Ok(());
@@ -89,7 +89,7 @@ impl GitAction for GitActionImpl {
                 let kv: BString = format!("http.{url_str}.extraHeader={auth_header}").into();
                 let open_opts = open::Options::default().config_overrides([kv]);
 
-                match self.try_clone_with_opts(&url, path, &open_opts) {
+                match try_clone_with_opts(&url, path, &open_opts) {
                     Ok(()) => {
                         log::debug!("Successfully cloned repository with auth method {}", i + 1);
                         return Ok(());
@@ -105,7 +105,7 @@ impl GitAction for GitActionImpl {
         // If all auth methods failed, try without authentication (for public repos)
         log::debug!("Trying without authentication");
         let open_opts = open::Options::default();
-        self.try_clone_with_opts(&url, path, &open_opts)
+        try_clone_with_opts(&url, path, &open_opts)
     }
 
     fn remote(&self, path: &Path) -> Result<Url, GitActionError> {
