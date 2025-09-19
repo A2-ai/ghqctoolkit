@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use gix::ObjectId;
-use inquire::{Autocomplete, CustomUserError, Select, Text, validator::Validation};
+use inquire::{Autocomplete, CustomUserError, MultiSelect, Select, Text, validator::Validation};
 use octocrab::models::{Milestone, issues::Issue};
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -887,4 +887,74 @@ mod tests {
         // Actual interactive testing would require manual verification
         assert!(config.checklists.len() == 3); // Including the default "Custom" checklist
     }
+}
+
+/// Interactive milestone selection for record generation
+pub fn prompt_milestone_record(
+    milestones: &[Milestone],
+) -> Result<(Vec<Milestone>, Option<PathBuf>)> {
+    println!("📄 Welcome to GHQC Milestone Record Mode!");
+
+    if milestones.is_empty() {
+        bail!("No milestones found in repository");
+    }
+
+    // First ask if they want to select all or choose specific ones
+    let choice = Select::new(
+        "📄 How would you like to select milestones for the record?",
+        vec!["📋 Select All Milestones", "🎯 Choose Specific Milestones"],
+    )
+    .prompt()
+    .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    let selected_milestones: Vec<Milestone> = if choice == "📋 Select All Milestones" {
+        milestones.to_vec()
+    } else {
+        // Multi-select specific milestones
+        let milestone_options: Vec<String> = milestones
+            .iter()
+            .map(|m| format!("{} ({})", m.title, m.number))
+            .collect();
+
+        let selected_strings =
+            MultiSelect::new("📄 Select milestones for the record:", milestone_options)
+                .with_validator(|selection: &[inquire::list_option::ListOption<&String>]| {
+                    if selection.is_empty() {
+                        Ok(inquire::validator::Validation::Invalid(
+                            "Please select at least one milestone".into(),
+                        ))
+                    } else {
+                        Ok(inquire::validator::Validation::Valid)
+                    }
+                })
+                .prompt()
+                .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+        // Filter milestones based on selected strings
+        milestones
+            .iter()
+            .filter(|m| {
+                let milestone_display = format!("{} ({})", m.title, m.number);
+                selected_strings.contains(&milestone_display)
+            })
+            .cloned()
+            .collect()
+    };
+
+    if selected_milestones.is_empty() {
+        bail!("No milestones selected");
+    }
+
+    // Prompt for optional record path
+    let record_path_input = Text::new("📁 Enter record file name (Enter for default):")
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+    let record_path = if record_path_input.trim().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(record_path_input.trim()))
+    };
+
+    Ok((selected_milestones, record_path))
 }

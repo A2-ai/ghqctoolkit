@@ -49,30 +49,63 @@ impl GitAction for GitActionImpl {
 
         let url_str = url.to_string();
 
-        let open_opts = if let Ok(token) = get_token(&url_str, &StdEnvProvider) {
-            let header = format!("Authorization: Basic x-access-token:{token}");
-            let kv: BString = format!("http.{url_str}.extraHeader={header}").into();
+        // Try different authentication approaches
+        if let Ok(token) = get_token(&url_str, &StdEnvProvider) {
+            // Method 1: Use git credential helper approach by setting up credentials
+            let auth_configs = vec![
+                // Try setting up credentials similar to how git does it
+                format!("credential.{url_str}.helper=!echo password={token}"),
+                format!("http.{url_str}.extraHeader=Authorization: Basic x-access-token:{token}"),
+            ];
 
-            open::Options::default().config_overrides([kv])
-        } else {
-            open::Options::default()
-        };
+            log::debug!("Trying git credential helper approach");
+            let open_opts = open::Options::default()
+                .config_overrides(auth_configs.iter().map(|s| BString::from(s.as_str())));
 
-        let mut prep = PrepareFetch::new(
-            url.clone(),
-            path,
-            Kind::WithWorktree,
-            create::Options::default(),
-            open_opts,
-        )?;
+            match try_clone_with_opts(&url, path, &open_opts) {
+                Ok(()) => {
+                    log::debug!("Successfully cloned repository with credential helper");
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::debug!("Credential helper method failed: {:?}", e);
+                }
+            }
 
-        let (mut checkout, _) =
-            prep.fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
+            // Method 2: Try different authorization header formats
+            let auth_methods = vec![
+                format!("Authorization: token {token}"),
+                format!("Authorization: Bearer {token}"),
+                format!("Authorization: Basic x-access-token:{token}"),
+            ];
 
-        checkout.main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
+            for (i, auth_header) in auth_methods.iter().enumerate() {
+                log::debug!(
+                    "Trying authentication header method {} of {}",
+                    i + 1,
+                    auth_methods.len()
+                );
 
-        log::debug!("Successfully cloned repository");
-        Ok(())
+                let kv: BString = format!("http.{url_str}.extraHeader={auth_header}").into();
+                let open_opts = open::Options::default().config_overrides([kv]);
+
+                match try_clone_with_opts(&url, path, &open_opts) {
+                    Ok(()) => {
+                        log::debug!("Successfully cloned repository with auth method {}", i + 1);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        log::debug!("Authentication method {} failed: {:?}", i + 1, e);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // If all auth methods failed, try without authentication (for public repos)
+        log::debug!("Trying without authentication");
+        let open_opts = open::Options::default();
+        try_clone_with_opts(&url, path, &open_opts)
     }
 
     fn remote(&self, path: &Path) -> Result<Url, GitActionError> {
@@ -93,4 +126,28 @@ impl GitAction for GitActionImpl {
                 ))?;
         Ok(remote_url.clone())
     }
+}
+
+fn try_clone_with_opts(
+    url: &Url,
+    path: &Path,
+    open_opts: &open::Options,
+) -> Result<(), GitActionError> {
+    let mut prep = PrepareFetch::new(
+        url.clone(),
+        path,
+        Kind::WithWorktree,
+        create::Options::default(),
+        open_opts.clone(),
+    )?;
+
+    let (mut checkout, _) = prep
+        .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
+        .map_err(|e| {
+            log::debug!("Fetch failed with error: {:?}", e);
+            GitActionError::FetchError(e)
+        })?;
+
+    checkout.main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
+    Ok(())
 }

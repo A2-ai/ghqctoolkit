@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use ghqctoolkit::cli::{
     RelevantFileParser, find_issue, interactive_milestone_status, interactive_status,
-    milestone_status, single_issue_status,
+    milestone_status, prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -481,13 +481,44 @@ async fn main() -> Result<()> {
                     let cache = DiskCache::from_git_info(&git_info).ok();
 
                     let milestones_data = git_info.get_milestones().await?;
-                    let selected_milestones = if all_milestones {
-                        milestones_data
-                    } else {
-                        milestones_data
-                            .into_iter()
-                            .filter(|m| milestones.contains(&m.title))
-                            .collect()
+
+                    let (selected_milestones, interactive_record_path) = match (
+                        milestones.is_empty(),
+                        all_milestones,
+                        record_path.is_none(),
+                    ) {
+                        (true, false, true) => {
+                            // Interactive mode - no milestones specified, not all_milestones, and no record_path
+                            prompt_milestone_record(&milestones_data)?
+                        }
+                        (true, true, _) => {
+                            // All milestones requested
+                            (milestones_data, None)
+                        }
+                        (false, false, _) => {
+                            // Specific milestones provided - filter by name
+                            let selected: Vec<Milestone> = milestones_data
+                                .into_iter()
+                                .filter(|m| milestones.contains(&m.title))
+                                .collect();
+
+                            if selected.is_empty() {
+                                bail!(
+                                    "No matching milestones found for: {}",
+                                    milestones.join(", ")
+                                );
+                            }
+
+                            (selected, None)
+                        }
+                        (false, true, _) => {
+                            bail!("Cannot specify both milestone names and --all-milestones flag");
+                        }
+                        (true, false, false) => {
+                            bail!(
+                                "Cannot use interactive mode when record_path is specified. Please specify milestone names or use --all-milestones."
+                            );
+                        }
                     };
 
                     let (milestone_names, record_str) = record(
@@ -498,14 +529,15 @@ async fn main() -> Result<()> {
                         cache.as_ref(),
                     )
                     .await?;
-                    let record_path = if let Some(mut record_path) = record_path {
+                    let final_record_path = interactive_record_path.or(record_path);
+                    let record_path = if let Some(mut record_path) = final_record_path {
                         record_path.set_extension(".pdf");
                         record_path
                     } else {
                         PathBuf::from(format!(
-                            "{}_{}.pdf",
+                            "{}-{}.pdf",
                             git_info.repo(),
-                            milestone_names.join("_").replace(" ", "_")
+                            milestone_names.join("-").replace(" ", "-")
                         ))
                     };
 
