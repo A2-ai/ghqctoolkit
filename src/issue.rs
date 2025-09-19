@@ -1,7 +1,8 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
+use regex::Regex;
 
 use crate::{
     cache::{DiskCache, get_issue_comments},
@@ -218,21 +219,174 @@ fn parse_commit_to_object_id(
     Err(IssueError::CommitNotParseable(commit_str.to_string()))
 }
 
+static MARKDOWN_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap()
+});
+
+static HTML_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]*)</a>"#).unwrap()
+});
+
 /// Parse branch name from issue body
-/// Looks for pattern: "git branch: <branch-name>"
+/// Looks for patterns:
+/// 1. "git branch: <branch-name>"
+/// 2. "[<branch-name>](<url>)" (markdown link format)
+/// 3. "<a href="url">text</a>" (HTML link format)
 fn parse_branch_from_body(body: &str) -> Option<String> {
+    // First try the original "git branch: " pattern
     let pattern = "git branch: ";
-    let start = body.find(pattern)?;
-    let branch_start = start + pattern.len();
+    if let Some(start) = body.find(pattern) {
+        let branch_start = start + pattern.len();
+        let remaining = &body[branch_start..];
 
-    let remaining = &body[branch_start..];
-    let branch_name = remaining.lines().next()?.trim();
+        // Check if the branch name is a markdown link [name](url)
+        if let Some(md_captures) = MARKDOWN_LINK_REGEX.captures(remaining.lines().next()?) {
+            if let Some(link_text) = md_captures.get(1) {
+                let branch_name = link_text.as_str().trim();
+                if !branch_name.is_empty() {
+                    return Some(branch_name.to_string());
+                }
+            }
+        }
 
-    if branch_name.is_empty() {
+        // Check if the branch name is an HTML link <a href="url">name</a>
+        if let Some(html_captures) = HTML_LINK_REGEX.captures(remaining.lines().next()?) {
+            if let Some(link_text) = html_captures.get(2) {
+                let branch_name = link_text.as_str().trim();
+                if !branch_name.is_empty() {
+                    return Some(branch_name.to_string());
+                }
+            }
+        }
+
+        // Fall back to plain text branch name
+        let branch_name = remaining.lines().next()?.trim();
+        if !branch_name.is_empty() {
+            return Some(branch_name.to_string());
+        }
+    }
+
+    // Try to find markdown link pattern: [branch](url)
+    // Look for patterns like [main](https://...) or [feature/branch-name](url)
+    for captures in MARKDOWN_LINK_REGEX.captures_iter(body) {
+        if let Some(branch_match) = captures.get(1) {
+            let potential_branch = branch_match.as_str().trim();
+
+            // Basic validation: branch names shouldn't contain spaces or certain characters
+            // that are common in regular markdown links
+            if !potential_branch.is_empty()
+                && !potential_branch.contains(' ')
+                && !potential_branch.starts_with("http")
+                && potential_branch.len() < 100  // Reasonable branch name length
+            {
+                return Some(potential_branch.to_string());
+            }
+        }
+    }
+
+    // Try to find HTML link pattern and extract branch from URL or link text
+    for captures in HTML_LINK_REGEX.captures_iter(body) {
+        if let Some(url_match) = captures.get(1) {
+            let url = url_match.as_str();
+
+            // Try to extract branch name from GitHub URL patterns
+            if let Some(branch_name) = extract_branch_from_url(url) {
+                return Some(branch_name);
+            }
+        }
+
+        // Also try the link text as a potential branch name
+        if let Some(text_match) = captures.get(2) {
+            let potential_branch = text_match.as_str().trim();
+
+            if !potential_branch.is_empty()
+                && !potential_branch.contains(' ')
+                && !potential_branch.starts_with("http")
+                && potential_branch.len() < 100
+            {
+                return Some(potential_branch.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract branch name from GitHub URL patterns
+/// Handles URLs like: https://github.com/owner/repo/tree/branch-name
+fn extract_branch_from_url(url: &str) -> Option<String> {
+    // Pattern: /tree/{branch-name}
+    if let Some(tree_pos) = url.find("/tree/") {
+        let branch_start = tree_pos + 6; // "/tree/".len()
+        let remaining = &url[branch_start..];
+
+        // Remove query parameters and fragments
+        let without_query = remaining.split('?').next().unwrap_or(remaining);
+        let without_fragment = without_query.split('#').next().unwrap_or(without_query);
+
+        // For GitHub tree URLs, we need to distinguish between branch names and file paths
+        // Heuristic: if the path contains common file extensions or looks like a deep file path,
+        // we try to extract just the branch portion
+        let path_parts: Vec<&str> = without_fragment.split('/').collect();
+
+        // If it's a simple path (1-2 segments) or doesn't look like a file path, treat as branch
+        if path_parts.len() <= 2 || !looks_like_file_path(&path_parts) {
+            let branch_name = without_fragment;
+            if !branch_name.is_empty() && branch_name.len() < 100 {
+                return Some(branch_name.to_string());
+            }
+        } else {
+            // Try to extract just the branch part (typically first 1-2 segments for feature branches)
+            // This is a heuristic and may not always be perfect
+            if let Some(branch_candidate) = extract_likely_branch(&path_parts) {
+                return Some(branch_candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Check if a path looks like it contains file paths (has file extensions or deep nesting)
+fn looks_like_file_path(path_parts: &[&str]) -> bool {
+    // Check if any part has a file extension
+    for part in path_parts {
+        if part.contains('.') && part.len() > 1 {
+            let last_dot = part.rfind('.').unwrap();
+            let extension = &part[last_dot + 1..];
+            // Common file extensions
+            if matches!(extension.to_lowercase().as_str(),
+                "rs" | "js" | "ts" | "py" | "java" | "cpp" | "c" | "h" |
+                "yaml" | "yml" | "json" | "xml" | "md" | "txt" | "css" | "html"
+            ) {
+                return true;
+            }
+        }
+    }
+
+    // If we have more than 3 path segments, it's likely a file path
+    path_parts.len() > 3
+}
+
+/// Extract the likely branch name from path parts
+fn extract_likely_branch(path_parts: &[&str]) -> Option<String> {
+    if path_parts.is_empty() {
         return None;
     }
 
-    Some(branch_name.to_string())
+    // For feature branches like "feature/branch-name", take first two parts
+    if path_parts.len() >= 2 {
+        let first_part = path_parts[0];
+        let second_part = path_parts[1];
+
+        // Common branch prefixes
+        if matches!(first_part, "feature" | "bugfix" | "hotfix" | "release" | "develop" | "dev") {
+            return Some(format!("{}/{}", first_part, second_part));
+        }
+    }
+
+    // Fall back to just the first part
+    Some(path_parts[0].to_string())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -716,6 +870,128 @@ mod tests {
         let body = "git branch:    \n";
         let result = parse_branch_from_body(body);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_markdown_link() {
+        let body = "Check out the changes in [feature/new-feature](https://github.com/owner/repo/tree/feature/new-feature)";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("feature/new-feature".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_markdown_link_main() {
+        let body = "Based on [main](https://github.com/owner/repo) branch.";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_markdown_link_complex_name() {
+        let body = "Issue found in [bugfix/JIRA-123_memory-leak](https://github.com/owner/repo/tree/bugfix/JIRA-123_memory-leak)";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("bugfix/JIRA-123_memory-leak".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_markdown_link_with_spaces_ignored() {
+        let body = "See [Code Review Process](https://docs.example.com) for details.";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, None); // Should ignore links with spaces
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_markdown_link_http_ignored() {
+        let body = "Check [https://example.com](https://example.com) for details.";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, None); // Should ignore HTTP URLs
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_prefers_git_branch_pattern() {
+        let body = "git branch: main\n\nSee also [develop](https://github.com/owner/repo/tree/develop)";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("main".to_string())); // Should prefer git branch pattern
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_markdown_link_incomplete() {
+        let body = "Check out [feature/branch but no closing";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, None); // Should not match incomplete markdown links
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_multiple_markdown_links() {
+        let body = "See [Documentation](https://docs.com) and [develop](https://github.com/owner/repo/tree/develop)";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("Documentation".to_string())); // Returns first valid markdown link
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_git_branch_markdown_link() {
+        let body = "git branch: [main](https://github.com/A2-ai/ghqc_status_project2/tree/main)\nauthor: test";
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_git_branch_html_link() {
+        let body = r#"git branch: <a href="https://github.com/A2-ai/ghqc_status_project2/tree/main" target="_blank">main</a>
+author: test"#;
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_html_link_in_content() {
+        let body = r#"Check out <a href="https://github.com/owner/repo/tree/feature/new-feature">feature/new-feature</a> for details."#;
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("feature/new-feature".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_html_link_extract_from_url() {
+        let body = r#"See <a href="https://github.com/A2-ai/repo/tree/bugfix/memory-leak" target="_blank">file contents</a>"#;
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("bugfix/memory-leak".to_string()));
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_complex_example() {
+        let body = r#"## Metadata
+
+* initial qc commit: a7075606219a40c7536af8cd1b5f0b761965826c
+* git branch: [main](https://github.com/A2-ai/ghqc_status_project2/tree/a7075606219a40c7536af8cd1b5f0b761965826c)
+* author: jenna-a2ai <jenna@a2-ai.com>
+* <a href="https://github.com/A2-ai/ghqc_status_project2/blob/a70756/dvs.yaml" target="_blank">file contents at initial qc commit</a>"#;
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_extract_branch_from_url_tree_pattern() {
+        let result = extract_branch_from_url("https://github.com/owner/repo/tree/feature/branch-name");
+        assert_eq!(result, Some("feature/branch-name".to_string()));
+    }
+
+    #[test]
+    fn test_extract_branch_from_url_tree_pattern_with_path() {
+        let result = extract_branch_from_url("https://github.com/owner/repo/tree/main/src/file.rs");
+        assert_eq!(result, Some("main".to_string())); // Should extract just the branch name
+    }
+
+    #[test]
+    fn test_extract_branch_from_url_no_tree_pattern() {
+        let result = extract_branch_from_url("https://github.com/owner/repo/blob/main/file.rs");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_branch_from_body_html_link_with_spaces_ignored() {
+        let body = r#"<a href="https://docs.com">Code Review Process</a>"#;
+        let result = parse_branch_from_body(body);
+        assert_eq!(result, None); // Should ignore links with spaces in text
     }
 
     // Enhanced MockGitInfo for testing robust branch handling
