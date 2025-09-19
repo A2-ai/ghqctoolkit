@@ -890,7 +890,9 @@ mod tests {
 }
 
 /// Interactive milestone selection for record generation
-pub fn prompt_milestone_record(milestones: &[Milestone]) -> Result<(Vec<Milestone>, Option<PathBuf>)> {
+pub fn prompt_milestone_record(
+    milestones: &[Milestone],
+) -> Result<(Vec<Milestone>, Option<PathBuf>)> {
     println!("📄 Welcome to GHQC Milestone Record Mode!");
 
     if milestones.is_empty() {

@@ -219,9 +219,8 @@ fn parse_commit_to_object_id(
     Err(IssueError::CommitNotParseable(commit_str.to_string()))
 }
 
-static MARKDOWN_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap()
-});
+static MARKDOWN_LINK_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap());
 
 static HTML_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]*)</a>"#).unwrap()
@@ -277,7 +276,8 @@ fn parse_branch_from_body(body: &str) -> Option<String> {
             if !potential_branch.is_empty()
                 && !potential_branch.contains(' ')
                 && !potential_branch.starts_with("http")
-                && potential_branch.len() < 100  // Reasonable branch name length
+                && potential_branch.len() < 100
+            // Reasonable branch name length
             {
                 return Some(potential_branch.to_string());
             }
@@ -355,9 +355,23 @@ fn looks_like_file_path(path_parts: &[&str]) -> bool {
             let last_dot = part.rfind('.').unwrap();
             let extension = &part[last_dot + 1..];
             // Common file extensions
-            if matches!(extension.to_lowercase().as_str(),
-                "rs" | "js" | "ts" | "py" | "java" | "cpp" | "c" | "h" |
-                "yaml" | "yml" | "json" | "xml" | "md" | "txt" | "css" | "html"
+            if matches!(
+                extension.to_lowercase().as_str(),
+                "rs" | "js"
+                    | "ts"
+                    | "py"
+                    | "java"
+                    | "cpp"
+                    | "c"
+                    | "h"
+                    | "yaml"
+                    | "yml"
+                    | "json"
+                    | "xml"
+                    | "md"
+                    | "txt"
+                    | "css"
+                    | "html"
             ) {
                 return true;
             }
@@ -380,7 +394,10 @@ fn extract_likely_branch(path_parts: &[&str]) -> Option<String> {
         let second_part = path_parts[1];
 
         // Common branch prefixes
-        if matches!(first_part, "feature" | "bugfix" | "hotfix" | "release" | "develop" | "dev") {
+        if matches!(
+            first_part,
+            "feature" | "bugfix" | "hotfix" | "release" | "develop" | "dev"
+        ) {
             return Some(format!("{}/{}", first_part, second_part));
         }
     }
@@ -909,7 +926,8 @@ mod tests {
 
     #[test]
     fn test_parse_branch_from_body_prefers_git_branch_pattern() {
-        let body = "git branch: main\n\nSee also [develop](https://github.com/owner/repo/tree/develop)";
+        let body =
+            "git branch: main\n\nSee also [develop](https://github.com/owner/repo/tree/develop)";
         let result = parse_branch_from_body(body);
         assert_eq!(result, Some("main".to_string())); // Should prefer git branch pattern
     }
@@ -971,7 +989,8 @@ author: test"#;
 
     #[test]
     fn test_extract_branch_from_url_tree_pattern() {
-        let result = extract_branch_from_url("https://github.com/owner/repo/tree/feature/branch-name");
+        let result =
+            extract_branch_from_url("https://github.com/owner/repo/tree/feature/branch-name");
         assert_eq!(result, Some("feature/branch-name".to_string()));
     }
 

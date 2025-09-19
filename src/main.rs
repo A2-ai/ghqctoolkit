@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use ghqctoolkit::cli::{
     RelevantFileParser, find_issue, interactive_milestone_status, interactive_status,
-    milestone_status, single_issue_status, prompt_milestone_record,
+    milestone_status, prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -482,7 +482,11 @@ async fn main() -> Result<()> {
 
                     let milestones_data = git_info.get_milestones().await?;
 
-                    let (selected_milestones, interactive_record_path) = match (milestones.is_empty(), all_milestones, record_path.is_none()) {
+                    let (selected_milestones, interactive_record_path) = match (
+                        milestones.is_empty(),
+                        all_milestones,
+                        record_path.is_none(),
+                    ) {
                         (true, false, true) => {
                             // Interactive mode - no milestones specified, not all_milestones, and no record_path
                             prompt_milestone_record(&milestones_data)?
@@ -511,7 +515,9 @@ async fn main() -> Result<()> {
                             bail!("Cannot specify both milestone names and --all-milestones flag");
                         }
                         (true, false, false) => {
-                            bail!("Cannot use interactive mode when record_path is specified. Please specify milestone names or use --all-milestones.");
+                            bail!(
+                                "Cannot use interactive mode when record_path is specified. Please specify milestone names or use --all-milestones."
+                            );
                         }
                     };
 

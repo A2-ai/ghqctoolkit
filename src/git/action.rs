@@ -59,7 +59,8 @@ impl GitAction for GitActionImpl {
             ];
 
             log::debug!("Trying git credential helper approach");
-            let open_opts = open::Options::default().config_overrides(auth_configs.iter().map(|s| BString::from(s.as_str())));
+            let open_opts = open::Options::default()
+                .config_overrides(auth_configs.iter().map(|s| BString::from(s.as_str())));
 
             match self.try_clone_with_opts(&url, path, &open_opts) {
                 Ok(()) => {
@@ -79,7 +80,11 @@ impl GitAction for GitActionImpl {
             ];
 
             for (i, auth_header) in auth_methods.iter().enumerate() {
-                log::debug!("Trying authentication header method {} of {}", i + 1, auth_methods.len());
+                log::debug!(
+                    "Trying authentication header method {} of {}",
+                    i + 1,
+                    auth_methods.len()
+                );
 
                 let kv: BString = format!("http.{url_str}.extraHeader={auth_header}").into();
                 let open_opts = open::Options::default().config_overrides([kv]);
@@ -123,7 +128,11 @@ impl GitAction for GitActionImpl {
     }
 }
 
-fn try_clone_with_opts(url: &Url, path: &Path, open_opts: &open::Options) -> Result<(), GitActionError> {
+fn try_clone_with_opts(
+    url: &Url,
+    path: &Path,
+    open_opts: &open::Options,
+) -> Result<(), GitActionError> {
     let mut prep = PrepareFetch::new(
         url.clone(),
         path,
@@ -132,7 +141,8 @@ fn try_clone_with_opts(url: &Url, path: &Path, open_opts: &open::Options) -> Res
         open_opts.clone(),
     )?;
 
-    let (mut checkout, _) = prep.fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
+    let (mut checkout, _) = prep
+        .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
         .map_err(|e| {
             log::debug!("Fetch failed with error: {:?}", e);
             GitActionError::FetchError(e)
@@ -141,4 +151,3 @@ fn try_clone_with_opts(url: &Url, path: &Path, open_opts: &open::Options) -> Res
     checkout.main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
     Ok(())
 }
-
