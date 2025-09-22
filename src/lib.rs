@@ -1,4 +1,5 @@
 mod approve;
+mod archive;
 mod cache;
 mod comment;
 mod configuration;
@@ -13,6 +14,7 @@ pub mod utils;
 pub mod cli;
 
 pub use approve::{QCApprove, QCUnapprove};
+pub use archive::{compress, get_archive_content};
 pub use cache::DiskCache;
 pub use cache::{
     CachedEvents, create_labels_if_needed, get_issue_comments, get_issue_events, get_repo_users,

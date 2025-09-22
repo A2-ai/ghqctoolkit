@@ -6,13 +6,14 @@ use std::path::PathBuf;
 
 use ghqctoolkit::cli::{
     RelevantFileParser, find_issue, interactive_milestone_status, interactive_status,
-    milestone_status, prompt_milestone_record, single_issue_status,
+    milestone_status, prompt_milestone_archive, prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitRepository,
-    GitStatusOps, IssueThread, QCStatus, RelevantFile, configuration_status,
-    create_labels_if_needed, determine_config_info, get_repo_users, record, setup_configuration,
+    GitStatusOps, IssueThread, QCStatus, RelevantFile, compress, configuration_status,
+    create_labels_if_needed, determine_config_info, get_archive_content, get_repo_users, record,
+    setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -170,6 +171,27 @@ enum MilestoneCommands {
         /// File name to save the record pdf as. Will default to <repo>_<milestone names>.pdf
         #[arg(short, long)]
         record_path: Option<PathBuf>,
+    },
+    /// Create an archive of files from milestones
+    Archive {
+        /// Milestone names to archive
+        milestones: Vec<String>,
+
+        /// Archive all milestones
+        #[arg(long)]
+        all_milestones: bool,
+
+        /// Include unapproved issues in archive
+        #[arg(long)]
+        include_unapproved: bool,
+
+        /// Flatten archive structure (put all files in root directory)
+        #[arg(long)]
+        flatten: bool,
+
+        /// File name to save the archive as. Will default to <repo>_<milestone names>.tar.gz
+        #[arg(short, long)]
+        archive_path: Option<PathBuf>,
     },
 }
 
@@ -546,6 +568,94 @@ async fn main() -> Result<()> {
                     println!(
                         "✅ Record successfully generated at {}",
                         record_path.display()
+                    );
+                }
+                MilestoneCommands::Archive {
+                    milestones,
+                    all_milestones,
+                    include_unapproved,
+                    flatten,
+                    archive_path,
+                } => {
+                    let cache = DiskCache::from_git_info(&git_info).ok();
+
+                    let milestones_data = git_info.get_milestones().await?;
+
+                    let (
+                        selected_milestones,
+                        interactive_archive_path,
+                        interactive_include_unapproved,
+                        interactive_flatten,
+                    ) = match (
+                        milestones.is_empty(),
+                        all_milestones,
+                        archive_path.is_none(),
+                    ) {
+                        (true, false, true) => {
+                            // Interactive mode - no milestones specified, not all_milestones, and no archive_path
+                            prompt_milestone_archive(&milestones_data)?
+                        }
+                        (true, true, _) => {
+                            // All milestones requested
+                            (milestones_data, None, include_unapproved, flatten)
+                        }
+                        (false, false, _) => {
+                            // Specific milestones provided - filter by name
+                            let selected: Vec<Milestone> = milestones_data
+                                .into_iter()
+                                .filter(|m| milestones.contains(&m.title))
+                                .collect();
+
+                            if selected.is_empty() {
+                                bail!(
+                                    "No matching milestones found for: {}",
+                                    milestones.join(", ")
+                                );
+                            }
+
+                            (selected, None, include_unapproved, flatten)
+                        }
+                        (false, true, _) => {
+                            bail!("Cannot specify both milestone names and --all-milestones flag");
+                        }
+                        (true, false, false) => {
+                            bail!(
+                                "Cannot use interactive mode when archive_path is specified. Please specify milestone names or use --all-milestones."
+                            );
+                        }
+                    };
+
+                    let archive_content = get_archive_content(
+                        cache.as_ref(),
+                        &selected_milestones,
+                        interactive_include_unapproved,
+                        &git_info,
+                    )
+                    .await?;
+
+                    let final_archive_path = interactive_archive_path.or(archive_path);
+                    let archive_path = if let Some(mut archive_path) = final_archive_path {
+                        if !archive_path.to_string_lossy().ends_with(".tar.gz") {
+                            archive_path.set_extension("tar.gz");
+                        }
+                        archive_path
+                    } else {
+                        let milestone_names: Vec<&str> = selected_milestones
+                            .iter()
+                            .map(|m| m.title.as_str())
+                            .collect();
+                        PathBuf::from(format!(
+                            "{}-{}.tar.gz",
+                            git_info.repo(),
+                            milestone_names.join("-").replace(" ", "-")
+                        ))
+                    };
+
+                    compress(&archive_content, interactive_flatten, &archive_path)?;
+
+                    println!(
+                        "✅ Archive successfully created at {}",
+                        archive_path.display()
                     );
                 }
             }
