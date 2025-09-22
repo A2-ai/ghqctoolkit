@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::{GitAction, GitRepository, GitStatusOps};
+use crate::git::{GitCli, GitRepository, GitStatusOps};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,7 +330,7 @@ fn format_header(name: &str, level: usize) -> String {
 pub async fn setup_configuration(
     config_dir: impl AsRef<Path>,
     git: Url,
-    git_action: impl GitAction,
+    git_action: impl GitCli,
 ) -> Result<(), ConfigurationError> {
     let config_dir = config_dir.as_ref();
 
@@ -394,7 +394,7 @@ pub async fn setup_configuration(
     Ok(())
 }
 
-pub fn determine_config_info(
+pub fn determine_config_dir(
     config_dir: Option<PathBuf>,
     env: &impl EnvProvider,
 ) -> Result<PathBuf, ConfigurationError> {
@@ -405,7 +405,7 @@ pub fn determine_config_info(
 
     let strategy = etcetera::choose_base_strategy()
         .map_err(|e| ConfigurationError::ConfigDir(e.to_string()))?;
-    let config_dir = strategy.config_dir().join("ghqc");
+    let config_dir = strategy.data_dir().join("ghqc");
 
     match env.var("GHQC_CONFIG_HOME") {
         Ok(url_str) => {
@@ -556,7 +556,7 @@ pub enum ConfigurationError {
         error: gix::url::parse::Error,
     },
     #[error("Git action failed: {0}")]
-    GitAction(#[from] crate::git::GitActionError),
+    GitAction(#[from] crate::git::GitCliError),
 }
 
 #[cfg(test)]
@@ -566,16 +566,16 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_determine_config_info_with_provided_path() {
+    fn test_determine_config_dir_with_provided_path() {
         let provided_path = PathBuf::from("/custom/config/path");
         let mock_env = MockEnvProvider::new();
 
-        let result = determine_config_info(Some(provided_path.clone()), &mock_env).unwrap();
+        let result = determine_config_dir(Some(provided_path.clone()), &mock_env).unwrap();
         assert_eq!(result, provided_path);
     }
 
     #[test]
-    fn test_determine_config_info_with_env_var() {
+    fn test_determine_config_dir_with_env_var() {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
@@ -583,7 +583,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok("https://github.com/owner/my-config-repo.git".to_string()));
 
-        let result = determine_config_info(None, &mock_env).unwrap();
+        let result = determine_config_dir(None, &mock_env).unwrap();
 
         // Should extract "my-config-repo.git" from the URL and append to config dir
         assert!(result.ends_with("my-config-repo.git"));
@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_config_info_without_env_var() {
+    fn test_determine_config_dir_without_env_var() {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
@@ -599,7 +599,7 @@ mod tests {
             .times(1)
             .returning(|_| Err(std::env::VarError::NotPresent));
 
-        let result = determine_config_info(None, &mock_env).unwrap();
+        let result = determine_config_dir(None, &mock_env).unwrap();
 
         // Should use default "ghqc" directory
         assert!(result.ends_with("config"));
@@ -607,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_config_info_with_invalid_url() {
+    fn test_determine_config_dir_with_invalid_url() {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
@@ -615,7 +615,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok("://invalid-url-scheme".to_string()));
 
-        let result = determine_config_info(None, &mock_env);
+        let result = determine_config_dir(None, &mock_env);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -624,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_config_info_with_url_no_path() {
+    fn test_determine_config_dir_with_url_no_path() {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
@@ -632,7 +632,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok("https://github.com".to_string()));
 
-        let result = determine_config_info(None, &mock_env);
+        let result = determine_config_dir(None, &mock_env);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

@@ -21,11 +21,11 @@ pub use cache::{
 };
 pub use comment::QCComment;
 pub use configuration::{
-    Configuration, configuration_status, determine_config_info, setup_configuration,
+    Configuration, configuration_status, determine_config_dir, setup_configuration,
 };
 pub use create::{QCIssue, RelevantFile};
 pub use git::{
-    AuthError, GitAction, GitActionError, GitActionImpl, GitAuthor, GitCommitAnalysis,
+    AuthError, GitCli, GitCliError, GitCommand, GitAuthor, GitCommitAnalysis,
     GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
     GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
     GitStatusError, GitStatusOps, RepoUser,

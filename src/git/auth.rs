@@ -19,18 +19,18 @@ pub enum AuthError {
     Yaml(#[from] serde_yaml::Error),
 }
 
-pub fn create_authenticated_client(
+pub async fn create_authenticated_client(
     base_url: &str,
     env: &impl EnvProvider,
 ) -> Result<Octocrab, AuthError> {
     match get_token(base_url, env) {
-        Ok(token) => build_client_with_token(base_url, token),
+        Ok(token) => build_client_with_token(base_url, token).await,
         Err(_) => {
             log::warn!(
                 "No authentication found. API access will be limited to public repositories"
             );
             // Fall back to unauthenticated client
-            build_unauthenticated_client(base_url)
+            build_unauthenticated_client(base_url).await
         }
     }
 }
@@ -65,24 +65,26 @@ pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Result<String, AuthE
     Err(AuthError::NoAuth)
 }
 
-fn build_client_with_token(base_url: &str, token: String) -> Result<Octocrab, AuthError> {
+async fn build_client_with_token(base_url: &str, token: String) -> Result<Octocrab, AuthError> {
     if base_url == "https://github.com" {
-        Ok(Octocrab::builder().personal_token(token).build()?)
+        let builder = Octocrab::builder().personal_token(token);
+        Ok(builder.build()?)
     } else {
-        Ok(Octocrab::builder()
+        let builder = Octocrab::builder()
             .base_uri(format!("{}/api/v3", base_url))?
-            .personal_token(token)
-            .build()?)
+            .personal_token(token);
+        Ok(builder.build()?)
     }
 }
 
-fn build_unauthenticated_client(base_url: &str) -> Result<Octocrab, AuthError> {
+async fn build_unauthenticated_client(base_url: &str) -> Result<Octocrab, AuthError> {
     if base_url == "https://github.com" {
-        Ok(Octocrab::builder().build()?)
+        let builder = Octocrab::builder();
+        Ok(builder.build()?)
     } else {
-        Ok(Octocrab::builder()
-            .base_uri(format!("{}/api/v3", base_url))?
-            .build()?)
+        let builder = Octocrab::builder()
+            .base_uri(format!("{}/api/v3", base_url))?;
+        Ok(builder.build()?)
     }
 }
 
@@ -323,7 +325,7 @@ password ghp_api_token_456
             .times(1)
             .returning(|_| Ok("ghp_env_token".to_string()));
 
-        let client = create_authenticated_client("https://github.com", &mock_env);
+        let client = create_authenticated_client("https://github.com", &mock_env).await;
         assert!(client.is_ok());
     }
 }

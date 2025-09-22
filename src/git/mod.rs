@@ -11,7 +11,7 @@ mod helpers;
 mod repository;
 mod status;
 
-pub use action::{GitAction, GitActionError, GitActionImpl};
+pub use action::{GitCli, GitCliError, GitCommand};
 pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
 pub use auth::{AuthError, create_authenticated_client};
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
@@ -50,7 +50,7 @@ pub struct GitInfo {
 }
 
 impl GitInfo {
-    pub fn from_path(path: &Path, env: &impl EnvProvider) -> Result<Self, GitInfoError> {
+    pub async fn from_path(path: &Path, env: &impl EnvProvider) -> Result<Self, GitInfoError> {
         log::debug!("Initializing GitInfo from path: {:?}", path);
 
         let repository = gix::open(path).map_err(GitInfoError::RepoOpen)?;
@@ -76,7 +76,7 @@ impl GitInfo {
             remote_info.url
         );
 
-        let octocrab = create_authenticated_client(&remote_info.url, env)?;
+        let octocrab = create_authenticated_client(&remote_info.url, env).await?;
 
         log::debug!(
             "Successfully initialized GitInfo for {}/{}",
