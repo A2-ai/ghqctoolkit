@@ -56,7 +56,11 @@ pub async fn record<'a>(
         context.insert("author", &author);
     }
 
-    let date = chrono::Local::now().format("%B %d, %Y").to_string();
+    let date = if let Ok(custom_date) = env.var("GHQC_RECORD_DATE") {
+        custom_date
+    } else {
+        chrono::Local::now().format("%B %d, %Y").to_string()
+    };
     context.insert("date", &date);
 
     let logo_path = absolute(configuration.logo_path())?;
@@ -1304,10 +1308,16 @@ mod tests {
 
     fn create_test_env() -> TestEnvProvider {
         TestEnvProvider {
-            vars: [("USER".to_string(), "testuser".to_string())]
-                .iter()
-                .cloned()
-                .collect(),
+            vars: [
+                ("USER".to_string(), "testuser".to_string()),
+                (
+                    "GHQC_RECORD_DATE".to_string(),
+                    "January 01, 2024".to_string(),
+                ),
+            ]
+            .iter()
+            .cloned()
+            .collect(),
         }
     }
 

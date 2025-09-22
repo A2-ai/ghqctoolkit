@@ -958,3 +958,94 @@ pub fn prompt_milestone_record(
 
     Ok((selected_milestones, record_path))
 }
+
+/// Interactive milestone selection for archive generation
+pub fn prompt_milestone_archive(
+    milestones: &[Milestone],
+) -> Result<(Vec<Milestone>, Option<PathBuf>, bool, bool)> {
+    use inquire::Confirm;
+
+    println!("📦 Welcome to GHQC Milestone Archive Mode!");
+
+    if milestones.is_empty() {
+        bail!("No milestones found in repository");
+    }
+
+    // First ask if they want to select all or choose specific ones
+    let choice = Select::new(
+        "📦 How would you like to select milestones for the archive?",
+        vec!["📋 Select All Milestones", "🎯 Choose Specific Milestones"],
+    )
+    .prompt()
+    .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    let selected_milestones: Vec<Milestone> = if choice == "📋 Select All Milestones" {
+        milestones.to_vec()
+    } else {
+        // Multi-select specific milestones
+        let milestone_options: Vec<String> = milestones
+            .iter()
+            .map(|m| format!("{} ({})", m.title, m.number))
+            .collect();
+
+        let selected_strings =
+            MultiSelect::new("📦 Select milestones for the archive:", milestone_options)
+                .with_validator(|selection: &[inquire::list_option::ListOption<&String>]| {
+                    if selection.is_empty() {
+                        Ok(inquire::validator::Validation::Invalid(
+                            "Please select at least one milestone".into(),
+                        ))
+                    } else {
+                        Ok(inquire::validator::Validation::Valid)
+                    }
+                })
+                .prompt()
+                .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+        // Filter milestones based on selected strings
+        milestones
+            .iter()
+            .filter(|m| {
+                let milestone_display = format!("{} ({})", m.title, m.number);
+                selected_strings.contains(&milestone_display)
+            })
+            .cloned()
+            .collect()
+    };
+
+    if selected_milestones.is_empty() {
+        bail!("No milestones selected");
+    }
+
+    // Prompt for include_unapproved using y/N format
+    let include_unapproved = Confirm::new("📋 Include unapproved issues?")
+        .with_default(false)
+        .with_help_message("N = only approved issues, y = all issues")
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    // Prompt for flatten using y/N format
+    let flatten = Confirm::new("📁 Flatten archive structure?")
+        .with_default(false)
+        .with_help_message("N = preserve directory structure, y = put all files in root")
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    // Prompt for optional archive path
+    let archive_path_input = Text::new("📁 Enter archive file name (Enter for default):")
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+    let archive_path = if archive_path_input.trim().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(archive_path_input.trim()))
+    };
+
+    Ok((
+        selected_milestones,
+        archive_path,
+        include_unapproved,
+        flatten,
+    ))
+}
