@@ -222,7 +222,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Issue { issue_command } => {
-            let git_info = GitInfo::from_path(&cli.directory, &env).await?;
+            let git_info = GitInfo::from_path(&cli.directory, &env)?;
 
             match issue_command {
                 IssueCommands::Create {
@@ -443,7 +443,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Milestone { milestone_command } => {
-            let git_info = GitInfo::from_path(&cli.directory, &env).await?;
+            let git_info = GitInfo::from_path(&cli.directory, &env)?;
 
             match milestone_command {
                 MilestoneCommands::Status {
@@ -697,7 +697,7 @@ async fn main() -> Result<()> {
                 let config_dir = determine_config_dir(cli.config_dir, &env)?;
                 let mut configuration = Configuration::from_path(&config_dir);
                 configuration.load_checklists();
-                let git_info = GitInfo::from_path(&config_dir, &env).await.ok();
+                let git_info = GitInfo::from_path(&config_dir, &env).ok();
 
                 println!("{}", configuration_status(&configuration, &git_info))
             }

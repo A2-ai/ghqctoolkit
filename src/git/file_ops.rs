@@ -47,6 +47,8 @@ pub enum GitFileOpsError {
     BranchNotFound(String),
     #[error("Failed to get HEAD ID: {0}")]
     HeadIdError(gix::reference::head_id::Error),
+    #[error("Failed to access repository: {0}")]
+    RepositoryError(#[from] crate::git::GitInfoError),
 }
 
 /// File-specific git operations
@@ -81,31 +83,28 @@ impl GitFileOps for GitInfo {
             file,
             branch
         );
+        let repo = self.repository()?;
         let mut commits = Vec::new();
 
         let start_id = if let Some(branch_name) = branch.as_ref() {
             // Look up the specific branch
             let branch_ref_name = format!("refs/heads/{}", branch_name);
-            let branch_ref = self
-                .repository
+            let branch_ref = repo
                 .find_reference(&branch_ref_name)
                 .map_err(|_| GitFileOpsError::BranchNotFound(branch_name.clone()))?;
             branch_ref.id()
         } else {
             // Use HEAD as before
-            self.repository
-                .head_id()
-                .map_err(GitFileOpsError::HeadIdError)?
+            repo.head_id().map_err(GitFileOpsError::HeadIdError)?
         };
 
-        let revwalk = self.repository.rev_walk([start_id]);
+        let revwalk = repo.rev_walk([start_id]);
 
         for commit_info in revwalk.all().map_err(GitFileOpsError::RevWalkError)? {
             let commit_info = commit_info.map_err(GitFileOpsError::TraverseError)?;
             let commit_id = commit_info.id;
 
-            let commit = self
-                .repository
+            let commit = repo
                 .find_object(commit_id)
                 .map_err(GitFileOpsError::ObjectError)?
                 .try_into_commit()
@@ -126,8 +125,7 @@ impl GitFileOps for GitInfo {
                 let current_tree = commit.tree().map_err(GitFileOpsError::TreeError)?;
 
                 for parent_id in commit.parent_ids() {
-                    let parent_commit = self
-                        .repository
+                    let parent_commit = repo
                         .find_object(parent_id)
                         .map_err(GitFileOpsError::ObjectError)?
                         .try_into_commit()
@@ -185,13 +183,13 @@ impl GitFileOps for GitInfo {
     }
 
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
+        let repo = self.repository()?;
         let commits = self.file_commits(file, &None)?;
 
         let mut res: Vec<GitAuthor> = Vec::new();
 
         for (commit_id, _) in commits {
-            let commit = self
-                .repository
+            let commit = repo
                 .find_object(commit_id)
                 .map_err(GitFileOpsError::ObjectError)?
                 .try_into_commit()
@@ -227,9 +225,10 @@ impl GitFileOps for GitInfo {
             commit
         );
 
+        let repo = self.repository()?;
+
         // Get the commit object
-        let commit_obj = self
-            .repository
+        let commit_obj = repo
             .find_object(*commit)
             .map_err(GitFileOpsError::ObjectError)?
             .try_into_commit()
@@ -245,8 +244,7 @@ impl GitFileOps for GitInfo {
             .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file_path.to_path_buf()))?;
 
         // Get the blob object for the file
-        let blob = self
-            .repository
+        let blob = repo
             .find_object(entry.oid())
             .map_err(GitFileOpsError::ObjectError)?
             .try_into_blob()

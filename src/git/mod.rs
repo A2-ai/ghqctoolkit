@@ -1,6 +1,6 @@
 use gix::Repository;
 use octocrab::Octocrab;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 mod action;
 mod api;
@@ -45,12 +45,12 @@ pub struct GitInfo {
     pub(crate) owner: String,
     pub(crate) repo: String,
     pub(crate) base_url: String,
-    pub(crate) repository: Repository,
-    pub(crate) octocrab: Octocrab,
+    pub(crate) repository_path: PathBuf,
+    pub(crate) auth_token: Option<String>,
 }
 
 impl GitInfo {
-    pub async fn from_path(path: &Path, env: &impl EnvProvider) -> Result<Self, GitInfoError> {
+    pub fn from_path(path: &Path, env: &impl EnvProvider) -> Result<Self, GitInfoError> {
         log::debug!("Initializing GitInfo from path: {:?}", path);
 
         let repository = gix::open(path).map_err(GitInfoError::RepoOpen)?;
@@ -76,7 +76,13 @@ impl GitInfo {
             remote_info.url
         );
 
-        let octocrab = create_authenticated_client(&remote_info.url, env).await?;
+        // Get auth token but don't create Octocrab client yet
+        let auth_token = auth::get_token(&remote_info.url, env);
+        if auth_token.is_some() {
+            log::debug!("Found authentication token");
+        } else {
+            log::debug!("No authentication token found");
+        }
 
         log::debug!(
             "Successfully initialized GitInfo for {}/{}",
@@ -88,8 +94,20 @@ impl GitInfo {
             owner: remote_info.owner,
             repo: remote_info.repo,
             base_url: remote_info.url,
-            repository,
-            octocrab,
+            repository_path: path.to_path_buf(),
+            auth_token,
         })
+    }
+
+    /// Get a repository instance (recreated for thread safety)
+    pub fn repository(&self) -> Result<Repository, GitInfoError> {
+        gix::open(&self.repository_path).map_err(GitInfoError::RepoOpen)
+    }
+
+    /// Create an Octocrab client when needed (not stored for thread safety)
+    pub fn create_client(&self) -> Result<Octocrab, GitInfoError> {
+        log::debug!("Creating GitHub client with cached token");
+        create_authenticated_client(&self.base_url, self.auth_token.clone())
+            .map_err(GitInfoError::AuthError)
     }
 }

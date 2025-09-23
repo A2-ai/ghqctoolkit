@@ -46,9 +46,9 @@ impl ConfigurationOptions {
 
 #[derive(Debug, Clone)]
 pub struct Checklist {
-    pub(crate) name: String,
+    pub name: String,
     note: Option<String>,
-    content: String,
+    pub content: String,
 }
 
 impl Checklist {
@@ -90,7 +90,7 @@ impl Default for Checklist {
 pub struct Configuration {
     pub(crate) path: PathBuf,
     // checklist name and content
-    pub(crate) checklists: HashMap<String, Checklist>,
+    pub checklists: HashMap<String, Checklist>,
     pub(crate) options: ConfigurationOptions,
 }
 

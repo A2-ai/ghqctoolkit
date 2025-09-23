@@ -10,6 +10,8 @@ pub enum GitRepositoryError {
     DetachedHead,
     #[error("Failed to get HEAD ID: {0}")]
     HeadIdError(gix::reference::head_id::Error),
+    #[error("Failed to access repository: {0}")]
+    RepositoryError(#[from] crate::git::GitInfoError),
 }
 
 /// Basic repository information and metadata
@@ -30,10 +32,8 @@ pub trait GitRepository {
 
 impl GitRepository for GitInfo {
     fn commit(&self) -> Result<String, GitRepositoryError> {
-        let head = self
-            .repository
-            .head()
-            .map_err(GitRepositoryError::HeadError)?;
+        let repo = self.repository()?;
+        let head = repo.head().map_err(GitRepositoryError::HeadError)?;
         let commit_id = head.id().ok_or(GitRepositoryError::DetachedHead)?;
         let commit_str = commit_id.to_string();
         log::debug!("Current commit: {}", commit_str);
@@ -41,10 +41,8 @@ impl GitRepository for GitInfo {
     }
 
     fn branch(&self) -> Result<String, GitRepositoryError> {
-        let head = self
-            .repository
-            .head()
-            .map_err(GitRepositoryError::HeadError)?;
+        let repo = self.repository()?;
+        let head = repo.head().map_err(GitRepositoryError::HeadError)?;
 
         // Try to get the branch name directly
         if let Some(branch_name) = head.referent_name() {
@@ -69,7 +67,7 @@ impl GitRepository for GitInfo {
         );
 
         // Try to find a local branch that points to this commit
-        if let Ok(refs) = self.repository.references() {
+        if let Ok(refs) = repo.references() {
             if let Ok(all_refs) = refs.all() {
                 for r_res in all_refs {
                     if let Ok(r) = r_res {

@@ -169,7 +169,7 @@ impl QCIssue {
         &self.branch
     }
 
-    pub(crate) fn new(
+    pub fn new(
         file: impl AsRef<Path>,
         git_info: &(impl GitRepository + GitFileOps),
         milestone_id: u64,
