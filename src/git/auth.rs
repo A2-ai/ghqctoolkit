@@ -39,24 +39,28 @@ pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
     // Try authentication sources in priority order (similar to gitcreds R package)
 
     // 1. GITHUB_TOKEN environment variable (highest priority)
+    log::debug!("Trying from GITHUB_TOKEN");
     if let Ok(token) = env.var("GITHUB_TOKEN") {
         log::debug!("Using GITHUB_TOKEN environment variable");
         return Some(token);
     }
 
     // 2. gh CLI authentication
+    log::debug!("Trying from gh cli authentication");
     if let Some(token) = get_gh_token_with_env(base_url, env) {
         log::debug!("Using gh CLI stored credentials");
         return Some(token);
     }
 
     // 3. Git credential manager (git credential fill)
+    log::debug!("Trying from git credential manager");
     if let Some(token) = get_git_credential_token(base_url) {
         log::debug!("Using git credential manager");
         return Some(token);
     }
 
     // 4. .netrc file
+    log::debug!("Trying from .netrc file");
     if let Some(token) = get_netrc_token_with_env(base_url, env) {
         log::debug!("Using .netrc file credentials");
         return Some(token);
@@ -68,122 +72,29 @@ pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
 }
 
 fn build_client_with_token(base_url: &str, token: String) -> Result<Octocrab, AuthError> {
-    let base_url = base_url.to_string();
-
-    // Check if we're already in a tokio runtime context
-    if tokio::runtime::Handle::try_current().is_ok() {
-        log::debug!("Found current tokio runtime for GitHub Api client build.");
-        // We're in a runtime context, spawn a blocking task to avoid conflicts
-        let task = tokio::task::spawn_blocking(move || {
-            if base_url == "https://github.com" {
-                Octocrab::builder().personal_token(token).build()
-            } else {
-                Octocrab::builder()
-                    .base_uri(format!("{}/api/v3", base_url))
-                    .and_then(|b| b.personal_token(token).build())
-            }
-        });
-
-        // Block on the task completion within the existing runtime
-        futures::executor::block_on(task)
-            .map_err(|e| {
-                AuthError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Task join error: {}", e),
-                ))
-            })?
-            .map_err(AuthError::ClientBuild)
+    // Assume we're already in a proper tokio runtime context (called from API functions)
+    log::debug!("Creating Octocrab client (assuming proper runtime context)");
+    if base_url == "https://github.com" {
+        Octocrab::builder().personal_token(token).build()
     } else {
-        log::debug!(
-            "Could not find tokio runtime context. Creating own for GitHub Api client build."
-        );
-        // No runtime context, use a separate thread to completely isolate from any runtime interference
-        std::thread::spawn(move || {
-            // Create a fresh runtime in the new thread
-            let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                AuthError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to create runtime: {}", e),
-                ))
-            })?;
-
-            log::debug!("Created new runtime");
-            rt.block_on(async {
-                if base_url == "https://github.com" {
-                    Octocrab::builder().personal_token(token).build()
-                } else {
-                    Octocrab::builder()
-                        .base_uri(format!("{}/api/v3", base_url))
-                        .and_then(|b| b.personal_token(token).build())
-                }
-            })
-            .map_err(AuthError::ClientBuild)
-        })
-        .join()
-        .map_err(|_| {
-            AuthError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Thread panicked".to_string(),
-            ))
-        })?
+        Octocrab::builder()
+            .base_uri(format!("{}/api/v3", base_url))
+            .and_then(|b| b.personal_token(token).build())
     }
+    .map_err(AuthError::ClientBuild)
 }
 
 fn build_unauthenticated_client(base_url: &str) -> Result<Octocrab, AuthError> {
-    let base_url = base_url.to_string();
-
-    // Check if we're already in a tokio runtime context
-    if tokio::runtime::Handle::try_current().is_ok() {
-        // We're in a runtime context, spawn a blocking task to avoid conflicts
-        let task = tokio::task::spawn_blocking(move || {
-            if base_url == "https://github.com" {
-                Octocrab::builder().build()
-            } else {
-                Octocrab::builder()
-                    .base_uri(format!("{}/api/v3", base_url))
-                    .and_then(|b| b.build())
-            }
-        });
-
-        // Block on the task completion within the existing runtime
-        futures::executor::block_on(task)
-            .map_err(|e| {
-                AuthError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Task join error: {}", e),
-                ))
-            })?
-            .map_err(AuthError::ClientBuild)
+    // Assume we're already in a proper tokio runtime context (called from API functions)
+    log::debug!("Creating unauthenticated Octocrab client (assuming proper runtime context)");
+    if base_url == "https://github.com" {
+        Octocrab::builder().build()
     } else {
-        // No runtime context, use a separate thread to completely isolate from any runtime interference
-        std::thread::spawn(move || {
-            // Create a fresh runtime in the new thread
-            let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                AuthError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to create runtime: {}", e),
-                ))
-            })?;
-
-            rt.block_on(async {
-                if base_url == "https://github.com" {
-                    Octocrab::builder().build()
-                } else {
-                    Octocrab::builder()
-                        .base_uri(format!("{}/api/v3", base_url))
-                        .and_then(|b| b.build())
-                }
-            })
-            .map_err(AuthError::ClientBuild)
-        })
-        .join()
-        .map_err(|_| {
-            AuthError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Thread panicked".to_string(),
-            ))
-        })?
+        Octocrab::builder()
+            .base_uri(format!("{}/api/v3", base_url))
+            .and_then(|b| b.build())
     }
+    .map_err(AuthError::ClientBuild)
 }
 
 fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<String> {
@@ -211,6 +122,15 @@ fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<Strin
 }
 
 fn get_git_credential_token(base_url: &str) -> Option<String> {
+    // Skip git credential fill in R/extendr context to avoid subprocess crashes
+    // Check for common R environment indicators
+    if std::env::var("R_HOME").is_ok() ||
+       std::env::var("R_SESSION_TMPDIR").is_ok() ||
+       std::env::var("RSTUDIO").is_ok() {
+        log::debug!("Skipping git credential manager in R environment to avoid subprocess issues");
+        return None;
+    }
+
     let host = extract_host_from_url(base_url);
 
     // Use git credential fill to get stored credentials
@@ -222,16 +142,33 @@ fn get_git_credential_token(base_url: &str) -> Option<String> {
 
     let input = format!("protocol=https\nhost={}\n\n", host);
 
-    let mut child = cmd.spawn().ok()?;
+    // Add extra error handling to prevent crashes
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log::debug!("Failed to spawn git credential process: {}", e);
+            return None;
+        }
+    };
 
     if let Some(stdin) = child.stdin.as_mut() {
         use std::io::Write;
-        stdin.write_all(input.as_bytes()).ok()?;
+        if stdin.write_all(input.as_bytes()).is_err() {
+            log::debug!("Failed to write to git credential stdin");
+            return None;
+        }
     }
 
-    let output = child.wait_with_output().ok()?;
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(e) => {
+            log::debug!("Failed to wait for git credential output: {}", e);
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        log::debug!("Git credential command failed with status: {}", output.status);
         return None;
     }
 
@@ -315,10 +252,12 @@ fn get_gh_config_dir_with_env(env: &impl EnvProvider) -> Option<PathBuf> {
         Some(PathBuf::from(home_dir).join(".config").join("gh"))
     } else if let Ok(user_profile) = env.var("USERPROFILE") {
         // Windows fallback
-        Some(PathBuf::from(user_profile)
-            .join("AppData")
-            .join("Roaming")
-            .join("GitHub CLI"))
+        Some(
+            PathBuf::from(user_profile)
+                .join("AppData")
+                .join("Roaming")
+                .join("GitHub CLI"),
+        )
     } else {
         None
     }
