@@ -124,9 +124,10 @@ fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<Strin
 fn get_git_credential_token(base_url: &str) -> Option<String> {
     // Skip git credential fill in R/extendr context to avoid subprocess crashes
     // Check for common R environment indicators
-    if std::env::var("R_HOME").is_ok() ||
-       std::env::var("R_SESSION_TMPDIR").is_ok() ||
-       std::env::var("RSTUDIO").is_ok() {
+    if std::env::var("R_HOME").is_ok()
+        || std::env::var("R_SESSION_TMPDIR").is_ok()
+        || std::env::var("RSTUDIO").is_ok()
+    {
         log::debug!("Skipping git credential manager in R environment to avoid subprocess issues");
         return None;
     }
@@ -168,7 +169,10 @@ fn get_git_credential_token(base_url: &str) -> Option<String> {
     };
 
     if !output.status.success() {
-        log::debug!("Git credential command failed with status: {}", output.status);
+        log::debug!(
+            "Git credential command failed with status: {}",
+            output.status
+        );
         return None;
     }
 

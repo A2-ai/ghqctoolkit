@@ -46,10 +46,13 @@ impl GitCli for GitCommand {
         let mut cmd = std::process::Command::new("git");
         cmd.args(&["clone", &url.to_string(), &path.to_string_lossy()]);
 
-        log::debug!("Running git clone command: git clone {} {}", url, path.display());
+        log::debug!(
+            "Running git clone command: git clone {} {}",
+            url,
+            path.display()
+        );
 
-        let output = cmd.output()
-            .map_err(|e| GitCliError::GitCommandError(e))?;
+        let output = cmd.output().map_err(|e| GitCliError::GitCommandError(e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -70,10 +73,12 @@ impl GitCli for GitCommand {
         let mut cmd = std::process::Command::new("git");
         cmd.args(&["-C", &path.to_string_lossy(), "remote", "get-url", "origin"]);
 
-        log::debug!("Running git remote command: git -C {} remote get-url origin", path.display());
+        log::debug!(
+            "Running git remote command: git -C {} remote get-url origin",
+            path.display()
+        );
 
-        let output = cmd.output()
-            .map_err(|e| GitCliError::GitCommandError(e))?;
+        let output = cmd.output().map_err(|e| GitCliError::GitCommandError(e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -85,8 +90,8 @@ impl GitCli for GitCommand {
         log::debug!("Found remote URL: {}", url_str);
 
         // Parse the URL using gix
-        gix::url::parse(url_str.as_bytes().into())
-            .map_err(|e| GitCliError::InvalidRemoteUrl(format!("Failed to parse '{}': {}", url_str, e)))
+        gix::url::parse(url_str.as_bytes().into()).map_err(|e| {
+            GitCliError::InvalidRemoteUrl(format!("Failed to parse '{}': {}", url_str, e))
+        })
     }
 }
-

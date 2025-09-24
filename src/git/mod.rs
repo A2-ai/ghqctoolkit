@@ -1,5 +1,4 @@
 use gix::Repository;
-use octocrab::Octocrab;
 use std::path::{Path, PathBuf};
 
 mod action;
@@ -13,7 +12,7 @@ mod status;
 
 pub use action::{GitCli, GitCliError, GitCommand};
 pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
-pub use auth::{AuthError, create_authenticated_client};
+pub use auth::AuthError;
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{GitAuthor, GitFileOps, GitFileOpsError, get_file_commits_robust};
 pub use helpers::GitHelpers;
@@ -102,12 +101,5 @@ impl GitInfo {
     /// Get a repository instance (recreated for thread safety)
     pub fn repository(&self) -> Result<Repository, GitInfoError> {
         gix::open(&self.repository_path).map_err(GitInfoError::RepoOpen)
-    }
-
-    /// Create an Octocrab client when needed (not stored for thread safety)
-    pub fn create_client(&self) -> Result<Octocrab, GitInfoError> {
-        log::debug!("Creating GitHub client with cached token");
-        create_authenticated_client(&self.base_url, self.auth_token.clone())
-            .map_err(GitInfoError::AuthError)
     }
 }

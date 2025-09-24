@@ -25,7 +25,7 @@ pub use configuration::{
 };
 pub use create::{QCIssue, RelevantFile};
 pub use git::{
-    AuthError, GitCli, GitCliError, GitCommand, GitAuthor, GitCommitAnalysis,
+    AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitCommitAnalysis,
     GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
     GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
     GitStatusError, GitStatusOps, RepoUser,
