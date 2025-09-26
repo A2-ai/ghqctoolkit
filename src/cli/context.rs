@@ -22,6 +22,7 @@ impl QCIssue {
         checklist_name: String,
         assignees: Option<Vec<String>>,
         relevant_files: Option<Vec<RelevantFile>>,
+        description: Option<String>,
         milestones: Vec<Milestone>,
         repo_users: &[RepoUser],
         configuration: Configuration,
@@ -32,7 +33,7 @@ impl QCIssue {
             log::debug!("Found existing milestone {}", m.number);
             m
         } else {
-            git_info.create_milestone(&milestone_name).await?
+            git_info.create_milestone(&milestone_name, &description).await?
         };
 
         let milestone_issues = git_info.get_milestone_issues(&milestone).await?;

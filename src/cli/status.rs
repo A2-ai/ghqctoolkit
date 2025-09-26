@@ -324,7 +324,7 @@ async fn get_milestone_status_rows(
                             "closed".to_string()
                         },
                         qc_status: qc_status.to_string(),
-                        git_status: git_status.format_for_file(&issue_thread, &file_commits),
+                        git_status: git_status.format_for_file(&issue_thread.file, &file_commits),
                         checklist_summary,
                     };
                     rows.push(row);

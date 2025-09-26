@@ -57,7 +57,7 @@ impl GitHubReader for GitInfo {
             log::debug!("Fetching milestones for {}/{}", owner, repo);
             let milestones: Vec<Milestone> = octocrab
                 .get(
-                    format!("/repos/{}/{}/milestones", &owner, &repo),
+                    format!("/repos/{}/{}/milestones?state=all", &owner, &repo),
                     None::<&()>,
                 )
                 .await

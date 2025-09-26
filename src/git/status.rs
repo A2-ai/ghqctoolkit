@@ -1,4 +1,7 @@
-use std::{fmt, path::PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use gix::ObjectId;
 #[cfg(test)]
@@ -47,13 +50,13 @@ impl GitStatus {
     /// Format git status for a specific file and issue thread
     pub fn format_for_file(
         &self,
-        issue_thread: &crate::issue::IssueThread,
+        issue_file: impl AsRef<Path>,
         file_commits: &Option<Vec<ObjectId>>,
     ) -> String {
         match self {
             GitStatus::Clean => "Up to date".to_string(),
             GitStatus::Dirty(files) => {
-                if files.contains(&issue_thread.file) {
+                if files.contains(&issue_file.as_ref().to_path_buf()) {
                     "Local changes".to_string()
                 } else {
                     "Up to date".to_string()

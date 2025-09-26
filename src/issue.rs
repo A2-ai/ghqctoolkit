@@ -1213,6 +1213,7 @@ author: test"#;
         async fn create_milestone(
             &self,
             _milestone_name: &str,
+            _description: &Option<String>,
         ) -> Result<octocrab::models::Milestone, crate::git::GitHubApiError> {
             unimplemented!()
         }

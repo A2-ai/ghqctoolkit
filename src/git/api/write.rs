@@ -14,6 +14,7 @@ pub trait GitHubWriter {
     fn create_milestone(
         &self,
         milestone_name: &str,
+        description: &Option<String>,
     ) -> impl Future<Output = Result<Milestone, GitHubApiError>> + Send;
     fn post_issue(
         &self,
@@ -42,10 +43,12 @@ impl GitHubWriter for GitInfo {
     fn create_milestone(
         &self,
         milestone_name: &str,
+        description: &Option<String>,
     ) -> impl std::future::Future<Output = Result<Milestone, GitHubApiError>> + Send {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let milestone_name = milestone_name.to_string();
+        let description = description.clone();
         let base_url = self.base_url.clone();
         let auth_token = self.auth_token.clone();
 
@@ -60,7 +63,8 @@ impl GitHubWriter for GitInfo {
             );
             let milestone_request = serde_json::json!({
                 "title": milestone_name,
-                "state": "open"
+                "state": "open",
+                "description": description,
             });
 
             let milestone: Milestone = octocrab

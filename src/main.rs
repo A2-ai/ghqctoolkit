@@ -77,6 +77,10 @@ enum IssueCommands {
         /// Additional relevant files for the issue (format: "name:path" or just "path")
         #[arg(short = 'r', long, value_parser = RelevantFileParser)]
         relevant_files: Option<Vec<RelevantFile>>,
+
+        /// Description for the milestone (only used when creating a new milestone)
+        #[arg(short = 'D', long)]
+        description: Option<String>,
     },
     /// Comment on an existing issue, providing updated context
     Comment {
@@ -231,6 +235,7 @@ async fn main() -> Result<()> {
                     checklist_name,
                     assignees,
                     relevant_files,
+                    description,
                 } => {
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let mut configuration = Configuration::from_path(&config_dir);
@@ -249,6 +254,7 @@ async fn main() -> Result<()> {
                                 checklist_name,
                                 assignees,
                                 relevant_files,
+                                description,
                                 milestones,
                                 &repo_users,
                                 configuration,
@@ -273,7 +279,8 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    create_labels_if_needed(cache.as_ref(), qc_issue.branch(), &git_info).await?;
+                    create_labels_if_needed(cache.as_ref(), Some(qc_issue.branch()), &git_info)
+                        .await?;
 
                     let issue_url = git_info.post_issue(&qc_issue).await?;
 

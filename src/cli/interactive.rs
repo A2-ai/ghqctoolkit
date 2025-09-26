@@ -13,13 +13,13 @@ use crate::{
 
 pub enum MilestoneStatus {
     Existing(Milestone),
-    New(String),
+    New(String, Option<String>), // (name, description)
 }
 
 impl fmt::Display for MilestoneStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::New(name) => write!(f, "{name} (new)"),
+            Self::New(name, _) => write!(f, "{name} (new)"),
             Self::Existing(milestone) => {
                 write!(f, "{} (existing: #{})", milestone.title, milestone.number)
             }
@@ -34,8 +34,8 @@ impl MilestoneStatus {
     ) -> Result<Cow<'a, Milestone>> {
         match self {
             Self::Existing(milestone) => Ok(Cow::Borrowed(milestone)),
-            Self::New(milestone_name) => {
-                let m = git_info.create_milestone(milestone_name).await?;
+            Self::New(milestone_name, description) => {
+                let m = git_info.create_milestone(milestone_name, description).await?;
                 log::debug!(
                     "Created milestone '{}' with ID: {}",
                     milestone_name,
@@ -88,7 +88,19 @@ pub fn prompt_milestone(milestones: Vec<Milestone>) -> Result<MilestoneStatus> {
             })
             .prompt()
             .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
-        Ok(MilestoneStatus::New(new_milestone.trim().to_string()))
+
+        let description = Text::new("Enter milestone description (optional):")
+            .with_default("")
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let description = if description.trim().is_empty() {
+            None
+        } else {
+            Some(description.trim().to_string())
+        };
+
+        Ok(MilestoneStatus::New(new_milestone.trim().to_string(), description))
     } else {
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);

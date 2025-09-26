@@ -44,7 +44,7 @@ impl ConfigurationOptions {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checklist {
     pub name: String,
     note: Option<String>,
@@ -86,7 +86,7 @@ impl Default for Checklist {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Configuration {
     pub(crate) path: PathBuf,
     // checklist name and content
@@ -208,6 +208,17 @@ impl Configuration {
 
     pub fn logo_path(&self) -> PathBuf {
         self.path.join(&self.options.logo_path)
+    }
+
+    pub fn checklist_display_name(&self) -> &str {
+        &self.options.checklist_display_name
+    }
+
+    pub fn prepended_checklist_note(&self) -> Option<&str> {
+        self.options
+            .prepended_checklist_note
+            .as_ref()
+            .map(|s| s.as_str())
     }
 }
 

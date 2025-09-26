@@ -456,7 +456,7 @@ async fn create_issue_information(
 
     // Git Status for this specific file
     let file_commits_option = Some(commit_ids);
-    let git_status_str = git_status.format_for_file(&issue_thread, &file_commits_option);
+    let git_status_str = git_status.format_for_file(&issue_thread.file, &file_commits_option);
 
     // Created by (with name lookup)
     let created_by = repo_users
