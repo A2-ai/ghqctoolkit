@@ -442,12 +442,10 @@ async fn create_issue_information(
     // Get comments and create issue thread
     let comments = get_issue_comments(issue, cache, git_info).await?;
     let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info).await?;
-    let file_commits = issue_thread.commits(git_info).await?;
-    let commit_ids: Vec<_> = file_commits.iter().map(|(id, _)| *id).collect();
     let open = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status
-    let qc_status = QCStatus::determine_status(&issue_thread, &commit_ids)?.to_string();
+    let qc_status = QCStatus::determine_status(&issue_thread)?.to_string();
 
     // Checklist Summary
     let checklist_summaries = analyze_issue_checklists(issue);
@@ -455,8 +453,8 @@ async fn create_issue_information(
         ChecklistSummary::sum(checklist_summaries.iter().map(|c| &c.1)).to_string();
 
     // Git Status for this specific file
-    let file_commits_option = Some(commit_ids);
-    let git_status_str = git_status.format_for_file(&issue_thread.file, &file_commits_option);
+    let file_commits = issue_thread.file_commits();
+    let git_status_str = git_status.format_for_file(&issue_thread.file, &file_commits);
 
     // Created by (with name lookup)
     let created_by = repo_users
@@ -512,8 +510,14 @@ async fn create_issue_information(
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
 
     // Commit information
-    let initial_qc_commit = format!("{}", issue_thread.initial_commit);
-    let latest_qc_commit = format!("{}", issue_thread.latest_commit());
+    let initial_qc_commit = issue_thread
+        .initial_commit()
+        .map(|c| format!("{}", c))
+        .unwrap_or_else(|| "No initial commit".to_string());
+    let latest_qc_commit = issue_thread
+        .latest_commit()
+        .map(|c| format!("{}", c))
+        .unwrap_or_else(|| "No commits".to_string());
 
     // Process issue body with header translation (min level 4 since under ### Issue Body)
     let body = issue
@@ -1002,9 +1006,9 @@ mod tests {
     use crate::{
         GitAuthor, RepoUser,
         git::{
-            GitComment, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError,
-            GitHelpers, GitHubApiError, GitRepository, GitRepositoryError, GitStatus,
-            GitStatusError, GitStatusOps,
+            GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
+            GitFileOpsError, GitHelpers, GitHubApiError, GitRepository, GitRepositoryError,
+            GitStatus, GitStatusError, GitStatusOps,
         },
     };
     use gix::ObjectId;
@@ -1167,17 +1171,39 @@ mod tests {
     }
 
     impl GitFileOps for RecordMockGitInfo {
-        fn file_commits(
-            &self,
-            file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<Vec<(ObjectId, String)>, GitFileOpsError> {
-            Ok(self.file_commits.get(file).cloned().unwrap_or_else(|| {
-                vec![(
-                    ObjectId::from_str(&self.current_commit).unwrap(),
-                    "Test commit".to_string(),
-                )]
-            }))
+        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+            // Convert all file_commits to a unified commit list
+            let mut all_commits = Vec::new();
+            for (file, commits) in &self.file_commits {
+                for (commit, message) in commits {
+                    // Check if this commit is already in the list
+                    if !all_commits.iter().any(|c: &GitCommit| c.commit == *commit) {
+                        all_commits.push(GitCommit {
+                            commit: *commit,
+                            message: message.clone(),
+                            files: vec![file.clone()],
+                        });
+                    } else {
+                        // Add this file to existing commit
+                        if let Some(existing) = all_commits.iter_mut().find(|c| c.commit == *commit)
+                        {
+                            if !existing.files.contains(file) {
+                                existing.files.push(file.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if all_commits.is_empty() {
+                all_commits.push(GitCommit {
+                    commit: ObjectId::from_str(&self.current_commit).unwrap(),
+                    message: "Test commit".to_string(),
+                    files: vec![PathBuf::from("test_file.rs")],
+                });
+            }
+
+            Ok(all_commits)
         }
 
         fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {

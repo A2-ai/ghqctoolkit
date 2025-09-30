@@ -415,16 +415,9 @@ async fn main() -> Result<()> {
                             let checklist_summaries = analyze_issue_checklists(&issue);
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
-                            let file_commits = issue_thread
-                                .commits(&git_info)
-                                .await
-                                .ok()
-                                .map(|v| v.into_iter().map(|(c, _)| c).collect::<Vec<_>>());
                             let git_status = git_info.status()?;
-                            let qc_status = QCStatus::determine_status(
-                                &issue_thread,
-                                file_commits.as_ref().unwrap_or(&Vec::new()),
-                            )?;
+                            let qc_status = QCStatus::determine_status(&issue_thread)?;
+                            let file_commits = issue_thread.file_commits();
                             println!(
                                 "{}",
                                 single_issue_status(

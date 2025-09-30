@@ -36,18 +36,13 @@ pub async fn interactive_status(
 
     // Create IssueThread from the selected issue
     let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-    let file_commits = issue_thread
-        .commits(git_info)
-        .await
-        .ok()
-        .map(|v| v.into_iter().map(|(c, _)| c).collect::<Vec<_>>());
+    let file_commits = issue_thread.file_commits();
 
     // Get git status for the file
     let git_status = git_info.status()?;
 
     // Determine QC status
-    let qc_status =
-        QCStatus::determine_status(&issue_thread, file_commits.as_ref().unwrap_or(&Vec::new()))?;
+    let qc_status = QCStatus::determine_status(&issue_thread)?;
 
     // Display the status
     println!(
@@ -68,7 +63,7 @@ pub fn single_issue_status(
     issue_thread: &IssueThread,
     git_status: &GitStatus,
     qc_status: &QCStatus,
-    file_commits: &Option<Vec<ObjectId>>,
+    file_commits: &[&ObjectId],
     checklist_summaries: &[(String, ChecklistSummary)],
 ) -> String {
     let mut res = vec![
@@ -108,62 +103,35 @@ pub fn single_issue_status(
         }
         GitStatus::Ahead(commits) => {
             log::debug!("Repository git status: ahead");
-            if let Some(file_commits) = file_commits {
-                log::debug!(
-                    "file commits: {:#?}\nahead commits: {:#?}",
-                    file_commits,
-                    commits
-                );
-                if file_commits.iter().any(|c| commits.contains(c)) {
-                    "File has local, committed changes".to_string()
-                } else {
-                    "File is up to date!".to_string()
-                }
+            if file_commits.iter().any(|c| commits.contains(c)) {
+                "File has local, committed changes".to_string()
             } else {
-                format!(
-                    "Repository is ahead of the remote by {} commits",
-                    commits.len()
-                )
+                "File is up to date!".to_string()
             }
         }
         GitStatus::Behind(commits) => {
             log::debug!("Repository git status: behind");
-            if let Some(file_commits) = file_commits {
-                if file_commits.iter().any(|c| commits.contains(c)) {
-                    "File has remote changes that have not been pulled locally".to_string()
-                } else {
-                    "File is up to date!".to_string()
-                }
+            if file_commits.iter().any(|c| commits.contains(c)) {
+                "File has remote changes that have not been pulled locally".to_string()
             } else {
-                format!(
-                    "Repository is behind the remote by {} commits",
-                    commits.len()
-                )
+                "File is up to date!".to_string()
             }
         }
         GitStatus::Diverged { ahead, behind } => {
             log::debug!("Repository git status: diverged");
-            if let Some(file_commits) = file_commits {
-                let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
-                let is_behind = file_commits.iter().any(|c| behind.contains(c));
+            let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
+            let is_behind = file_commits.iter().any(|c| behind.contains(c));
 
-                match (is_ahead, is_behind) {
-                    (true, true) => {
-                        "File has diverged and has local, committed and remote, unpulled changes"
-                            .to_string()
-                    }
-                    (true, false) => "File has local, committed changes".to_string(),
-                    (false, true) => {
-                        "File has remote changes that have not been pulled locally".to_string()
-                    }
-                    (false, false) => "File is up to date!".to_string(),
+            match (is_ahead, is_behind) {
+                (true, true) => {
+                    "File has diverged and has local, committed and remote, unpulled changes"
+                        .to_string()
                 }
-            } else {
-                format!(
-                    "Repository has diverged and is ahead by {} and behind by {} commits",
-                    ahead.len(),
-                    behind.len()
-                )
+                (true, false) => "File has local, committed changes".to_string(),
+                (false, true) => {
+                    "File has remote changes that have not been pulled locally".to_string()
+                }
+                (false, false) => "File is up to date!".to_string(),
             }
         }
     };
@@ -296,20 +264,13 @@ async fn get_milestone_status_rows(
         for issue in issues {
             // Create IssueThread for each issue
             if let Ok(issue_thread) = IssueThread::from_issue(&issue, cache, git_info).await {
-                let file_commits = issue_thread
-                    .commits(git_info)
-                    .await
-                    .ok()
-                    .map(|v| v.into_iter().map(|(c, _)| c).collect::<Vec<_>>());
+                let file_commits = issue_thread.file_commits();
 
                 // Get git status
                 let git_status = git_info.status().unwrap_or(GitStatus::Clean);
 
                 // Determine QC status
-                if let Ok(qc_status) = QCStatus::determine_status(
-                    &issue_thread,
-                    file_commits.as_ref().unwrap_or(&Vec::new()),
-                ) {
+                if let Ok(qc_status) = QCStatus::determine_status(&issue_thread) {
                     let checklist_summaries = analyze_issue_checklists(&issue);
                     let checklist_summary =
                         ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));

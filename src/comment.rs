@@ -308,7 +308,7 @@ fn format_hunk(hunk: &DiffHunk) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::GitAuthor;
+    use crate::{GitAuthor, git::GitCommit};
 
     use super::*;
     use gix::ObjectId;
@@ -369,11 +369,7 @@ mod tests {
     }
 
     impl GitFileOps for MockGitInfo {
-        fn file_commits(
-            &self,
-            _file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<Vec<(gix::ObjectId, String)>, GitFileOpsError> {
+        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(Vec::new())
         }
 

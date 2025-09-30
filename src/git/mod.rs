@@ -1,4 +1,4 @@
-use gix::Repository;
+use gix::{ObjectId, Repository};
 use std::path::{Path, PathBuf};
 
 mod action;
@@ -14,7 +14,7 @@ pub use action::{GitCli, GitCliError, GitCommand};
 pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
 pub use auth::AuthError;
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
-pub use file_ops::{GitAuthor, GitFileOps, GitFileOpsError, get_file_commits_robust};
+pub use file_ops::{GitAuthor, GitCommit, GitFileOps, GitFileOpsError, get_commits_robust};
 pub use helpers::GitHelpers;
 pub use repository::{GitRepository, GitRepositoryError};
 pub use status::{GitStatus, GitStatusError, GitStatusOps};

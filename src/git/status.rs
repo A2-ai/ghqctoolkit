@@ -51,7 +51,7 @@ impl GitStatus {
     pub fn format_for_file(
         &self,
         issue_file: impl AsRef<Path>,
-        file_commits: &Option<Vec<ObjectId>>,
+        file_commits: &[&ObjectId],
     ) -> String {
         match self {
             GitStatus::Clean => "Up to date".to_string(),
@@ -63,39 +63,27 @@ impl GitStatus {
                 }
             }
             GitStatus::Ahead(commits) => {
-                if let Some(file_commits) = file_commits {
-                    if file_commits.iter().any(|c| commits.contains(c)) {
-                        "Local commits".to_string()
-                    } else {
-                        "Up to date".to_string()
-                    }
+                if file_commits.iter().any(|c| commits.contains(c)) {
+                    "Local commits".to_string()
                 } else {
-                    "Ahead".to_string()
+                    "Up to date".to_string()
                 }
             }
             GitStatus::Behind(commits) => {
-                if let Some(file_commits) = file_commits {
-                    if file_commits.iter().any(|c| commits.contains(c)) {
-                        "Remote changes".to_string()
-                    } else {
-                        "Up to date".to_string()
-                    }
+                if file_commits.iter().any(|c| commits.contains(c)) {
+                    "Remote changes".to_string()
                 } else {
-                    "Behind".to_string()
+                    "Up to date".to_string()
                 }
             }
             GitStatus::Diverged { ahead, behind } => {
-                if let Some(file_commits) = file_commits {
-                    let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
-                    let is_behind = file_commits.iter().any(|c| behind.contains(c));
-                    match (is_ahead, is_behind) {
-                        (true, true) => "Diverged".to_string(),
-                        (true, false) => "Local commits".to_string(),
-                        (false, true) => "Remote changes".to_string(),
-                        (false, false) => "Up to date".to_string(),
-                    }
-                } else {
-                    "Diverged".to_string()
+                let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
+                let is_behind = file_commits.iter().any(|c| behind.contains(c));
+                match (is_ahead, is_behind) {
+                    (true, true) => "Diverged".to_string(),
+                    (true, false) => "Local commits".to_string(),
+                    (false, true) => "Remote changes".to_string(),
+                    (false, false) => "Up to date".to_string(),
                 }
             }
         }
