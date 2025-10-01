@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr, sync::LazyLock};
+use std::{fmt, path::PathBuf, str::FromStr, sync::LazyLock};
 
 use gix::ObjectId;
 use octocrab::models::{IssueState, issues::Issue};
@@ -27,6 +27,18 @@ pub enum CommitState {
     NoComment,
 }
 
+impl fmt::Display for CommitState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let self_str = match self {
+            Self::Initial => "initial",
+            Self::Notification => "notification",
+            Self::Approved => "approved",
+            Self::NoComment => "no_comment",
+        };
+        write!(f, "{self_str}")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct IssueCommit {
     pub hash: ObjectId,
@@ -39,7 +51,7 @@ pub struct IssueThread {
     pub(crate) file: PathBuf,
     pub branch: String,
     pub(crate) open: bool,
-    pub(crate) commits: Vec<IssueCommit>,
+    pub commits: Vec<IssueCommit>,
 }
 
 impl IssueThread {
@@ -90,7 +102,12 @@ impl IssueThread {
             get_commits_robust(git_info, &Some(branch.clone()), reference_commit.as_ref())?;
 
         let mut issue_commits = Vec::new();
-        for commit in all_commits {
+        let mut qc_notif_found = false;
+
+        // all_commits is latest commit first in the vec.
+        // We want to iter rev to "look" from the bottom for the first qc notification to kick-off recording commits.
+        // Typically the first qc notification will be initial, but flexible enough to accept any
+        for commit in all_commits.into_iter().rev() {
             let state = issue_thread_commits
                 .iter()
                 .find_map(|(issue_commit_str, state)| {
@@ -99,6 +116,7 @@ impl IssueThread {
                     if **issue_commit_str == full_sha
                         || (issue_commit_str.len() >= 7 && full_sha.starts_with(issue_commit_str))
                     {
+                        qc_notif_found = true;
                         Some(state.clone())
                     } else {
                         None
@@ -107,12 +125,18 @@ impl IssueThread {
                 .unwrap_or(CommitState::NoComment);
             let file_changed = commit.files.contains(&file);
 
-            issue_commits.push(IssueCommit {
-                hash: commit.commit,
-                message: commit.message,
-                state,
-                file_changed,
-            });
+            if qc_notif_found {
+                // insert a idx 0 instead of push to re-reverse the order
+                issue_commits.insert(
+                    0,
+                    IssueCommit {
+                        hash: commit.commit,
+                        message: commit.message,
+                        state,
+                        file_changed,
+                    },
+                );
+            }
         }
 
         Ok(IssueThread {

@@ -26,9 +26,9 @@ pub use configuration::{
 pub use create::{QCIssue, RelevantFile};
 pub use git::{
     AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitCommit, GitCommitAnalysis,
-    GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+    GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
     GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
-    GitStatusError, GitStatusOps, RepoUser,
+    GitStatusError, GitStatusOps, RepoUser, find_file_commits,
 };
 pub use issue::{IssueCommit, IssueError, IssueThread};
 pub use qc_status::{ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists};

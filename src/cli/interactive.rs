@@ -35,7 +35,9 @@ impl MilestoneStatus {
         match self {
             Self::Existing(milestone) => Ok(Cow::Borrowed(milestone)),
             Self::New(milestone_name, description) => {
-                let m = git_info.create_milestone(milestone_name, description).await?;
+                let m = git_info
+                    .create_milestone(milestone_name, description)
+                    .await?;
                 log::debug!(
                     "Created milestone '{}' with ID: {}",
                     milestone_name,
@@ -100,7 +102,10 @@ pub fn prompt_milestone(milestones: Vec<Milestone>) -> Result<MilestoneStatus> {
             Some(description.trim().to_string())
         };
 
-        Ok(MilestoneStatus::New(new_milestone.trim().to_string(), description))
+        Ok(MilestoneStatus::New(
+            new_milestone.trim().to_string(),
+            description,
+        ))
     } else {
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
@@ -665,11 +670,9 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
 }
 
 /// Helper function to format commit options for display
-fn format_commit_options(
-    issue_thread: &IssueThread,
-    selected: &[usize],
-) -> Vec<String> {
-    issue_thread.commits
+fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<String> {
+    issue_thread
+        .commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
@@ -710,7 +713,10 @@ fn format_commit_options(
                     status_indicator, file_indicator, short_hash, short_message
                 )
             } else {
-                format!("  {}{} {} - {}", status_indicator, file_indicator, short_hash, short_message)
+                format!(
+                    "  {}{} {} - {}",
+                    status_indicator, file_indicator, short_hash, short_message
+                )
             };
 
             selection_indicator
@@ -719,9 +725,7 @@ fn format_commit_options(
 }
 
 /// Select commits for comparison - returns (current, previous) in chronological order
-pub fn prompt_commits(
-    issue_thread: &IssueThread,
-) -> Result<(ObjectId, Option<ObjectId>)> {
+pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<ObjectId>)> {
     if issue_thread.commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
@@ -731,7 +735,8 @@ pub fn prompt_commits(
     }
 
     // Get commits that actually changed the file for smart defaults
-    let file_changing_commits: Vec<_> = issue_thread.commits
+    let file_changing_commits: Vec<_> = issue_thread
+        .commits
         .iter()
         .enumerate()
         .filter(|(_, c)| c.file_changed)
@@ -739,9 +744,9 @@ pub fn prompt_commits(
 
     // Determine default cursor position (prefer file-changing commits)
     let default_cursor = if !file_changing_commits.is_empty() {
-        file_changing_commits[0].0  // First file-changing commit
+        file_changing_commits[0].0 // First file-changing commit
     } else {
-        0  // Fall back to first commit overall
+        0 // Fall back to first commit overall
     };
 
     println!("📋 Commit Status Legend:");
@@ -773,7 +778,8 @@ pub fn prompt_commits(
         .trim();
 
     // Find the commit index
-    let first_index = issue_thread.commits
+    let first_index = issue_thread
+        .commits
         .iter()
         .position(|commit| commit.hash.to_string().starts_with(first_short_hash))
         .unwrap_or(0);
@@ -782,15 +788,14 @@ pub fn prompt_commits(
 
     // Determine default cursor for second selection (prefer second file-changing commit)
     let second_default_cursor = if file_changing_commits.len() > 1 {
-        file_changing_commits[1].0 + 1  // +1 because we insert "Skip" at position 0
+        file_changing_commits[1].0 + 1 // +1 because we insert "Skip" at position 0
     } else {
-        0  // Default to skip if no second file-changing commit
+        0 // Default to skip if no second file-changing commit
     };
 
     // Second selection
     println!("\n📝 Select second commit for comparison (press Enter for second file change):");
-    let mut options_with_skip =
-        format_commit_options(issue_thread, &selected_commits);
+    let mut options_with_skip = format_commit_options(issue_thread, &selected_commits);
     options_with_skip.insert(
         0,
         "  ⏭️  Skip second commit (compare with nothing)".to_string(),
@@ -810,7 +815,12 @@ pub fn prompt_commits(
             .trim_start_matches("  ")
             .chars()
             .skip_while(|c| {
-                c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍' || *c == '📝'
+                c.is_whitespace()
+                    || *c == '🌱'
+                    || *c == '💬'
+                    || *c == '✅'
+                    || *c == '📍'
+                    || *c == '📝'
             })
             .collect::<String>();
         let second_short_hash = cleaned_second_selection
@@ -820,7 +830,8 @@ pub fn prompt_commits(
             .unwrap_or("")
             .trim();
 
-        let second_index = issue_thread.commits
+        let second_index = issue_thread
+            .commits
             .iter()
             .position(|commit| commit.hash.to_string().starts_with(second_short_hash))
             .unwrap_or(0);
@@ -832,10 +843,7 @@ pub fn prompt_commits(
 }
 
 /// Select a single commit from file commits - returns the selected commit
-pub fn prompt_single_commit(
-    issue_thread: &IssueThread,
-    prompt_text: &str,
-) -> Result<ObjectId> {
+pub fn prompt_single_commit(issue_thread: &IssueThread, prompt_text: &str) -> Result<ObjectId> {
     if issue_thread.commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
@@ -861,7 +869,9 @@ pub fn prompt_single_commit(
     let cleaned_commit_selection = commit_selection
         .trim_start_matches("  ")
         .chars()
-        .skip_while(|c| c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍' || *c == '📝')
+        .skip_while(|c| {
+            c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍' || *c == '📝'
+        })
         .collect::<String>();
     let commit_short_hash = cleaned_commit_selection
         .trim()
@@ -870,7 +880,8 @@ pub fn prompt_single_commit(
         .unwrap_or("")
         .trim();
 
-    let commit_index = issue_thread.commits
+    let commit_index = issue_thread
+        .commits
         .iter()
         .position(|commit| commit.hash.to_string().starts_with(commit_short_hash))
         .unwrap_or(0);

@@ -33,7 +33,9 @@ impl QCIssue {
             log::debug!("Found existing milestone {}", m.number);
             m
         } else {
-            git_info.create_milestone(&milestone_name, &description).await?
+            git_info
+                .create_milestone(&milestone_name, &description)
+                .await?
         };
 
         let milestone_issues = git_info.get_milestone_issues(&milestone).await?;

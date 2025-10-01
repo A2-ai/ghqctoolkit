@@ -132,14 +132,13 @@ impl GitHubWriter for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let issue_number = comment.issue.number;
-        let body_result = comment.body(self);
+        let body = comment.body(self);
         let base_url = self.base_url.clone();
         let auth_token = self.auth_token.clone();
 
         async move {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
-            let body = body_result?;
 
             log::debug!(
                 "Posting comment to issue #{} in {}/{}",

@@ -40,6 +40,8 @@ pub enum GitFileOpsError {
     CommitError(gix::object::try_into::Error),
     #[error("Failed to get commit tree: {0}")]
     TreeError(gix::object::commit::Error),
+    #[error("Failed to convert object to tree: {0}")]
+    ObjectToTreeError(gix::object::try_into::Error),
     #[error("Failed to get signature: {0}")]
     SignatureError(gix::objs::decode::Error),
     #[error("Author not found for file: {0:?}")]
@@ -115,15 +117,9 @@ impl GitFileOps for GitInfo {
             let mut changed_files = Vec::new();
 
             if commit_obj.parent_ids().count() == 0 {
-                // Initial commit - get all files in the tree
+                // Initial commit - get all files in the tree recursively
                 if let Ok(tree) = commit_obj.tree() {
-                    for entry in tree.iter() {
-                        if let Ok(entry) = entry {
-                            if entry.mode().is_blob() {
-                                changed_files.push(PathBuf::from(entry.filename().to_string()));
-                            }
-                        }
-                    }
+                    collect_tree_files_recursive(&tree, &mut changed_files, "")?;
                 }
             } else {
                 // Compare this commit's tree with each parent to find changed files
@@ -139,64 +135,39 @@ impl GitFileOps for GitInfo {
 
                     let parent_tree = parent_commit.tree().map_err(GitFileOpsError::TreeError)?;
 
-                    // Find differences between trees
-                    {
-                        // Collect all entries from both trees
-                        let mut current_files: std::collections::HashMap<String, gix::ObjectId> =
-                            std::collections::HashMap::new();
-                        let mut parent_files: std::collections::HashMap<String, gix::ObjectId> =
-                            std::collections::HashMap::new();
+                    // Find differences between trees recursively
+                    let current_files = collect_tree_files_with_oids(&current_tree)?;
+                    let parent_files = collect_tree_files_with_oids(&parent_tree)?;
 
-                        // Collect current tree entries
-                        for entry in current_tree.iter() {
-                            if let Ok(entry) = entry {
-                                if entry.mode().is_blob() {
-                                    current_files
-                                        .insert(entry.filename().to_string(), entry.oid().into());
-                                }
-                            }
-                        }
-
-                        // Collect parent tree entries
-                        for entry in parent_tree.iter() {
-                            if let Ok(entry) = entry {
-                                if entry.mode().is_blob() {
-                                    parent_files
-                                        .insert(entry.filename().to_string(), entry.oid().into());
-                                }
-                            }
-                        }
-
-                        // Find differences
-                        for (path, oid) in &current_files {
-                            match parent_files.get(path) {
-                                Some(parent_oid) if parent_oid != oid => {
-                                    // File modified
-                                    let file_path = PathBuf::from(path);
-                                    if !changed_files.contains(&file_path) {
-                                        changed_files.push(file_path);
-                                    }
-                                }
-                                None => {
-                                    // File added
-                                    let file_path = PathBuf::from(path);
-                                    if !changed_files.contains(&file_path) {
-                                        changed_files.push(file_path);
-                                    }
-                                }
-                                _ => {
-                                    // File unchanged
-                                }
-                            }
-                        }
-
-                        // Check for deleted files
-                        for (path, _) in &parent_files {
-                            if !current_files.contains_key(path) {
+                    // Find differences
+                    for (path, oid) in &current_files {
+                        match parent_files.get(path) {
+                            Some(parent_oid) if parent_oid != oid => {
+                                // File modified
                                 let file_path = PathBuf::from(path);
                                 if !changed_files.contains(&file_path) {
                                     changed_files.push(file_path);
                                 }
+                            }
+                            None => {
+                                // File added
+                                let file_path = PathBuf::from(path);
+                                if !changed_files.contains(&file_path) {
+                                    changed_files.push(file_path);
+                                }
+                            }
+                            _ => {
+                                // File unchanged
+                            }
+                        }
+                    }
+
+                    // Check for deleted files
+                    for (path, _) in &parent_files {
+                        if !current_files.contains_key(path) {
+                            let file_path = PathBuf::from(path);
+                            if !changed_files.contains(&file_path) {
+                                changed_files.push(file_path);
                             }
                         }
                     }
@@ -361,6 +332,79 @@ fn find_merged_into_branch(
     }
 
     Ok(None)
+}
+
+/// Recursively collect all files in a tree
+fn collect_tree_files_recursive(
+    tree: &gix::Tree<'_>,
+    files: &mut Vec<PathBuf>,
+    path_prefix: &str,
+) -> Result<(), GitFileOpsError> {
+    for entry in tree.iter() {
+        let entry = entry.map_err(|e| GitFileOpsError::TreeError(e.into()))?;
+
+        let entry_name = entry.filename().to_string();
+        let full_path = if path_prefix.is_empty() {
+            entry_name.clone()
+        } else {
+            format!("{}/{}", path_prefix, entry_name)
+        };
+
+        if entry.mode().is_blob() {
+            // This is a file
+            files.push(PathBuf::from(full_path));
+        } else if entry.mode().is_tree() {
+            // This is a directory, recurse into it
+            let sub_tree = entry
+                .object()
+                .map_err(GitFileOpsError::ObjectError)?
+                .try_into_tree()
+                .map_err(GitFileOpsError::ObjectToTreeError)?;
+            collect_tree_files_recursive(&sub_tree, files, &full_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Recursively collect all files in a tree with their OIDs
+fn collect_tree_files_with_oids(
+    tree: &gix::Tree<'_>,
+) -> Result<std::collections::HashMap<String, gix::ObjectId>, GitFileOpsError> {
+    let mut files = std::collections::HashMap::new();
+    collect_tree_files_with_oids_recursive(tree, &mut files, "")?;
+    Ok(files)
+}
+
+/// Helper for recursive OID collection
+fn collect_tree_files_with_oids_recursive(
+    tree: &gix::Tree<'_>,
+    files: &mut std::collections::HashMap<String, gix::ObjectId>,
+    path_prefix: &str,
+) -> Result<(), GitFileOpsError> {
+    for entry in tree.iter() {
+        let entry = entry.map_err(|e| GitFileOpsError::TreeError(e.into()))?;
+
+        let entry_name = entry.filename().to_string();
+        let full_path = if path_prefix.is_empty() {
+            entry_name.clone()
+        } else {
+            format!("{}/{}", path_prefix, entry_name)
+        };
+
+        if entry.mode().is_blob() {
+            // This is a file
+            files.insert(full_path, entry.oid().into());
+        } else if entry.mode().is_tree() {
+            // This is a directory, recurse into it
+            let sub_tree = entry
+                .object()
+                .map_err(GitFileOpsError::ObjectError)?
+                .try_into_tree()
+                .map_err(GitFileOpsError::ObjectToTreeError)?;
+            collect_tree_files_with_oids_recursive(&sub_tree, files, &full_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Get commits with robust branch handling

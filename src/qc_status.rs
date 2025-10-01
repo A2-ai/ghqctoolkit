@@ -34,9 +34,7 @@ impl std::fmt::Display for QCStatus {
 }
 
 impl QCStatus {
-    pub fn determine_status(
-        issue_thread: &IssueThread,
-    ) -> Result<Self, QCStatusError> {
+    pub fn determine_status(issue_thread: &IssueThread) -> Result<Self, QCStatusError> {
         let commits = &issue_thread.commits;
 
         let status = if let Some(approved) = issue_thread.approved_commit() {
@@ -64,9 +62,7 @@ impl QCStatus {
                 Self::ApprovalRequired
             } else {
                 // Find the latest commit that affects the file
-                let latest_file_commit = commits
-                    .iter()
-                    .find(|commit| commit.file_changed);
+                let latest_file_commit = commits.iter().find(|commit| commit.file_changed);
 
                 match latest_file_commit {
                     Some(latest_commit) => {
@@ -79,8 +75,8 @@ impl QCStatus {
                         } else {
                             Self::ChangesToComment(latest_commit.hash)
                         }
-                    },
-                    None => Self::InProgress
+                    }
+                    None => Self::InProgress,
                 }
             }
         };
