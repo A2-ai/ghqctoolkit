@@ -21,7 +21,8 @@ pub use cache::{
 };
 pub use comment::QCComment;
 pub use configuration::{
-    Checklist, Configuration, configuration_status, determine_config_dir, setup_configuration,
+    Checklist, Configuration, ConfigurationOptions, configuration_status, determine_config_dir,
+    setup_configuration,
 };
 pub use create::{QCIssue, RelevantFile};
 pub use git::{

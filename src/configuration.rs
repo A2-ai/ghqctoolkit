@@ -13,15 +13,15 @@ use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct ConfigurationOptions {
+pub struct ConfigurationOptions {
     // Note to prepend at the top of all checklists
-    pub(crate) prepended_checklist_note: Option<String>,
+    pub prepended_checklist_note: Option<String>,
     // What to call the checklist in the app. Default: checklist
-    pub(crate) checklist_display_name: String,
+    pub checklist_display_name: String,
     // Path to the logo within the configuration repo. Default: logo
-    logo_path: PathBuf,
+    pub logo_path: PathBuf,
     // Path to the checklist directory within the configuration repo. Default: checklists
-    checklist_directory: PathBuf,
+    pub checklist_directory: PathBuf,
 }
 
 impl Default for ConfigurationOptions {
@@ -88,10 +88,10 @@ impl Default for Checklist {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Configuration {
-    pub(crate) path: PathBuf,
+    pub path: PathBuf,
     // checklist name and content
     pub checklists: HashMap<String, Checklist>,
-    pub(crate) options: ConfigurationOptions,
+    pub options: ConfigurationOptions,
 }
 
 impl Default for Configuration {

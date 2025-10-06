@@ -6,10 +6,10 @@ use octocrab::models::issues::Issue;
 use crate::git::GitHelpers;
 
 pub struct QCApprove {
-    pub(crate) file: PathBuf,
-    pub(crate) commit: ObjectId,
-    pub(crate) issue: Issue,
-    pub(crate) note: Option<String>,
+    pub file: PathBuf,
+    pub commit: ObjectId,
+    pub issue: Issue,
+    pub note: Option<String>,
 }
 
 impl QCApprove {
