@@ -431,12 +431,12 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn file_content_at_commit(
+        fn file_bytes_at_commit(
             &self,
             _file: &std::path::Path,
             _commit: &ObjectId,
-        ) -> Result<String, GitFileOpsError> {
-            Ok(String::new())
+        ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok(Vec::new())
         }
     }
 

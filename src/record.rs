@@ -1213,12 +1213,12 @@ mod tests {
             }])
         }
 
-        fn file_content_at_commit(
+        fn file_bytes_at_commit(
             &self,
             _file: &std::path::Path,
             _commit: &ObjectId,
-        ) -> Result<String, GitFileOpsError> {
-            Ok("test content".to_string())
+        ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok("test content".to_string().into_bytes())
         }
     }
 

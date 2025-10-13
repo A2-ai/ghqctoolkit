@@ -69,12 +69,13 @@ pub trait GitFileOps {
     /// Get all authors who have modified a file
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError>;
 
-    /// Get file content at a specific commit
-    fn file_content_at_commit(
+    /// Get file bytes at a specific commit
+    /// Return bytes to either use in excel reader or convert to string
+    fn file_bytes_at_commit(
         &self,
         file: &Path,
         commit: &ObjectId,
-    ) -> Result<String, GitFileOpsError>;
+    ) -> Result<Vec<u8>, GitFileOpsError>;
 }
 
 impl GitFileOps for GitInfo {
@@ -221,11 +222,11 @@ impl GitFileOps for GitInfo {
         }
     }
 
-    fn file_content_at_commit(
+    fn file_bytes_at_commit(
         &self,
         file: &Path,
         commit: &gix::ObjectId,
-    ) -> Result<String, GitFileOpsError> {
+    ) -> Result<Vec<u8>, GitFileOpsError> {
         let file_path = file;
         log::debug!(
             "Getting file content for {:?} at commit {}",
@@ -258,18 +259,14 @@ impl GitFileOps for GitInfo {
             .try_into_blob()
             .map_err(GitFileOpsError::BlobError)?;
 
-        // Convert blob data to string
-        let content = std::str::from_utf8(&blob.data)
-            .map_err(|_| GitFileOpsError::EncodingError(file_path.to_path_buf()))?;
-
         log::debug!(
             "Successfully read {} bytes from file {:?} at commit {}",
-            content.len(),
+            blob.data.len(),
             file_path,
             commit
         );
 
-        Ok(content.to_string())
+        Ok(blob.data.clone())
     }
 }
 
@@ -642,12 +639,12 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn file_content_at_commit(
+        fn file_bytes_at_commit(
             &self,
             _file: &Path,
             _commit: &ObjectId,
-        ) -> Result<String, GitFileOpsError> {
-            Ok(String::new())
+        ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok(Vec::new())
         }
     }
 

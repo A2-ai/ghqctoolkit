@@ -1,5 +1,6 @@
-use std::path::PathBuf;
+use std::{io::Cursor, path::{Path, PathBuf}};
 
+use calamine::{open_workbook_auto_from_rs, Reader, Data};
 use diff::{Result as DiffResult, lines};
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
@@ -51,17 +52,10 @@ impl QCComment {
 
         if !self.no_diff {
             if let Some(previous_commit) = self.previous_commit {
-                let current_res = git_info.file_content_at_commit(&self.file, &self.current_commit);
-                let previous_res = git_info.file_content_at_commit(&self.file, &previous_commit);
-                if let (Ok(current_content), Ok(previous_content)) = (current_res, previous_res) {
-                    let difference = format!(
-                        "## File Difference\n{}",
-                        diff(&previous_content, &current_content)
-                    );
-
-                    body.push(difference);
+                if let Some(difference) = file_diff(&self.file, &previous_commit, &self.current_commit, git_info) {
+                    body.push(format!("## File Difference\n{}", difference));
                 } else {
-                    log::warn!("Could not read file content at commit. Cannot generate diff...");
+                    log::warn!("Could not generate diff for file {:?}", self.file);
                 }
             } else {
                 log::debug!("Previous Commit not specified. Cannot generate diff...");
@@ -70,6 +64,165 @@ impl QCComment {
 
         body.join("\n\n")
     }
+}
+
+fn file_diff(
+    file: impl AsRef<Path>,
+    from_commit: &ObjectId,
+    to_commit: &ObjectId,
+    git_info: &impl GitFileOps,
+) -> Option<String> {
+    let file = file.as_ref();
+    let Ok(from_bytes) = git_info.file_bytes_at_commit(file, from_commit) else {
+        log::debug!("Could not read file at from commit ({from_commit})...");
+        return None;
+    };
+    // Get bytes from both commits
+    let to_bytes = git_info.file_bytes_at_commit(file, to_commit).ok()?;
+
+    // Try to handle as Excel file first
+    if is_excel_file(file) {
+        if let Some(excel_diff) = diff_excel_files(from_bytes.clone(), to_bytes.clone()) {
+            return Some(excel_diff);
+        }
+        log::debug!("Failed to diff as Excel, falling back to text diff");
+    }
+
+    // Fall back to text diff
+    diff_text_files(from_bytes, to_bytes)
+}
+
+fn is_excel_file(file: &Path) -> bool {
+    if let Some(ext) = file.extension().and_then(|e| e.to_str()) {
+        matches!(ext.to_lowercase().as_str(), "xlsx" | "xlsm" | "xlsb" | "xls")
+    } else {
+        false
+    }
+}
+
+fn diff_excel_files(from_bytes: Vec<u8>, to_bytes: Vec<u8>) -> Option<String> {
+    // Use Cursor to provide Read + Seek traits
+    let from_cursor = Cursor::new(from_bytes);
+    let to_cursor = Cursor::new(to_bytes);
+
+    // Try to open both workbooks
+    let mut from_workbook = open_workbook_auto_from_rs(from_cursor).ok()?;
+    let mut to_workbook = open_workbook_auto_from_rs(to_cursor).ok()?;
+
+    let mut diff_lines = Vec::new();
+    diff_lines.push("```diff".to_string());
+
+    // Get worksheet names from both workbooks
+    let from_sheets: std::collections::HashSet<String> = from_workbook.sheet_names().iter().cloned().collect();
+    let to_sheets: std::collections::HashSet<String> = to_workbook.sheet_names().iter().cloned().collect();
+
+    // Check for added/removed sheets
+    for sheet in &from_sheets {
+        if !to_sheets.contains(sheet) {
+            diff_lines.push(format!("- Sheet removed: {}", sheet));
+        }
+    }
+
+    for sheet in &to_sheets {
+        if !from_sheets.contains(sheet) {
+            diff_lines.push(format!("+ Sheet added: {}", sheet));
+        }
+    }
+
+    // Compare common sheets
+    for sheet_name in from_sheets.intersection(&to_sheets) {
+        if let Some(sheet_diff) = diff_excel_sheet(&mut from_workbook, &mut to_workbook, sheet_name) {
+            diff_lines.push(format!("@@ Sheet: {} @@", sheet_name));
+            diff_lines.extend(sheet_diff);
+        }
+    }
+
+    diff_lines.push("```".to_string());
+
+    if diff_lines.len() > 2 { // More than just the ``` markers
+        Some(diff_lines.join("\n"))
+    } else {
+        Some("\nNo differences between Excel file versions.\n".to_string())
+    }
+}
+
+fn diff_excel_sheet<R>(
+    from_workbook: &mut R,
+    to_workbook: &mut R,
+    sheet_name: &str,
+) -> Option<Vec<String>>
+where
+    R: Reader<Cursor<Vec<u8>>>,
+{
+    let from_range = from_workbook.worksheet_range(sheet_name).ok()?;
+    let to_range = to_workbook.worksheet_range(sheet_name).ok()?;
+
+    let mut changes = Vec::new();
+    let mut has_changes = false;
+
+    // Get dimensions
+    let from_dims = from_range.get_size();
+    let to_dims = to_range.get_size();
+
+    if from_dims != to_dims {
+        changes.push(format!("  Sheet dimensions changed: {}x{} -> {}x{}",
+                           from_dims.1, from_dims.0, to_dims.1, to_dims.0));
+        has_changes = true;
+    }
+
+    // Compare cells in the overlapping area
+    let max_rows = from_dims.0.max(to_dims.0);
+    let max_cols = from_dims.1.max(to_dims.1);
+
+    let mut cell_changes = 0;
+    for row in 0..max_rows {
+        for col in 0..max_cols {
+            let from_cell = from_range.get((row, col)).unwrap_or(&Data::Empty);
+            let to_cell = to_range.get((row, col)).unwrap_or(&Data::Empty);
+
+            if from_cell != to_cell {
+                cell_changes += 1;
+                // Only show first 10 cell changes to avoid too much output
+                if cell_changes <= 10 {
+                    let col_letter = (b'A' + (col % 26) as u8) as char;
+                    let cell_ref = format!("{}{}", col_letter, row + 1);
+                    changes.push(format!("- {}: {}", cell_ref, format_cell_value(from_cell)));
+                    changes.push(format!("+ {}: {}", cell_ref, format_cell_value(to_cell)));
+                }
+                has_changes = true;
+            }
+        }
+    }
+
+    if cell_changes > 10 {
+        changes.push(format!("  ... and {} more cell changes", cell_changes - 10));
+    }
+
+    if has_changes {
+        Some(changes)
+    } else {
+        None
+    }
+}
+
+fn format_cell_value(cell: &Data) -> String {
+    match cell {
+        Data::Empty => "".to_string(),
+        Data::String(s) => format!("\"{}\"", s),
+        Data::Float(f) => f.to_string(),
+        Data::Int(i) => i.to_string(),
+        Data::Bool(b) => b.to_string(),
+        Data::Error(e) => format!("ERROR({:?})", e),
+        Data::DateTime(dt) => format!("DATE({})", dt),
+        Data::DateTimeIso(dt) => format!("ISO_DATE({})", dt),
+        Data::DurationIso(d) => format!("ISO_DURATION({})", d),
+    }
+}
+
+fn diff_text_files(from_bytes: Vec<u8>, to_bytes: Vec<u8>) -> Option<String> {
+    let from_str = String::from_utf8_lossy(&from_bytes);
+    let to_str = String::from_utf8_lossy(&to_bytes);
+    Some(diff(&from_str, &to_str))
 }
 
 /// Generate a markdown-formatted diff between two strings showing only changed hunks with context
@@ -376,16 +529,18 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn file_content_at_commit(
+        fn file_bytes_at_commit(
             &self,
             file: &std::path::Path,
             commit: &gix::ObjectId,
-        ) -> Result<String, GitFileOpsError> {
+        ) -> Result<Vec<u8>, GitFileOpsError> {
             let key = (file.to_path_buf(), commit.to_string());
-            self.file_contents
+            Ok(self
+                .file_contents
                 .get(&key)
                 .cloned()
-                .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
+                .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))?
+                .into_bytes())
         }
     }
 
