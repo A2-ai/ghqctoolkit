@@ -21,15 +21,16 @@ pub use cache::{
 };
 pub use comment::QCComment;
 pub use configuration::{
-    Configuration, configuration_status, determine_config_info, setup_configuration,
+    Checklist, Configuration, ConfigurationOptions, configuration_status, determine_config_dir,
+    setup_configuration,
 };
 pub use create::{QCIssue, RelevantFile};
 pub use git::{
-    AuthError, GitAction, GitActionError, GitActionImpl, GitAuthor, GitCommitAnalysis,
-    GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+    AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitCommit, GitCommitAnalysis,
+    GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
     GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
-    GitStatusError, GitStatusOps, RepoUser,
+    GitStatusError, GitStatusOps, RepoUser, find_file_commits,
 };
-pub use issue::{IssueError, IssueThread};
+pub use issue::{IssueCommit, IssueError, IssueThread};
 pub use qc_status::{ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists};
 pub use record::{record, render};

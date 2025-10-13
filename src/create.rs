@@ -103,7 +103,7 @@ impl RelevantFile {
 #[derive(Debug, Clone)]
 pub struct QCIssue {
     pub(crate) milestone_id: u64,
-    title: PathBuf,
+    pub title: PathBuf,
     commit: String,
     pub(crate) branch: String,
     authors: Vec<GitAuthor>,
@@ -169,7 +169,7 @@ impl QCIssue {
         &self.branch
     }
 
-    pub(crate) fn new(
+    pub fn new(
         file: impl AsRef<Path>,
         git_info: &(impl GitRepository + GitFileOps),
         milestone_id: u64,

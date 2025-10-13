@@ -41,13 +41,17 @@ pub async fn get_archive_content(
             let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
 
             // Filter out unapproved issues if needed
-            if !include_unapproved && issue_thread.approved_commit.is_none() {
+            if !include_unapproved && issue_thread.approved_commit().is_none() {
                 return Ok::<Option<(PathBuf, String)>, ArchiveError>(None);
             }
 
             // Get file content at the latest commit
-            let content = git_info
-                .file_content_at_commit(&issue_thread.file, issue_thread.latest_commit())?;
+            let content = git_info.file_content_at_commit(
+                &issue_thread.file,
+                issue_thread
+                    .latest_commit()
+                    .ok_or_else(|| GitFileOpsError::AuthorNotFound(issue_thread.file.clone()))?,
+            )?;
 
             Ok(Some((issue_thread.file.clone(), content)))
         })
@@ -150,9 +154,9 @@ mod tests {
     use crate::{
         GitAuthor, RepoUser,
         git::{
-            GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
-            GitHubApiError, GitRepository, GitRepositoryError, GitStatus, GitStatusError,
-            GitStatusOps,
+            GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError,
+            GitHelpers, GitHubApiError, GitRepository, GitRepositoryError, GitStatus,
+            GitStatusError, GitStatusOps,
         },
     };
     use gix::ObjectId;
@@ -296,17 +300,39 @@ mod tests {
     }
 
     impl GitFileOps for ArchiveMockGitInfo {
-        fn file_commits(
-            &self,
-            file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<Vec<(ObjectId, String)>, GitFileOpsError> {
-            Ok(self.file_commits.get(file).cloned().unwrap_or_else(|| {
-                vec![(
-                    ObjectId::from_str(&self.current_commit).unwrap(),
-                    "Test commit".to_string(),
-                )]
-            }))
+        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+            // Convert all file_commits to a unified commit list
+            let mut all_commits = Vec::new();
+            for (file, commits) in &self.file_commits {
+                for (commit, message) in commits {
+                    // Check if this commit is already in the list
+                    if !all_commits.iter().any(|c: &GitCommit| c.commit == *commit) {
+                        all_commits.push(GitCommit {
+                            commit: *commit,
+                            message: message.clone(),
+                            files: vec![file.clone()],
+                        });
+                    } else {
+                        // Add this file to existing commit
+                        if let Some(existing) = all_commits.iter_mut().find(|c| c.commit == *commit)
+                        {
+                            if !existing.files.contains(file) {
+                                existing.files.push(file.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if all_commits.is_empty() {
+                all_commits.push(GitCommit {
+                    commit: ObjectId::from_str(&self.current_commit).unwrap(),
+                    message: "Test commit".to_string(),
+                    files: vec![PathBuf::from("test_file.rs")],
+                });
+            }
+
+            Ok(all_commits)
         }
 
         fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {

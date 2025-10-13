@@ -1,4 +1,7 @@
-use std::{fmt, path::PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use gix::ObjectId;
 #[cfg(test)]
@@ -47,52 +50,40 @@ impl GitStatus {
     /// Format git status for a specific file and issue thread
     pub fn format_for_file(
         &self,
-        issue_thread: &crate::issue::IssueThread,
-        file_commits: &Option<Vec<ObjectId>>,
+        issue_file: impl AsRef<Path>,
+        file_commits: &[&ObjectId],
     ) -> String {
         match self {
             GitStatus::Clean => "Up to date".to_string(),
             GitStatus::Dirty(files) => {
-                if files.contains(&issue_thread.file) {
+                if files.contains(&issue_file.as_ref().to_path_buf()) {
                     "Local changes".to_string()
                 } else {
                     "Up to date".to_string()
                 }
             }
             GitStatus::Ahead(commits) => {
-                if let Some(file_commits) = file_commits {
-                    if file_commits.iter().any(|c| commits.contains(c)) {
-                        "Local commits".to_string()
-                    } else {
-                        "Up to date".to_string()
-                    }
+                if file_commits.iter().any(|c| commits.contains(c)) {
+                    "Local commits".to_string()
                 } else {
-                    "Ahead".to_string()
+                    "Up to date".to_string()
                 }
             }
             GitStatus::Behind(commits) => {
-                if let Some(file_commits) = file_commits {
-                    if file_commits.iter().any(|c| commits.contains(c)) {
-                        "Remote changes".to_string()
-                    } else {
-                        "Up to date".to_string()
-                    }
+                if file_commits.iter().any(|c| commits.contains(c)) {
+                    "Remote changes".to_string()
                 } else {
-                    "Behind".to_string()
+                    "Up to date".to_string()
                 }
             }
             GitStatus::Diverged { ahead, behind } => {
-                if let Some(file_commits) = file_commits {
-                    let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
-                    let is_behind = file_commits.iter().any(|c| behind.contains(c));
-                    match (is_ahead, is_behind) {
-                        (true, true) => "Diverged".to_string(),
-                        (true, false) => "Local commits".to_string(),
-                        (false, true) => "Remote changes".to_string(),
-                        (false, false) => "Up to date".to_string(),
-                    }
-                } else {
-                    "Diverged".to_string()
+                let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
+                let is_behind = file_commits.iter().any(|c| behind.contains(c));
+                match (is_ahead, is_behind) {
+                    (true, true) => "Diverged".to_string(),
+                    (true, false) => "Local commits".to_string(),
+                    (false, true) => "Remote changes".to_string(),
+                    (false, false) => "Up to date".to_string(),
                 }
             }
         }
@@ -117,6 +108,8 @@ pub enum GitStatusError {
     RevWalkError(gix::revision::walk::Error),
     #[error("Failed to traverse commits: {0}")]
     TraverseError(gix::revision::walk::iter::Error),
+    #[error("Failed to access repository: {0}")]
+    RepositoryError(#[from] crate::git::GitInfoError),
 }
 
 /// Repository and file status operations
@@ -129,10 +122,10 @@ pub trait GitStatusOps {
 impl GitStatusOps for GitInfo {
     fn status(&self) -> Result<GitStatus, GitStatusError> {
         log::debug!("Getting git repository status");
+        let repo = self.repository()?;
 
         // Check for uncommitted changes (dirty working tree)
-        let status_platform = self
-            .repository
+        let status_platform = repo
             .status(gix::progress::Discard)
             .map_err(GitStatusError::StatusError)?;
 
@@ -151,7 +144,7 @@ impl GitStatusOps for GitInfo {
         }
 
         // Get current branch and its upstream tracking branch
-        let head = self.repository.head().map_err(GitStatusError::HeadError)?;
+        let head = repo.head().map_err(GitStatusError::HeadError)?;
         let current_branch_name = if let Some(branch_name) = head.referent_name() {
             let name_str = branch_name.as_bstr().to_string();
             name_str
@@ -168,11 +161,11 @@ impl GitStatusOps for GitInfo {
 
         // Try to find the upstream tracking branch
         let upstream_ref_name = format!("refs/remotes/origin/{}", current_branch_name);
-        let upstream_ref = match self.repository.find_reference(&upstream_ref_name) {
+        let upstream_ref = match repo.find_reference(&upstream_ref_name) {
             Ok(r) => r,
             Err(_) => {
                 // Count local commits since no upstream exists
-                let local_revwalk = self.repository.rev_walk([head.id().ok_or_else(|| {
+                let local_revwalk = repo.rev_walk([head.id().ok_or_else(|| {
                     GitStatusError::HeadError(gix::reference::find::existing::Error::NotFound {
                         name: gix::refs::PartialName::try_from("HEAD").unwrap(),
                     })
@@ -204,8 +197,8 @@ impl GitStatusOps for GitInfo {
         }
 
         // Check if local is ahead, behind, or diverged from remote
-        let local_revwalk = self.repository.rev_walk([local_commit_id]);
-        let remote_revwalk = self.repository.rev_walk([remote_commit_id]);
+        let local_revwalk = repo.rev_walk([local_commit_id]);
+        let remote_revwalk = repo.rev_walk([remote_commit_id]);
 
         // Get all local commits (preserving chronological order)
         let local_commits = local_revwalk

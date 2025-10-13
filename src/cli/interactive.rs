@@ -13,13 +13,13 @@ use crate::{
 
 pub enum MilestoneStatus {
     Existing(Milestone),
-    New(String),
+    New(String, Option<String>), // (name, description)
 }
 
 impl fmt::Display for MilestoneStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::New(name) => write!(f, "{name} (new)"),
+            Self::New(name, _) => write!(f, "{name} (new)"),
             Self::Existing(milestone) => {
                 write!(f, "{} (existing: #{})", milestone.title, milestone.number)
             }
@@ -34,8 +34,10 @@ impl MilestoneStatus {
     ) -> Result<Cow<'a, Milestone>> {
         match self {
             Self::Existing(milestone) => Ok(Cow::Borrowed(milestone)),
-            Self::New(milestone_name) => {
-                let m = git_info.create_milestone(milestone_name).await?;
+            Self::New(milestone_name, description) => {
+                let m = git_info
+                    .create_milestone(milestone_name, description)
+                    .await?;
                 log::debug!(
                     "Created milestone '{}' with ID: {}",
                     milestone_name,
@@ -88,7 +90,22 @@ pub fn prompt_milestone(milestones: Vec<Milestone>) -> Result<MilestoneStatus> {
             })
             .prompt()
             .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
-        Ok(MilestoneStatus::New(new_milestone.trim().to_string()))
+
+        let description = Text::new("Enter milestone description (optional):")
+            .with_default("")
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let description = if description.trim().is_empty() {
+            None
+        } else {
+            Some(description.trim().to_string())
+        };
+
+        Ok(MilestoneStatus::New(
+            new_milestone.trim().to_string(),
+            description,
+        ))
     } else {
         // Find the selected milestone and return its ID
         let milestone_title = selection.strip_prefix("🎯 ").unwrap_or(&selection);
@@ -653,21 +670,18 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
 }
 
 /// Helper function to format commit options for display
-fn format_commit_options(
-    file_commits: &[(gix::ObjectId, String)],
-    issue_thread: &IssueThread,
-    selected: &[usize],
-) -> Vec<String> {
-    file_commits
+fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<String> {
+    issue_thread
+        .commits
         .iter()
         .enumerate()
-        .map(|(i, (commit_id, message))| {
-            let short_hash = commit_id.to_string()[..8].to_string();
-            let short_message = if message.is_empty() {
+        .map(|(i, commit)| {
+            let short_hash = commit.hash.to_string()[..8].to_string();
+            let short_message = if commit.message.is_empty() {
                 "No message".to_string()
             } else {
                 // Take first line and truncate if too long
-                let first_line = message.lines().next().unwrap_or("");
+                let first_line = commit.message.lines().next().unwrap_or("");
                 if first_line.len() > 50 {
                     format!("{}...", &first_line[..47])
                 } else {
@@ -676,25 +690,33 @@ fn format_commit_options(
             };
 
             // Determine commit status
-            let status_indicator = if *commit_id == issue_thread.initial_commit {
-                "🌱" // Initial commit
-            } else if issue_thread.notification_commits.contains(commit_id) {
-                "💬" // Has comments
-            } else if issue_thread.approved_commit.as_ref() == Some(commit_id) {
-                "✅" // Approved commit
-            } else if *commit_id == *issue_thread.latest_commit() {
-                "📍" // Latest commit
-            } else {
-                "  " // Regular commit
+            let status_indicator = match commit.state {
+                crate::issue::CommitState::Initial => "🌱", // Initial commit
+                crate::issue::CommitState::Notification => "💬", // Has comments
+                crate::issue::CommitState::Approved => "✅", // Approved commit
+                crate::issue::CommitState::NoComment => {
+                    // Check if it's the latest commit
+                    if Some(&commit.hash) == issue_thread.latest_commit() {
+                        "📍" // Latest commit
+                    } else {
+                        "  " // Regular commit
+                    }
+                }
             };
+
+            // Add file change indicator
+            let file_indicator = if commit.file_changed { "📝" } else { "  " };
 
             let selection_indicator = if selected.contains(&i) {
                 format!(
-                    "✓ {} {} - {} (already selected)",
-                    status_indicator, short_hash, short_message
+                    "✓ {}{} {} - {} (already selected)",
+                    status_indicator, file_indicator, short_hash, short_message
                 )
             } else {
-                format!("  {} {} - {}", status_indicator, short_hash, short_message)
+                format!(
+                    "  {}{} {} - {}",
+                    status_indicator, file_indicator, short_hash, short_message
+                )
             };
 
             selection_indicator
@@ -703,29 +725,41 @@ fn format_commit_options(
 }
 
 /// Select commits for comparison - returns (current, previous) in chronological order
-pub fn prompt_commits(
-    file_commits: &[(gix::ObjectId, String)],
-    issue_thread: &IssueThread,
-) -> Result<(ObjectId, Option<ObjectId>)> {
-    if file_commits.is_empty() {
+pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<ObjectId>)> {
+    if issue_thread.commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
 
-    if file_commits.len() == 1 {
-        return Ok((file_commits[0].0, None));
+    if issue_thread.commits.len() == 1 {
+        return Ok((issue_thread.commits[0].hash, None));
     }
 
+    // Get commits that actually changed the file for smart defaults
+    let file_changing_commits: Vec<_> = issue_thread
+        .commits
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.file_changed)
+        .collect();
+
+    // Determine default cursor position (prefer file-changing commits)
+    let default_cursor = if !file_changing_commits.is_empty() {
+        file_changing_commits[0].0 // First file-changing commit
+    } else {
+        0 // Fall back to first commit overall
+    };
+
     println!("📋 Commit Status Legend:");
-    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest");
+    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed");
     println!();
 
     let mut selected_commits: Vec<usize> = Vec::new();
 
     // First selection
-    println!("📝 Select first commit (press Enter for latest):");
-    let options = format_commit_options(file_commits, issue_thread, &selected_commits);
+    println!("📝 Select first commit (press Enter for latest file change):");
+    let options = format_commit_options(issue_thread, &selected_commits);
     let first_selection = Select::new("Pick commit:", options)
-        .with_starting_cursor(0) // Default to first (most recent) commit
+        .with_starting_cursor(default_cursor)
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
@@ -744,24 +778,31 @@ pub fn prompt_commits(
         .trim();
 
     // Find the commit index
-    let first_index = file_commits
+    let first_index = issue_thread
+        .commits
         .iter()
-        .position(|(commit_id, _)| commit_id.to_string().starts_with(first_short_hash))
+        .position(|commit| commit.hash.to_string().starts_with(first_short_hash))
         .unwrap_or(0);
 
     selected_commits.push(first_index);
 
+    // Determine default cursor for second selection (prefer second file-changing commit)
+    let second_default_cursor = if file_changing_commits.len() > 1 {
+        file_changing_commits[1].0 + 1 // +1 because we insert "Skip" at position 0
+    } else {
+        0 // Default to skip if no second file-changing commit
+    };
+
     // Second selection
-    println!("\n📝 Select second commit for comparison (press Enter to skip):");
-    let mut options_with_skip =
-        format_commit_options(file_commits, issue_thread, &selected_commits);
+    println!("\n📝 Select second commit for comparison (press Enter for second file change):");
+    let mut options_with_skip = format_commit_options(issue_thread, &selected_commits);
     options_with_skip.insert(
         0,
         "  ⏭️  Skip second commit (compare with nothing)".to_string(),
     );
 
     let second_selection = Select::new("Pick commit:", options_with_skip)
-        .with_starting_cursor(0) // Default to skip
+        .with_starting_cursor(second_default_cursor)
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
@@ -774,7 +815,12 @@ pub fn prompt_commits(
             .trim_start_matches("  ")
             .chars()
             .skip_while(|c| {
-                c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍'
+                c.is_whitespace()
+                    || *c == '🌱'
+                    || *c == '💬'
+                    || *c == '✅'
+                    || *c == '📍'
+                    || *c == '📝'
             })
             .collect::<String>();
         let second_short_hash = cleaned_second_selection
@@ -784,37 +830,34 @@ pub fn prompt_commits(
             .unwrap_or("")
             .trim();
 
-        let second_index = file_commits
+        let second_index = issue_thread
+            .commits
             .iter()
-            .position(|(commit_id, _)| commit_id.to_string().starts_with(second_short_hash))
+            .position(|commit| commit.hash.to_string().starts_with(second_short_hash))
             .unwrap_or(0);
 
-        Some(file_commits[second_index].0)
+        Some(issue_thread.commits[second_index].hash)
     };
 
-    Ok((file_commits[first_index].0, second_commit))
+    Ok((issue_thread.commits[first_index].hash, second_commit))
 }
 
 /// Select a single commit from file commits - returns the selected commit
-pub fn prompt_single_commit(
-    file_commits: &[(gix::ObjectId, String)],
-    issue_thread: &IssueThread,
-    prompt_text: &str,
-) -> Result<ObjectId> {
-    if file_commits.is_empty() {
+pub fn prompt_single_commit(issue_thread: &IssueThread, prompt_text: &str) -> Result<ObjectId> {
+    if issue_thread.commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
 
-    if file_commits.len() == 1 {
-        return Ok(file_commits[0].0);
+    if issue_thread.commits.len() == 1 {
+        return Ok(issue_thread.commits[0].hash);
     }
 
     println!("📋 Commit Status Legend:");
-    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest");
+    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed");
     println!();
 
     // Create commit options with status indicators
-    let commit_options = format_commit_options(file_commits, issue_thread, &[]);
+    let commit_options = format_commit_options(issue_thread, &[]);
 
     println!("{}", prompt_text);
     let commit_selection = Select::new("Pick commit:", commit_options)
@@ -826,7 +869,9 @@ pub fn prompt_single_commit(
     let cleaned_commit_selection = commit_selection
         .trim_start_matches("  ")
         .chars()
-        .skip_while(|c| c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍')
+        .skip_while(|c| {
+            c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍' || *c == '📝'
+        })
         .collect::<String>();
     let commit_short_hash = cleaned_commit_selection
         .trim()
@@ -835,12 +880,13 @@ pub fn prompt_single_commit(
         .unwrap_or("")
         .trim();
 
-    let commit_index = file_commits
+    let commit_index = issue_thread
+        .commits
         .iter()
-        .position(|(commit_id, _)| commit_id.to_string().starts_with(commit_short_hash))
+        .position(|commit| commit.hash.to_string().starts_with(commit_short_hash))
         .unwrap_or(0);
 
-    Ok(file_commits[commit_index].0)
+    Ok(issue_thread.commits[commit_index].hash)
 }
 
 /// Prompt for optional note for a comment

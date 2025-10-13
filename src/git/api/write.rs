@@ -14,6 +14,7 @@ pub trait GitHubWriter {
     fn create_milestone(
         &self,
         milestone_name: &str,
+        description: &Option<String>,
     ) -> impl Future<Output = Result<Milestone, GitHubApiError>> + Send;
     fn post_issue(
         &self,
@@ -42,13 +43,18 @@ impl GitHubWriter for GitInfo {
     fn create_milestone(
         &self,
         milestone_name: &str,
+        description: &Option<String>,
     ) -> impl std::future::Future<Output = Result<Milestone, GitHubApiError>> + Send {
-        let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let milestone_name = milestone_name.to_string();
+        let description = description.clone();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
 
         async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
             log::debug!(
                 "Creating milestone '{}' for {}/{}",
                 milestone_name,
@@ -57,7 +63,8 @@ impl GitHubWriter for GitInfo {
             );
             let milestone_request = serde_json::json!({
                 "title": milestone_name,
-                "state": "open"
+                "state": "open",
+                "description": description,
             });
 
             let milestone: Milestone = octocrab
@@ -82,7 +89,6 @@ impl GitHubWriter for GitInfo {
         &self,
         issue: &QCIssue,
     ) -> impl std::future::Future<Output = Result<String, GitHubApiError>> + Send {
-        let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let title = issue.title();
@@ -90,8 +96,12 @@ impl GitHubWriter for GitInfo {
         let milestone_id = issue.milestone_id;
         let branch = issue.branch.clone();
         let assignees = issue.assignees.clone();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
 
         async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
             log::debug!("Posting issue '{}' to {}/{}", title, owner, repo);
 
             let handler = octocrab.issues(owner.clone(), repo.clone());
@@ -119,14 +129,16 @@ impl GitHubWriter for GitInfo {
         &self,
         comment: &QCComment,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
-        let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let issue_number = comment.issue.number;
-        let body_result = comment.body(self);
+        let body = comment.body(self);
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
 
         async move {
-            let body = body_result?;
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
 
             log::debug!(
                 "Posting comment to issue #{} in {}/{}",
@@ -157,13 +169,16 @@ impl GitHubWriter for GitInfo {
         &self,
         approval: &QCApprove,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
-        let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let issue_number = approval.issue.number;
         let body = approval.body(self);
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
 
         async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
             log::debug!(
                 "Posting approval comment and closing issue #{} in {}/{}",
                 issue_number,
@@ -214,13 +229,16 @@ impl GitHubWriter for GitInfo {
         &self,
         unapproval: &QCUnapprove,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
-        let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let issue_number = unapproval.issue.number;
         let body = unapproval.body();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
 
         async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
             log::debug!(
                 "Posting unapproval comment and reopening issue #{} in {}/{}",
                 issue_number,
@@ -272,13 +290,16 @@ impl GitHubWriter for GitInfo {
         name: &str,
         color: &str,
     ) -> impl Future<Output = Result<(), GitHubApiError>> + Send {
-        let octocrab = self.octocrab.clone();
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let name = name.to_string();
         let color = color.to_string();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
 
         async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
             log::debug!(
                 "Creating label '{}' with color '{}' for {}/{}",
                 name,

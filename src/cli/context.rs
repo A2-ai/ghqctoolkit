@@ -22,6 +22,7 @@ impl QCIssue {
         checklist_name: String,
         assignees: Option<Vec<String>>,
         relevant_files: Option<Vec<RelevantFile>>,
+        description: Option<String>,
         milestones: Vec<Milestone>,
         repo_users: &[RepoUser],
         configuration: Configuration,
@@ -32,7 +33,9 @@ impl QCIssue {
             log::debug!("Found existing milestone {}", m.number);
             m
         } else {
-            git_info.create_milestone(&milestone_name).await?
+            git_info
+                .create_milestone(&milestone_name, &description)
+                .await?
         };
 
         let milestone_issues = git_info.get_milestone_issues(&milestone).await?;
@@ -150,24 +153,24 @@ impl QCComment {
 
         // Create IssueThread to get commits from the issue's specific branch
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let file_commits = issue_thread.commits(git_info).await?;
+        let commits = &issue_thread.commits;
 
-        if file_commits.is_empty() {
+        if commits.is_empty() {
             return Err(anyhow!("No commits found for file: {}", file.display()));
         }
 
         let final_current_commit =
             match current_commit {
-                Some(commit_str) => file_commits
+                Some(commit_str) => commits
                     .iter()
-                    .find(|(c, _)| c.to_string().contains(&commit_str))
+                    .find(|c| c.hash.to_string().contains(&commit_str))
                     .ok_or(anyhow!(
                         "Provided commit does not correspond to any commits which edited this file"
                     ))?
-                    .0,
+                    .hash,
                 None => {
                     // Default to most recent commit for this file (first in chronological order)
-                    file_commits[0].0
+                    commits[0].hash
                 }
             };
 
@@ -175,16 +178,17 @@ impl QCComment {
             Some(commit_str) => {
                 // Parse the provided commit string into ObjectId
                 Some(
-                    file_commits
-                        .into_iter()
-                        .find(|(c, _)| c.to_string().contains(&commit_str))
-                        .ok_or(anyhow!("Provided commit does not correspond to any commits which edited this file"))?.0
+                    commits
+                        .iter()
+                        .find(|c| c.hash.to_string().contains(&commit_str))
+                        .ok_or(anyhow!("Provided commit does not correspond to any commits which edited this file"))?
+                        .hash
                 )
             }
             None => {
                 // Default to second most recent commit if it exists
-                if file_commits.len() > 1 {
-                    Some(file_commits[1].0)
+                if commits.len() > 1 {
+                    Some(commits[1].hash)
                 } else {
                     None // Only one commit exists for this file
                 }
@@ -222,10 +226,8 @@ impl QCComment {
 
         // Create IssueThread to get commits from the issue's specific branch
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let file_commits = issue_thread.commits(git_info).await?;
-
         // Select commits for comparison with status annotations
-        let (current_commit, previous_commit) = prompt_commits(&file_commits, &issue_thread)?;
+        let (current_commit, previous_commit) = prompt_commits(&issue_thread)?;
 
         // Prompt for optional note
         let note = prompt_note()?;
@@ -302,15 +304,14 @@ impl QCApprove {
 
         // Create IssueThread to get commits from the issue's specific branch
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let file_commits = issue_thread.commits(git_info).await?;
+        let commits = &issue_thread.commits;
 
-        if file_commits.is_empty() {
+        if commits.is_empty() {
             bail!("No commits found for file: {}", file_path.display());
         }
 
         // Select single commit to approve with status annotations
         let approved_commit = prompt_single_commit(
-            &file_commits,
             &issue_thread,
             "📝 Select commit to approve (press Enter for latest):",
         )?;
@@ -352,9 +353,9 @@ impl QCApprove {
         }
 
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let file_commits = issue_thread.commits(git_info).await?;
+        let commits = &issue_thread.commits;
 
-        if file_commits.is_empty() {
+        if commits.is_empty() {
             bail!(
                 "No open issue found for file '{}' in milestone '{milestone_name}'",
                 file.display()
@@ -363,14 +364,14 @@ impl QCApprove {
 
         let approved_commit =
             match approve_commit {
-                Some(commit_str) => file_commits
+                Some(commit_str) => commits
                     .iter()
-                    .find(|(c, _)| c.to_string().contains(&commit_str))
+                    .find(|c| c.hash.to_string().contains(&commit_str))
                     .ok_or(anyhow!(
                         "Provided commit does not correspond to any commits which edited this file"
                     ))?
-                    .0,
-                None => file_commits[0].0,
+                    .hash,
+                None => commits[0].hash,
             };
 
         Ok(Self {

@@ -10,9 +10,9 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, DiskCache, GitActionImpl, GitHubReader, GitHubWriter, GitInfo, GitRepository,
+    Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
     GitStatusOps, IssueThread, QCStatus, RelevantFile, compress, configuration_status,
-    create_labels_if_needed, determine_config_info, get_archive_content, get_repo_users, record,
+    create_labels_if_needed, determine_config_dir, get_archive_content, get_repo_users, record,
     setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
@@ -77,6 +77,10 @@ enum IssueCommands {
         /// Additional relevant files for the issue (format: "name:path" or just "path")
         #[arg(short = 'r', long, value_parser = RelevantFileParser)]
         relevant_files: Option<Vec<RelevantFile>>,
+
+        /// Description for the milestone (only used when creating a new milestone)
+        #[arg(short = 'D', long)]
+        description: Option<String>,
     },
     /// Comment on an existing issue, providing updated context
     Comment {
@@ -231,8 +235,9 @@ async fn main() -> Result<()> {
                     checklist_name,
                     assignees,
                     relevant_files,
+                    description,
                 } => {
-                    let config_dir = determine_config_info(cli.config_dir, &env)?;
+                    let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let mut configuration = Configuration::from_path(&config_dir);
                     configuration.load_checklists();
 
@@ -249,6 +254,7 @@ async fn main() -> Result<()> {
                                 checklist_name,
                                 assignees,
                                 relevant_files,
+                                description,
                                 milestones,
                                 &repo_users,
                                 configuration,
@@ -273,7 +279,8 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    create_labels_if_needed(cache.as_ref(), qc_issue.branch(), &git_info).await?;
+                    create_labels_if_needed(cache.as_ref(), Some(qc_issue.branch()), &git_info)
+                        .await?;
 
                     let issue_url = git_info.post_issue(&qc_issue).await?;
 
@@ -408,16 +415,9 @@ async fn main() -> Result<()> {
                             let checklist_summaries = analyze_issue_checklists(&issue);
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
-                            let file_commits = issue_thread
-                                .commits(&git_info)
-                                .await
-                                .ok()
-                                .map(|v| v.into_iter().map(|(c, _)| c).collect::<Vec<_>>());
                             let git_status = git_info.status()?;
-                            let qc_status = QCStatus::determine_status(
-                                &issue_thread,
-                                file_commits.as_ref().unwrap_or(&Vec::new()),
-                            )?;
+                            let qc_status = QCStatus::determine_status(&issue_thread)?;
+                            let file_commits = issue_thread.file_commits();
                             println!(
                                 "{}",
                                 single_issue_status(
@@ -497,7 +497,7 @@ async fn main() -> Result<()> {
                 } => {
                     use ghqctoolkit::render;
 
-                    let config_dir = determine_config_info(cli.config_dir, &env)?;
+                    let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let configuration = Configuration::from_path(&config_dir);
 
                     let cache = DiskCache::from_git_info(&git_info).ok();
@@ -679,9 +679,9 @@ async fn main() -> Result<()> {
                     }
                 };
 
-                let config_dir = determine_config_info(cli.config_dir, &StdEnvProvider::default())?;
+                let config_dir = determine_config_dir(cli.config_dir, &StdEnvProvider::default())?;
 
-                let git_action = GitActionImpl;
+                let git_action = GitCommand;
 
                 setup_configuration(&config_dir, url, git_action)
                     .await
@@ -694,7 +694,7 @@ async fn main() -> Result<()> {
             }
             ConfigurationCommands::Status => {
                 let env = StdEnvProvider;
-                let config_dir = determine_config_info(cli.config_dir, &env)?;
+                let config_dir = determine_config_dir(cli.config_dir, &env)?;
                 let mut configuration = Configuration::from_path(&config_dir);
                 configuration.load_checklists();
                 let git_info = GitInfo::from_path(&config_dir, &env).ok();

@@ -34,36 +34,50 @@ impl std::fmt::Display for QCStatus {
 }
 
 impl QCStatus {
-    pub fn determine_status(
-        issue_thread: &IssueThread,
-        file_commits: &[ObjectId],
-    ) -> Result<Self, QCStatusError> {
-        let status = if let Some(approved) = &issue_thread.approved_commit {
-            file_commits
-                .first()
-                .and_then(|latest_commit| {
-                    if latest_commit != approved {
-                        Some(Self::ChangesAfterApproval(*latest_commit))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(Self::Approved)
+    pub fn determine_status(issue_thread: &IssueThread) -> Result<Self, QCStatusError> {
+        let commits = &issue_thread.commits;
+
+        let status = if let Some(approved) = issue_thread.approved_commit() {
+            // Find the approved commit index in the chronological sequence
+            let approved_index = commits
+                .iter()
+                .position(|commit| commit.hash == approved.hash)
+                .expect("Approved commit must be in commits");
+
+            // Check if there are any commits after the approved commit that touch the file
+            // (commits are ordered chronologically, newer commits have lower indices)
+            let commits_after_approval = &commits[..approved_index];
+            let file_changes_after_approval = commits_after_approval
+                .iter()
+                .find(|commit| commit.file_changed);
+
+            if let Some(latest_file_change) = file_changes_after_approval {
+                Self::ChangesAfterApproval(latest_file_change.hash)
+            } else {
+                Self::Approved
+            }
         } else {
             // if not approved and closed
             if !issue_thread.open {
                 Self::ApprovalRequired
             } else {
-                file_commits
-                    .first()
-                    .map(|latest_commit| {
-                        if latest_commit == issue_thread.latest_commit() {
-                            Self::AwaitingApproval
+                // Find the latest commit that affects the file
+                let latest_file_commit = commits.iter().find(|commit| commit.file_changed);
+
+                match latest_file_commit {
+                    Some(latest_commit) => {
+                        if let Some(latest_issue_commit) = issue_thread.latest_commit() {
+                            if latest_commit.hash == *latest_issue_commit {
+                                Self::AwaitingApproval
+                            } else {
+                                Self::ChangesToComment(latest_commit.hash)
+                            }
                         } else {
-                            Self::ChangesToComment(*latest_commit)
+                            Self::ChangesToComment(latest_commit.hash)
                         }
-                    })
-                    .unwrap_or(Self::InProgress)
+                    }
+                    None => Self::InProgress,
+                }
             }
         };
 

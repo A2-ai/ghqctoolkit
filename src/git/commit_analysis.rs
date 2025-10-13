@@ -14,6 +14,8 @@ pub enum GitCommitAnalysisError {
     ObjectError(gix::object::find::existing::Error),
     #[error("Failed to parse commit: {0}")]
     CommitError(gix::object::try_into::Error),
+    #[error("Failed to access repository: {0}")]
+    RepositoryError(#[from] crate::git::GitInfoError),
 }
 
 /// Advanced commit analysis and branch operations
@@ -46,17 +48,18 @@ impl GitCommitAnalysis for GitInfo {
     fn get_all_merge_commits(&self) -> Result<Vec<gix::ObjectId>, GitCommitAnalysisError> {
         log::debug!("Finding all merge commits in repository");
 
+        let repo = self.repository()?;
         let mut merge_commits = Vec::new();
         // Get all references and walk from all of them to ensure we see all merge commits
         let mut start_points: Vec<gix::ObjectId> = Vec::new();
 
         // Add HEAD
-        if let Ok(head_id) = self.repository.head_id() {
+        if let Ok(head_id) = repo.head_id() {
             start_points.push(head_id.into());
         }
 
         // Add all local and remote branch tips
-        if let Ok(refs) = self.repository.references() {
+        if let Ok(refs) = repo.references() {
             if let Ok(all_refs) = refs.all() {
                 for reference_result in all_refs {
                     if let Ok(reference) = reference_result {
@@ -70,7 +73,7 @@ impl GitCommitAnalysis for GitInfo {
 
         // Ensure we have at least HEAD to walk from
         if start_points.is_empty() {
-            let head_id = self.repository.head_id().map_err(|_| {
+            let head_id = repo.head_id().map_err(|_| {
                 GitCommitAnalysisError::ObjectError(gix::object::find::existing::Error::NotFound {
                     oid: gix::ObjectId::empty_tree(gix::hash::Kind::Sha1),
                 })
@@ -78,7 +81,7 @@ impl GitCommitAnalysis for GitInfo {
             start_points.push(head_id.into());
         }
 
-        let revwalk = self.repository.rev_walk(start_points);
+        let revwalk = repo.rev_walk(start_points);
 
         for commit_info in revwalk
             .all()
@@ -87,8 +90,7 @@ impl GitCommitAnalysis for GitInfo {
             let commit_info = commit_info.map_err(GitCommitAnalysisError::TraverseError)?;
             let commit_id = commit_info.id;
 
-            let commit = self
-                .repository
+            let commit = repo
                 .find_object(commit_id)
                 .map_err(GitCommitAnalysisError::ObjectError)?
                 .try_into_commit()
@@ -108,8 +110,8 @@ impl GitCommitAnalysis for GitInfo {
         &self,
         commit: &gix::ObjectId,
     ) -> Result<Vec<gix::ObjectId>, GitCommitAnalysisError> {
-        let commit_obj = self
-            .repository
+        let repo = self.repository()?;
+        let commit_obj = repo
             .find_object(*commit)
             .map_err(GitCommitAnalysisError::ObjectError)?
             .try_into_commit()
@@ -124,7 +126,8 @@ impl GitCommitAnalysis for GitInfo {
         descendant: &gix::ObjectId,
     ) -> Result<bool, GitCommitAnalysisError> {
         // Walk from descendant to see if we can reach ancestor
-        let revwalk = self.repository.rev_walk([*descendant]);
+        let repo = self.repository()?;
+        let revwalk = repo.rev_walk([*descendant]);
 
         for commit_info in revwalk
             .all()
@@ -145,7 +148,8 @@ impl GitCommitAnalysis for GitInfo {
     ) -> Result<Vec<String>, GitCommitAnalysisError> {
         log::debug!("Finding branches containing commit {}", commit);
 
-        let Ok(refs) = self.repository.references() else {
+        let repo = self.repository()?;
+        let Ok(refs) = repo.references() else {
             return Ok(Vec::new());
         };
 

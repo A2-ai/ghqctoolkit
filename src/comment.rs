@@ -4,22 +4,20 @@ use diff::{Result as DiffResult, lines};
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
 
-use crate::git::{GitFileOps, GitFileOpsError, GitHelpers};
+use crate::git::{GitFileOps, GitHelpers};
 
+#[derive(Debug, Clone)]
 pub struct QCComment {
-    pub(crate) file: PathBuf,
-    pub(crate) issue: Issue,
-    pub(crate) current_commit: ObjectId,
-    pub(crate) previous_commit: Option<ObjectId>,
-    pub(crate) note: Option<String>,
-    pub(crate) no_diff: bool,
+    pub file: PathBuf,
+    pub issue: Issue,
+    pub current_commit: ObjectId,
+    pub previous_commit: Option<ObjectId>,
+    pub note: Option<String>,
+    pub no_diff: bool,
 }
 
 impl QCComment {
-    pub(crate) fn body(
-        &self,
-        git_info: &(impl GitHelpers + GitFileOps),
-    ) -> Result<String, GitFileOpsError> {
+    pub fn body(&self, git_info: &(impl GitHelpers + GitFileOps)) -> String {
         let mut metadata = vec![
             "## Metadata".to_string(),
             format!("current commit: {}", self.current_commit),
@@ -70,7 +68,7 @@ impl QCComment {
             }
         }
 
-        Ok(body.join("\n\n"))
+        body.join("\n\n")
     }
 }
 
@@ -308,7 +306,8 @@ fn format_hunk(hunk: &DiffHunk) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::GitAuthor;
+    use crate::GitFileOpsError;
+    use crate::{GitAuthor, git::GitCommit};
 
     use super::*;
     use gix::ObjectId;
@@ -369,11 +368,7 @@ mod tests {
     }
 
     impl GitFileOps for MockGitInfo {
-        fn file_commits(
-            &self,
-            _file: &std::path::Path,
-            _branch: &Option<String>,
-        ) -> Result<Vec<(gix::ObjectId, String)>, GitFileOpsError> {
+        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(Vec::new())
         }
 
@@ -460,12 +455,7 @@ mod tests {
         let config = load_test_config(test_file);
         let (comment, git_info) = create_comment_from_config(&config);
 
-        let result = comment.body(&git_info).unwrap_or_else(|e| {
-            panic!(
-                "Failed to generate comment body for test {}: {}",
-                config.name, e
-            )
-        });
+        let result = comment.body(&git_info);
 
         // Use insta with a test-specific name
         let test_name = format!("comment_body_{}", config.name);

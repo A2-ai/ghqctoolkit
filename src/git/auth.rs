@@ -21,11 +21,11 @@ pub enum AuthError {
 
 pub fn create_authenticated_client(
     base_url: &str,
-    env: &impl EnvProvider,
+    token: Option<String>,
 ) -> Result<Octocrab, AuthError> {
-    match get_token(base_url, env) {
-        Ok(token) => build_client_with_token(base_url, token),
-        Err(_) => {
+    match token {
+        Some(token) => build_client_with_token(base_url, token),
+        None => {
             log::warn!(
                 "No authentication found. API access will be limited to public repositories"
             );
@@ -35,82 +35,103 @@ pub fn create_authenticated_client(
     }
 }
 
-pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Result<String, AuthError> {
+pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
     // Try authentication sources in priority order (similar to gitcreds R package)
 
     // 1. GITHUB_TOKEN environment variable (highest priority)
+    log::debug!("Trying from GITHUB_TOKEN");
     if let Ok(token) = env.var("GITHUB_TOKEN") {
         log::debug!("Using GITHUB_TOKEN environment variable");
-        return Ok(token);
+        return Some(token);
     }
 
     // 2. gh CLI authentication
-    if let Ok(token) = get_gh_token_with_env(base_url, env) {
+    log::debug!("Trying from gh cli authentication");
+    if let Some(token) = get_gh_token_with_env(base_url, env) {
         log::debug!("Using gh CLI stored credentials");
-        return Ok(token);
+        return Some(token);
     }
 
     // 3. Git credential manager (git credential fill)
-    if let Ok(token) = get_git_credential_token(base_url) {
+    log::debug!("Trying from git credential manager");
+    if let Some(token) = get_git_credential_token(base_url) {
         log::debug!("Using git credential manager");
-        return Ok(token);
+        return Some(token);
     }
 
     // 4. .netrc file
-    if let Ok(token) = get_netrc_token_with_env(base_url, env) {
+    log::debug!("Trying from .netrc file");
+    if let Some(token) = get_netrc_token_with_env(base_url, env) {
         log::debug!("Using .netrc file credentials");
-        return Ok(token);
+        return Some(token);
     }
 
-    Err(AuthError::NoAuth)
+    log::warn!("No authentication found. API access will be limited to public repositories");
+
+    None
 }
 
 fn build_client_with_token(base_url: &str, token: String) -> Result<Octocrab, AuthError> {
+    // Assume we're already in a proper tokio runtime context (called from API functions)
+    log::debug!("Creating Octocrab client (assuming proper runtime context)");
     if base_url == "https://github.com" {
-        Ok(Octocrab::builder().personal_token(token).build()?)
+        Octocrab::builder().personal_token(token).build()
     } else {
-        Ok(Octocrab::builder()
-            .base_uri(format!("{}/api/v3", base_url))?
-            .personal_token(token)
-            .build()?)
+        Octocrab::builder()
+            .base_uri(format!("{}/api/v3", base_url))
+            .and_then(|b| b.personal_token(token).build())
     }
+    .map_err(AuthError::ClientBuild)
 }
 
 fn build_unauthenticated_client(base_url: &str) -> Result<Octocrab, AuthError> {
+    // Assume we're already in a proper tokio runtime context (called from API functions)
+    log::debug!("Creating unauthenticated Octocrab client (assuming proper runtime context)");
     if base_url == "https://github.com" {
-        Ok(Octocrab::builder().build()?)
+        Octocrab::builder().build()
     } else {
-        Ok(Octocrab::builder()
-            .base_uri(format!("{}/api/v3", base_url))?
-            .build()?)
+        Octocrab::builder()
+            .base_uri(format!("{}/api/v3", base_url))
+            .and_then(|b| b.build())
     }
+    .map_err(AuthError::ClientBuild)
 }
 
-fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Result<String, AuthError> {
+fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<String> {
     let config_dir = get_gh_config_dir_with_env(env)?;
     let hosts_file = config_dir.join("hosts.yml");
 
     if !hosts_file.exists() {
-        return Err(AuthError::NoAuth);
+        return None;
     }
 
-    let content = std::fs::read_to_string(&hosts_file)?;
-    let hosts: serde_yaml::Value = serde_yaml::from_str(&content)?;
+    let content = std::fs::read_to_string(&hosts_file).ok()?;
+    let hosts: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
 
     let host = extract_host_from_url(base_url);
 
     if let Some(host_config) = hosts.get(host) {
         if let Some(oauth_token) = host_config.get("oauth_token") {
             if let Some(token_str) = oauth_token.as_str() {
-                return Ok(token_str.to_string());
+                return Some(token_str.to_string());
             }
         }
     }
 
-    Err(AuthError::NoAuth)
+    None
 }
 
-fn get_git_credential_token(base_url: &str) -> Result<String, AuthError> {
+fn get_git_credential_token(base_url: &str) -> Option<String> {
+    // Skip git credential fill in R/extendr context to avoid subprocess crashes
+    // Check for common R environment indicators
+    if std::env::var("R_HOME").is_ok()
+        || std::env::var("R_SESSION_TMPDIR").is_ok()
+        || std::env::var("RSTUDIO").is_ok()
+    {
+        log::debug!("Skipping git credential manager in R environment to avoid subprocess issues");
+        return None;
+    }
+
     let host = extract_host_from_url(base_url);
 
     // Use git credential fill to get stored credentials
@@ -122,19 +143,37 @@ fn get_git_credential_token(base_url: &str) -> Result<String, AuthError> {
 
     let input = format!("protocol=https\nhost={}\n\n", host);
 
-    let mut child = cmd.spawn().map_err(|_| AuthError::NoAuth)?;
+    // Add extra error handling to prevent crashes
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log::debug!("Failed to spawn git credential process: {}", e);
+            return None;
+        }
+    };
 
     if let Some(stdin) = child.stdin.as_mut() {
         use std::io::Write;
-        stdin
-            .write_all(input.as_bytes())
-            .map_err(|_| AuthError::NoAuth)?;
+        if stdin.write_all(input.as_bytes()).is_err() {
+            log::debug!("Failed to write to git credential stdin");
+            return None;
+        }
     }
 
-    let output = child.wait_with_output().map_err(|_| AuthError::NoAuth)?;
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(e) => {
+            log::debug!("Failed to wait for git credential output: {}", e);
+            return None;
+        }
+    };
 
     if !output.status.success() {
-        return Err(AuthError::NoAuth);
+        log::debug!(
+            "Git credential command failed with status: {}",
+            output.status
+        );
+        return None;
     }
 
     let output_str = String::from_utf8_lossy(&output.stdout);
@@ -148,23 +187,23 @@ fn get_git_credential_token(base_url: &str) -> Result<String, AuthError> {
                 || password.starts_with("gho_")
                 || password.starts_with("ghu_")
             {
-                return Ok(password.to_string());
+                return Some(password.to_string());
             }
         }
     }
 
-    Err(AuthError::NoAuth)
+    None
 }
 
-fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Result<String, AuthError> {
+fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<String> {
     let host = extract_host_from_url(base_url);
     let netrc_path = get_netrc_path_with_env(env)?;
 
     if !netrc_path.exists() {
-        return Err(AuthError::NoAuth);
+        return None;
     }
 
-    let content = std::fs::read_to_string(&netrc_path)?;
+    let content = std::fs::read_to_string(&netrc_path).ok()?;
 
     // Parse .netrc format: machine <host> login <user> password <token>
     let lines: Vec<&str> = content.split_whitespace().collect();
@@ -185,7 +224,7 @@ fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Result<St
                             || password.starts_with("gho_")
                             || password.starts_with("ghu_")
                         {
-                            return Ok(password.to_string());
+                            return Some(password.to_string());
                         }
                     }
                     j += 1;
@@ -195,7 +234,7 @@ fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Result<St
         i += 1;
     }
 
-    Err(AuthError::NoAuth)
+    None
 }
 
 fn extract_host_from_url(base_url: &str) -> &str {
@@ -206,39 +245,41 @@ fn extract_host_from_url(base_url: &str) -> &str {
     }
 }
 
-fn get_gh_config_dir_with_env(env: &impl EnvProvider) -> Result<PathBuf, AuthError> {
+fn get_gh_config_dir_with_env(env: &impl EnvProvider) -> Option<PathBuf> {
     // Check GH_CONFIG_DIR environment variable first
     if let Ok(config_dir) = env.var("GH_CONFIG_DIR") {
-        return Ok(PathBuf::from(config_dir));
+        return Some(PathBuf::from(config_dir));
     }
 
     // Fall back to default locations
     if let Ok(home_dir) = env.var("HOME") {
-        Ok(PathBuf::from(home_dir).join(".config").join("gh"))
+        Some(PathBuf::from(home_dir).join(".config").join("gh"))
     } else if let Ok(user_profile) = env.var("USERPROFILE") {
         // Windows fallback
-        Ok(PathBuf::from(user_profile)
-            .join("AppData")
-            .join("Roaming")
-            .join("GitHub CLI"))
+        Some(
+            PathBuf::from(user_profile)
+                .join("AppData")
+                .join("Roaming")
+                .join("GitHub CLI"),
+        )
     } else {
-        Err(AuthError::NoAuth)
+        None
     }
 }
 
-fn get_netrc_path_with_env(env: &impl EnvProvider) -> Result<PathBuf, AuthError> {
+fn get_netrc_path_with_env(env: &impl EnvProvider) -> Option<PathBuf> {
     if let Ok(home_dir) = env.var("HOME") {
-        Ok(PathBuf::from(home_dir).join(".netrc"))
+        Some(PathBuf::from(home_dir).join(".netrc"))
     } else if let Ok(user_profile) = env.var("USERPROFILE") {
         // Windows: try both _netrc and .netrc
         let netrc_path = PathBuf::from(&user_profile).join("_netrc");
         if netrc_path.exists() {
-            Ok(netrc_path)
+            Some(netrc_path)
         } else {
-            Ok(PathBuf::from(user_profile).join(".netrc"))
+            Some(PathBuf::from(user_profile).join(".netrc"))
         }
     } else {
-        Err(AuthError::NoAuth)
+        None
     }
 }
 
@@ -323,7 +364,8 @@ password ghp_api_token_456
             .times(1)
             .returning(|_| Ok("ghp_env_token".to_string()));
 
-        let client = create_authenticated_client("https://github.com", &mock_env);
+        let token = get_token("https://github.com", &mock_env);
+        let client = create_authenticated_client("https://github.com", token);
         assert!(client.is_ok());
     }
 }

@@ -27,4 +27,6 @@ pub enum GitHubApiError {
     APIError(octocrab::Error),
     #[error("Failed to generate comment body: {0}")]
     CommentGenerationError(#[from] crate::git::GitFileOpsError),
+    #[error("Failed to create GitHub client: {0}")]
+    ClientCreation(#[from] crate::git::AuthError),
 }

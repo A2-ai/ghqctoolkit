@@ -240,7 +240,7 @@ pub async fn get_repo_users(
 /// Create required labels if they don't exist, with caching
 pub async fn create_labels_if_needed(
     cache: Option<&DiskCache>,
-    branch: &str,
+    branch: Option<&str>,
     git_info: &(impl GitHubReader + GitHubWriter),
 ) -> Result<(), GitHubApiError> {
     // Try to get labels from cache first
@@ -278,10 +278,12 @@ pub async fn create_labels_if_needed(
     }
 
     // Ensure branch label exists
-    if !updated_labels.iter().any(|name| name == branch) {
-        log::debug!("Branch label ({}) does not exist. Creating...", branch);
-        git_info.create_label(branch, "00274C").await?;
-        updated_labels.push(branch.to_string());
+    if let Some(branch) = branch {
+        if !updated_labels.iter().any(|name| name == branch) {
+            log::debug!("Branch label ({}) does not exist. Creating...", branch);
+            git_info.create_label(branch, "00274C").await?;
+            updated_labels.push(branch.to_string());
+        }
     }
 
     // Update cache with new labels if we created any
