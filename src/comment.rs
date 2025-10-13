@@ -170,38 +170,166 @@ where
         has_changes = true;
     }
 
-    // Compare cells in the overlapping area
-    let max_rows = from_dims.0.max(to_dims.0);
-    let max_cols = from_dims.1.max(to_dims.1);
+    // Analyze changes by row for better formatting
+    let row_changes = analyze_row_changes(&from_range, &to_range, from_dims, to_dims);
 
-    let mut cell_changes = 0;
-    for row in 0..max_rows {
-        for col in 0..max_cols {
-            let from_cell = from_range.get((row, col)).unwrap_or(&Data::Empty);
-            let to_cell = to_range.get((row, col)).unwrap_or(&Data::Empty);
-
-            if from_cell != to_cell {
-                cell_changes += 1;
-                // Only show first 10 cell changes to avoid too much output
-                if cell_changes <= 10 {
-                    let col_letter = (b'A' + (col % 26) as u8) as char;
-                    let cell_ref = format!("{}{}", col_letter, row + 1);
-                    changes.push(format!("- {}: {}", cell_ref, format_cell_value(from_cell)));
-                    changes.push(format!("+ {}: {}", cell_ref, format_cell_value(to_cell)));
-                }
-                has_changes = true;
-            }
-        }
-    }
-
-    if cell_changes > 10 {
-        changes.push(format!("  ... and {} more cell changes", cell_changes - 10));
+    if !row_changes.is_empty() {
+        format_row_changes(&mut changes, &row_changes);
+        has_changes = true;
     }
 
     if has_changes {
         Some(changes)
     } else {
         None
+    }
+}
+
+#[derive(Debug, Clone)]
+enum RowChange {
+    Added { row_num: usize, values: Vec<String> },
+    Removed { row_num: usize, values: Vec<String> },
+    Modified { row_num: usize, changes: Vec<CellChange> },
+}
+
+#[derive(Debug, Clone)]
+struct CellChange {
+    col_letter: char,
+    old_value: String,
+    new_value: String,
+}
+
+/// Analyze changes by row to provide better formatting
+fn analyze_row_changes(
+    from_range: &calamine::Range<Data>,
+    to_range: &calamine::Range<Data>,
+    from_dims: (usize, usize),
+    to_dims: (usize, usize),
+) -> Vec<RowChange> {
+    let mut row_changes = Vec::new();
+    let max_rows = from_dims.0.max(to_dims.0);
+    let max_cols = from_dims.1.max(to_dims.1);
+
+    // Limit the number of rows we analyze to prevent overwhelming output
+    let rows_to_analyze = max_rows.min(20);
+
+    for row in 0..rows_to_analyze {
+        let row_num = row + 1; // 1-indexed for display
+
+        // Check if this is a completely new row (beyond from_dims)
+        if row >= from_dims.0 && row < to_dims.0 {
+            let values = get_row_values(to_range, row, to_dims.1);
+            if !values.iter().all(|v| v.is_empty()) {
+                row_changes.push(RowChange::Added { row_num, values });
+            }
+            continue;
+        }
+
+        // Check if this is a completely removed row (beyond to_dims)
+        if row >= to_dims.0 && row < from_dims.0 {
+            let values = get_row_values(from_range, row, from_dims.1);
+            if !values.iter().all(|v| v.is_empty()) {
+                row_changes.push(RowChange::Removed { row_num, values });
+            }
+            continue;
+        }
+
+        // Compare existing rows cell by cell
+        let mut cell_changes = Vec::new();
+        let cols_to_check = max_cols.min(26); // Limit to A-Z for now
+
+        for col in 0..cols_to_check {
+            let from_cell = from_range.get((row, col)).unwrap_or(&Data::Empty);
+            let to_cell = to_range.get((row, col)).unwrap_or(&Data::Empty);
+
+            if from_cell != to_cell {
+                let col_letter = (b'A' + (col % 26) as u8) as char;
+                cell_changes.push(CellChange {
+                    col_letter,
+                    old_value: format_cell_value(from_cell),
+                    new_value: format_cell_value(to_cell),
+                });
+            }
+        }
+
+        if !cell_changes.is_empty() {
+            row_changes.push(RowChange::Modified { row_num, changes: cell_changes });
+        }
+
+        // Stop early if we have too many changes to prevent overwhelming output
+        if row_changes.len() >= 10 {
+            break;
+        }
+    }
+
+    row_changes
+}
+
+/// Get all values from a row as strings
+fn get_row_values(range: &calamine::Range<Data>, row: usize, num_cols: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    let cols_to_get = num_cols.min(26); // Limit to A-Z
+
+    for col in 0..cols_to_get {
+        let cell = range.get((row, col)).unwrap_or(&Data::Empty);
+        values.push(format_cell_value(cell));
+    }
+
+    values
+}
+
+/// Format row changes into readable diff output
+fn format_row_changes(changes: &mut Vec<String>, row_changes: &[RowChange]) {
+    let mut change_count = 0;
+
+    for row_change in row_changes {
+        if change_count >= 10 {
+            let remaining = row_changes.len() - change_count;
+            changes.push(format!("  ... and {} more row changes", remaining));
+            break;
+        }
+
+        match row_change {
+            RowChange::Added { row_num, values } => {
+                let row_content = values.join(" | ");
+                changes.push(format!("+ Row {}: {}", row_num, row_content));
+            }
+            RowChange::Removed { row_num, values } => {
+                let row_content = values.join(" | ");
+                changes.push(format!("- Row {}: {}", row_num, row_content));
+            }
+            RowChange::Modified { row_num, changes: cell_changes } => {
+                if cell_changes.len() == 1 {
+                    // Single cell change - show it concisely
+                    let change = &cell_changes[0];
+                    changes.push(format!(
+                        "  Row {} {}: {} → {}",
+                        row_num, change.col_letter, change.old_value, change.new_value
+                    ));
+                } else if cell_changes.len() <= 3 {
+                    // Few cell changes - show them on one line
+                    let change_strs: Vec<String> = cell_changes
+                        .iter()
+                        .map(|c| format!("{}: {} → {}", c.col_letter, c.old_value, c.new_value))
+                        .collect();
+                    changes.push(format!("  Row {} changes: {}", row_num, change_strs.join(", ")));
+                } else {
+                    // Many cell changes - show summary
+                    changes.push(format!("  Row {} has {} cell changes", row_num, cell_changes.len()));
+                    for change in cell_changes.iter().take(3) {
+                        changes.push(format!(
+                            "    {}: {} → {}",
+                            change.col_letter, change.old_value, change.new_value
+                        ));
+                    }
+                    if cell_changes.len() > 3 {
+                        changes.push(format!("    ... and {} more", cell_changes.len() - 3));
+                    }
+                }
+            }
+        }
+
+        change_count += 1;
     }
 }
 
