@@ -82,3 +82,97 @@ Other commands will look for the configuration repository based on the following
 
 An example repository is set-up for use and reference at https://github.com/a2-ai/ghqc.example_config_repo.
 
+# Issue
+
+Issues are the unit for QC within `ghqc`. Each QC has an associated GitHub Issue to track the QC.
+
+Issues are grouped into Milestones for organization.
+
+## Create
+
+```
+ghqc issue create
+```
+
+Providing no arguments will take you through an interactive issue creation.
+
+The first step is to either create a new milestone or select an existing one.
+```shell
+🚀 Welcome to GHQC Interactive Mode!
+? Select or create a milestone:  
+  📝 Create new milestone: 
+> 🎯 Milestone 1
+  🎯 QC Round 2
+  🎯 EDA
+```
+
+Then, select a file. Within a milestone, only one issue can exist for a file to prevent conflicting reviews.
+```shell
+🚀 Welcome to GHQC Interactive Mode!
+> Select or create a milestone: 🎯 Milestone 1
+? 📁 Enter file path (Tab for autocomplete, directories shown with /): scripts
+> scripts/file_1.qmd
+  scripts/file_2.qmd
+  🚫 scripts/file_3.qmd (already has issue)
+```
+
+After selecting a milestone and a file to be QCed, select a checklist:
+```shell
+🚀 Welcome to GHQC Interactive Mode!
+> Select or create a milestone: 🎯 Milestone 1
+> 📁 Enter file path (Tab for autocomplete, directories shown with /): scripts/file_1.qmd
+? Select a checklist:  
+> 📋 Code Review
+  📋 Custom
+  📋 General Script
+  📋 Report
+```
+
+Users can then assign reviewer(s) to the QC:
+```shell
+🚀 Welcome to GHQC Interactive Mode!
+> Select or create a milestone: 🎯 Milestone 1
+> 📁 Enter file path (Tab for autocomplete, directories shown with /): scripts/file_1.qmd
+> Select a checklist: 📋 Code Review
+? 👥 Enter assignee username (use Tab for autocomplete, Enter for none): QCer
+  QCer
+  Reviewer
+```
+
+Lastly, users can add relevant files to the issue:
+```shell
+🚀 Welcome to GHQC Interactive Mode!
+> Select or create a milestone: 🎯 Milestone 1
+> 📁 Enter file path (Tab for autocomplete, directories shown with /): scripts/file_1.qmd
+> Select a checklist: 📋 Code Review
+> 👥 Enter assignee username (use Tab for autocomplete, Enter for none): QCer
+> 👥 Enter another assignee (current: QCer, use Tab for autocomplete, Enter to finish): 
+? 📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none):  scripts/
+  scripts/file_2.qmd
+  🚫 scripts/file_3.qmd
+```
+
+After preparing the QC, `ghqc` will create the Issue within the GitHub repository:
+```shell
+🚀 Welcome to GHQC Interactive Mode!
+> Select or create a milestone: 🎯 Milestone 1
+> 📁 Enter file path (Tab for autocomplete, directories shown with /): scripts/file_1.qmd
+> Select a checklist: 📋 Code Review
+> 👥 Enter assignee username (use Tab for autocomplete, Enter for none): QCer
+> 👥 Enter another assignee (current: QCer, use Tab for autocomplete, Enter to finish): 
+? 📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none):  scripts/
+  scripts/file_2.qmd
+  🚫 scripts/file_3.qmd
+
+✨ Creating issue with:
+   📊 Milestone: Milestone 1
+   📁 File: scripts/file_1.qmd
+   📋 Checklist: Code Review
+   👥 Assignees: QCer
+
+✅ Issue created successfully!
+https://github.com/my_organization/my_analysis/issues/4
+```
+
+The QC Issue has now been created and ready for review by your QCer!
+
