@@ -1,6 +1,9 @@
-use std::{io::Cursor, path::{Path, PathBuf}};
+use std::{
+    io::Cursor,
+    path::{Path, PathBuf},
+};
 
-use calamine::{open_workbook_auto_from_rs, Reader, Data};
+use calamine::{Data, Reader, open_workbook_auto_from_rs};
 use diff::{Result as DiffResult, lines};
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
@@ -52,7 +55,9 @@ impl QCComment {
 
         if !self.no_diff {
             if let Some(previous_commit) = self.previous_commit {
-                if let Some(difference) = file_diff(&self.file, &previous_commit, &self.current_commit, git_info) {
+                if let Some(difference) =
+                    file_diff(&self.file, &previous_commit, &self.current_commit, git_info)
+                {
                     body.push(format!("## File Difference\n{}", difference));
                 } else {
                     log::warn!("Could not generate diff for file {:?}", self.file);
@@ -94,7 +99,10 @@ fn file_diff(
 
 fn is_excel_file(file: &Path) -> bool {
     if let Some(ext) = file.extension().and_then(|e| e.to_str()) {
-        matches!(ext.to_lowercase().as_str(), "xlsx" | "xlsm" | "xlsb" | "xls")
+        matches!(
+            ext.to_lowercase().as_str(),
+            "xlsx" | "xlsm" | "xlsb" | "xls"
+        )
     } else {
         false
     }
@@ -113,8 +121,10 @@ fn diff_excel_files(from_bytes: Vec<u8>, to_bytes: Vec<u8>) -> Option<String> {
     diff_lines.push("```diff".to_string());
 
     // Get worksheet names from both workbooks
-    let from_sheets: std::collections::HashSet<String> = from_workbook.sheet_names().iter().cloned().collect();
-    let to_sheets: std::collections::HashSet<String> = to_workbook.sheet_names().iter().cloned().collect();
+    let from_sheets: std::collections::HashSet<String> =
+        from_workbook.sheet_names().iter().cloned().collect();
+    let to_sheets: std::collections::HashSet<String> =
+        to_workbook.sheet_names().iter().cloned().collect();
 
     // Check for added/removed sheets
     for sheet in &from_sheets {
@@ -131,7 +141,8 @@ fn diff_excel_files(from_bytes: Vec<u8>, to_bytes: Vec<u8>) -> Option<String> {
 
     // Compare common sheets
     for sheet_name in from_sheets.intersection(&to_sheets) {
-        if let Some(sheet_diff) = diff_excel_sheet(&mut from_workbook, &mut to_workbook, sheet_name) {
+        if let Some(sheet_diff) = diff_excel_sheet(&mut from_workbook, &mut to_workbook, sheet_name)
+        {
             diff_lines.push(format!("@@ Sheet: {} @@", sheet_name));
             diff_lines.extend(sheet_diff);
         }
@@ -139,7 +150,8 @@ fn diff_excel_files(from_bytes: Vec<u8>, to_bytes: Vec<u8>) -> Option<String> {
 
     diff_lines.push("```".to_string());
 
-    if diff_lines.len() > 2 { // More than just the ``` markers
+    if diff_lines.len() > 2 {
+        // More than just the ``` markers
         Some(diff_lines.join("\n"))
     } else {
         Some("\nNo differences between Excel file versions.\n".to_string())
@@ -165,8 +177,10 @@ where
     let to_dims = to_range.get_size();
 
     if from_dims != to_dims {
-        changes.push(format!("  Sheet dimensions changed: {}x{} -> {}x{}",
-                           from_dims.1, from_dims.0, to_dims.1, to_dims.0));
+        changes.push(format!(
+            "  Sheet dimensions changed: {}x{} -> {}x{}",
+            from_dims.1, from_dims.0, to_dims.1, to_dims.0
+        ));
         has_changes = true;
     }
 
@@ -178,18 +192,23 @@ where
         has_changes = true;
     }
 
-    if has_changes {
-        Some(changes)
-    } else {
-        None
-    }
+    if has_changes { Some(changes) } else { None }
 }
 
 #[derive(Debug, Clone)]
 enum RowChange {
-    Added { row_num: usize, values: Vec<String> },
-    Removed { row_num: usize, values: Vec<String> },
-    Modified { row_num: usize, changes: Vec<CellChange> },
+    Added {
+        row_num: usize,
+        values: Vec<String>,
+    },
+    Removed {
+        row_num: usize,
+        values: Vec<String>,
+    },
+    Modified {
+        row_num: usize,
+        changes: Vec<CellChange>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -253,7 +272,10 @@ fn analyze_row_changes(
         }
 
         if !cell_changes.is_empty() {
-            row_changes.push(RowChange::Modified { row_num, changes: cell_changes });
+            row_changes.push(RowChange::Modified {
+                row_num,
+                changes: cell_changes,
+            });
         }
 
         // Stop early if we have too many changes to prevent overwhelming output
@@ -298,7 +320,10 @@ fn format_row_changes(changes: &mut Vec<String>, row_changes: &[RowChange]) {
                 let row_content = values.join(" | ");
                 changes.push(format!("- Row {}: {}", row_num, row_content));
             }
-            RowChange::Modified { row_num, changes: cell_changes } => {
+            RowChange::Modified {
+                row_num,
+                changes: cell_changes,
+            } => {
                 if cell_changes.len() == 1 {
                     // Single cell change - show it concisely
                     let change = &cell_changes[0];
@@ -312,10 +337,18 @@ fn format_row_changes(changes: &mut Vec<String>, row_changes: &[RowChange]) {
                         .iter()
                         .map(|c| format!("{}: {} → {}", c.col_letter, c.old_value, c.new_value))
                         .collect();
-                    changes.push(format!("  Row {} changes: {}", row_num, change_strs.join(", ")));
+                    changes.push(format!(
+                        "  Row {} changes: {}",
+                        row_num,
+                        change_strs.join(", ")
+                    ));
                 } else {
                     // Many cell changes - show summary
-                    changes.push(format!("  Row {} has {} cell changes", row_num, cell_changes.len()));
+                    changes.push(format!(
+                        "  Row {} has {} cell changes",
+                        row_num,
+                        cell_changes.len()
+                    ));
                     for change in cell_changes.iter().take(3) {
                         changes.push(format!(
                             "    {}: {} → {}",
