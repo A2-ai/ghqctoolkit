@@ -46,12 +46,13 @@ pub async fn get_archive_content(
             }
 
             // Get file content at the latest commit
-            let content = git_info.file_content_at_commit(
+            let file_bytes = git_info.file_bytes_at_commit(
                 &issue_thread.file,
                 issue_thread
                     .latest_commit()
                     .ok_or_else(|| GitFileOpsError::AuthorNotFound(issue_thread.file.clone()))?,
             )?;
+            let content = String::from_utf8_lossy(&file_bytes).to_string();
 
             Ok(Some((issue_thread.file.clone(), content)))
         })
@@ -342,16 +343,17 @@ mod tests {
             }])
         }
 
-        fn file_content_at_commit(
+        fn file_bytes_at_commit(
             &self,
             file: &std::path::Path,
             commit: &ObjectId,
-        ) -> Result<String, GitFileOpsError> {
+        ) -> Result<Vec<u8>, GitFileOpsError> {
             Ok(self
                 .file_content
                 .get(&(file.to_path_buf(), *commit))
                 .cloned()
-                .unwrap_or_else(|| "test content".to_string()))
+                .unwrap_or_else(|| "test content".to_string())
+                .into_bytes())
         }
     }
 
