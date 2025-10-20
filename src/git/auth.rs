@@ -41,25 +41,35 @@ pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
     // 1. GITHUB_TOKEN environment variable (highest priority)
     log::debug!("Trying from GITHUB_TOKEN");
     if let Ok(token) = env.var("GITHUB_TOKEN") {
-        log::debug!("Using GITHUB_TOKEN environment variable");
+        log::debug!("Found GITHUB_TOKEN environment variable");
+        if let Some(validated_token) = validate_github_token(&token) {
+            log::debug!("Using GITHUB_TOKEN environment variable");
+            return Some(validated_token);
+        }
+    }
+
+    // 2. gh CLI active authentication (gh auth token)
+    log::debug!("Trying from gh auth token command");
+    if let Some(token) = get_gh_auth_token(base_url) {
+        log::debug!("Using gh CLI active token");
         return Some(token);
     }
 
-    // 2. gh CLI authentication
-    log::debug!("Trying from gh cli authentication");
+    // 3. gh CLI stored authentication (config files)
+    log::debug!("Trying from gh cli stored authentication");
     if let Some(token) = get_gh_token_with_env(base_url, env) {
         log::debug!("Using gh CLI stored credentials");
         return Some(token);
     }
 
-    // 3. Git credential manager (git credential fill)
+    // 4. Git credential manager (git credential fill)
     log::debug!("Trying from git credential manager");
     if let Some(token) = get_git_credential_token(base_url) {
         log::debug!("Using git credential manager");
         return Some(token);
     }
 
-    // 4. .netrc file
+    // 5. .netrc file
     log::debug!("Trying from .netrc file");
     if let Some(token) = get_netrc_token_with_env(base_url, env) {
         log::debug!("Using .netrc file credentials");
@@ -113,7 +123,7 @@ fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<Strin
     if let Some(host_config) = hosts.get(host) {
         if let Some(oauth_token) = host_config.get("oauth_token") {
             if let Some(token_str) = oauth_token.as_str() {
-                return Some(token_str.to_string());
+                return validate_github_token(token_str);
             }
         }
     }
@@ -122,16 +132,6 @@ fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<Strin
 }
 
 fn get_git_credential_token(base_url: &str) -> Option<String> {
-    // Skip git credential fill in R/extendr context to avoid subprocess crashes
-    // Check for common R environment indicators
-    if std::env::var("R_HOME").is_ok()
-        || std::env::var("R_SESSION_TMPDIR").is_ok()
-        || std::env::var("RSTUDIO").is_ok()
-    {
-        log::debug!("Skipping git credential manager in R environment to avoid subprocess issues");
-        return None;
-    }
-
     let host = extract_host_from_url(base_url);
 
     // Use git credential fill to get stored credentials
@@ -181,18 +181,78 @@ fn get_git_credential_token(base_url: &str) -> Option<String> {
     // Parse the credential output for password (token)
     for line in output_str.lines() {
         if let Some(password) = line.strip_prefix("password=") {
-            // GitHub tokens should start with specific prefixes
-            if password.starts_with("ghp_")
-                || password.starts_with("github_pat_")
-                || password.starts_with("gho_")
-                || password.starts_with("ghu_")
-            {
-                return Some(password.to_string());
-            }
+            return validate_github_token(password);
         }
     }
 
     None
+}
+
+fn get_gh_auth_token(base_url: &str) -> Option<String> {
+    let host = extract_host_from_url(base_url);
+
+    // Use gh auth token --hostname <host> to get the active token
+    let mut cmd = Command::new("gh");
+    cmd.args(&["auth", "token", "--hostname", host])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    // Add extra error handling to prevent crashes
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log::debug!("Failed to spawn gh auth token process: {}", e);
+            return None;
+        }
+    };
+
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(e) => {
+            log::debug!("Failed to wait for gh auth token output: {}", e);
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        log::debug!(
+            "gh auth token command failed with status: {}",
+            output.status
+        );
+        return None;
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let token = output_str.trim();
+
+    if token.is_empty() {
+        log::debug!("gh auth token returned empty token");
+        return None;
+    }
+
+    validate_github_token(token)
+}
+
+fn validate_github_token(token: &str) -> Option<String> {
+    // GitHub tokens should start with specific prefixes and meet length requirements
+    let is_valid = token.starts_with("ghp_")       // Personal access tokens
+        || token.starts_with("github_pat_")        // Fine-grained personal access tokens
+        || token.starts_with("gho_")               // OAuth tokens
+        || token.starts_with("ghu_")               // User-to-server tokens
+        || token.starts_with("ghs_")               // GitHub App tokens
+        || token.starts_with("ghr_"); // Refresh tokens
+
+    if is_valid && token.len() >= 20 {
+        // Basic length check
+        Some(token.to_string())
+    } else {
+        log::debug!(
+            "Invalid GitHub token format or length: {} chars, starts with: {}",
+            token.len(),
+            token.chars().take(4).collect::<String>()
+        );
+        None
+    }
 }
 
 fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<String> {
@@ -218,13 +278,8 @@ fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<St
                 while j < lines.len() && lines[j] != "machine" {
                     if lines[j] == "password" && j + 1 < lines.len() {
                         let password = lines[j + 1];
-                        // Check if it looks like a GitHub token
-                        if password.starts_with("ghp_")
-                            || password.starts_with("github_pat_")
-                            || password.starts_with("gho_")
-                            || password.starts_with("ghu_")
-                        {
-                            return Some(password.to_string());
+                        if let Some(validated_token) = validate_github_token(password) {
+                            return Some(validated_token);
                         }
                     }
                     j += 1;
@@ -311,7 +366,7 @@ mod tests {
         let hosts_content = r#"
 github.com:
     user: testuser
-    oauth_token: ghp_test_token_123
+    oauth_token: ghp_test_token_1234567890123456789012345678901234567890
     git_protocol: https
 "#;
         fs::write(&hosts_file, hosts_content).unwrap();
@@ -324,7 +379,10 @@ github.com:
             .returning(move |_| Ok(temp_dir.path().to_string_lossy().to_string()));
 
         let token = get_gh_token_with_env("https://github.com", &mock_env).unwrap();
-        assert_eq!(token, "ghp_test_token_123");
+        assert_eq!(
+            token,
+            "ghp_test_token_1234567890123456789012345678901234567890"
+        );
     }
 
     #[test]
@@ -367,5 +425,57 @@ password ghp_api_token_456
         let token = get_token("https://github.com", &mock_env);
         let client = create_authenticated_client("https://github.com", token);
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_validate_github_token() {
+        // Valid tokens
+        assert_eq!(
+            validate_github_token("ghp_1234567890123456789012345678901234567890"),
+            Some("ghp_1234567890123456789012345678901234567890".to_string())
+        );
+        assert_eq!(
+            validate_github_token("github_pat_1234567890123456789012345678901"),
+            Some("github_pat_1234567890123456789012345678901".to_string())
+        );
+        assert_eq!(
+            validate_github_token("gho_1234567890123456789012345678901234567890"),
+            Some("gho_1234567890123456789012345678901234567890".to_string())
+        );
+        assert_eq!(
+            validate_github_token("ghu_1234567890123456789012345678901234567890"),
+            Some("ghu_1234567890123456789012345678901234567890".to_string())
+        );
+        assert_eq!(
+            validate_github_token("ghs_1234567890123456789012345678901234567890"),
+            Some("ghs_1234567890123456789012345678901234567890".to_string())
+        );
+        assert_eq!(
+            validate_github_token("ghr_1234567890123456789012345678901234567890"),
+            Some("ghr_1234567890123456789012345678901234567890".to_string())
+        );
+
+        // Invalid tokens - wrong prefix
+        assert_eq!(
+            validate_github_token("invalid_1234567890123456789012345678901234567890"),
+            None
+        );
+        assert_eq!(
+            validate_github_token("abc_1234567890123456789012345678901234567890"),
+            None
+        );
+
+        // Invalid tokens - too short
+        assert_eq!(validate_github_token("ghp_123"), None);
+        assert_eq!(validate_github_token("github_pat_123"), None);
+
+        // Empty token
+        assert_eq!(validate_github_token(""), None);
+
+        // No prefix
+        assert_eq!(
+            validate_github_token("1234567890123456789012345678901234567890"),
+            None
+        );
     }
 }
