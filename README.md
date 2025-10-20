@@ -176,9 +176,14 @@ The QC Issue has now been created and ready for review by your QCer!
 
 ## Comment
 
+To review and provide context about how the files change, `ghqc` provides the ability to comment within the GitHub Issue
+and include commit differences. 
+
 ```
 ghqc issue comment
 ```
+
+Providing no arguments will take you through an interactive issue comment posting.
 
 The first step is to select an existing Milestone in which your issue exists.
 ```shell
@@ -279,6 +284,174 @@ Then, `ghqc` will post the comment to the selecting Issue within GitHub:
 https://github.com/my_organization/my_analysis/issues/4#issuecomment-123456789
 ```
 
+## Approve
 
+Once the review has been completed and implemented, the QCer can approve the Issue.
 
+```
+ghqc issue approve
+```
+
+Providing no arguments will take you through an interactive issue approval.
+
+First, select a Milestone containing the Issue to approve.
+```shell
+✅ Welcome to GHQC Approve Mode!
+? Select a milestone:  
+> 🎯 Milestone 1
+  🎯 QC Round 2
+  🎯 EDA
+```
+
+Then, select the issue.
+```shell
+✅ Welcome to GHQC Approve Mode!
+> Select a milestone: 🎯 Milestone 1
+? 🎫 Enter issue title (use Tab for autocomplete):  
+> scripts/file_1.qmd
+  scripts/file_2.qmd
+  scripts/file_3.qmd
+```
+
+Next, select the commit to approve. Defaults to the latest commit.
+```shell
+✅ Welcome to GHQC Approve Mode!
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+📋 Commit Status Legend:
+   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed
+
+📝 Select commit to approve (press Enter for latest):
+? Pick commit: 
+>   💬📝 00eadb9b - commit 3
+    💬📝 bf8e8730 - commit 2
+    🌱  32cf8fd6 - commit 1
+```
+
+Lastly, optionally include a note to provide additional context to the approval
+```shell
+✅ Welcome to GHQC Approve Mode!
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+📋 Commit Status Legend:
+   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed
+
+📝 Select commit to approve (press Enter for latest):
+> Pick commit: 💬📝 00eadb9b - commit 3
+? 📝 Enter optional note for this comment (Enter to skip):
+```
+
+`ghqc` will then post a comment indicating approval and close the issue.
+```shell
+✅ Welcome to GHQC Approve Mode!
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+📋 Commit Status Legend:
+   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed
+
+📝 Select commit to approve (press Enter for latest):
+> Pick commit: 💬📝 00eadb9b - commit 3
+? 📝 Enter optional note for this comment (Enter to skip):
+
+✨ Creating approval with:
+   🎯 Milestone: Milestone 1
+   🎫 Issue: #4 - scripts/file_1.qmd
+   📁 File: scripts/file_1.qmd
+   📝 Commit: 00eadb9bf2747dffade4415e63e689c1450261bd
+
+✅ Approval created and issue closed!
+https://github.com/my_organization/my_analysis/issues/4#issuecomment-987654321
+```
+
+## Unapprove
+
+If for some reason an approval should be overturned, we must unapprove the Issue.
+
+```shell
+ghqc issue unapprove
+```
+
+Providing no arguments will take you through an interactive issue unapproval.
+
+First, select the Milestone containing the Issue to unapprove.
+```shell
+🚫 Welcome to GHQC Unapprove Mode!
+? Select a milestone:  
+> 🎯 Milestone 1
+  🎯 QC Round 2
+  🎯 EDA
+```
+
+Then, select a closed issue to unapprove.
+```shell
+🚫 Welcome to GHQC Unapprove Mode!
+> Select a milestone: 🎯 Milestone 1
+? 🎫 Enter issue title (use Tab for autocomplete):  
+> scripts/file_1.qmd
+  models/1001.mod
+```
+
+Lastly, provide a reason to be included with the unapproval.
+```shell
+🚫 Welcome to GHQC Unapprove Mode!
+> Select a milestone: 🎯 Milestone 1
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+? 📝 Enter reason for unapproval:  Found more changes to be made
+```
+
+Then, `ghqc` will post the comment and re-open the Issue.
+```shell
+🚫 Welcome to GHQC Unapprove Mode!
+> Select a milestone: 🎯 Milestone 1
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+? 📝 Enter reason for unapproval:  Found more changes to be made
+
+✨ Creating unapproval with:
+   🎯 Milestone: Milestone 1
+   🎫 Issue: #4 - scripts/file_1.qmd
+   🚫 Reason: Found more changes to be made
+
+🚫 Issue unapproved and reopened!
+https://github.com/A2-ai/ghqctoolkit/issues/4#issuecomment-192837465
+```
+
+## Status
+Provides the status of the issue.
+
+```
+ghqc issue status
+```
+
+First, select a Milestone containing the Issue of interest.
+```shell
+✅ Welcome to GHQC Approve Mode!
+? Select a milestone:  
+> 🎯 Milestone 1
+  🎯 QC Round 2
+  🎯 EDA
+```
+
+Then, select the issue.
+```shell
+✅ Welcome to GHQC Approve Mode!
+> Select a milestone: 🎯 Milestone 1
+? 🎫 Enter issue title (use Tab for autocomplete):  
+> scripts/file_1.qmd
+  scripts/file_2.qmd
+  scripts/file_3.qmd
+```
+
+`ghqc` will then print the status of the issue:
+
+```shell
+✅ Welcome to GHQC Approve Mode!
+> Select a milestone: 🎯 Milestone 1
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+
+- File:         scripts/file_1.qmd
+- Branch:       excel
+- Issue State:  open
+- QC Status:    File change in `bb23a12` not commented
+- Git Status:   File is up to date!
+- Checklist Summary: 0/5 (0.0%)
+    - Code Quality: 0/2 (0.0%)
+    - Scientific Review: 0/3 (0.0%)
+```
 
