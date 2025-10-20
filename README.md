@@ -415,6 +415,8 @@ https://github.com/A2-ai/ghqctoolkit/issues/4#issuecomment-192837465
 ## Status
 Provides the status of the issue.
 
+Providing no arguments will take you through an interactive issue status.
+
 ```
 ghqc issue status
 ```
@@ -446,7 +448,7 @@ Then, select the issue.
 > 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
 
 - File:         scripts/file_1.qmd
-- Branch:       excel
+- Branch:       analysis
 - Issue State:  open
 - QC Status:    File change in `bb23a12` not commented
 - Git Status:   File is up to date!
@@ -454,4 +456,89 @@ Then, select the issue.
     - Code Quality: 0/2 (0.0%)
     - Scientific Review: 0/3 (0.0%)
 ```
+
+# Milestone
+
+## Status
+
+Similar to the issue status, we can get a summary for all issues in the milestone(s).
+
+```shell
+ghqc milestone status
+```
+
+Providing no arguments will take you through an interactive milestone status.
+
+First, select All Milestones or as many as you'd like:
+```shell
+📊 Welcome to GHQC Milestone Status Mode!
+? 📊 How would you like to select milestones?  
+  📋 Select All Milestones
+> 🎯 Choose Specific Milestones
+```
+
+```shell
+📊 Welcome to GHQC Milestone Status Mode!
+> 📊 How would you like to select milestones? 🎯 Choose Specific Milestones
+? 📊 Select milestones to check:  
+> [x] Milestone 1 (3)
+  [x] QC Round 2 (1)
+  [ ] EDA (8)
+```
+
+Then, `ghqc` will print a summary table of the issues within the selected Milestone(s)
+
+```
+File                             | Milestone   | Branch     | Issue State | QC Status          | Git Status | Checklist  
+---------------------------------+-------------+------------+-------------+--------------------+------------+------------
+scripts/file_1.qmd               | Milestone 1 | analysis   | open        | Changes to comment | Up to date | 0/5 (0.0%)
+scripts/file_2.qmd               | Milestone 1 | analysis   | open        | Changes to comment | Up to date | 6/8 (75.0%)
+scripts/file_3.qmd               | Milestone 1 | analysis   | open        | In progress        | Up to date | 3/10 (30.0%)
+scripts/file_4.qmd               | QC Round 2  | QC         | closed      | Approved           | Up to date | 15/15 (100.0%)
+```
+
+## Record
+
+At the end of a QC, users may create an archive.
+
+```shell
+ghqc milestone archive
+```
+
+Providing no arguments will take you through an interactive milestone status.
+
+First, select All Milestones or as many as you'd like:
+```shell
+📊 Welcome to GHQC Milestone Archive Mode!
+? 📊 How would you like to select milestones?  
+  📋 Select All Milestones
+> 🎯 Choose Specific Milestones
+```
+
+```shell
+📊 Welcome to GHQC Milestone Status Mode!
+> 📊 How would you like to select milestones? 🎯 Choose Specific Milestones
+? 📊 Select milestones to check:  
+> [x] Milestone 1 (3)
+  [ ] QC Round 2 (1)
+  [ ] EDA (8)
+```
+
+Users can then provide a custom record file name. Default is `<repo name>-<milestone names, separated by '-'>.pdf`
+```shell
+📊 Welcome to GHQC Milestone Status Mode!
+> 📊 How would you like to select milestones? 🎯 Choose Specific Milestones
+> 📊 Select milestones to check: Milestone 1 (3)
+? 📁 Enter record file name (Enter for default): 
+```
+
+Lastly, `ghqc` will create pdf record of the selected Milestones.
+```shell
+📊 Welcome to GHQC Milestone Status Mode!
+> 📊 How would you like to select milestones? 🎯 Choose Specific Milestones
+> 📊 Select milestones to check: Milestone 1 (3)
+? 📁 Enter record file name (Enter for default): 
+✅ Record successfully generated at my_analysis-Milestone-1.pdf
+```
+
 
