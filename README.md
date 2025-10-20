@@ -149,7 +149,7 @@ Lastly, users can add relevant files to the issue:
 > 👥 Enter another assignee (current: QCer, use Tab for autocomplete, Enter to finish): 
 ? 📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none):  scripts/
   scripts/file_2.qmd
-  🚫 scripts/file_3.qmd
+  scripts/file_3.qmd
 ```
 
 After preparing the QC, `ghqc` will create the Issue within the GitHub repository:
@@ -160,9 +160,7 @@ After preparing the QC, `ghqc` will create the Issue within the GitHub repositor
 > Select a checklist: 📋 Code Review
 > 👥 Enter assignee username (use Tab for autocomplete, Enter for none): QCer
 > 👥 Enter another assignee (current: QCer, use Tab for autocomplete, Enter to finish): 
-? 📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none):  scripts/
-  scripts/file_2.qmd
-  🚫 scripts/file_3.qmd
+? 📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none): 
 
 ✨ Creating issue with:
    📊 Milestone: Milestone 1
@@ -175,4 +173,112 @@ https://github.com/my_organization/my_analysis/issues/4
 ```
 
 The QC Issue has now been created and ready for review by your QCer!
+
+## Comment
+
+```
+ghqc issue comment
+```
+
+The first step is to select an existing Milestone in which your issue exists.
+```shell
+💬 Welcome to GHQC Comment Mode!
+? Select a milestone:  
+> 🎯 Milestone 1
+  🎯 QC Round 2
+  🎯 EDA
+```
+
+Then, select an issue.
+```shell
+💬 Welcome to GHQC Comment Mode!
+> Select a milestone: 🎯 Milestone 1
+? 🎫 Enter issue title (use Tab for autocomplete):  
+> scripts/file_1.qmd
+  scripts/file_2.qmd
+  scripts/file_3.qmd
+```
+
+We then select two commits to take the file difference between. It will default the most recent file changing commit and the most recent commented on commit. If those are the same, will select the second most recent file changing commit.
+```shell
+💬 Welcome to GHQC Comment Mode!
+> Select a milestone: 🎯 Milestone 1
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+📋 Commit Status Legend:
+   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed
+
+📝 Select first commit (press Enter for latest file change):
+? Pick commit: 
+>    📝 00eadb9b - commit 3
+    💬📝 bf8e8730 - commit 2
+    🌱  32cf8fd6 - commit 1
+```
+
+```shell
+💬 Welcome to GHQC Comment Mode!
+> Select a milestone: 🎯 Milestone 1
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+📋 Commit Status Legend:
+   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed
+
+📝 Select first commit (press Enter for latest file change):
+> Pick commit: 📝 00eadb9b - commit 3
+
+📝 Select second commit for comparison (press Enter for second file change):
+? Pick commit: 
+     📝 00eadb9b - commit 3
+>   💬📝 bf8e8730 - commit 2
+    🌱  32cf8fd6 - commit 1
+```
+
+Lastly, you are able to tune which context you'd like to add to the comment by entering a note and/or 
+including the commit diff.
+```shell
+💬 Welcome to GHQC Comment Mode!
+> Select a milestone: 🎯 Milestone 1
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+📋 Commit Status Legend:
+   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed
+
+📝 Select first commit (press Enter for latest file change):
+> Pick commit: 📝 00eadb9b - commit 3
+
+📝 Select second commit for comparison (press Enter for second file change):
+> Pick commit: 💬📝 bf8e8730 - commit 2
+
+? 📝 Enter optional note for this comment (Enter to skip):
+? 📊 Include commit diff in comment? (Y/n)   
+```
+
+Then, `ghqc` will post the comment to the selecting Issue within GitHub:
+```shell
+💬 Welcome to GHQC Comment Mode!
+> Select a milestone: 🎯 Milestone 1
+> 🎫 Enter issue title (use Tab for autocomplete): scripts/file_1.qmd
+📋 Commit Status Legend:
+   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed
+
+📝 Select first commit (press Enter for latest file change):
+> Pick commit: 📝 00eadb9b - commit 3
+
+📝 Select second commit for comparison (press Enter for second file change):
+> Pick commit: 💬📝 bf8e8730 - commit 2
+
+? 📝 Enter optional note for this comment (Enter to skip):
+? 📊 Include commit diff in comment? (Y/n) 
+
+✨ Creating comment with:
+   🎯 Milestone: Milestone 1
+   🎫 Issue: #4 - scripts/file_1.qmd
+   📁 File: scripts/file_1.qmd
+   📝 Current commit: 00eadb9bf2747dffade4415e63e689c1450261bd
+   📝 Previous commit: bf8e8730a66f7be13aa0c895bf8dc2acd033751a
+   📊 Include diff: Yes
+
+✅ Comment Created!
+https://github.com/my_organization/my_analysis/issues/4#issuecomment-123456789
+```
+
+
+
 
