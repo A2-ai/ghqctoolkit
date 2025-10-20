@@ -420,9 +420,11 @@ password ghp_api_token_456
             .expect_var()
             .with(mockall::predicate::eq("GITHUB_TOKEN"))
             .times(1)
-            .returning(|_| Ok("ghp_env_token".to_string()));
+            .returning(|_| Ok("ghp_valid_env_token_1234567890123456789012345678901234567890".to_string()));
 
         let token = get_token("https://github.com", &mock_env);
+        assert_eq!(token, Some("ghp_valid_env_token_1234567890123456789012345678901234567890".to_string()));
+
         let client = create_authenticated_client("https://github.com", token);
         assert!(client.is_ok());
     }
