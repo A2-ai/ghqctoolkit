@@ -1,6 +1,6 @@
 ---
 source: src/record.rs
-expression: result.unwrap().1
+expression: result.unwrap()
 ---
 ---
 title: "QC Record: v1.0"
@@ -72,7 +72,7 @@ Title & Description & Status & Issues\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
 \endlastfoot
 v1.0 & First release
-milestone & open & src/config.rs\\*
+milestone & open & src/config.rs\textcolor{red}{U}\\*
 
 \end{longtable}
 

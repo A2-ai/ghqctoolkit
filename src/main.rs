@@ -12,8 +12,8 @@ use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
     GitStatusOps, IssueThread, QCStatus, RelevantFile, compress, configuration_status,
-    create_labels_if_needed, determine_config_dir, get_archive_content, get_repo_users, record,
-    setup_configuration,
+    create_labels_if_needed, determine_config_dir, fetch_milestone_issues, get_archive_content,
+    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -495,8 +495,6 @@ async fn main() -> Result<()> {
                     all_milestones,
                     record_path,
                 } => {
-                    use ghqctoolkit::render;
-
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let configuration = Configuration::from_path(&config_dir);
 
@@ -543,12 +541,16 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    let (milestone_names, record_str) = record(
+                    let issues = fetch_milestone_issues(&selected_milestones, &git_info).await?;
+                    let issue_information =
+                        get_milestone_issue_information(&issues, cache.as_ref(), &git_info).await?;
+
+                    let record_str = record(
                         &selected_milestones,
+                        &issue_information,
                         &configuration,
                         &git_info,
                         env,
-                        cache.as_ref(),
                     )
                     .await?;
                     let final_record_path = interactive_record_path.or(record_path);
@@ -559,7 +561,12 @@ async fn main() -> Result<()> {
                         PathBuf::from(format!(
                             "{}-{}.pdf",
                             git_info.repo(),
-                            milestone_names.join("-").replace(" ", "-")
+                            issues
+                                .keys()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join("-")
+                                .replace(" ", "-")
                         ))
                     };
 

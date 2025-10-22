@@ -1,6 +1,7 @@
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
 use crate::issue::{IssueError, IssueThread};
@@ -85,7 +86,7 @@ impl QCStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChecklistSummary {
     pub completed: usize,
     pub total: usize,

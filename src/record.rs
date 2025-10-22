@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use tera::{Context, Result as TeraResult, Tera, Value};
 
 use crate::{
-    ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, RepoUser,
-    get_issue_comments, get_issue_events, get_repo_users,
-    git::{GitComment, GitCommitAnalysis, GitFileOps, GitStatus, GitStatusOps},
+    ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, GitStatusOps,
+    RepoUser, get_issue_comments, get_issue_events, get_repo_users,
+    git::{GitComment, GitCommitAnalysis, GitFileOps, GitStatus},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
     utils::EnvProvider,
@@ -37,13 +37,13 @@ lazy_static! {
     };
 }
 
-pub async fn record<'a>(
-    milestones: &'a [Milestone],
+pub async fn record(
+    milestones: &[Milestone],
+    issues: &HashMap<String, Vec<IssueInformation>>,
     configuration: &Configuration,
-    git_info: &(impl GitHubReader + GitRepository + GitFileOps + GitCommitAnalysis + GitStatusOps),
+    git_info: &impl GitRepository,
     env: impl EnvProvider,
-    cache: Option<&DiskCache>,
-) -> Result<(Vec<&'a str>, String), RecordError> {
+) -> Result<String, RecordError> {
     let mut context = Context::new();
 
     context.insert("repository_name", git_info.repo());
@@ -68,30 +68,27 @@ pub async fn record<'a>(
         context.insert("logo_path", &logo_path);
     }
 
-    // Fetch all milestone issues
-    let issue_objects = fetch_milestone_issues(milestones, git_info).await?;
-
     // Generate milestone dataframe
-    let milestone_data = create_milestone_df(milestones, &issue_objects)?;
+    let milestone_data = create_milestone_df(milestones, &issues)?;
     context.insert("milestone_data", &milestone_data);
 
     // Generate milestone sections for individual milestone tables
-    let milestone_sections =
-        create_milestone_sections(milestones, &issue_objects, cache, git_info).await?;
+    let milestone_sections = issues
+        .iter()
+        .filter(|(m, _)| milestones.iter().any(|milestone| milestone.title == **m))
+        .map(|(m, i)| MilestoneSection {
+            name: m.to_string(),
+            issues: i.clone(),
+        })
+        .collect::<Vec<_>>();
     context.insert("milestone_sections", &milestone_sections);
 
-    let milestone_names = milestones
-        .iter()
-        .filter(|m| issue_objects.contains_key(&m.title))
-        .map(|m| m.title.as_str())
-        .collect::<Vec<_>>();
+    let milestone_names = issues.keys().map(|s| s.as_str()).collect::<Vec<_>>();
     context.insert("milestone_names", &milestone_names.join(", "));
 
-    let rendered = TEMPLATES
+    TEMPLATES
         .render("record.qmd", &context)
-        .map_err(RecordError::Template)?;
-
-    Ok((milestone_names, rendered))
+        .map_err(RecordError::Template)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,45 +127,36 @@ pub async fn fetch_milestone_issues(
 /// Create milestone dataframe equivalent to R function
 pub fn create_milestone_df(
     milestone_objects: &[Milestone],
-    issue_objects: &HashMap<String, Vec<Issue>>,
+    issue_information: &HashMap<String, Vec<IssueInformation>>,
 ) -> Result<Vec<MilestoneRow>, RecordError> {
     let mut milestone_rows = Vec::new();
 
     for milestone in milestone_objects {
-        let Some(issues) = issue_objects.get(&milestone.title) else {
+        let Some(issues) = issue_information.get(&milestone.title) else {
             continue;
         };
 
-        let mut issues_with_unapproved_statuses = Vec::new();
-        let mut issues_with_open_checklists = Vec::new();
+        let issue_names = issues
+            .iter()
+            .map(|issue| {
+                let mut issue_name = insert_breaks(&issue.title, 42);
+                if issue.checklist_summary.contains("100.0%") {
+                    issue_name = format!("{}\\textcolor{{red}}{{U}}", issue_name);
+                }
 
-        // Analyze each issue for checklist status
-        for issue in issues {
-            let checklists = analyze_issue_checklists(issue);
+                if issue.qc_status.contains("Approved") {
+                    issue_name = format!("{}\\textcolor{{red}}{{C}}", issue_name);
+                }
 
-            // Check if any checklist has uncompleted items
-            let has_open_checklists = checklists.iter().any(|(_, summary)| !summary.is_complete());
-
-            if has_open_checklists {
-                issues_with_open_checklists.push(issue.title.clone());
-            }
-
-            // For now, we'll mark all open issues as "unapproved"
-            // In a full implementation, you'd check the QC status
-            if matches!(issue.state, octocrab::models::IssueState::Open) {
-                issues_with_unapproved_statuses.push(issue.title.clone());
-            }
-        }
+                issue_name
+            })
+            .collect::<Vec<String>>();
 
         // Format issues string with status indicators
-        let issues_str = if issues.is_empty() {
+        let issues_str = if issue_names.is_empty() {
             String::new()
         } else {
-            format_issues_for_milestone(
-                &issues,
-                &issues_with_unapproved_statuses,
-                &issues_with_open_checklists,
-            )
+            issue_names.join("\\newline \\newline ")
         };
 
         // Format milestone status
@@ -198,38 +186,6 @@ pub fn create_milestone_df(
     }
 
     Ok(milestone_rows)
-}
-
-/// Format issues for milestone with status indicators
-fn format_issues_for_milestone(
-    issues: &[Issue],
-    issues_with_unapproved_statuses: &[String],
-    issues_with_open_checklists: &[String],
-) -> String {
-    if issues.is_empty() {
-        return String::new();
-    }
-
-    let issue_names: Vec<String> = issues
-        .iter()
-        .map(|issue| {
-            let mut issue_name = insert_breaks(&issue.title, 42);
-
-            if issues_with_unapproved_statuses.contains(&issue.title) {
-                issue_name = format!("{}\\textcolor{{red}}{{U}}", issue_name);
-            }
-
-            if issues_with_open_checklists.contains(&issue.title) {
-                issue_name = format!("{}\\textcolor{{red}}{{C}}", issue_name);
-            }
-
-            // Escape underscores for LaTeX
-            issue_name.replace('_', "\\_")
-        })
-        .collect();
-
-    // Join with double newlines and add proper LaTeX line breaks
-    issue_names.join("\\newline \\newline ")
 }
 
 /// Insert line breaks at word boundaries (equivalent to R's insert_breaks)
@@ -378,26 +334,16 @@ pub struct MilestoneSection {
     pub issues: Vec<IssueInformation>,
 }
 
-/// Create issue summary data for each milestone
-pub async fn create_milestone_sections(
-    milestone_objects: &[Milestone],
-    issue_objects: &HashMap<String, Vec<Issue>>,
-    cache: Option<&crate::cache::DiskCache>,
+pub async fn get_milestone_issue_information(
+    milestone_issues: &HashMap<String, Vec<Issue>>,
+    cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps),
-) -> Result<Vec<MilestoneSection>, RecordError> {
-    // Get all repository users with cache for efficient lookup
+) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
     let repo_users = get_repo_users(cache, git_info).await?;
-
-    // Get git status once and reuse it across all issues
     let git_status = git_info.status()?;
 
-    let mut sections = Vec::new();
-
-    for milestone in milestone_objects {
-        let Some(issues) = issue_objects.get(&milestone.title) else {
-            continue;
-        };
-
+    let mut res = HashMap::new();
+    for (milestone_name, issues) in milestone_issues {
         // Create detailed issue information for each issue (used for both summary and details)
         let issue_futures: Vec<_> = issues
             .iter()
@@ -407,7 +353,7 @@ pub async fn create_milestone_sections(
                 async move {
                     create_issue_information(
                         issue,
-                        &milestone.title,
+                        milestone_name,
                         &repo_users_clone,
                         &git_status_clone,
                         cache,
@@ -421,17 +367,14 @@ pub async fn create_milestone_sections(
         let issue_results = futures::future::join_all(issue_futures).await;
         let issue_information = issue_results.into_iter().collect::<Result<Vec<_>, _>>()?;
 
-        sections.push(MilestoneSection {
-            name: milestone.title.clone(),
-            issues: issue_information,
-        });
+        res.insert(milestone_name.to_string(), issue_information);
     }
 
-    Ok(sections)
+    Ok(res)
 }
 
 /// Create detailed issue information from an issue
-async fn create_issue_information(
+pub async fn create_issue_information(
     issue: &Issue,
     milestone_name: &str,
     repo_users: &[RepoUser],
@@ -1392,11 +1335,17 @@ mod tests {
 
         let config = create_test_configuration();
         let env = create_test_env();
+        let issues = fetch_milestone_issues(&milestones, &git_info)
+            .await
+            .unwrap();
+        let issue_information = get_milestone_issue_information(&issues, None, &git_info)
+            .await
+            .unwrap();
 
-        let result = record(&milestones, &config, &git_info, env, None).await;
+        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
         assert!(result.is_ok());
 
-        insta::assert_snapshot!("record_v1_milestone", result.unwrap().1);
+        insta::assert_snapshot!("record_v1_milestone", result.unwrap());
     }
 
     #[tokio::test]
@@ -1468,10 +1417,16 @@ mod tests {
         let config = create_test_configuration();
         let env = create_test_env();
 
-        let result = record(&milestones, &config, &git_info, env, None).await;
+        let issues = fetch_milestone_issues(&milestones, &git_info)
+            .await
+            .unwrap();
+        let issue_information = get_milestone_issue_information(&issues, None, &git_info)
+            .await
+            .unwrap();
+        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
         assert!(result.is_ok());
 
-        insta::assert_snapshot!("record_multiple_milestones", result.unwrap().1);
+        insta::assert_snapshot!("record_multiple_milestones", result.unwrap());
     }
 
     #[tokio::test]
@@ -1517,10 +1472,16 @@ mod tests {
         let config = create_test_configuration();
         let env = create_test_env();
 
-        let result = record(&milestones, &config, &git_info, env, None).await;
+        let issues = fetch_milestone_issues(&milestones, &git_info)
+            .await
+            .unwrap();
+        let issue_information = get_milestone_issue_information(&issues, None, &git_info)
+            .await
+            .unwrap();
+        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
         assert!(result.is_ok());
 
-        insta::assert_snapshot!("record_closed_issue", result.unwrap().1);
+        insta::assert_snapshot!("record_closed_issue", result.unwrap());
     }
 
     #[tokio::test]
@@ -1558,10 +1519,16 @@ mod tests {
         let config = create_test_configuration();
         let env = create_test_env();
 
-        let result = record(&milestones, &config, &git_info, env, None).await;
+        let issues = fetch_milestone_issues(&milestones, &git_info)
+            .await
+            .unwrap();
+        let issue_information = get_milestone_issue_information(&issues, None, &git_info)
+            .await
+            .unwrap();
+        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
         assert!(result.is_ok());
 
-        insta::assert_snapshot!("record_reopened_issue", result.unwrap().1);
+        insta::assert_snapshot!("record_reopened_issue", result.unwrap());
     }
 
     #[tokio::test]
@@ -1574,9 +1541,15 @@ mod tests {
         let config = create_test_configuration();
         let env = create_test_env();
 
-        let result = record(&milestones, &config, &git_info, env, None).await;
+        let issues = fetch_milestone_issues(&milestones, &git_info)
+            .await
+            .unwrap();
+        let issue_information = get_milestone_issue_information(&issues, None, &git_info)
+            .await
+            .unwrap();
+        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
         assert!(result.is_ok());
 
-        insta::assert_snapshot!("record_empty_milestones", result.unwrap().1);
+        insta::assert_snapshot!("record_empty_milestones", result.unwrap());
     }
 }
