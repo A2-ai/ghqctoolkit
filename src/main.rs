@@ -507,44 +507,43 @@ async fn main() -> Result<()> {
 
                     let milestones_data = git_info.get_milestones().await?;
 
-                    let (selected_milestones, interactive_record_path, interactive_only_tables) = match (
-                        milestones.is_empty(),
-                        all_milestones,
-                        record_path.is_none(),
-                    ) {
-                        (true, false, true) => {
-                            // Interactive mode - no milestones specified, not all_milestones, and no record_path
-                            prompt_milestone_record(&milestones_data)?
-                        }
-                        (true, true, _) => {
-                            // All milestones requested
-                            (milestones_data, None, only_tables)
-                        }
-                        (false, false, _) => {
-                            // Specific milestones provided - filter by name
-                            let selected: Vec<Milestone> = milestones_data
-                                .into_iter()
-                                .filter(|m| milestones.contains(&m.title))
-                                .collect();
+                    let (selected_milestones, interactive_record_path, interactive_only_tables) =
+                        match (milestones.is_empty(), all_milestones, record_path.is_none()) {
+                            (true, false, true) => {
+                                // Interactive mode - no milestones specified, not all_milestones, and no record_path
+                                prompt_milestone_record(&milestones_data)?
+                            }
+                            (true, true, _) => {
+                                // All milestones requested
+                                (milestones_data, None, only_tables)
+                            }
+                            (false, false, _) => {
+                                // Specific milestones provided - filter by name
+                                let selected: Vec<Milestone> = milestones_data
+                                    .into_iter()
+                                    .filter(|m| milestones.contains(&m.title))
+                                    .collect();
 
-                            if selected.is_empty() {
+                                if selected.is_empty() {
+                                    bail!(
+                                        "No matching milestones found for: {}",
+                                        milestones.join(", ")
+                                    );
+                                }
+
+                                (selected, None, only_tables)
+                            }
+                            (false, true, _) => {
                                 bail!(
-                                    "No matching milestones found for: {}",
-                                    milestones.join(", ")
+                                    "Cannot specify both milestone names and --all-milestones flag"
                                 );
                             }
-
-                            (selected, None, only_tables)
-                        }
-                        (false, true, _) => {
-                            bail!("Cannot specify both milestone names and --all-milestones flag");
-                        }
-                        (true, false, false) => {
-                            bail!(
-                                "Cannot use interactive mode when record_path is specified. Please specify milestone names or use --all-milestones."
-                            );
-                        }
-                    };
+                            (true, false, false) => {
+                                bail!(
+                                    "Cannot use interactive mode when record_path is specified. Please specify milestone names or use --all-milestones."
+                                );
+                            }
+                        };
 
                     let issues = fetch_milestone_issues(&selected_milestones, &git_info).await?;
                     let issue_information =

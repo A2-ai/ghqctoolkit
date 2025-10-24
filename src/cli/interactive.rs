@@ -1,6 +1,8 @@
 use anyhow::{Result, bail};
 use gix::ObjectId;
-use inquire::{Autocomplete, Confirm, CustomUserError, MultiSelect, Select, Text, validator::Validation};
+use inquire::{
+    Autocomplete, Confirm, CustomUserError, MultiSelect, Select, Text, validator::Validation,
+};
 use octocrab::models::{Milestone, issues::Issue};
 use std::borrow::Cow;
 use std::path::PathBuf;
