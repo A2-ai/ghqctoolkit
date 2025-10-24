@@ -78,15 +78,20 @@ pub fn record(
     let milestone_sections = milestones
         .iter()
         .filter_map(|milestone| {
-            issues.get(&milestone.title).map(|issue_list| MilestoneSection {
-                name: milestone.title.clone(),
-                issues: issue_list.clone(),
-            })
+            issues
+                .get(&milestone.title)
+                .map(|issue_list| MilestoneSection {
+                    name: milestone.title.clone(),
+                    issues: issue_list.clone(),
+                })
         })
         .collect::<Vec<_>>();
     context.insert("milestone_sections", &milestone_sections);
 
-    let milestone_names = milestones.iter().map(|m| m.title.as_str()).collect::<Vec<_>>();
+    let milestone_names = milestones
+        .iter()
+        .map(|m| m.title.as_str())
+        .collect::<Vec<_>>();
     context.insert(
         "milestone_names",
         &escape_latex(&milestone_names.join(", ")),
