@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use gix::ObjectId;
-use inquire::{Autocomplete, CustomUserError, MultiSelect, Select, Text, validator::Validation};
+use inquire::{Autocomplete, Confirm, CustomUserError, MultiSelect, Select, Text, validator::Validation};
 use octocrab::models::{Milestone, issues::Issue};
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -938,7 +938,7 @@ mod tests {
 /// Interactive milestone selection for record generation
 pub fn prompt_milestone_record(
     milestones: &[Milestone],
-) -> Result<(Vec<Milestone>, Option<PathBuf>)> {
+) -> Result<(Vec<Milestone>, Option<PathBuf>, bool)> {
     println!("📄 Welcome to GHQC Milestone Record Mode!");
 
     if milestones.is_empty() {
@@ -991,6 +991,13 @@ pub fn prompt_milestone_record(
         bail!("No milestones selected");
     }
 
+    // Prompt for only_tables using y/N format
+    let only_tables = Confirm::new("📋 Generate only tables without detailed issue content?")
+        .with_default(false)
+        .with_help_message("N = include detailed issue content, y = only summary tables")
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
     // Prompt for optional record path
     let record_path_input = Text::new("📁 Enter record file name (Enter for default):")
         .prompt()
@@ -1002,7 +1009,7 @@ pub fn prompt_milestone_record(
         Some(PathBuf::from(record_path_input.trim()))
     };
 
-    Ok((selected_milestones, record_path))
+    Ok((selected_milestones, record_path, only_tables))
 }
 
 /// Interactive milestone selection for archive generation

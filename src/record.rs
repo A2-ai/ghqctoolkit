@@ -37,29 +37,30 @@ lazy_static! {
     };
 }
 
-pub async fn record(
+pub fn record(
     milestones: &[Milestone],
     issues: &HashMap<String, Vec<IssueInformation>>,
     configuration: &Configuration,
     git_info: &impl GitRepository,
-    env: impl EnvProvider,
+    env: &impl EnvProvider,
+    only_tables: bool,
 ) -> Result<String, RecordError> {
     let mut context = Context::new();
 
-    context.insert("repository_name", git_info.repo());
+    context.insert("repository_name", &escape_latex(git_info.repo()));
     context.insert(
         "checklist_name",
-        &configuration.options.checklist_display_name,
+        &escape_latex(&configuration.options.checklist_display_name),
     );
 
     if let Ok(author) = env.var("USER") {
-        context.insert("author", &author);
+        context.insert("author", &escape_latex(&author));
     }
 
     let date = if let Ok(custom_date) = env.var("GHQC_RECORD_DATE") {
-        custom_date
+        escape_latex(&custom_date)
     } else {
-        chrono::Local::now().format("%B %d, %Y").to_string()
+        escape_latex(&chrono::Local::now().format("%B %d, %Y").to_string())
     };
     context.insert("date", &date);
 
@@ -84,11 +85,16 @@ pub async fn record(
     context.insert("milestone_sections", &milestone_sections);
 
     let milestone_names = issues.keys().map(|s| s.as_str()).collect::<Vec<_>>();
-    context.insert("milestone_names", &milestone_names.join(", "));
+    context.insert(
+        "milestone_names",
+        &escape_latex(&milestone_names.join(", ")),
+    );
 
-    TEMPLATES
+    context.insert("only_tables", &only_tables);
+
+    Ok(TEMPLATES
         .render("record.qmd", &context)
-        .map_err(RecordError::Template)
+        .map_err(RecordError::Template)?)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +145,7 @@ pub fn create_milestone_df(
         let issue_names = issues
             .iter()
             .map(|issue| {
-                let mut issue_name = insert_breaks(&issue.title, 42);
+                let mut issue_name = insert_breaks(&escape_latex(&issue.title), 42);
                 if issue.checklist_summary.contains("100.0%") {
                     issue_name = format!("{}\\textcolor{{red}}{{U}}", issue_name);
                 }
@@ -160,22 +166,24 @@ pub fn create_milestone_df(
         };
 
         // Format milestone status
-        let status = milestone
-            .state
-            .as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or("Unknown")
-            .to_string();
+        let status = escape_latex(
+            &milestone
+                .state
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or("Unknown")
+                .to_string(),
+        );
 
         // Format description with line breaks
         let description = milestone
             .description
             .as_ref()
-            .map(|d| insert_breaks(d, 20))
+            .map(|d| escape_latex(&insert_breaks(d, 20)))
             .unwrap_or_else(|| "NA".to_string());
 
         // Format milestone name with line breaks
-        let name = insert_breaks(&milestone.title, 18);
+        let name = escape_latex(&insert_breaks(&milestone.title, 18));
 
         milestone_rows.push(MilestoneRow {
             name,
@@ -215,6 +223,22 @@ fn insert_breaks(text: &str, max_width: usize) -> String {
     result
 }
 
+/// Escape LaTeX special characters in user-provided text
+/// This function escapes characters that have special meaning in LaTeX to prevent
+/// them from being interpreted as LaTeX commands when they appear in user content
+fn escape_latex(text: &str) -> String {
+    text.replace('\\', r"\textbackslash{}")
+        .replace('{', r"\{")
+        .replace('}', r"\}")
+        .replace('$', r"\$")
+        .replace('&', r"\&")
+        .replace('%', r"\%")
+        .replace('#', r"\#")
+        .replace('^', r"\textasciicircum{}")
+        .replace('_', r"\_")
+        .replace('~', r"\textasciitilde{}")
+}
+
 /// Tera function to render milestone table rows only
 fn render_milestone_table_rows(args: &HashMap<String, Value>) -> TeraResult<Value> {
     let data = args
@@ -231,13 +255,19 @@ fn render_milestone_table_rows(args: &HashMap<String, Value>) -> TeraResult<Valu
         if i < rows.len() - 1 {
             table_rows.push(format!(
                 r"{} & {} & {} & {}\\",
-                row.name, row.description, row.status, row.issues
+                row.name,        // already escaped in create_milestone_df
+                row.description, // already escaped in create_milestone_df
+                row.status,      // already escaped in create_milestone_df
+                row.issues       // issues string already contains LaTeX formatting commands
             ));
             table_rows.push(r"\addlinespace\addlinespace".to_string());
         } else {
             table_rows.push(format!(
                 r"{} & {} & {} & {}\\*",
-                row.name, row.description, row.status, row.issues
+                row.name,        // already escaped in create_milestone_df
+                row.description, // already escaped in create_milestone_df
+                row.status,      // already escaped in create_milestone_df
+                row.issues       // issues string already contains LaTeX formatting commands
             ));
         }
     }
@@ -283,21 +313,21 @@ fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraResult<
         if i < rows.len() - 1 {
             table_rows.push(format!(
                 r"{} & {} & {} & {} & {}\\",
-                row.title.replace('_', "\\_"),
-                row.qc_status,
-                author_display,
-                qcer_display,
-                closer_display
+                escape_latex(&row.title),
+                escape_latex(&row.qc_status),
+                escape_latex(author_display),
+                escape_latex(&qcer_display),
+                escape_latex(closer_display)
             ));
             table_rows.push(r"\addlinespace\addlinespace".to_string());
         } else {
             table_rows.push(format!(
                 r"{} & {} & {} & {} & {}\\*",
-                row.title.replace('_', "\\_"),
-                row.qc_status,
-                author_display,
-                qcer_display,
-                closer_display
+                escape_latex(&row.title),
+                escape_latex(&row.qc_status),
+                escape_latex(author_display),
+                escape_latex(&qcer_display),
+                escape_latex(closer_display)
             ));
         }
     }
@@ -479,25 +509,28 @@ pub async fn create_issue_information(
     let timeline = create_combined_timeline(&formatted_events, &formatted_comments);
 
     Ok(IssueInformation {
-        title: issue.title.clone(),
+        title: escape_latex(&issue.title),
         number: issue.number,
-        milestone: milestone_name.to_string(),
-        created_by,
-        created_at,
-        qcer,
-        qc_status,
-        checklist_summary,
-        git_status: git_status_str,
-        initial_qc_commit,
-        latest_qc_commit,
-        issue_url: issue.html_url.to_string(),
-        state: if open { "Open" } else { "Closed" }.to_string(),
-        closed_by,
-        closed_at,
-        body,
-        comments: formatted_comments,
-        events: formatted_events,
-        timeline,
+        milestone: escape_latex(milestone_name),
+        created_by: escape_latex(&created_by),
+        created_at: escape_latex(&created_at),
+        qcer: qcer.into_iter().map(|q| escape_latex(&q)).collect(),
+        qc_status: escape_latex(&qc_status),
+        checklist_summary: escape_latex(&checklist_summary),
+        git_status: escape_latex(&git_status_str),
+        initial_qc_commit: escape_latex(&initial_qc_commit),
+        latest_qc_commit: escape_latex(&latest_qc_commit),
+        issue_url: escape_latex(&issue.html_url.to_string()),
+        state: escape_latex(&if open { "Open" } else { "Closed" }.to_string()),
+        closed_by: closed_by.map(|c| escape_latex(&c)),
+        closed_at: closed_at.map(|c| escape_latex(&c)),
+        body, // body already processed with format_markdown_with_min_level which handles LaTeX
+        comments: formatted_comments, // comments already processed with format_markdown_with_min_level
+        events: formatted_events
+            .into_iter()
+            .map(|e| escape_latex(&e))
+            .collect(),
+        timeline: timeline.into_iter().map(|t| escape_latex(&t)).collect(),
     })
 }
 
@@ -652,7 +685,11 @@ fn format_comments(comments: &[GitComment], repo_users: &[RepoUser]) -> Vec<(Str
 
         // Format timestamp and header
         let created_at = comment.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
-        let header = format!("{} - Comment by {}", created_at, author_display);
+        let header = format!(
+            "{} - Comment by {}",
+            escape_latex(&created_at),
+            escape_latex(&author_display)
+        );
 
         // Format comment body (min level 4 since it will be under #### header in template)
         let body = format_markdown_with_min_level(&comment.body, 4);
@@ -1342,7 +1379,14 @@ mod tests {
             .await
             .unwrap();
 
-        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
+        let result = record(
+            &milestones,
+            &issue_information,
+            &config,
+            &git_info,
+            &env,
+            false,
+        );
         assert!(result.is_ok());
 
         insta::assert_snapshot!("record_v1_milestone", result.unwrap());
@@ -1423,7 +1467,14 @@ mod tests {
         let issue_information = get_milestone_issue_information(&issues, None, &git_info)
             .await
             .unwrap();
-        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
+        let result = record(
+            &milestones,
+            &issue_information,
+            &config,
+            &git_info,
+            &env,
+            false,
+        );
         assert!(result.is_ok());
 
         insta::assert_snapshot!("record_multiple_milestones", result.unwrap());
@@ -1478,7 +1529,14 @@ mod tests {
         let issue_information = get_milestone_issue_information(&issues, None, &git_info)
             .await
             .unwrap();
-        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
+        let result = record(
+            &milestones,
+            &issue_information,
+            &config,
+            &git_info,
+            &env,
+            false,
+        );
         assert!(result.is_ok());
 
         insta::assert_snapshot!("record_closed_issue", result.unwrap());
@@ -1525,7 +1583,14 @@ mod tests {
         let issue_information = get_milestone_issue_information(&issues, None, &git_info)
             .await
             .unwrap();
-        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
+        let result = record(
+            &milestones,
+            &issue_information,
+            &config,
+            &git_info,
+            &env,
+            false,
+        );
         assert!(result.is_ok());
 
         insta::assert_snapshot!("record_reopened_issue", result.unwrap());
@@ -1547,9 +1612,94 @@ mod tests {
         let issue_information = get_milestone_issue_information(&issues, None, &git_info)
             .await
             .unwrap();
-        let result = record(&milestones, &issue_information, &config, &git_info, env).await;
+        let result = record(
+            &milestones,
+            &issue_information,
+            &config,
+            &git_info,
+            &env,
+            false,
+        );
         assert!(result.is_ok());
 
         insta::assert_snapshot!("record_empty_milestones", result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_record_only_tables() {
+        let v1_milestone = load_test_milestone("v1.0.json");
+        let milestones = vec![v1_milestone.clone()];
+
+        let main_issue = load_test_issue("main_file_issue.json");
+        let test_issue = load_test_issue("test_file_issue.json");
+
+        let main_events = load_test_events("main_file_issue_events.json");
+        let test_events = load_test_events("test_file_issue_events.json");
+        let repo_users = load_test_users();
+
+        let mut milestone_issues = HashMap::new();
+        milestone_issues.insert(
+            "v1.0".to_string(),
+            vec![main_issue.clone(), test_issue.clone()],
+        );
+
+        let mut issue_events = HashMap::new();
+        issue_events.insert(main_issue.number, main_events);
+        issue_events.insert(test_issue.number, test_events);
+
+        let git_info = RecordMockGitInfo::new()
+            .with_milestones(milestones.clone())
+            .with_milestone_issues(milestone_issues)
+            .with_issue_events(issue_events)
+            .with_repo_users(repo_users)
+            .with_git_status(GitStatus::Clean)
+            .with_file_commits(
+                PathBuf::from("src/main.rs"),
+                vec![(
+                    ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap(),
+                    "Initial commit".to_string(),
+                )],
+            )
+            .with_file_commits(
+                PathBuf::from("src/test.rs"),
+                vec![(
+                    ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+                    "Test commit".to_string(),
+                )],
+            );
+
+        let config = create_test_configuration();
+        let env = create_test_env();
+        let issues = fetch_milestone_issues(&milestones, &git_info)
+            .await
+            .unwrap();
+        let issue_information = get_milestone_issue_information(&issues, None, &git_info)
+            .await
+            .unwrap();
+
+        // Test with only_tables = true
+        let result = record(
+            &milestones,
+            &issue_information,
+            &config,
+            &git_info,
+            &env,
+            true,
+        );
+        assert!(result.is_ok());
+
+        let record_content = result.unwrap();
+
+        // Verify that detailed issue content is NOT present when only_tables is true
+        assert!(!record_content.contains("### **Issue Information**"));
+        assert!(!record_content.contains("### **Issue Body**"));
+        assert!(!record_content.contains("### **Comments**"));
+        assert!(!record_content.contains("### **Events**"));
+        assert!(!record_content.contains("### **Detailed Timeline**"));
+
+        // But verify that the issue summary table is still present
+        assert!(record_content.contains("File Path & QC Status & Author & QCer & Issue Closer"));
+
+        insta::assert_snapshot!("record_only_tables", record_content);
     }
 }

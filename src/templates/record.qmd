@@ -112,6 +112,7 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 {% endraw %}
 \newpage
 
+{% if not only_tables %}
 {% for issue in section.issues %}
 ## {{ issue.title }}
 
@@ -172,4 +173,5 @@ No timeline items found.
 
 \newpage
 {% endfor %}
+{% endif %}
 {% endfor %}

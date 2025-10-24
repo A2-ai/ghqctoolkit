@@ -175,6 +175,10 @@ enum MilestoneCommands {
         /// File name to save the record pdf as. Will default to <repo>_<milestone names>.pdf
         #[arg(short, long)]
         record_path: Option<PathBuf>,
+
+        /// Only include tables and skip detailed issue content
+        #[arg(long)]
+        only_tables: bool,
     },
     /// Create an archive of files from milestones
     Archive {
@@ -494,6 +498,7 @@ async fn main() -> Result<()> {
                     milestones,
                     all_milestones,
                     record_path,
+                    only_tables,
                 } => {
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let configuration = Configuration::from_path(&config_dir);
@@ -502,7 +507,7 @@ async fn main() -> Result<()> {
 
                     let milestones_data = git_info.get_milestones().await?;
 
-                    let (selected_milestones, interactive_record_path) = match (
+                    let (selected_milestones, interactive_record_path, interactive_only_tables) = match (
                         milestones.is_empty(),
                         all_milestones,
                         record_path.is_none(),
@@ -513,7 +518,7 @@ async fn main() -> Result<()> {
                         }
                         (true, true, _) => {
                             // All milestones requested
-                            (milestones_data, None)
+                            (milestones_data, None, only_tables)
                         }
                         (false, false, _) => {
                             // Specific milestones provided - filter by name
@@ -529,7 +534,7 @@ async fn main() -> Result<()> {
                                 );
                             }
 
-                            (selected, None)
+                            (selected, None, only_tables)
                         }
                         (false, true, _) => {
                             bail!("Cannot specify both milestone names and --all-milestones flag");
@@ -550,9 +555,9 @@ async fn main() -> Result<()> {
                         &issue_information,
                         &configuration,
                         &git_info,
-                        env,
-                    )
-                    .await?;
+                        &env,
+                        interactive_only_tables,
+                    )?;
                     let final_record_path = interactive_record_path.or(record_path);
                     let record_path = if let Some(mut record_path) = final_record_path {
                         record_path.set_extension(".pdf");
