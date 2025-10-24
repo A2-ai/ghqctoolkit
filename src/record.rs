@@ -145,7 +145,7 @@ pub fn create_milestone_df(
         let issue_names = issues
             .iter()
             .map(|issue| {
-                let mut issue_name = insert_breaks(&escape_latex(&issue.title), 42);
+                let mut issue_name = insert_breaks(&issue.title, 42);
                 if issue.checklist_summary.contains("100.0%") {
                     issue_name = format!("{}\\textcolor{{red}}{{U}}", issue_name);
                 }
@@ -179,11 +179,11 @@ pub fn create_milestone_df(
         let description = milestone
             .description
             .as_ref()
-            .map(|d| escape_latex(&insert_breaks(d, 20)))
+            .map(|d| insert_breaks(&escape_latex(d), 20))
             .unwrap_or_else(|| "NA".to_string());
 
         // Format milestone name with line breaks
-        let name = escape_latex(&insert_breaks(&milestone.title, 18));
+        let name = insert_breaks(&escape_latex(&milestone.title), 18);
 
         milestone_rows.push(MilestoneRow {
             name,
@@ -227,9 +227,9 @@ fn insert_breaks(text: &str, max_width: usize) -> String {
 /// This function escapes characters that have special meaning in LaTeX to prevent
 /// them from being interpreted as LaTeX commands when they appear in user content
 fn escape_latex(text: &str) -> String {
-    text.replace('\\', r"\textbackslash{}")
-        .replace('{', r"\{")
+    text.replace('{', r"\{")
         .replace('}', r"\}")
+        .replace('\\', r"\textbackslash{}")
         .replace('$', r"\$")
         .replace('&', r"\&")
         .replace('%', r"\%")
@@ -313,21 +313,13 @@ fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraResult<
         if i < rows.len() - 1 {
             table_rows.push(format!(
                 r"{} & {} & {} & {} & {}\\",
-                escape_latex(&row.title),
-                escape_latex(&row.qc_status),
-                escape_latex(author_display),
-                escape_latex(&qcer_display),
-                escape_latex(closer_display)
+                &row.title, &row.qc_status, author_display, &qcer_display, closer_display
             ));
             table_rows.push(r"\addlinespace\addlinespace".to_string());
         } else {
             table_rows.push(format!(
                 r"{} & {} & {} & {} & {}\\*",
-                escape_latex(&row.title),
-                escape_latex(&row.qc_status),
-                escape_latex(author_display),
-                escape_latex(&qcer_display),
-                escape_latex(closer_display)
+                &row.title, &row.qc_status, author_display, &qcer_display, closer_display
             ));
         }
     }

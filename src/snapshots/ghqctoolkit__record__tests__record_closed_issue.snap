@@ -103,11 +103,12 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 \endfoot
 \bottomrule
 \endlastfoot
-src/config.rs & Approval required & Jane Developer & Alice Reviewer,\textbackslash\{\}newline Bob Reviewer & NA\\*
+src/config.rs & Approval required & Jane Developer & Alice Reviewer,\newline Bob Reviewer & NA\\*
 
 \end{longtable}
 
 \newpage
+
 
 
 ## src/config.rs

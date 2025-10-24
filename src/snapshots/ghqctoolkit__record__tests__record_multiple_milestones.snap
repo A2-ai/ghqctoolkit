@@ -3,7 +3,7 @@ source: src/record.rs
 expression: result.unwrap()
 ---
 ---
-title: "QC Record: v1.0, v2.0"
+title: "QC Record: v2.0, v1.0"
 subtitle: "Git repository: repo"
 
 author: "testuser"
@@ -83,6 +83,163 @@ milestone & open & src/config.rs\\*
 
 \newpage
 
+# v2.0
+
+## **Issue Summary**
+
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}
+                  >{\raggedright\arraybackslash}p{7em}}
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endfirsthead
+\multicolumn{5}{@{}l}{\textit{(continued)}}\\
+\toprule
+File Path & QC Status & Author & QCer & Issue Closer\\
+\midrule
+\endhead
+
+\endfoot
+\bottomrule
+\endlastfoot
+src/config.rs & Awaiting approval & Jane Developer & Alice Reviewer,\newline Bob Reviewer & NA\\*
+
+\end{longtable}
+
+\newpage
+
+
+
+## src/config.rs
+
+### **Issue Information**
+
+* **Issue Number:** 2
+* **Milestone:** `v2.0`
+* **Created by:** Jane Developer (developer)
+* **Created at:** 2011-04-22 14:33:48
+* **QCer:** Alice Reviewer (reviewer1), Bob Reviewer (reviewer2)
+* **QC Status:** Awaiting approval
+* **Test Checklist Summary:** 0/0 (100.0\%)
+* **Git Status:** Up to date
+* **Initial QC Commit:** 456def789abc012345678901234567890123cdef
+* **Latest QC Commit:** 456def789abc012345678901234567890123cdef
+* **Issue URL:** https://github.com/owner/repo/issues/2
+* **Issue state:** Closed
+
+### **Issue Body**
+
+Quality check issue for src/config.rs
+
+#### Metadata
+initial qc commit: 456def789abc012345678901234567890123cdef
+git branch: feature/config-update
+author: Jane Developer <developer@example.com>
+
+### **Comments**
+
+
+
+#### 2011-04-22 15:00:00 - Comment by Alice Reviewer (reviewer1)
+
+#### QC Notification
+
+@developer @reviewer2
+
+#### Metadata
+current commit: 456def789abc012345678901234567890123cdef
+previous commit: 123abc456def789012345678901234567890abcd
+
+#### File Difference
+
+Reviewing the configuration changes in src/config.rs:
+
+- New configuration structure looks clean
+- Validation logic is well implemented
+- Consider adding more comprehensive error messages
+
+
+#### 2011-04-22 16:15:00 - Comment by Bob Reviewer (reviewer2)
+
+#### QC Notification
+
+@developer
+
+#### Metadata
+current commit: 456def789abc012345678901234567890123cdef
+previous commit: 123abc456def789012345678901234567890abcd
+
+Agreed with @reviewer1's feedback. Additionally:
+
+- The new config format is much more intuitive
+- Migration path from old config is well handled
+- Tests coverage looks comprehensive
+
+
+#### 2011-04-23 09:00:00 - Comment by Jane Developer (developer)
+
+#### QC Approve
+
+#### Note
+
+Thank you both @reviewer1 @reviewer2 for the thorough review!
+
+I've implemented all suggested improvements:
+
+✅ Enhanced error messages with detailed context
+✅ Added backward compatibility warnings
+✅ Expanded test suite with edge cases
+✅ Updated documentation with migration guide
+
+The configuration system is now ready for production use.
+
+
+
+
+### **Events**
+
+
+
+* 2011-04-22 14:30:00 - milestone set to 'v2.0' by Jane Developer (developer)
+
+* 2011-04-22 14:31:00 - Alice Reviewer (reviewer1) assigned by Jane Developer (developer)
+
+* 2011-04-22 14:32:00 - Bob Reviewer (reviewer2) assigned by Jane Developer (developer)
+
+* 2011-04-22 14:33:00 - added label 'ghqc' by Jane Developer (developer)
+
+
+
+### **Detailed Timeline**
+
+
+
+* 2011-04-22 14:30:00 - milestone set to 'v2.0' by Jane Developer (developer)
+
+* 2011-04-22 14:31:00 - Alice Reviewer (reviewer1) assigned by Jane Developer (developer)
+
+* 2011-04-22 14:32:00 - Bob Reviewer (reviewer2) assigned by Jane Developer (developer)
+
+* 2011-04-22 14:33:00 - added label 'ghqc' by Jane Developer (developer)
+
+* 2011-04-22 15:00:00 - commented by Alice Reviewer (reviewer1)
+
+* 2011-04-22 16:15:00 - commented by Bob Reviewer (reviewer2)
+
+* 2011-04-23 09:00:00 - commented by Jane Developer (developer)
+
+
+
+\newpage
+
+
+
+\newpage
+
 # v1.0
 
 ## **Issue Summary**
@@ -113,6 +270,7 @@ src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
 \end{longtable}
 
 \newpage
+
 
 
 ## src/main.rs
@@ -288,161 +446,6 @@ Ready for review!
 * 2011-04-22 13:32:00 - added label 'ghqc' by The Octocat (octocat)
 
 * 2011-04-22 14:00:00 - commented by The Octocat (octocat)
-
-
-
-\newpage
-
-
-\newpage
-
-# v2.0
-
-## **Issue Summary**
-
-
-\begin{longtable}{>{\raggedright\arraybackslash}p{7em}
-                  >{\raggedright\arraybackslash}p{7em}
-                  >{\raggedright\arraybackslash}p{7em}
-                  >{\raggedright\arraybackslash}p{7em}
-                  >{\raggedright\arraybackslash}p{7em}}
-\toprule
-File Path & QC Status & Author & QCer & Issue Closer\\
-\midrule
-\endfirsthead
-\multicolumn{5}{@{}l}{\textit{(continued)}}\\
-\toprule
-File Path & QC Status & Author & QCer & Issue Closer\\
-\midrule
-\endhead
-
-\endfoot
-\bottomrule
-\endlastfoot
-src/config.rs & Awaiting approval & Jane Developer & Alice Reviewer,\textbackslash\{\}newline Bob Reviewer & NA\\*
-
-\end{longtable}
-
-\newpage
-
-
-## src/config.rs
-
-### **Issue Information**
-
-* **Issue Number:** 2
-* **Milestone:** `v2.0`
-* **Created by:** Jane Developer (developer)
-* **Created at:** 2011-04-22 14:33:48
-* **QCer:** Alice Reviewer (reviewer1), Bob Reviewer (reviewer2)
-* **QC Status:** Awaiting approval
-* **Test Checklist Summary:** 0/0 (100.0\%)
-* **Git Status:** Up to date
-* **Initial QC Commit:** 456def789abc012345678901234567890123cdef
-* **Latest QC Commit:** 456def789abc012345678901234567890123cdef
-* **Issue URL:** https://github.com/owner/repo/issues/2
-* **Issue state:** Closed
-
-### **Issue Body**
-
-Quality check issue for src/config.rs
-
-#### Metadata
-initial qc commit: 456def789abc012345678901234567890123cdef
-git branch: feature/config-update
-author: Jane Developer <developer@example.com>
-
-### **Comments**
-
-
-
-#### 2011-04-22 15:00:00 - Comment by Alice Reviewer (reviewer1)
-
-#### QC Notification
-
-@developer @reviewer2
-
-#### Metadata
-current commit: 456def789abc012345678901234567890123cdef
-previous commit: 123abc456def789012345678901234567890abcd
-
-#### File Difference
-
-Reviewing the configuration changes in src/config.rs:
-
-- New configuration structure looks clean
-- Validation logic is well implemented
-- Consider adding more comprehensive error messages
-
-
-#### 2011-04-22 16:15:00 - Comment by Bob Reviewer (reviewer2)
-
-#### QC Notification
-
-@developer
-
-#### Metadata
-current commit: 456def789abc012345678901234567890123cdef
-previous commit: 123abc456def789012345678901234567890abcd
-
-Agreed with @reviewer1's feedback. Additionally:
-
-- The new config format is much more intuitive
-- Migration path from old config is well handled
-- Tests coverage looks comprehensive
-
-
-#### 2011-04-23 09:00:00 - Comment by Jane Developer (developer)
-
-#### QC Approve
-
-#### Note
-
-Thank you both @reviewer1 @reviewer2 for the thorough review!
-
-I've implemented all suggested improvements:
-
-✅ Enhanced error messages with detailed context
-✅ Added backward compatibility warnings
-✅ Expanded test suite with edge cases
-✅ Updated documentation with migration guide
-
-The configuration system is now ready for production use.
-
-
-
-
-### **Events**
-
-
-
-* 2011-04-22 14:30:00 - milestone set to 'v2.0' by Jane Developer (developer)
-
-* 2011-04-22 14:31:00 - Alice Reviewer (reviewer1) assigned by Jane Developer (developer)
-
-* 2011-04-22 14:32:00 - Bob Reviewer (reviewer2) assigned by Jane Developer (developer)
-
-* 2011-04-22 14:33:00 - added label 'ghqc' by Jane Developer (developer)
-
-
-
-### **Detailed Timeline**
-
-
-
-* 2011-04-22 14:30:00 - milestone set to 'v2.0' by Jane Developer (developer)
-
-* 2011-04-22 14:31:00 - Alice Reviewer (reviewer1) assigned by Jane Developer (developer)
-
-* 2011-04-22 14:32:00 - Bob Reviewer (reviewer2) assigned by Jane Developer (developer)
-
-* 2011-04-22 14:33:00 - added label 'ghqc' by Jane Developer (developer)
-
-* 2011-04-22 15:00:00 - commented by Alice Reviewer (reviewer1)
-
-* 2011-04-22 16:15:00 - commented by Bob Reviewer (reviewer2)
-
-* 2011-04-23 09:00:00 - commented by Jane Developer (developer)
 
 
 
