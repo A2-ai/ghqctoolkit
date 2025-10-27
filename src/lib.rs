@@ -4,6 +4,7 @@ mod cache;
 mod comment;
 mod configuration;
 mod create;
+mod diffs;
 mod git;
 mod issue;
 mod qc_status;
