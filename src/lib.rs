@@ -26,6 +26,7 @@ pub use configuration::{
     setup_configuration,
 };
 pub use create::{QCIssue, RelevantFile};
+pub use diffs::{create_excel_diff, is_excel_file};
 pub use git::{
     AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitCommit, GitCommitAnalysis,
     GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,

@@ -10,10 +10,11 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
-    GitStatusOps, IssueThread, QCStatus, RelevantFile, compress, configuration_status,
-    create_labels_if_needed, determine_config_dir, fetch_milestone_issues, get_archive_content,
-    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
+    Configuration, DiskCache, GitCommand, GitFileOps, GitHubReader, GitHubWriter, GitInfo,
+    GitRepository, GitStatusOps, IssueThread, QCStatus, RelevantFile, compress,
+    configuration_status, create_labels_if_needed, determine_config_dir, fetch_milestone_issues,
+    get_archive_content, get_milestone_issue_information, get_repo_users, is_excel_file, record,
+    render, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -42,7 +43,7 @@ enum Commands {
         #[command(subcommand)]
         issue_command: IssueCommands,
     },
-    /// Milestone status commands
+    /// Milestone management commands
     Milestone {
         #[command(subcommand)]
         milestone_command: MilestoneCommands,
@@ -51,6 +52,11 @@ enum Commands {
     Configuration {
         #[command(subcommand)]
         configuration_command: ConfigurationCommands,
+    },
+    /// Excel file commands
+    Excel {
+        #[command(subcommand)]
+        excel_command: ExcelCommands,
     },
 }
 
@@ -212,6 +218,24 @@ enum ConfigurationCommands {
     },
     /// Status of the configuration repository
     Status,
+}
+
+#[derive(Subcommand)]
+enum ExcelCommands {
+    /// perform a diff on an excel file and save a colorized version locally
+    Diff {
+        /// what excel file to perform diff on
+        file: PathBuf,
+        /// what commit to compare from
+        #[arg(short, long)]
+        from: String,
+        /// what commit to compare to
+        #[arg(short, long)]
+        to: String,
+        /// where to save the resulting file. By default, `./ghqc/<file basename>_<from sha>...<to sha>.xlsx`
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[cfg(feature = "cli")]
@@ -690,7 +714,7 @@ async fn main() -> Result<()> {
                     }
                 };
 
-                let config_dir = determine_config_dir(cli.config_dir, &StdEnvProvider::default())?;
+                let config_dir = determine_config_dir(cli.config_dir, &env)?;
 
                 let git_action = GitCommand;
 
@@ -704,13 +728,80 @@ async fn main() -> Result<()> {
                 );
             }
             ConfigurationCommands::Status => {
-                let env = StdEnvProvider;
                 let config_dir = determine_config_dir(cli.config_dir, &env)?;
                 let mut configuration = Configuration::from_path(&config_dir);
                 configuration.load_checklists();
                 let git_info = GitInfo::from_path(&config_dir, &env).ok();
 
                 println!("{}", configuration_status(&configuration, &git_info))
+            }
+        },
+        Commands::Excel { excel_command } => match excel_command {
+            ExcelCommands::Diff {
+                file,
+                from,
+                to,
+                output,
+            } => {
+                use ghqctoolkit::create_excel_diff;
+
+                if !is_excel_file(&file) {
+                    bail!("File {} is not an excel file", file.display());
+                }
+
+                let git_info = GitInfo::from_path(&cli.directory, &env)?;
+                let commits = git_info.commits(&None)?;
+                if from.len() < 7 || to.len() < 7 {
+                    bail!(
+                        "From ({} characters) and to ({} characters) commits must be at least 7 characters long",
+                        from.len(),
+                        to.len()
+                    );
+                }
+
+                let Some(from_commit) = commits
+                    .iter()
+                    .find(|c| c.commit.to_string().starts_with(&from))
+                else {
+                    bail!("No commits found for from commit: {from}");
+                };
+
+                let Some(to_commit) = commits
+                    .iter()
+                    .find(|c| c.commit.to_string().starts_with(&to))
+                else {
+                    bail!("No commits found for to commit: {to}");
+                };
+
+                let output_path = match output {
+                    Some(o) => o,
+                    None => {
+                        let file_name = file
+                            .file_stem()
+                            .unwrap_or(file.as_os_str())
+                            .to_string_lossy();
+                        let from_str = &from_commit.commit.to_string()[..7];
+                        let to_str = &to_commit.commit.to_string()[..7];
+
+                        PathBuf::from("ghqc").join(format!("{file_name}_{from_str}..{to_str}.xlsx"))
+                    }
+                };
+
+                // Create output directory if it doesn't exist
+                if let Some(parent) = output_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+
+                // Create the Excel diff
+                create_excel_diff(
+                    &file,
+                    &from_commit.commit,
+                    &to_commit.commit,
+                    &git_info,
+                    &output_path,
+                )?;
+
+                println!("Excel diff created: {}", output_path.display());
             }
         },
     }
