@@ -12,8 +12,8 @@ use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
     GitStatusOps, IssueThread, QCStatus, RelevantFile, compress, configuration_status,
-    create_labels_if_needed, determine_config_dir, get_archive_content, get_repo_users, record,
-    setup_configuration,
+    create_labels_if_needed, determine_config_dir, fetch_milestone_issues, get_archive_content,
+    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
@@ -175,6 +175,10 @@ enum MilestoneCommands {
         /// File name to save the record pdf as. Will default to <repo>_<milestone names>.pdf
         #[arg(short, long)]
         record_path: Option<PathBuf>,
+
+        /// Only include tables and skip detailed issue content
+        #[arg(long)]
+        only_tables: bool,
     },
     /// Create an archive of files from milestones
     Archive {
@@ -494,9 +498,8 @@ async fn main() -> Result<()> {
                     milestones,
                     all_milestones,
                     record_path,
+                    only_tables,
                 } => {
-                    use ghqctoolkit::render;
-
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let configuration = Configuration::from_path(&config_dir);
 
@@ -504,53 +507,56 @@ async fn main() -> Result<()> {
 
                     let milestones_data = git_info.get_milestones().await?;
 
-                    let (selected_milestones, interactive_record_path) = match (
-                        milestones.is_empty(),
-                        all_milestones,
-                        record_path.is_none(),
-                    ) {
-                        (true, false, true) => {
-                            // Interactive mode - no milestones specified, not all_milestones, and no record_path
-                            prompt_milestone_record(&milestones_data)?
-                        }
-                        (true, true, _) => {
-                            // All milestones requested
-                            (milestones_data, None)
-                        }
-                        (false, false, _) => {
-                            // Specific milestones provided - filter by name
-                            let selected: Vec<Milestone> = milestones_data
-                                .into_iter()
-                                .filter(|m| milestones.contains(&m.title))
-                                .collect();
+                    let (selected_milestones, interactive_record_path, interactive_only_tables) =
+                        match (milestones.is_empty(), all_milestones, record_path.is_none()) {
+                            (true, false, true) => {
+                                // Interactive mode - no milestones specified, not all_milestones, and no record_path
+                                prompt_milestone_record(&milestones_data)?
+                            }
+                            (true, true, _) => {
+                                // All milestones requested
+                                (milestones_data, None, only_tables)
+                            }
+                            (false, false, _) => {
+                                // Specific milestones provided - filter by name
+                                let selected: Vec<Milestone> = milestones_data
+                                    .into_iter()
+                                    .filter(|m| milestones.contains(&m.title))
+                                    .collect();
 
-                            if selected.is_empty() {
+                                if selected.is_empty() {
+                                    bail!(
+                                        "No matching milestones found for: {}",
+                                        milestones.join(", ")
+                                    );
+                                }
+
+                                (selected, None, only_tables)
+                            }
+                            (false, true, _) => {
                                 bail!(
-                                    "No matching milestones found for: {}",
-                                    milestones.join(", ")
+                                    "Cannot specify both milestone names and --all-milestones flag"
                                 );
                             }
+                            (true, false, false) => {
+                                bail!(
+                                    "Cannot use interactive mode when record_path is specified. Please specify milestone names or use --all-milestones."
+                                );
+                            }
+                        };
 
-                            (selected, None)
-                        }
-                        (false, true, _) => {
-                            bail!("Cannot specify both milestone names and --all-milestones flag");
-                        }
-                        (true, false, false) => {
-                            bail!(
-                                "Cannot use interactive mode when record_path is specified. Please specify milestone names or use --all-milestones."
-                            );
-                        }
-                    };
+                    let issues = fetch_milestone_issues(&selected_milestones, &git_info).await?;
+                    let issue_information =
+                        get_milestone_issue_information(&issues, cache.as_ref(), &git_info).await?;
 
-                    let (milestone_names, record_str) = record(
+                    let record_str = record(
                         &selected_milestones,
+                        &issue_information,
                         &configuration,
                         &git_info,
-                        env,
-                        cache.as_ref(),
-                    )
-                    .await?;
+                        &env,
+                        interactive_only_tables,
+                    )?;
                     let final_record_path = interactive_record_path.or(record_path);
                     let record_path = if let Some(mut record_path) = final_record_path {
                         record_path.set_extension(".pdf");
@@ -559,7 +565,12 @@ async fn main() -> Result<()> {
                         PathBuf::from(format!(
                             "{}-{}.pdf",
                             git_info.repo(),
-                            milestone_names.join("-").replace(" ", "-")
+                            issues
+                                .keys()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join("-")
+                                .replace(" ", "-")
                         ))
                     };
 

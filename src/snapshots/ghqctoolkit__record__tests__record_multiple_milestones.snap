@@ -1,6 +1,6 @@
 ---
 source: src/record.rs
-expression: result.unwrap().1
+expression: result.unwrap()
 ---
 ---
 title: "QC Record: v1.0, v2.0"
@@ -72,10 +72,10 @@ Title & Description & Status & Issues\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
 \endlastfoot
 v1.0 & First release
-milestone & open & src/main.rs\textcolor{red}{U}\newline \newline src/test.rs\textcolor{red}{U}\\
+milestone & open & src/main.rs\newline \newline src/test.rs\\
 \addlinespace\addlinespace
 v2.0 & Second release
-milestone & open & src/config.rs\textcolor{red}{U}\\*
+milestone & open & src/config.rs\\*
 
 \end{longtable}
 
@@ -115,6 +115,7 @@ src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
 \newpage
 
 
+
 ## src/main.rs
 
 ### **Issue Information**
@@ -125,7 +126,7 @@ src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
 * **Created at:** 2011-04-22 15:33:48
 * **QCer:** NA
 * **QC Status:** Awaiting approval
-* **Test Checklist Summary:** 0/0 (100.0%)
+* **Test Checklist Summary:** 0/0 (100.0\%)
 * **Git Status:** Up to date
 * **Initial QC Commit:** abc123def456789012345678901234567890abcd
 * **Latest QC Commit:** abc123def456789012345678901234567890abcd
@@ -225,7 +226,7 @@ The changes are ready for final review.
 * **Created at:** 2011-04-22 13:33:48
 * **QCer:** NA
 * **QC Status:** Awaiting approval
-* **Test Checklist Summary:** 0/0 (100.0%)
+* **Test Checklist Summary:** 0/0 (100.0\%)
 * **Git Status:** Up to date
 * **Initial QC Commit:** def456789abc012345678901234567890123abcd
 * **Latest QC Commit:** def456789abc012345678901234567890123abcd
@@ -294,6 +295,7 @@ Ready for review!
 \newpage
 
 
+
 \newpage
 
 # v2.0
@@ -326,6 +328,7 @@ src/config.rs & Awaiting approval & Jane Developer & Alice Reviewer,\newline Bob
 \newpage
 
 
+
 ## src/config.rs
 
 ### **Issue Information**
@@ -336,7 +339,7 @@ src/config.rs & Awaiting approval & Jane Developer & Alice Reviewer,\newline Bob
 * **Created at:** 2011-04-22 14:33:48
 * **QCer:** Alice Reviewer (reviewer1), Bob Reviewer (reviewer2)
 * **QC Status:** Awaiting approval
-* **Test Checklist Summary:** 0/0 (100.0%)
+* **Test Checklist Summary:** 0/0 (100.0\%)
 * **Git Status:** Up to date
 * **Initial QC Commit:** 456def789abc012345678901234567890123cdef
 * **Latest QC Commit:** 456def789abc012345678901234567890123cdef

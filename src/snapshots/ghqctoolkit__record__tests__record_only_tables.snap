@@ -1,9 +1,9 @@
 ---
 source: src/record.rs
-expression: result.unwrap()
+expression: record_content
 ---
 ---
-title: "QC Record: v2.0"
+title: "QC Record: v1.0"
 subtitle: "Git repository: repo"
 
 author: "testuser"
@@ -71,8 +71,8 @@ Title & Description & Status & Issues\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{U} Unapproved Issue}\\
 \multicolumn{4}{l}{\rule{0pt}{1em}\textcolor{red}{C} Issue with unchecked items}\\
 \endlastfoot
-v2.0 & Second release
-milestone & open & src/test.rs\\*
+v1.0 & First release
+milestone & open & src/main.rs\newline \newline src/test.rs\\*
 
 \end{longtable}
 
@@ -80,7 +80,7 @@ milestone & open & src/test.rs\\*
 
 \newpage
 
-# v2.0
+# v1.0
 
 ## **Issue Summary**
 
@@ -103,75 +103,10 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 \endfoot
 \bottomrule
 \endlastfoot
-src/test.rs & Awaiting approval & The Octocat & NA & Bob Reviewer\\*
+src/main.rs & Awaiting approval & John Maintainer & NA & NA\\
+\addlinespace\addlinespace
+src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
 
 \end{longtable}
-
-\newpage
-
-
-
-## src/test.rs
-
-### **Issue Information**
-
-* **Issue Number:** 1
-* **Milestone:** `v2.0`
-* **Created by:** The Octocat (octocat)
-* **Created at:** 2011-04-22 13:33:48
-* **QCer:** NA
-* **QC Status:** Awaiting approval
-* **Test Checklist Summary:** 0/0 (100.0\%)
-* **Git Status:** Local changes
-* **Initial QC Commit:** def456789abc012345678901234567890123abcd
-* **Latest QC Commit:** def456789abc012345678901234567890123abcd
-* **Issue URL:** https://github.com/owner/repo/issues/1
-* **Issue state:** Closed
-
-* **Closed by:** Bob Reviewer (reviewer2)
-* **Closed at:** 
-
-### **Issue Body**
-
-Quality check issue for src/test.rs
-
-#### Metadata
-initial qc commit: def456789abc012345678901234567890123abcd
-git branch: main
-author: The Octocat <octocat@example.com>
-
-### **Comments**
-
-
-No comments found.
-
-
-### **Events**
-
-
-
-* 2011-04-18 09:00:00 - milestone set to 'v2.0' by John Maintainer (maintainer)
-
-* 2011-04-18 09:15:00 - Bob Reviewer (reviewer2) assigned by John Maintainer (maintainer)
-
-* 2011-04-19 12:00:00 - closed by Bob Reviewer (reviewer2)
-
-* 2011-04-19 16:00:00 - reopened by John Maintainer (maintainer)
-
-
-
-### **Detailed Timeline**
-
-
-
-* 2011-04-18 09:00:00 - milestone set to 'v2.0' by John Maintainer (maintainer)
-
-* 2011-04-18 09:15:00 - Bob Reviewer (reviewer2) assigned by John Maintainer (maintainer)
-
-* 2011-04-19 12:00:00 - closed by Bob Reviewer (reviewer2)
-
-* 2011-04-19 16:00:00 - reopened by John Maintainer (maintainer)
-
-
 
 \newpage

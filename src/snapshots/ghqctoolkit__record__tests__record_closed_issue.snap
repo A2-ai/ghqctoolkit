@@ -1,6 +1,6 @@
 ---
 source: src/record.rs
-expression: result.unwrap().1
+expression: result.unwrap()
 ---
 ---
 title: "QC Record: v1.0"
@@ -110,6 +110,7 @@ src/config.rs & Approval required & Jane Developer & Alice Reviewer,\newline Bob
 \newpage
 
 
+
 ## src/config.rs
 
 ### **Issue Information**
@@ -120,7 +121,7 @@ src/config.rs & Approval required & Jane Developer & Alice Reviewer,\newline Bob
 * **Created at:** 2011-04-22 14:33:48
 * **QCer:** Alice Reviewer (reviewer1), Bob Reviewer (reviewer2)
 * **QC Status:** Approval required
-* **Test Checklist Summary:** 0/0 (100.0%)
+* **Test Checklist Summary:** 0/0 (100.0\%)
 * **Git Status:** Up to date
 * **Initial QC Commit:** 456def789abc012345678901234567890123cdef
 * **Latest QC Commit:** 456def789abc012345678901234567890123cdef
