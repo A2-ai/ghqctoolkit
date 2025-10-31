@@ -776,6 +776,12 @@ async fn main() -> Result<()> {
                 let output_path = match output {
                     Some(o) => o,
                     None => {
+                        if !PathBuf::from("ghqc").is_dir() {
+                            std::fs::create_dir("ghqc")?;
+                        }
+                        // ignore everything in the ghqc dir except for the .gitignore
+                        std::fs::write("ghqc/.gitignore", "*\n!.gitignore")?;
+
                         let file_name = file
                             .file_stem()
                             .unwrap_or(file.as_os_str())
