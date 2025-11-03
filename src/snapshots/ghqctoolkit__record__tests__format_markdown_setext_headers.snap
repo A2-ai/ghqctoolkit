@@ -1,0 +1,38 @@
+---
+source: src/record.rs
+expression: result
+---
+#### Original ATX H1
+
+Some content before setext headers.
+
+#### README – TMDD SimBiology Model
+
+Model Version: v1.0.0 (Initial QC Build)
+Last Updated: 2025-11-02
+
+#### Original ATX H2
+
+#### Some Subheading
+
+This line has some === equals === in it.
+And this line has some `---` dashes `---` in it.
+But not as underlines.
+
+#### Original ATX H3
+
+#### Another Setext H1
+
+#### Original ATX H4
+
+#### Final Setext H2
+
+Some content with === in the middle === of the line.
+Some content with `---` in the middle `---` of the line.
+
+``` diff
++ This is a diff block
+- With some changes
+```
+
+Regular content after everything.

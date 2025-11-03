@@ -704,15 +704,38 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
     let lines: Vec<&str> = markdown.lines().collect();
     let mut result = Vec::new();
     let mut in_diff_block = false;
+    let mut i = 0;
 
-    for line in lines {
+    while i < lines.len() {
+        let line = lines[i];
         let trimmed = line.trim_start();
 
         // Track if we're in a diff code block
         if trimmed.starts_with("```") {
             in_diff_block = trimmed.contains("diff");
             result.push(line.to_string());
+            i += 1;
             continue;
+        }
+
+        // Check for setext-style headers (header text followed by === or ---)
+        if i + 1 < lines.len() && !in_diff_block {
+            let next_line = lines[i + 1].trim();
+            if !next_line.is_empty() {
+                let is_h1_underline = next_line.chars().all(|c| c == '=') && next_line.len() >= 3;
+                let is_h2_underline = next_line.chars().all(|c| c == '-') && next_line.len() >= 3;
+
+                if is_h1_underline || is_h2_underline {
+                    // Convert setext header to ATX header
+                    let header_level = if is_h1_underline { 1 } else { 2 };
+                    let new_level = std::cmp::min(std::cmp::max(header_level, min_level), 6);
+                    let new_header = "#".repeat(new_level);
+                    let header_text = line.trim();
+                    result.push(format!("{} {}", new_header, header_text));
+                    i += 2; // Skip both the header line and the underline
+                    continue;
+                }
+            }
         }
 
         if trimmed.starts_with('#') {
@@ -734,6 +757,8 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
         } else {
             result.push(line.to_string());
         }
+
+        i += 1;
     }
 
     result
@@ -1700,5 +1725,52 @@ mod tests {
         assert!(record_content.contains("File Path & QC Status & Author & QCer & Issue Closer"));
 
         insta::assert_snapshot!("record_only_tables", record_content);
+    }
+
+    #[test]
+    fn test_format_markdown_with_min_level_comprehensive() {
+        // Test all header scenarios including setext, ATX, mixed content, and edge cases
+        let markdown = r#"# Original ATX H1
+
+Some content before setext headers.
+
+README – TMDD SimBiology Model
+================================
+
+Model Version: v1.0.0 (Initial QC Build)
+Last Updated: 2025-11-02
+
+## Original ATX H2
+
+Some Subheading
+---------------
+
+This line has some === equals === in it.
+And this line has some --- dashes --- in it.
+But not as underlines.
+
+### Original ATX H3
+
+Another Setext H1
+=================
+
+#### Original ATX H4
+
+Final Setext H2
+---------------
+
+Some content with === in the middle === of the line.
+Some content with --- in the middle --- of the line.
+
+```diff
++ This is a diff block
+- With some changes
+```
+
+Regular content after everything."#;
+
+        let result = format_markdown_with_min_level(markdown, 4);
+
+        insta::assert_snapshot!("format_markdown_setext_headers", result);
     }
 }
