@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
+use serde::{Deserialize, Serialize};
 
 use crate::git::GitHelpers;
 
@@ -35,9 +36,10 @@ impl QCApprove {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QCUnapprove {
-    pub(crate) issue: Issue,
-    pub(crate) reason: String,
+    pub issue: Issue,
+    pub reason: String,
 }
 
 impl QCUnapprove {
