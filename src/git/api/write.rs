@@ -3,9 +3,9 @@ use std::future::Future;
 use octocrab::models::Milestone;
 
 use super::GitHubApiError;
+use crate::QCIssue;
 use crate::comment_system::CommentBody;
 use crate::git::GitInfo;
-use crate::QCIssue;
 
 #[cfg(test)]
 use mockall::automock;
@@ -185,12 +185,7 @@ impl GitHubWriter for GitInfo {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
 
-            log::debug!(
-                "Closing issue #{} in {}/{}",
-                issue_number,
-                owner,
-                repo
-            );
+            log::debug!("Closing issue #{} in {}/{}", issue_number, owner, repo);
 
             let update_request = serde_json::json!({
                 "state": "closed"
@@ -228,12 +223,7 @@ impl GitHubWriter for GitInfo {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
 
-            log::debug!(
-                "Opening issue #{} in {}/{}",
-                issue_number,
-                owner,
-                repo
-            );
+            log::debug!("Opening issue #{} in {}/{}", issue_number, owner, repo);
 
             let update_request = serde_json::json!({
                 "state": "open"

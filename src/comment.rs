@@ -90,7 +90,6 @@ impl QCComment {
         // Use the shared diff utilities
         diff_utils::file_diff(from_bytes, to_bytes, &self.file)
     }
-
 }
 
 #[cfg(test)]

@@ -171,7 +171,8 @@ mod tests {
         );
 
         // Create a mock issue using existing test data
-        let json_str = std::fs::read_to_string("src/tests/github_api/issues/test_file_issue.json").unwrap();
+        let json_str =
+            std::fs::read_to_string("src/tests/github_api/issues/test_file_issue.json").unwrap();
         let mut issue: Issue = serde_json::from_str(&json_str).unwrap();
         // Customize the issue for our test
         issue.number = 123;

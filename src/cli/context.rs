@@ -5,8 +5,8 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Configuration, DiskCache, GitHubReader, GitHubWriter, GitInfo, GitRepository, QCApprove, QCIssue, QCReview, QCUnapprove,
-    RelevantFile, RepoUser,
+    Configuration, DiskCache, GitHubReader, GitHubWriter, GitInfo, GitRepository, QCApprove,
+    QCIssue, QCReview, QCUnapprove, RelevantFile, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
@@ -312,10 +312,9 @@ impl QCApprove {
 
         // Select single commit to approve with status annotations
         // Default to latest_commit if available, otherwise use position 0 (most recent file change)
-        let default_position = issue_thread.latest_commit()
-            .and_then(|latest| {
-                issue_thread.commits.iter().position(|c| c.hash == *latest)
-            })
+        let default_position = issue_thread
+            .latest_commit()
+            .and_then(|latest| issue_thread.commits.iter().position(|c| c.hash == *latest))
             .unwrap_or(0);
 
         let approved_commit = prompt_single_commit(
@@ -504,27 +503,31 @@ impl QCReview {
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
 
         if issue_thread.commits.is_empty() {
-            return Err(anyhow!("No commits found for file: {}", file_path.display()));
+            return Err(anyhow!(
+                "No commits found for file: {}",
+                file_path.display()
+            ));
         }
 
         // Robust fallback chain for finding default position:
         // 1. Try HEAD commit from repository
         // 2. Try latest_commit from issue thread
         // 3. Fall back to position 0 (most recent file commit)
-        let default_position = git_info.commit()
+        let default_position = git_info
+            .commit()
             .ok()
             .and_then(|head_str| {
                 // Find HEAD commit in the file's commit history
-                issue_thread.commits
+                issue_thread
+                    .commits
                     .iter()
                     .position(|c| c.hash.to_string().starts_with(&head_str[..8]))
             })
             .or_else(|| {
                 // Fallback to latest_commit from issue thread
-                issue_thread.latest_commit()
-                    .and_then(|latest| {
-                        issue_thread.commits.iter().position(|c| c.hash == *latest)
-                    })
+                issue_thread
+                    .latest_commit()
+                    .and_then(|latest| issue_thread.commits.iter().position(|c| c.hash == *latest))
             })
             .unwrap_or(0); // Final fallback to most recent file commit
 
@@ -584,19 +587,22 @@ impl QCReview {
         let final_commit = match commit {
             Some(commit_str) => {
                 // Try to find the commit in the file's history first
-                issue_thread.commits
+                issue_thread
+                    .commits
                     .iter()
                     .find(|c| c.hash.to_string().contains(&commit_str))
                     .map(|c| c.hash)
                     .unwrap_or_else(|| {
                         // If not found in file history, try to parse as ObjectId
                         use std::str::FromStr;
-                        gix::ObjectId::from_str(&commit_str)
-                            .unwrap_or_else(|_| {
-                                log::warn!("Could not parse commit '{}', using fallback logic", commit_str);
-                                // Use same fallback chain as interactive mode
-                                Self::get_default_commit(git_info, &issue_thread)
-                            })
+                        gix::ObjectId::from_str(&commit_str).unwrap_or_else(|_| {
+                            log::warn!(
+                                "Could not parse commit '{}', using fallback logic",
+                                commit_str
+                            );
+                            // Use same fallback chain as interactive mode
+                            Self::get_default_commit(git_info, &issue_thread)
+                        })
                     })
             }
             None => {

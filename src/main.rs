@@ -449,10 +449,21 @@ async fn main() -> Result<()> {
 
                     let review = match (milestone, file) {
                         (None, None) => {
-                            QCReview::from_interactive(milestones, cache.as_ref(), &git_info).await?
+                            QCReview::from_interactive(milestones, cache.as_ref(), &git_info)
+                                .await?
                         }
                         (Some(m), Some(f)) => {
-                            QCReview::from_args(m, f, commit, note, &milestones, cache.as_ref(), &git_info, no_diff).await?
+                            QCReview::from_args(
+                                m,
+                                f,
+                                commit,
+                                note,
+                                &milestones,
+                                cache.as_ref(),
+                                &git_info,
+                                no_diff,
+                            )
+                            .await?
                         }
                         _ => {
                             bail!(

@@ -5,7 +5,7 @@ use octocrab::models::issues::Issue;
 use serde::{Deserialize, Serialize};
 
 use crate::comment_system::CommentBody;
-use crate::git::{GitHelpers, GitFileOps};
+use crate::git::{GitFileOps, GitHelpers};
 
 pub struct QCApprove {
     pub file: PathBuf,
@@ -41,7 +41,6 @@ impl CommentBody for QCApprove {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QCUnapprove {
     pub issue: Issue,
@@ -68,12 +67,11 @@ impl CommentBody for QCUnapprove {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::comment_system::CommentBody;
-    use crate::git::{GitHelpers, GitFileOps, GitFileOpsError, GitAuthor, GitCommit};
+    use crate::git::{GitAuthor, GitCommit, GitFileOps, GitFileOpsError, GitHelpers};
     use std::path::Path;
 
     // Mock implementation for testing

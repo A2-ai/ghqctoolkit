@@ -1,7 +1,4 @@
-use std::{
-    io::Cursor,
-    path::Path,
-};
+use std::{io::Cursor, path::Path};
 
 use calamine::{Data, Reader, open_workbook_auto_from_rs};
 use diff::{Result as DiffResult, lines};

@@ -845,7 +845,11 @@ pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<Ob
 }
 
 /// Select a single commit from file commits - returns the selected commit
-pub fn prompt_single_commit(issue_thread: &IssueThread, prompt_text: &str, default_position: usize) -> Result<ObjectId> {
+pub fn prompt_single_commit(
+    issue_thread: &IssueThread,
+    prompt_text: &str,
+    default_position: usize,
+) -> Result<ObjectId> {
     if issue_thread.commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }

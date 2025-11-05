@@ -1,6 +1,6 @@
 use octocrab::models::issues::Issue;
 
-use crate::git::{GitHelpers, GitFileOps};
+use crate::git::{GitFileOps, GitHelpers};
 
 /// Trait for generating comment bodies for GitHub issues
 ///
