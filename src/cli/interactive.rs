@@ -845,7 +845,7 @@ pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<Ob
 }
 
 /// Select a single commit from file commits - returns the selected commit
-pub fn prompt_single_commit(issue_thread: &IssueThread, prompt_text: &str) -> Result<ObjectId> {
+pub fn prompt_single_commit(issue_thread: &IssueThread, prompt_text: &str, default_position: usize) -> Result<ObjectId> {
     if issue_thread.commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
@@ -863,7 +863,7 @@ pub fn prompt_single_commit(issue_thread: &IssueThread, prompt_text: &str) -> Re
 
     println!("{}", prompt_text);
     let commit_selection = Select::new("Pick commit:", commit_options)
-        .with_starting_cursor(0) // Default to latest commit
+        .with_starting_cursor(default_position.min(issue_thread.commits.len() - 1)) // Use provided default position, clamped to valid range
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 

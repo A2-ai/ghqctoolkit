@@ -15,7 +15,7 @@ use ghqctoolkit::{
     create_labels_if_needed, determine_config_dir, fetch_milestone_issues, get_archive_content,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
 };
-use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCUnapprove};
+use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -139,6 +139,28 @@ enum IssueCommands {
         /// Reason to re-open issue (will prompt if not provided)
         #[arg(short, long)]
         reason: Option<String>,
+    },
+    /// Review current working directory changes against a commit
+    Review {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path to review (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Commit to compare against (defaults to HEAD if not specified)
+        #[arg(short, long)]
+        commit: Option<String>,
+
+        /// Optional note to include in the review
+        #[arg(short, long)]
+        note: Option<String>,
+
+        /// Do not include diff between commit and working directory
+        #[arg(long)]
+        no_diff: bool,
     },
     /// detailed status of the ongoing qc issue
     Status {
@@ -369,7 +391,11 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    let approval_url = git_info.post_approval(&approval).await?;
+                    // Post the approval comment
+                    let approval_url = git_info.post_comment(&approval).await?;
+
+                    // Close the issue
+                    git_info.close_issue(approval.issue.number).await?;
 
                     println!("✅ Approval created and issue closed!");
                     println!("{}", approval_url);
@@ -402,10 +428,44 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    let unapproval_url = git_info.post_unapproval(&unapproval).await?;
+                    // Post the unapproval comment
+                    let unapproval_url = git_info.post_comment(&unapproval).await?;
+
+                    // Reopen the issue
+                    git_info.open_issue(unapproval.issue.number).await?;
 
                     println!("🚫 Issue unapproved and reopened!");
                     println!("{}", unapproval_url);
+                }
+                IssueCommands::Review {
+                    milestone,
+                    file,
+                    commit,
+                    note,
+                    no_diff,
+                } => {
+                    let milestones = git_info.get_milestones().await?;
+                    let cache = DiskCache::from_git_info(&git_info).ok();
+
+                    let review = match (milestone, file) {
+                        (None, None) => {
+                            QCReview::from_interactive(milestones, cache.as_ref(), &git_info).await?
+                        }
+                        (Some(m), Some(f)) => {
+                            QCReview::from_args(m, f, commit, note, &milestones, cache.as_ref(), &git_info, no_diff).await?
+                        }
+                        _ => {
+                            bail!(
+                                "Must provide both milestone and file arguments, or neither to enter interactive mode"
+                            )
+                        }
+                    };
+
+                    // Post the review comment
+                    let review_url = git_info.post_comment(&review).await?;
+
+                    println!("📝 Review comment created!");
+                    println!("{}", review_url);
                 }
                 IssueCommands::Status { milestone, file } => {
                     let milestones = git_info.get_milestones().await?;
