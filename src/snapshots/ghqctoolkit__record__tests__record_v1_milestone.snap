@@ -103,9 +103,9 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 \endfoot
 \bottomrule
 \endlastfoot
-src/main.rs & Awaiting approval & John Maintainer & NA & NA\\
+src/main.rs & Awaiting review & John Maintainer & NA & NA\\
 \addlinespace\addlinespace
-src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
+src/test.rs & Awaiting review & The Octocat & NA & NA\\*
 
 \end{longtable}
 
@@ -122,7 +122,7 @@ src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
 * **Created by:** John Maintainer (maintainer)
 * **Created at:** 2011-04-22 15:33:48
 * **QCer:** NA
-* **QC Status:** Awaiting approval
+* **QC Status:** Awaiting review
 * **Test Checklist Summary:** 0/0 (100.0\%)
 * **Git Status:** Up to date
 * **Initial QC Commit:** abc123def456789012345678901234567890abcd
@@ -184,7 +184,7 @@ No comments found.
 * **Created by:** The Octocat (octocat)
 * **Created at:** 2011-04-22 13:33:48
 * **QCer:** NA
-* **QC Status:** Awaiting approval
+* **QC Status:** Awaiting review
 * **Test Checklist Summary:** 0/0 (100.0\%)
 * **Git Status:** Up to date
 * **Initial QC Commit:** def456789abc012345678901234567890123abcd

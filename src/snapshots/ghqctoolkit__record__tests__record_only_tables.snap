@@ -103,9 +103,9 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 \endfoot
 \bottomrule
 \endlastfoot
-src/main.rs & Awaiting approval & John Maintainer & NA & NA\\
+src/main.rs & Awaiting review & John Maintainer & NA & NA\\
 \addlinespace\addlinespace
-src/test.rs & Awaiting approval & The Octocat & NA & NA\\*
+src/test.rs & Awaiting review & The Octocat & NA & NA\\*
 
 \end{longtable}
 

@@ -45,6 +45,7 @@ pub struct IssueCommit {
     pub message: String,
     pub state: CommitState,
     pub file_changed: bool,
+    pub reviewed: bool,
 }
 
 pub struct IssueThread {
@@ -82,7 +83,8 @@ impl IssueThread {
         let mut issue_thread_commits = parse_commits_from_comments(comments);
 
         // 4. Include the initial commit in the map
-        issue_thread_commits.insert(initial_commit_str, CommitState::Initial);
+        let existing_reviewed = issue_thread_commits.get(initial_commit_str).map_or(false, |(_, reviewed)| *reviewed);
+        issue_thread_commits.insert(initial_commit_str, (CommitState::Initial, existing_reviewed));
 
         // 5. Find first parseable ObjectId for robust commit retrieval
         let mut reference_commit = None;
@@ -108,21 +110,21 @@ impl IssueThread {
         // We want to iter rev to "look" from the bottom for the first qc notification to kick-off recording commits.
         // Typically the first qc notification will be initial, but flexible enough to accept any
         for commit in all_commits.into_iter().rev() {
-            let state = issue_thread_commits
+            let (state, reviewed) = issue_thread_commits
                 .iter()
-                .find_map(|(issue_commit_str, state)| {
+                .find_map(|(issue_commit_str, (state, reviewed))| {
                     let full_sha = commit.commit.to_string();
                     // Handle both exact matches and short SHA matches
                     if **issue_commit_str == full_sha
                         || (issue_commit_str.len() >= 7 && full_sha.starts_with(issue_commit_str))
                     {
                         qc_notif_found = true;
-                        Some(state.clone())
+                        Some((state.clone(), *reviewed))
                     } else {
                         None
                     }
                 })
-                .unwrap_or(CommitState::NoComment);
+                .unwrap_or((CommitState::NoComment, false));
             let file_changed = commit.files.contains(&file);
 
             if qc_notif_found {
@@ -134,6 +136,7 @@ impl IssueThread {
                         message: commit.message,
                         state,
                         file_changed,
+                        reviewed,
                     },
                 );
             }
@@ -162,22 +165,27 @@ impl IssueThread {
 
     pub fn latest_commit(&self) -> Option<&ObjectId> {
         // Find the latest commit with the highest priority state
-        // Priority: Approved > Notification > Initial > NoComment
-        let mut latest_approved = None;
-        let mut latest_notification = None;
-        let mut latest_initial = None;
+        // Priority: Approved > (Notification | Initial | NoComment with review) - with tie-break to most recent
+        let mut latest_commentable = None; // Notification, Initial, or NoComment with review
 
+        // Iterate in forward order (newest first) to find most recent commits first
         for commit in &self.commits {
             match commit.state {
-                CommitState::Approved => latest_approved = Some(&commit.hash),
-                CommitState::Notification => latest_notification = Some(&commit.hash),
-                CommitState::Initial => latest_initial = Some(&commit.hash),
-                CommitState::NoComment => {}
+                CommitState::Approved => return Some(&commit.hash), // Return immediately on first approved
+                CommitState::Notification | CommitState::Initial => {
+                    if latest_commentable.is_none() {
+                        latest_commentable = Some(&commit.hash); // Track first commentable we find
+                    }
+                }
+                CommitState::NoComment => {
+                    if commit.reviewed && latest_commentable.is_none() {
+                        latest_commentable = Some(&commit.hash); // Track first reviewed NoComment we find
+                    }
+                }
             }
         }
 
-        // Return based on priority
-        latest_approved.or(latest_notification).or(latest_initial)
+        latest_commentable
     }
 
     pub fn approved_commit(&self) -> Option<&IssueCommit> {
@@ -203,11 +211,11 @@ impl IssueThread {
 }
 
 /// Parse notification and approval commits from comment bodies
-/// Returns a HashMap of commit strings to their final states
+/// Returns a HashMap of commit strings to their final states and review status
 /// Approval is only invalidated if an unapproval occurs after approval
 fn parse_commits_from_comments<'a>(
     comments: &'a [GitComment],
-) -> std::collections::HashMap<&'a str, CommitState> {
+) -> std::collections::HashMap<&'a str, (CommitState, bool)> {
     let mut commit_states = std::collections::HashMap::new();
     let mut approved_commit = None;
     let mut approval_comment_index = None;
@@ -217,16 +225,26 @@ fn parse_commits_from_comments<'a>(
         // Check for notification commit: "current commit: {hash}"
         if let Some(commit) = parse_commit_from_pattern(&comment.body, "current commit: ") {
             // Only set to notification if not already approved (approvals "stick")
-            if !matches!(commit_states.get(commit), Some(CommitState::Approved)) {
-                commit_states.insert(commit, CommitState::Notification);
+            if !matches!(commit_states.get(commit), Some((CommitState::Approved, _))) {
+                let existing_reviewed = commit_states.get(commit).map_or(false, |(_, reviewed)| *reviewed);
+                commit_states.insert(commit, (CommitState::Notification, existing_reviewed));
             }
         }
 
         // Check for approval commit: "approved qc commit: {hash}"
         if let Some(commit) = parse_commit_from_pattern(&comment.body, "approved qc commit: ") {
-            commit_states.insert(commit, CommitState::Approved);
+            let existing_reviewed = commit_states.get(commit).map_or(false, |(_, reviewed)| *reviewed);
+            commit_states.insert(commit, (CommitState::Approved, existing_reviewed));
             approved_commit = Some(commit);
             approval_comment_index = Some(index);
+        }
+
+        // Check for review commit: "comparing commit: {hash}" in "# QC Review" comments
+        if comment.body.contains("# QC Review") {
+            if let Some(commit) = parse_commit_from_pattern(&comment.body, "comparing commit: ") {
+                let existing_state = commit_states.get(commit).map_or(CommitState::NoComment, |(state, _)| state.clone());
+                commit_states.insert(commit, (existing_state, true)); // First review wins - set reviewed to true
+            }
         }
 
         // Check for unapproval: "# QC Un-Approval"
@@ -236,7 +254,8 @@ fn parse_commits_from_comments<'a>(
                 if index > approval_index {
                     // Revert the approved commit back to notification state
                     if let Some(commit) = approved_commit {
-                        commit_states.insert(commit, CommitState::Notification);
+                        let existing_reviewed = commit_states.get(commit).map_or(false, |(_, reviewed)| *reviewed);
+                        commit_states.insert(commit, (CommitState::Notification, existing_reviewed));
                     }
                     approved_commit = None;
                     approval_comment_index = None;
@@ -844,11 +863,11 @@ mod tests {
         assert_eq!(commit_states.len(), 2);
         assert_eq!(
             commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&CommitState::Notification)
+            Some(&(CommitState::Notification, false))
         );
         assert_eq!(
             commit_states.get("def456789abc012345678901234567890123abcd"),
-            Some(&CommitState::Approved)
+            Some(&(CommitState::Approved, false))
         );
     }
 
@@ -873,11 +892,11 @@ mod tests {
         assert_eq!(commit_states.len(), 2);
         assert_eq!(
             commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&CommitState::Notification)
+            Some(&(CommitState::Notification, false))
         );
         assert_eq!(
             commit_states.get("def456789abc012345678901234567890123abcd"),
-            Some(&CommitState::Notification)
+            Some(&(CommitState::Notification, false))
         );
     }
 
@@ -907,12 +926,116 @@ mod tests {
         assert_eq!(commit_states.len(), 2);
         assert_eq!(
             commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&CommitState::Notification)
+            Some(&(CommitState::Notification, false))
         );
         assert_eq!(
             commit_states.get("def456789abc012345678901234567890123abcd"),
-            Some(&CommitState::Notification)
+            Some(&(CommitState::Notification, false))
         ); // Should be reverted to Notification
+    }
+
+    #[test]
+    fn test_parse_commits_from_comments_with_review() {
+        let comments = vec![
+            GitComment {
+                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: def456789abc012345678901234567890123abcd\n[file at commit](url)".to_string(),
+                author_login: "reviewer".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let commit_states = parse_commits_from_comments(&comments);
+
+        // Should have notification + review
+        assert_eq!(commit_states.len(), 2);
+        assert_eq!(
+            commit_states.get("abc123def456789012345678901234567890abcd"),
+            Some(&(CommitState::Notification, false))
+        );
+        assert_eq!(
+            commit_states.get("def456789abc012345678901234567890123abcd"),
+            Some(&(CommitState::NoComment, true)) // Review sets reviewed=true but keeps NoComment state
+        );
+    }
+
+    #[test]
+    fn test_parse_commits_from_comments_notification_then_review() {
+        let comments = vec![
+            GitComment {
+                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
+                author_login: "reviewer".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let commit_states = parse_commits_from_comments(&comments);
+
+        // Same commit has notification then review - should preserve notification state but add reviewed flag
+        assert_eq!(commit_states.len(), 1);
+        assert_eq!(
+            commit_states.get("abc123def456789012345678901234567890abcd"),
+            Some(&(CommitState::Notification, true)) // Notification state preserved, reviewed flag added
+        );
+    }
+
+    #[test]
+    fn test_parse_commits_from_comments_review_then_approval() {
+        let comments = vec![
+            GitComment {
+                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
+                author_login: "reviewer".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "approved qc commit: abc123def456789012345678901234567890abcd".to_string(),
+                author_login: "test-user".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let commit_states = parse_commits_from_comments(&comments);
+
+        // Review then approval - should be approved with reviewed flag preserved
+        assert_eq!(commit_states.len(), 1);
+        assert_eq!(
+            commit_states.get("abc123def456789012345678901234567890abcd"),
+            Some(&(CommitState::Approved, true)) // Approved state, reviewed flag preserved
+        );
+    }
+
+    #[test]
+    fn test_parse_commits_from_comments_multiple_reviews_same_commit() {
+        let comments = vec![
+            GitComment {
+                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
+                author_login: "reviewer1".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+            GitComment {
+                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
+                author_login: "reviewer2".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let commit_states = parse_commits_from_comments(&comments);
+
+        // Multiple reviews on same commit - first review wins (reviewed stays true)
+        assert_eq!(commit_states.len(), 1);
+        assert_eq!(
+            commit_states.get("abc123def456789012345678901234567890abcd"),
+            Some(&(CommitState::NoComment, true)) // First review sets reviewed=true, subsequent reviews don't change it
+        );
     }
 
     #[test]

@@ -14,8 +14,12 @@ static CHECKLIST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 pub enum QCStatus {
     Approved,
     ChangesAfterApproval(ObjectId),
+    // closed without approval
     ApprovalRequired,
-    AwaitingApproval,
+    // latest comment = latest commit
+    AwaitingReview,
+    // latest comment = latest commit, but reviewed
+    ChangeRequested,
     InProgress,
     ChangesToComment(ObjectId),
 }
@@ -25,9 +29,10 @@ impl std::fmt::Display for QCStatus {
         let status_text = match self {
             QCStatus::Approved => "Approved",
             QCStatus::ChangesAfterApproval(_) => "Approved; subsequent file changes",
-            QCStatus::AwaitingApproval => "Awaiting approval",
+            QCStatus::AwaitingReview => "Awaiting review",
             QCStatus::InProgress => "In progress",
             QCStatus::ApprovalRequired => "Approval required",
+            QCStatus::ChangeRequested => "Changes requested",
             QCStatus::ChangesToComment(_) => "Changes to comment",
         };
         write!(f, "{}", status_text)
@@ -69,7 +74,12 @@ impl QCStatus {
                     Some(latest_commit) => {
                         if let Some(latest_issue_commit) = issue_thread.latest_commit() {
                             if latest_commit.hash == *latest_issue_commit {
-                                Self::AwaitingApproval
+                                // Check if the latest commit has been reviewed
+                                if latest_commit.reviewed {
+                                    Self::ChangeRequested
+                                } else {
+                                    Self::AwaitingReview
+                                }
                             } else {
                                 Self::ChangesToComment(latest_commit.hash)
                             }
@@ -289,5 +299,131 @@ mod tests {
         let issue: Issue = serde_json::from_str(issue_json).unwrap();
         let result = analyze_issue_checklists(&issue);
         insta::assert_debug_snapshot!(result);
+    }
+
+
+    #[test]
+    fn test_change_requested_status_matrix() {
+        use crate::issue::{CommitState, IssueCommit, IssueThread};
+        use gix::ObjectId;
+        use std::path::PathBuf;
+        use std::str::FromStr;
+
+        let test_cases = vec![
+            // (scenario_name, commits: [(state, file_changed, reviewed)], issue_open, expected_status)
+            (
+                "I/R -> C: AwaitingReview",
+                vec![
+                    (CommitState::Initial, true, false),
+                    (CommitState::Notification, true, false),
+                ],
+                true,
+                "AwaitingReview",
+            ),
+            (
+                "I/R -> C/R: ChangeRequested",
+                vec![
+                    (CommitState::Initial, true, false),
+                    (CommitState::Notification, true, true),
+                ],
+                true,
+                "ChangeRequested",
+            ),
+            (
+                "I/R -> R: ChangeRequested",
+                vec![
+                    (CommitState::Initial, true, true),
+                ],
+                true,
+                "ChangeRequested",
+            ),
+            (
+                "I/R -> R -> C: AwaitingReview",
+                vec![
+                    (CommitState::Initial, true, false),
+                    (CommitState::NoComment, false, true), // reviewed but no file change
+                    (CommitState::Notification, true, false), // new notification with file change
+                ],
+                true,
+                "AwaitingReview",
+            ),
+            (
+                "I/R -> A/R: Approved",
+                vec![
+                    (CommitState::Initial, true, false),
+                    (CommitState::Approved, true, true),
+                ],
+                true,
+                "Approved",
+            ),
+            (
+                "I/R -> A -> R: ChangesAfterApproval",
+                vec![
+                    (CommitState::Initial, true, false),
+                    (CommitState::Approved, true, false),
+                    (CommitState::NoComment, true, false), // file change after approval
+                ],
+                true,
+                "ChangesAfterApproval",
+            ),
+            (
+                "I/R -> C -> N: ChangesToComment",
+                vec![
+                    (CommitState::Initial, true, false),
+                    (CommitState::Notification, true, false), // latest comment
+                    (CommitState::NoComment, true, false), // new file changes, not commented or reviewed
+                ],
+                true,
+                "ChangesToComment",
+            ),
+            (
+                "Closed without approval: ApprovalRequired",
+                vec![
+                    (CommitState::Initial, true, false),
+                    (CommitState::Notification, true, true),
+                ],
+                false, // issue closed
+                "ApprovalRequired",
+            ),
+        ];
+
+        for (scenario, commit_data, issue_open, expected_status) in test_cases {
+            let commits: Vec<IssueCommit> = commit_data
+                .into_iter()
+                .enumerate()
+                .map(|(i, (state, file_changed, reviewed))| IssueCommit {
+                    hash: ObjectId::from_str(&format!("{:040x}", i + 1)).unwrap(),
+                    message: format!("Commit {}", i + 1),
+                    state,
+                    file_changed,
+                    reviewed,
+                })
+                .rev() // Reverse to match real implementation: newest commits first
+                .collect();
+
+            let issue_thread = IssueThread {
+                file: PathBuf::from("test.rs"),
+                branch: "main".to_string(),
+                open: issue_open,
+                commits,
+            };
+
+            let status = QCStatus::determine_status(&issue_thread).unwrap();
+            let actual_status = match status {
+                QCStatus::Approved => "Approved",
+                QCStatus::ChangesAfterApproval(_) => "ChangesAfterApproval",
+                QCStatus::AwaitingReview => "AwaitingReview",
+                QCStatus::ChangeRequested => "ChangeRequested",
+                QCStatus::InProgress => "InProgress",
+                QCStatus::ApprovalRequired => "ApprovalRequired",
+                QCStatus::ChangesToComment(_) => "ChangesToComment",
+            };
+
+            assert_eq!(
+                actual_status, expected_status,
+                "Failed for scenario: {}. Expected {}, got {}",
+                scenario, expected_status, actual_status
+            );
+        }
     }
 }
