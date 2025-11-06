@@ -83,8 +83,13 @@ impl IssueThread {
         let mut issue_thread_commits = parse_commits_from_comments(comments);
 
         // 4. Include the initial commit in the map
-        let existing_reviewed = issue_thread_commits.get(initial_commit_str).map_or(false, |(_, reviewed)| *reviewed);
-        issue_thread_commits.insert(initial_commit_str, (CommitState::Initial, existing_reviewed));
+        let existing_reviewed = issue_thread_commits
+            .get(initial_commit_str)
+            .map_or(false, |(_, reviewed)| *reviewed);
+        issue_thread_commits.insert(
+            initial_commit_str,
+            (CommitState::Initial, existing_reviewed),
+        );
 
         // 5. Find first parseable ObjectId for robust commit retrieval
         let mut reference_commit = None;
@@ -226,14 +231,18 @@ fn parse_commits_from_comments<'a>(
         if let Some(commit) = parse_commit_from_pattern(&comment.body, "current commit: ") {
             // Only set to notification if not already approved (approvals "stick")
             if !matches!(commit_states.get(commit), Some((CommitState::Approved, _))) {
-                let existing_reviewed = commit_states.get(commit).map_or(false, |(_, reviewed)| *reviewed);
+                let existing_reviewed = commit_states
+                    .get(commit)
+                    .map_or(false, |(_, reviewed)| *reviewed);
                 commit_states.insert(commit, (CommitState::Notification, existing_reviewed));
             }
         }
 
         // Check for approval commit: "approved qc commit: {hash}"
         if let Some(commit) = parse_commit_from_pattern(&comment.body, "approved qc commit: ") {
-            let existing_reviewed = commit_states.get(commit).map_or(false, |(_, reviewed)| *reviewed);
+            let existing_reviewed = commit_states
+                .get(commit)
+                .map_or(false, |(_, reviewed)| *reviewed);
             commit_states.insert(commit, (CommitState::Approved, existing_reviewed));
             approved_commit = Some(commit);
             approval_comment_index = Some(index);
@@ -242,7 +251,9 @@ fn parse_commits_from_comments<'a>(
         // Check for review commit: "comparing commit: {hash}" in "# QC Review" comments
         if comment.body.contains("# QC Review") {
             if let Some(commit) = parse_commit_from_pattern(&comment.body, "comparing commit: ") {
-                let existing_state = commit_states.get(commit).map_or(CommitState::NoComment, |(state, _)| state.clone());
+                let existing_state = commit_states
+                    .get(commit)
+                    .map_or(CommitState::NoComment, |(state, _)| state.clone());
                 commit_states.insert(commit, (existing_state, true)); // First review wins - set reviewed to true
             }
         }
@@ -254,8 +265,11 @@ fn parse_commits_from_comments<'a>(
                 if index > approval_index {
                     // Revert the approved commit back to notification state
                     if let Some(commit) = approved_commit {
-                        let existing_reviewed = commit_states.get(commit).map_or(false, |(_, reviewed)| *reviewed);
-                        commit_states.insert(commit, (CommitState::Notification, existing_reviewed));
+                        let existing_reviewed = commit_states
+                            .get(commit)
+                            .map_or(false, |(_, reviewed)| *reviewed);
+                        commit_states
+                            .insert(commit, (CommitState::Notification, existing_reviewed));
                     }
                     approved_commit = None;
                     approval_comment_index = None;

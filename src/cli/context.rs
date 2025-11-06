@@ -120,7 +120,6 @@ impl QCIssue {
         }
         println!();
 
-
         // Create the QCIssue
         let issue = QCIssue::new(
             file,

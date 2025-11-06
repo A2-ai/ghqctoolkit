@@ -301,7 +301,6 @@ mod tests {
         insta::assert_debug_snapshot!(result);
     }
 
-
     #[test]
     fn test_change_requested_status_matrix() {
         use crate::issue::{CommitState, IssueCommit, IssueThread};
@@ -331,9 +330,7 @@ mod tests {
             ),
             (
                 "I/R -> R: ChangeRequested",
-                vec![
-                    (CommitState::Initial, true, true),
-                ],
+                vec![(CommitState::Initial, true, true)],
                 true,
                 "ChangeRequested",
             ),
