@@ -68,11 +68,15 @@ impl GitHubWriter for GitInfo {
                 owner,
                 repo
             );
-            let milestone_request = serde_json::json!({
+            let mut milestone_request = serde_json::json!({
                 "title": milestone_name,
                 "state": "open",
-                "description": description,
             });
+
+            // Only include description if it's Some
+            if let Some(desc) = &description {
+                milestone_request["description"] = serde_json::Value::String(desc.clone());
+            }
 
             let milestone: Milestone = octocrab
                 .post(

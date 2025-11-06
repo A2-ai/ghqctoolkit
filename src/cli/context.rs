@@ -120,8 +120,6 @@ impl QCIssue {
         }
         println!();
 
-        // Determine the milestone
-        let milestone = milestone_status.determine_milestone(git_info).await?;
 
         // Create the QCIssue
         let issue = QCIssue::new(
