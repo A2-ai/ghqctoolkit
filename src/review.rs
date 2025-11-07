@@ -187,7 +187,7 @@ mod tests {
             issue,
             commit,
             note: Some("Testing commit-to-local diff".to_string()),
-            no_diff: true, // Skip diff for this test
+            no_diff: true,                                // Skip diff for this test
             working_dir: PathBuf::from("/tmp/test-repo"), // Test working directory
         };
 
