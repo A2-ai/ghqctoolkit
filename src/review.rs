@@ -14,6 +14,7 @@ pub struct QCReview {
     pub commit: ObjectId, // Commit to compare against (defaults to HEAD)
     pub note: Option<String>,
     pub no_diff: bool,
+    pub working_dir: PathBuf, // Working directory path for reading local files
 }
 
 impl CommentBody for QCReview {
@@ -72,12 +73,14 @@ impl QCReview {
         };
 
         // Get file bytes from working directory
-        let local_bytes = match std::fs::read(&self.file) {
+        let working_file_path = self.working_dir.join(&self.file);
+        let local_bytes = match std::fs::read(&working_file_path) {
             Ok(bytes) => bytes,
             Err(e) => {
                 log::error!(
-                    "Failed to read file {:?} from working directory: {}",
+                    "Failed to read file {:?} from working directory (tried path: {:?}): {}",
                     self.file,
+                    working_file_path,
                     e
                 );
                 return None;
@@ -185,6 +188,7 @@ mod tests {
             commit,
             note: Some("Testing commit-to-local diff".to_string()),
             no_diff: true, // Skip diff for this test
+            working_dir: PathBuf::from("/tmp/test-repo"), // Test working directory
         };
 
         let body = review.generate_body(&git_info);

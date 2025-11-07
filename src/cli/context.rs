@@ -496,7 +496,7 @@ impl QCReview {
         // Extract file path from issue - we need to determine which file this issue is about
         let file_path = PathBuf::from(&issue.title);
 
-        // Create IssueThread to get commits from the issue's specific branch
+        // Create IssueThread to get QC-tracked commits for status/metadata
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
 
         if issue_thread.commits.is_empty() {
@@ -506,27 +506,38 @@ impl QCReview {
             ));
         }
 
-        // Robust fallback chain for finding default position:
-        // 1. Try HEAD commit from repository
-        // 2. Try latest_commit from issue thread
-        // 3. Fall back to position 0 (most recent file commit)
-        let default_position = git_info
-            .commit()
-            .ok()
-            .and_then(|head_str| {
-                // Find HEAD commit in the file's commit history
-                issue_thread
+        // Set default position to HEAD commit if it exists in the file's commit history
+        let default_position = match git_info.commit() {
+            Ok(head_str) => {
+                // Look for HEAD commit in the file's commit history
+                if let Some(head_position) = issue_thread
                     .commits
                     .iter()
                     .position(|c| c.hash.to_string().starts_with(&head_str[..8]))
-            })
-            .or_else(|| {
-                // Fallback to latest_commit from issue thread
-                issue_thread
-                    .latest_commit()
-                    .and_then(|latest| issue_thread.commits.iter().position(|c| c.hash == *latest))
-            })
-            .unwrap_or(0); // Final fallback to most recent file commit
+                {
+                    // HEAD is in file's commit history - use it as default selection
+                    head_position
+                } else {
+                    // HEAD is not in the file's commit history - this is an error
+                    return Err(anyhow!(
+                        "Cannot review: HEAD commit '{}' is not in the known git history for file '{}'.\n\
+                        \n\
+                        This means you're on a branch that doesn't affect this file, or the file \n\
+                        hasn't been modified in your current branch.\n\
+                        \n\
+                        You may need to:\n\
+                        1. Switch to the correct branch for this file\n\
+                        2. Ensure this file has been modified in a tracked commit\n\
+                        3. Check that you're in the right repository",
+                        &head_str[..8],
+                        file_path.display()
+                    ));
+                }
+            }
+            Err(_) => {
+                return Err(anyhow!("Could not determine HEAD commit from repository"));
+            }
+        };
 
         let commit_hash = prompt_single_commit(
             &issue_thread,
@@ -559,6 +570,7 @@ impl QCReview {
             commit: commit_hash,
             note,
             no_diff,
+            working_dir: git_info.repository_path.clone(),
         })
     }
 
@@ -614,6 +626,7 @@ impl QCReview {
             commit: final_commit,
             note,
             no_diff,
+            working_dir: git_info.repository_path.clone(),
         })
     }
 

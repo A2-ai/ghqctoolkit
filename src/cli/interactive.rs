@@ -855,6 +855,7 @@ pub fn prompt_single_commit(
     }
 
     if issue_thread.commits.len() == 1 {
+        log::info!("Only one commit found for this file. Selecting the commit...");
         return Ok(issue_thread.commits[0].hash);
     }
 
