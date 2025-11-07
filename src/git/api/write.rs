@@ -3,8 +3,9 @@ use std::future::Future;
 use octocrab::models::Milestone;
 
 use super::GitHubApiError;
+use crate::QCIssue;
+use crate::comment_system::CommentBody;
 use crate::git::GitInfo;
-use crate::{QCApprove, QCComment, QCIssue, QCUnapprove};
 
 #[cfg(test)]
 use mockall::automock;
@@ -20,18 +21,24 @@ pub trait GitHubWriter {
         &self,
         issue: &QCIssue,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
-    fn post_comment(
+
+    // Unified comment posting system
+    fn post_comment<T: CommentBody + 'static>(
         &self,
-        comment: &QCComment,
+        comment: &T,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
-    fn post_approval(
+
+    // Explicit issue state management
+    fn close_issue(
         &self,
-        approval: &QCApprove,
-    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
-    fn post_unapproval(
+        issue_number: u64,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
+
+    fn open_issue(
         &self,
-        unapproval: &QCUnapprove,
-    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
+        issue_number: u64,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
+
     fn create_label(
         &self,
         name: &str,
@@ -61,11 +68,15 @@ impl GitHubWriter for GitInfo {
                 owner,
                 repo
             );
-            let milestone_request = serde_json::json!({
+            let mut milestone_request = serde_json::json!({
                 "title": milestone_name,
                 "state": "open",
-                "description": description,
             });
+
+            // Only include description if it's Some
+            if let Some(desc) = &description {
+                milestone_request["description"] = serde_json::Value::String(desc.clone());
+            }
 
             let milestone: Milestone = octocrab
                 .post(
@@ -125,14 +136,14 @@ impl GitHubWriter for GitInfo {
         }
     }
 
-    fn post_comment(
+    fn post_comment<T: CommentBody>(
         &self,
-        comment: &QCComment,
+        comment: &T,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        let issue_number = comment.issue.number;
-        let body = comment.body(self);
+        let issue_number = comment.issue().number;
+        let body = comment.generate_body(self);
         let base_url = self.base_url.clone();
         let auth_token = self.auth_token.clone();
 
@@ -165,43 +176,21 @@ impl GitHubWriter for GitInfo {
         }
     }
 
-    fn post_approval(
+    fn close_issue(
         &self,
-        approval: &QCApprove,
-    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
+        issue_number: u64,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        let issue_number = approval.issue.number;
-        let body = approval.body(self);
         let base_url = self.base_url.clone();
         let auth_token = self.auth_token.clone();
 
         async move {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
-            log::debug!(
-                "Posting approval comment and closing issue #{} in {}/{}",
-                issue_number,
-                owner,
-                repo
-            );
 
-            // Post the comment first
-            let comment = octocrab
-                .issues(&owner, &repo)
-                .create_comment(issue_number, body)
-                .await
-                .map_err(GitHubApiError::APIError)?;
+            log::debug!("Closing issue #{} in {}/{}", issue_number, owner, repo);
 
-            log::debug!(
-                "Successfully posted approval comment {} to issue #{} in {}/{}",
-                comment.id,
-                issue_number,
-                owner,
-                repo
-            );
-
-            // Then close the issue
             let update_request = serde_json::json!({
                 "state": "closed"
             });
@@ -221,47 +210,25 @@ impl GitHubWriter for GitInfo {
                 repo
             );
 
-            Ok(comment.html_url.to_string())
+            Ok(())
         }
     }
 
-    fn post_unapproval(
+    fn open_issue(
         &self,
-        unapproval: &QCUnapprove,
-    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {
+        issue_number: u64,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        let issue_number = unapproval.issue.number;
-        let body = unapproval.body();
         let base_url = self.base_url.clone();
         let auth_token = self.auth_token.clone();
 
         async move {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
-            log::debug!(
-                "Posting unapproval comment and reopening issue #{} in {}/{}",
-                issue_number,
-                owner,
-                repo
-            );
 
-            // Post the comment first
-            let comment = octocrab
-                .issues(&owner, &repo)
-                .create_comment(issue_number, body)
-                .await
-                .map_err(GitHubApiError::APIError)?;
+            log::debug!("Opening issue #{} in {}/{}", issue_number, owner, repo);
 
-            log::debug!(
-                "Successfully posted unapproval comment {} to issue #{} in {}/{}",
-                comment.id,
-                issue_number,
-                owner,
-                repo
-            );
-
-            // Then reopen the issue
             let update_request = serde_json::json!({
                 "state": "open"
             });
@@ -275,13 +242,13 @@ impl GitHubWriter for GitInfo {
                 .map_err(GitHubApiError::APIError)?;
 
             log::debug!(
-                "Successfully reopened issue #{} in {}/{}",
+                "Successfully opened issue #{} in {}/{}",
                 issue_number,
                 owner,
                 repo
             );
 
-            Ok(comment.html_url.to_string())
+            Ok(())
         }
     }
 

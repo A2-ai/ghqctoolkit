@@ -103,7 +103,7 @@ File Path & QC Status & Author & QCer & Issue Closer\\
 \endfoot
 \bottomrule
 \endlastfoot
-src/test.rs & Awaiting approval & The Octocat & NA & Bob Reviewer\\*
+src/test.rs & Awaiting review & The Octocat & NA & Bob Reviewer\\*
 
 \end{longtable}
 
@@ -120,7 +120,7 @@ src/test.rs & Awaiting approval & The Octocat & NA & Bob Reviewer\\*
 * **Created by:** The Octocat (octocat)
 * **Created at:** 2011-04-22 13:33:48
 * **QCer:** NA
-* **QC Status:** Awaiting approval
+* **QC Status:** Awaiting review
 * **Test Checklist Summary:** 0/0 (100.0\%)
 * **Git Status:** Local changes
 * **Initial QC Commit:** def456789abc012345678901234567890123abcd

@@ -5,3 +5,7 @@ expression: body
 # QC Un-Approval
 
 Found critical security vulnerability that needs to be addressed.
+
+## Metadata
+* issue: #1
+* unapproval reason: Found critical security vulnerability that needs to be addressed.

@@ -80,7 +80,8 @@ pub fn single_issue_status(
         QCStatus::ChangesAfterApproval(_) => {
             format!("Approved. File has changed since approval")
         }
-        QCStatus::AwaitingApproval => format!("Awaiting approval. Latest commit notified"),
+        QCStatus::AwaitingReview => format!("Awaiting review. Latest commit notified"),
+        QCStatus::ChangeRequested => format!("Changes requested. Latest commit reviewed"),
         QCStatus::InProgress => format!("Awaiting approval"),
         QCStatus::ApprovalRequired => format!("Issue closed without approval"),
         QCStatus::ChangesToComment(commit) => format!(
