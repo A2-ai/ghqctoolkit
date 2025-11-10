@@ -34,7 +34,7 @@ header-includes:
   - \usepackage{listings}
   - \justifying
   - \sloppy
-  - \lstset{breaklines=true}
+  - \lstset{breaklines=true,breakatwhitespace=true,columns=flexible,basicstyle=\ttfamily\small,breakindent=20pt}
   - \usepackage{titlesec}
   - \titleformat{\paragraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
   - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
@@ -53,6 +53,7 @@ format:
     toc: true
     toc-depth: 2
     code-overflow: wrap
+    code-block-border-left: false
     fontsize: 12pt
 ---
 

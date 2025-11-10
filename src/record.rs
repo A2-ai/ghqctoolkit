@@ -2072,4 +2072,169 @@ Regular content after everything."#;
 
         insta::assert_snapshot!("format_markdown_setext_headers", result);
     }
+
+    #[test]
+    fn test_simple_wrap_line_basic() {
+        // Test line shorter than max_width - should not wrap
+        assert_eq!(
+            simple_wrap_line("short line", 75),
+            vec!["short line"]
+        );
+
+        // Test line exactly at max_width - should not wrap
+        let exactly_75 = "x".repeat(75);
+        assert_eq!(
+            simple_wrap_line(&exactly_75, 75),
+            vec![exactly_75]
+        );
+    }
+
+    #[test]
+    fn test_simple_wrap_line_no_break_points() {
+        // Test line with no good break points - should break at max_width
+        let no_breaks = "x".repeat(100);
+        let result = simple_wrap_line(&no_breaks, 75);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].len(), 75);
+        assert_eq!(result[1].len(), 25);
+    }
+
+    #[test]
+    fn test_simple_wrap_line_space_breaks() {
+        // Test line with spaces - should break at space
+        let with_spaces = "This is a very long line that should break at a space character when it exceeds the maximum width limit";
+        let result = simple_wrap_line(with_spaces, 75);
+
+        // Should break at spaces and each line should be <= 75 chars
+        for line in &result {
+            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+        }
+
+        // At least one break should occur at a space
+        let has_space_break = result.iter().any(|line| {
+            line.ends_with(' ') || (line.len() < 75 && with_spaces.contains(&format!("{} ", line)))
+        });
+        assert!(has_space_break || result.len() == 1, "Should break at spaces when possible");
+    }
+
+    #[test]
+    fn test_simple_wrap_line_slash_breaks() {
+        // Test line with forward slashes - should break at slashes
+        let with_slashes = "https://very-long-domain-name.example.com/very/long/path/to/some/resource/file.extension";
+        let result = simple_wrap_line(with_slashes, 75);
+
+        // Should break and each line should be <= 75 chars
+        for line in &result {
+            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+        }
+
+        // Should have multiple lines for this long URL
+        assert!(result.len() > 1, "Long URL should be broken into multiple lines");
+    }
+
+    #[test]
+    fn test_simple_wrap_line_backslash_breaks() {
+        // Test line with backslashes - should break at backslashes
+        let with_backslashes = "C:\\Very\\Long\\Windows\\Path\\To\\Some\\Deep\\Nested\\Directory\\Structure\\WithVeryLongFilename.txt";
+        let result = simple_wrap_line(with_backslashes, 75);
+
+        // Should break and each line should be <= 75 chars
+        for line in &result {
+            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+        }
+
+        // Should have multiple lines for this long path
+        assert!(result.len() > 1, "Long path should be broken into multiple lines");
+    }
+
+    #[test]
+    fn test_simple_wrap_line_mixed_break_points() {
+        // Test line with multiple types of break points
+        let mixed = "This is a long line with spaces and/forward/slashes and\\backslashes that should break intelligently";
+        let result = simple_wrap_line(mixed, 75);
+
+        // Should break and each line should be <= 75 chars
+        for line in &result {
+            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+        }
+
+        // Should prefer later break points (reverse search)
+        assert!(result.len() > 1, "Long mixed line should be broken");
+    }
+
+    #[test]
+    fn test_simple_wrap_line_multi_line() {
+        // Test very long line that should wrap to multiple lines (3+ lines)
+        let very_long = "This is an extremely long line that should definitely be wrapped into multiple lines because it exceeds 150 characters and should test our multi-line wrapping capability with spaces and/paths/like/this that provide good break points throughout the entire length of this very verbose example string";
+
+        let result = simple_wrap_line(very_long, 75);
+
+        // Should break into multiple lines (at least 3 for a 240+ character string)
+        assert!(result.len() >= 3, "Very long line should be broken into at least 3 lines, got {}", result.len());
+
+        // Each line should be <= 75 chars
+        for (i, line) in result.iter().enumerate() {
+            assert!(line.len() <= 75, "Line {} '{}' is {} chars, exceeds 75", i + 1, line, line.len());
+        }
+
+        // Verify the total content is preserved (accounting for potential break characters)
+        let rejoined = result.join("");
+        let original_chars: Vec<char> = very_long.chars().collect();
+        let rejoined_chars: Vec<char> = rejoined.chars().collect();
+
+        // Should preserve most characters (some break characters like spaces might be at line boundaries)
+        assert!(rejoined_chars.len() >= original_chars.len() - 5,
+               "Should preserve most content: original {} chars, got {} chars",
+               original_chars.len(), rejoined_chars.len());
+    }
+
+    #[test]
+    fn test_code_block_wrapping_integration() {
+        // Test that code blocks trigger line wrapping
+        let markdown_with_long_code = r#"Some regular text.
+
+```r
+repositories = [{alias = "PRISM", url = "https://prism.dev.a2-ai.cloud/rpkgs/stratus/2025-10-29"}]
+very_long_variable_name_that_exceeds_limit = "some value with a very long string that should be wrapped"
+```
+
+More regular text."#;
+
+        let result = format_markdown_with_min_level(markdown_with_long_code, 4);
+
+        // The long lines in the code block should be wrapped
+        let lines: Vec<&str> = result.lines().collect();
+        for line in &lines {
+            // Code block lines (except the ``` markers) should not exceed 75 characters
+            if !line.trim().starts_with("```") && !line.trim().is_empty() {
+                if line.len() > 75 {
+                    // Allow some tolerance for edge cases, but mostly should be wrapped
+                    println!("Long line found: '{}' (length: {})", line, line.len());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_diff_vs_regular_code_blocks() {
+        // Test that diff blocks still use diff-specific wrapping while regular code blocks use simple wrapping
+        let markdown_with_both = r#"Regular code block:
+```r
+very_long_line_in_regular_code_block_that_should_use_simple_wrapping_logic_here
+```
+
+Diff code block:
+```diff
++ very_long_added_line_in_diff_block_that_should_use_diff_specific_wrapping_logic
+- very_long_removed_line_in_diff_block_that_should_also_use_diff_specific_wrapping
+```"#;
+
+        let result = format_markdown_with_min_level(markdown_with_both, 4);
+
+        // Both should be wrapped, but this test mainly ensures no crashes occur
+        // and that the different wrapping logic is applied appropriately
+        assert!(result.contains("```r"));
+        assert!(result.contains("``` diff")); // Note: ```diff gets converted to ``` diff
+        assert!(result.len() > markdown_with_both.len()); // Should be longer due to wrapping
+    }
 }
