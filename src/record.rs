@@ -881,7 +881,6 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
     wrap_emojis(&joined)
 }
 
-
 /// Smart line wrapping - looks for good break points within ±5 chars of max_width, otherwise breaks at max_width
 fn simple_wrap_line(line: &str, max_width: usize) -> Vec<String> {
     if line.len() <= max_width {
@@ -2076,17 +2075,11 @@ Regular content after everything."#;
     #[test]
     fn test_simple_wrap_line_basic() {
         // Test line shorter than max_width - should not wrap
-        assert_eq!(
-            simple_wrap_line("short line", 75),
-            vec!["short line"]
-        );
+        assert_eq!(simple_wrap_line("short line", 75), vec!["short line"]);
 
         // Test line exactly at max_width - should not wrap
         let exactly_75 = "x".repeat(75);
-        assert_eq!(
-            simple_wrap_line(&exactly_75, 75),
-            vec![exactly_75]
-        );
+        assert_eq!(simple_wrap_line(&exactly_75, 75), vec![exactly_75]);
     }
 
     #[test]
@@ -2107,14 +2100,22 @@ Regular content after everything."#;
 
         // Should break at spaces and each line should be <= 75 chars
         for line in &result {
-            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+            assert!(
+                line.len() <= 75,
+                "Line '{}' is {} chars, exceeds 75",
+                line,
+                line.len()
+            );
         }
 
         // At least one break should occur at a space
         let has_space_break = result.iter().any(|line| {
             line.ends_with(' ') || (line.len() < 75 && with_spaces.contains(&format!("{} ", line)))
         });
-        assert!(has_space_break || result.len() == 1, "Should break at spaces when possible");
+        assert!(
+            has_space_break || result.len() == 1,
+            "Should break at spaces when possible"
+        );
     }
 
     #[test]
@@ -2125,11 +2126,19 @@ Regular content after everything."#;
 
         // Should break and each line should be <= 75 chars
         for line in &result {
-            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+            assert!(
+                line.len() <= 75,
+                "Line '{}' is {} chars, exceeds 75",
+                line,
+                line.len()
+            );
         }
 
         // Should have multiple lines for this long URL
-        assert!(result.len() > 1, "Long URL should be broken into multiple lines");
+        assert!(
+            result.len() > 1,
+            "Long URL should be broken into multiple lines"
+        );
     }
 
     #[test]
@@ -2140,11 +2149,19 @@ Regular content after everything."#;
 
         // Should break and each line should be <= 75 chars
         for line in &result {
-            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+            assert!(
+                line.len() <= 75,
+                "Line '{}' is {} chars, exceeds 75",
+                line,
+                line.len()
+            );
         }
 
         // Should have multiple lines for this long path
-        assert!(result.len() > 1, "Long path should be broken into multiple lines");
+        assert!(
+            result.len() > 1,
+            "Long path should be broken into multiple lines"
+        );
     }
 
     #[test]
@@ -2155,7 +2172,12 @@ Regular content after everything."#;
 
         // Should break and each line should be <= 75 chars
         for line in &result {
-            assert!(line.len() <= 75, "Line '{}' is {} chars, exceeds 75", line, line.len());
+            assert!(
+                line.len() <= 75,
+                "Line '{}' is {} chars, exceeds 75",
+                line,
+                line.len()
+            );
         }
 
         // Should prefer later break points (reverse search)
@@ -2170,11 +2192,21 @@ Regular content after everything."#;
         let result = simple_wrap_line(very_long, 75);
 
         // Should break into multiple lines (at least 3 for a 240+ character string)
-        assert!(result.len() >= 3, "Very long line should be broken into at least 3 lines, got {}", result.len());
+        assert!(
+            result.len() >= 3,
+            "Very long line should be broken into at least 3 lines, got {}",
+            result.len()
+        );
 
         // Each line should be <= 75 chars
         for (i, line) in result.iter().enumerate() {
-            assert!(line.len() <= 75, "Line {} '{}' is {} chars, exceeds 75", i + 1, line, line.len());
+            assert!(
+                line.len() <= 75,
+                "Line {} '{}' is {} chars, exceeds 75",
+                i + 1,
+                line,
+                line.len()
+            );
         }
 
         // Verify the total content is preserved (accounting for potential break characters)
@@ -2183,9 +2215,12 @@ Regular content after everything."#;
         let rejoined_chars: Vec<char> = rejoined.chars().collect();
 
         // Should preserve most characters (some break characters like spaces might be at line boundaries)
-        assert!(rejoined_chars.len() >= original_chars.len() - 5,
-               "Should preserve most content: original {} chars, got {} chars",
-               original_chars.len(), rejoined_chars.len());
+        assert!(
+            rejoined_chars.len() >= original_chars.len() - 5,
+            "Should preserve most content: original {} chars, got {} chars",
+            original_chars.len(),
+            rejoined_chars.len()
+        );
     }
 
     #[test]
