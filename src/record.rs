@@ -235,7 +235,8 @@ fn insert_breaks(text: &str, max_width: usize) -> String {
 /// them from being interpreted as LaTeX commands when they appear in user content,
 /// and wraps emoji characters with the \emoji{} command for proper rendering
 fn escape_latex(text: &str) -> String {
-    let escaped = text.replace('{', r"\{")
+    let escaped = text
+        .replace('{', r"\{")
         .replace('}', r"\}")
         .replace('\\', r"\textbackslash{}")
         .replace('$', r"\$")
@@ -337,10 +338,12 @@ fn is_emoji(ch: char) -> bool {
 /// Check if a character is an emoji modifier (like skin tone modifiers)
 fn is_emoji_modifier(ch: char) -> bool {
     let code = ch as u32;
-    matches!(code,
-        0x1F3FB..=0x1F3FF | // Skin tone modifiers
+    matches!(
+        code,
+        0x1F3FB
+            ..=0x1F3FF | // Skin tone modifiers
         0x200D |            // Zero Width Joiner
-        0xFE0F              // Variation Selector-16
+        0xFE0F // Variation Selector-16
     )
 }
 
@@ -859,7 +862,8 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
         i += 1;
     }
 
-    let joined = result.join("\n")
+    let joined = result
+        .join("\n")
         .replace("---", "`---`")
         .replace("```diff", "``` diff");
 
@@ -1866,7 +1870,10 @@ mod tests {
         assert_eq!(wrap_emojis("Hello 😀 world"), "Hello \\emoji{😀} world");
 
         // Test multiple emojis
-        assert_eq!(wrap_emojis("😀 🎯 ✅"), "\\emoji{😀} \\emoji{🎯} \\emoji{✅}");
+        assert_eq!(
+            wrap_emojis("😀 🎯 ✅"),
+            "\\emoji{😀} \\emoji{🎯} \\emoji{✅}"
+        );
 
         // Test emoji sequence
         assert_eq!(wrap_emojis("👨‍💻"), "\\emoji{👨‍💻}"); // Man technologist (composite emoji)
@@ -1875,7 +1882,10 @@ mod tests {
         assert_eq!(wrap_emojis("Hello world"), "Hello world");
 
         // Test mixed content
-        assert_eq!(wrap_emojis("Status: ✅ Complete! 🎉"), "Status: \\emoji{✅} Complete! \\emoji{🎉}");
+        assert_eq!(
+            wrap_emojis("Status: ✅ Complete! 🎉"),
+            "Status: \\emoji{✅} Complete! \\emoji{🎉}"
+        );
     }
 
     #[test]
@@ -1905,8 +1915,10 @@ Normal text with emoji \emoji{🎯}"#;
     #[test]
     fn test_wrap_emojis_inline_code() {
         // Test that emojis in inline code are not wrapped
-        let text_with_inline_code = "Use `echo \"Hello 🌍\"` to print emoji. But this 😀 should be wrapped.";
-        let expected = "Use `echo \"Hello 🌍\"` to print emoji. But this \\emoji{😀} should be wrapped.";
+        let text_with_inline_code =
+            "Use `echo \"Hello 🌍\"` to print emoji. But this 😀 should be wrapped.";
+        let expected =
+            "Use `echo \"Hello 🌍\"` to print emoji. But this \\emoji{😀} should be wrapped.";
 
         assert_eq!(wrap_emojis(text_with_inline_code), expected);
     }
@@ -1946,9 +1958,15 @@ Final emoji \emoji{🎯}."#;
     #[test]
     fn test_escape_latex_with_emojis() {
         // Test that escape_latex both escapes LaTeX chars and wraps emojis
-        assert_eq!(escape_latex("Hello & 😀 world!"), "Hello \\& \\emoji{😀} world!");
+        assert_eq!(
+            escape_latex("Hello & 😀 world!"),
+            "Hello \\& \\emoji{😀} world!"
+        );
         assert_eq!(escape_latex("Price: $5 💰"), "Price: \\$5 \\emoji{💰}");
-        assert_eq!(escape_latex("100% complete ✅"), "100\\% complete \\emoji{✅}");
+        assert_eq!(
+            escape_latex("100% complete ✅"),
+            "100\\% complete \\emoji{✅}"
+        );
     }
 
     #[test]
