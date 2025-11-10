@@ -800,20 +800,27 @@ fn format_comments(comments: &[GitComment], repo_users: &[RepoUser]) -> Vec<(Str
     formatted_comments
 }
 
-/// Translate markdown headers to ensure minimum level and wrap long diff lines
+/// Translate markdown headers to ensure minimum level and wrap long code lines
 fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
     let lines: Vec<&str> = markdown.lines().collect();
     let mut result = Vec::new();
     let mut in_diff_block = false;
+    let mut in_code_block = false;
     let mut i = 0;
 
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim_start();
 
-        // Track if we're in a diff code block
+        // Track if we're in a code block
         if trimmed.starts_with("```") {
-            in_diff_block = trimmed.contains("diff");
+            if trimmed.contains("diff") {
+                in_diff_block = !in_diff_block; // Toggle diff block state
+                in_code_block = in_diff_block; // Diff blocks are also code blocks
+            } else {
+                in_diff_block = false; // Not a diff block
+                in_code_block = !in_code_block; // Toggle regular code block state
+            }
             result.push(line.to_string());
             i += 1;
             continue;
@@ -853,8 +860,11 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
                 result.push(line.to_string());
             }
         } else if in_diff_block && (line.starts_with('+') || line.starts_with('-')) {
-            // Handle diff line wrapping for long lines
+            // Handle diff line wrapping for long lines with +/- markers
             result.extend(wrap_diff_line(line, 80));
+        } else if in_code_block && line.len() > 75 {
+            // We're in a code block - wrap long lines at 75 characters
+            result.extend(simple_wrap_line(line, 75));
         } else {
             result.push(line.to_string());
         }
@@ -869,6 +879,53 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
 
     // Wrap emojis in the final result
     wrap_emojis(&joined)
+}
+
+
+/// Smart line wrapping - looks for good break points within ±5 chars of max_width, otherwise breaks at max_width
+fn simple_wrap_line(line: &str, max_width: usize) -> Vec<String> {
+    if line.len() <= max_width {
+        return vec![line.to_string()];
+    }
+
+    let mut result = Vec::new();
+    let mut pos = 0;
+
+    while pos < line.len() {
+        let remaining = &line[pos..];
+
+        if remaining.len() <= max_width {
+            // Rest of line fits
+            result.push(remaining.to_string());
+            break;
+        }
+
+        // Look for good break points between (max_width - 5) and max_width
+        let search_start = (max_width.saturating_sub(10)).min(remaining.len());
+        let search_end = max_width.min(remaining.len());
+
+        let mut break_point = None;
+
+        if search_start < search_end {
+            let search_slice = &remaining[search_start..search_end];
+
+            // Look for space, backslash, or forward slash (in reverse order to get the latest one)
+            for (i, ch) in search_slice.char_indices().rev() {
+                if ch == ' ' || ch == '\\' || ch == '/' {
+                    break_point = Some(search_start + i + 1); // +1 to include the break character
+                    break;
+                }
+            }
+        }
+
+        // If no good break point found, break at max_width
+        let final_break = break_point.unwrap_or(max_width.min(remaining.len()));
+
+        result.push(remaining[..final_break].to_string());
+        pos += final_break;
+    }
+
+    result
 }
 
 /// Wrap a diff line if it's too long, preserving the diff marker
