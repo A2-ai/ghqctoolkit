@@ -230,11 +230,12 @@ fn insert_breaks(text: &str, max_width: usize) -> String {
     result
 }
 
-/// Escape LaTeX special characters in user-provided text
+/// Escape LaTeX special characters in user-provided text and wrap emojis
 /// This function escapes characters that have special meaning in LaTeX to prevent
-/// them from being interpreted as LaTeX commands when they appear in user content
+/// them from being interpreted as LaTeX commands when they appear in user content,
+/// and wraps emoji characters with the \emoji{} command for proper rendering
 fn escape_latex(text: &str) -> String {
-    text.replace('{', r"\{")
+    let escaped = text.replace('{', r"\{")
         .replace('}', r"\}")
         .replace('\\', r"\textbackslash{}")
         .replace('$', r"\$")
@@ -243,7 +244,101 @@ fn escape_latex(text: &str) -> String {
         .replace('#', r"\#")
         .replace('^', r"\textasciicircum{}")
         .replace('_', r"\_")
-        .replace('~', r"\textasciitilde{}")
+        .replace('~', r"\textasciitilde{}");
+
+    wrap_emojis(&escaped)
+}
+
+/// Wrap emoji characters with \emoji{} command for LaTeX rendering
+/// Skips emoji wrapping inside code blocks and verbatim environments
+fn wrap_emojis(text: &str) -> String {
+    let mut result = String::new();
+    let mut chars = text.chars().peekable();
+    let mut in_code_block = false;
+    let mut in_inline_code = false;
+
+    while let Some(ch) = chars.next() {
+        // Check for code block markers
+        if ch == '`' {
+            let mut backtick_count = 1;
+            let mut lookahead = chars.clone();
+
+            // Count consecutive backticks
+            while let Some(&next_ch) = lookahead.peek() {
+                if next_ch == '`' {
+                    backtick_count += 1;
+                    lookahead.next();
+                } else {
+                    break;
+                }
+            }
+
+            if backtick_count >= 3 {
+                // This is a code fence (```)
+                in_code_block = !in_code_block;
+                // Consume the additional backticks
+                for _ in 1..backtick_count {
+                    if chars.peek().is_some() && *chars.peek().unwrap() == '`' {
+                        result.push(chars.next().unwrap());
+                    }
+                }
+            } else if backtick_count == 1 && !in_code_block {
+                // This might be inline code
+                in_inline_code = !in_inline_code;
+            }
+        }
+
+        // Only wrap emojis if we're not in any kind of code block
+        if !in_code_block && !in_inline_code && is_emoji(ch) {
+            // Collect consecutive emoji characters
+            let mut emoji_sequence = String::new();
+            emoji_sequence.push(ch);
+
+            // Check for additional emoji characters or combining characters
+            while let Some(&next_ch) = chars.peek() {
+                if is_emoji(next_ch) || is_emoji_modifier(next_ch) {
+                    emoji_sequence.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+
+            result.push_str(&format!(r"\emoji{{{}}}", emoji_sequence));
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Check if a character is an emoji
+fn is_emoji(ch: char) -> bool {
+    let code = ch as u32;
+
+    // Common emoji ranges
+    matches!(code,
+        0x1F600..=0x1F64F | // Emoticons
+        0x1F300..=0x1F5FF | // Miscellaneous Symbols and Pictographs
+        0x1F680..=0x1F6FF | // Transport and Map
+        0x1F1E6..=0x1F1FF | // Regional Indicator Symbols
+        0x2600..=0x26FF |   // Miscellaneous Symbols
+        0x2700..=0x27BF |   // Dingbats
+        0x1F900..=0x1F9FF |  // Supplemental Symbols and Pictographs
+        0x1F018..=0x1F270 | // Various symbols
+        0x238C..=0x2454 |   // Miscellaneous Technical
+        0x20D0..=0x20FF     // Combining Diacritical Marks for Symbols
+    )
+}
+
+/// Check if a character is an emoji modifier (like skin tone modifiers)
+fn is_emoji_modifier(ch: char) -> bool {
+    let code = ch as u32;
+    matches!(code,
+        0x1F3FB..=0x1F3FF | // Skin tone modifiers
+        0x200D |            // Zero Width Joiner
+        0xFE0F              // Variation Selector-16
+    )
 }
 
 /// Tera function to render milestone table rows only
@@ -761,10 +856,12 @@ fn format_markdown_with_min_level(markdown: &str, min_level: usize) -> String {
         i += 1;
     }
 
-    result
-        .join("\n")
+    let joined = result.join("\n")
         .replace("---", "`---`")
-        .replace("```diff", "``` diff")
+        .replace("```diff", "``` diff");
+
+    // Wrap emojis in the final result
+    wrap_emojis(&joined)
 }
 
 /// Wrap a diff line if it's too long, preserving the diff marker

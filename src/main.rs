@@ -631,9 +631,15 @@ async fn main() -> Result<()> {
                     let final_record_path = interactive_record_path.or(record_path);
                     let record_path = if let Some(mut record_path) = final_record_path {
                         record_path.set_extension(".pdf");
-                        record_path
+                        // Make path relative to the directory argument
+                        if record_path.is_relative() {
+                            cli.directory.join(record_path)
+                        } else {
+                            record_path
+                        }
                     } else {
-                        PathBuf::from(format!(
+                        // Default record path in the directory argument location
+                        cli.directory.join(format!(
                             "{}-{}.pdf",
                             git_info.repo(),
                             issues
