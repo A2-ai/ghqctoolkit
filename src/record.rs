@@ -327,7 +327,10 @@ fn is_emoji(ch: char) -> bool {
         0x1F900..=0x1F9FF |  // Supplemental Symbols and Pictographs
         0x1F018..=0x1F270 | // Various symbols
         0x238C..=0x2454 |   // Miscellaneous Technical
-        0x20D0..=0x20FF     // Combining Diacritical Marks for Symbols
+        0x20D0..=0x20FF |   // Combining Diacritical Marks for Symbols
+        0x2B00..=0x2BFF |   // Miscellaneous Symbols and Arrows (includes ⭐)
+        0x3030 | 0x303D |  // Wavy dash, part alternation mark
+        0x3297 | 0x3299     // Ideographic circle symbols
     )
 }
 
@@ -1822,6 +1825,130 @@ mod tests {
         assert!(record_content.contains("File Path & QC Status & Author & QCer & Issue Closer"));
 
         insta::assert_snapshot!("record_only_tables", record_content);
+    }
+
+    #[test]
+    fn test_emoji_detection() {
+        // Test various emoji ranges
+        assert!(is_emoji('😀')); // Emoticons
+        assert!(is_emoji('🎯')); // Miscellaneous Symbols and Pictographs
+        assert!(is_emoji('🚀')); // Transport and Map
+        assert!(is_emoji('⭐')); // Miscellaneous Symbols
+        assert!(is_emoji('✅')); // Dingbats
+        assert!(is_emoji('🤖')); // Supplemental Symbols and Pictographs
+
+        // Test non-emojis
+        assert!(!is_emoji('A'));
+        assert!(!is_emoji('1'));
+        assert!(!is_emoji(' '));
+        assert!(!is_emoji('!'));
+    }
+
+    #[test]
+    fn test_emoji_modifier_detection() {
+        // Test skin tone modifiers
+        assert!(is_emoji_modifier('🏻')); // Light skin tone
+        assert!(is_emoji_modifier('🏽')); // Medium skin tone
+        assert!(is_emoji_modifier('🏿')); // Dark skin tone
+
+        // Test other modifiers
+        assert!(is_emoji_modifier('\u{200D}')); // Zero Width Joiner
+        assert!(is_emoji_modifier('\u{FE0F}')); // Variation Selector-16
+
+        // Test non-modifiers
+        assert!(!is_emoji_modifier('A'));
+        assert!(!is_emoji_modifier('😀'));
+    }
+
+    #[test]
+    fn test_wrap_emojis_basic() {
+        // Test single emoji
+        assert_eq!(wrap_emojis("Hello 😀 world"), "Hello \\emoji{😀} world");
+
+        // Test multiple emojis
+        assert_eq!(wrap_emojis("😀 🎯 ✅"), "\\emoji{😀} \\emoji{🎯} \\emoji{✅}");
+
+        // Test emoji sequence
+        assert_eq!(wrap_emojis("👨‍💻"), "\\emoji{👨‍💻}"); // Man technologist (composite emoji)
+
+        // Test no emojis
+        assert_eq!(wrap_emojis("Hello world"), "Hello world");
+
+        // Test mixed content
+        assert_eq!(wrap_emojis("Status: ✅ Complete! 🎉"), "Status: \\emoji{✅} Complete! \\emoji{🎉}");
+    }
+
+    #[test]
+    fn test_wrap_emojis_code_blocks() {
+        // Test that emojis in code fences are not wrapped
+        let markdown_with_code = r#"# Header 😀
+
+```bash
+echo "Hello 🌍 World!"
+ls -la 📁
+```
+
+Normal text with emoji 🎯"#;
+
+        let expected = r#"# Header \emoji{😀}
+
+```bash
+echo "Hello 🌍 World!"
+ls -la 📁
+```
+
+Normal text with emoji \emoji{🎯}"#;
+
+        assert_eq!(wrap_emojis(markdown_with_code), expected);
+    }
+
+    #[test]
+    fn test_wrap_emojis_inline_code() {
+        // Test that emojis in inline code are not wrapped
+        let text_with_inline_code = "Use `echo \"Hello 🌍\"` to print emoji. But this 😀 should be wrapped.";
+        let expected = "Use `echo \"Hello 🌍\"` to print emoji. But this \\emoji{😀} should be wrapped.";
+
+        assert_eq!(wrap_emojis(text_with_inline_code), expected);
+    }
+
+    #[test]
+    fn test_wrap_emojis_complex_code_blocks() {
+        // Test nested backticks and complex scenarios
+        let complex_markdown = r#"Text with 😀 emoji.
+
+```diff
++ Added emoji support 🎉
+- Old version without emojis
+```
+
+More text 🚀 here.
+
+`inline code with 📁 emoji`
+
+Final emoji 🎯."#;
+
+        let expected = r#"Text with \emoji{😀} emoji.
+
+```diff
++ Added emoji support 🎉
+- Old version without emojis
+```
+
+More text \emoji{🚀} here.
+
+`inline code with 📁 emoji`
+
+Final emoji \emoji{🎯}."#;
+
+        assert_eq!(wrap_emojis(complex_markdown), expected);
+    }
+
+    #[test]
+    fn test_escape_latex_with_emojis() {
+        // Test that escape_latex both escapes LaTeX chars and wraps emojis
+        assert_eq!(escape_latex("Hello & 😀 world!"), "Hello \\& \\emoji{😀} world!");
+        assert_eq!(escape_latex("Price: $5 💰"), "Price: \\$5 \\emoji{💰}");
+        assert_eq!(escape_latex("100% complete ✅"), "100\\% complete \\emoji{✅}");
     }
 
     #[test]

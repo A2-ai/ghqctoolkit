@@ -40,14 +40,20 @@ header-includes:
   - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
   - \titleformat{\subparagraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
   - \titlespacing*{\subparagraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
+  - \usepackage{fontspec}
+  - \defaultfontfeatures{Ligatures=TeX}
+  - \setmainfont{Times New Roman}
+  - "% Cross-platform emoji font fallback: Apple Color Emoji (macOS), Noto Color Emoji (Linux), Segoe UI Emoji (Windows), Times New Roman (fallback)"
+  - \IfFontExistsTF{Apple Color Emoji}{\newfontfamily\emojifont{Apple Color Emoji}[Renderer=HarfBuzz]}{\IfFontExistsTF{Noto Color Emoji}{\newfontfamily\emojifont{Noto Color Emoji}[Renderer=HarfBuzz]}{\IfFontExistsTF{Segoe UI Emoji}{\newfontfamily\emojifont{Segoe UI Emoji}[Renderer=HarfBuzz]}{\newfontfamily\emojifont{Times New Roman}}}}
+  - \DeclareRobustCommand{\emoji}[1]{{\emojifont{#1}}}
 
 format:
   pdf:
-    pdf-engine: xelatex
+    pdf-engine: lualatex
     toc: true
     toc-depth: 2
     code-overflow: wrap
-    mainfont: Times New Roman
+    fontsize: 12pt
 ---
 
 \newpage
@@ -173,9 +179,9 @@ Reviewed the critical changes in src/main.rs. The implementation looks good but 
 
 Thanks @reviewer1 for the feedback! I've addressed all the points:
 
-✅ Improved error handling with proper Result types
-✅ Added comprehensive unit tests
-✅ Updated documentation with examples
+\emoji{✅} Improved error handling with proper Result types
+\emoji{✅} Added comprehensive unit tests
+\emoji{✅} Updated documentation with examples
 
 The changes are ready for final review.
 
@@ -405,10 +411,10 @@ Thank you both @reviewer1 @reviewer2 for the thorough review!
 
 I've implemented all suggested improvements:
 
-✅ Enhanced error messages with detailed context
-✅ Added backward compatibility warnings
-✅ Expanded test suite with edge cases
-✅ Updated documentation with migration guide
+\emoji{✅} Enhanced error messages with detailed context
+\emoji{✅} Added backward compatibility warnings
+\emoji{✅} Expanded test suite with edge cases
+\emoji{✅} Updated documentation with migration guide
 
 The configuration system is now ready for production use.
 
