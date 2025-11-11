@@ -300,7 +300,10 @@ impl GitHubReader for GitInfo {
 
                 // Extract body
                 let body = match comment.get("body").and_then(|b| b.as_str()) {
-                    Some(body) => body.to_string(),
+                    Some(body) => {
+                        log::debug!("Comment body: {body}");
+                        body.to_string()
+                    }
                     None => {
                         error_count += 1;
                         if is_last_comment {

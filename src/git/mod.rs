@@ -104,4 +104,9 @@ impl GitInfo {
     pub fn repository(&self) -> Result<Repository, GitInfoError> {
         gix::open(&self.repository_path).map_err(GitInfoError::RepoOpen)
     }
+
+    /// Get the authentication token
+    pub fn auth_token(&self) -> &Option<String> {
+        &self.auth_token
+    }
 }
