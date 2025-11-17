@@ -49,7 +49,7 @@ pub struct IssueCommit {
 }
 
 pub struct IssueThread {
-    pub(crate) file: PathBuf,
+    pub file: PathBuf,
     pub branch: String,
     pub(crate) open: bool,
     pub commits: Vec<IssueCommit>,
