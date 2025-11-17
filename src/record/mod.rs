@@ -483,6 +483,7 @@ pub(crate) fn format_events(events: &[serde_json::Value], repo_users: &[RepoUser
             .map(|name| format!("{} ({})", name, actor_login))
             .unwrap_or_else(|| actor_login.to_string());
 
+
         let formatted_event = match event_type {
             "milestoned" => {
                 let milestone_title = event
@@ -502,6 +503,14 @@ pub(crate) fn format_events(events: &[serde_json::Value], repo_users: &[RepoUser
                     .and_then(|l| l.as_str())
                     .unwrap_or("Unknown user");
 
+                // Use assigner field instead of actor for assignments
+                let assigner_login = event
+                    .get("assigner")
+                    .and_then(|a| a.get("login"))
+                    .and_then(|l| l.as_str())
+                    .unwrap_or(actor_login); // Fallback to actor if assigner is not available
+
+
                 let assignee_display = repo_users
                     .iter()
                     .find(|user| user.login == assignee_login)
@@ -509,10 +518,21 @@ pub(crate) fn format_events(events: &[serde_json::Value], repo_users: &[RepoUser
                     .map(|name| format!("{} ({})", name, assignee_login))
                     .unwrap_or_else(|| assignee_login.to_string());
 
-                format!(
+                // Look up display name for assigner
+                let assigner_display = repo_users
+                    .iter()
+                    .find(|user| user.login == assigner_login)
+                    .and_then(|user| user.name.as_ref())
+                    .map(|name| format!("{} ({})", name, assigner_login))
+                    .unwrap_or_else(|| assigner_login.to_string());
+
+
+                let formatted_message = format!(
                     "{} - {} assigned by {}",
-                    created_at, assignee_display, actor_display
-                )
+                    created_at, assignee_display, assigner_display
+                );
+
+                formatted_message
             }
             "labeled" => {
                 let label_name = event
