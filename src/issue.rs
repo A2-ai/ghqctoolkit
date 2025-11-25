@@ -48,6 +48,7 @@ pub struct IssueCommit {
     pub reviewed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct IssueThread {
     pub file: PathBuf,
     pub branch: String,
@@ -294,7 +295,7 @@ fn parse_commit_from_pattern<'a>(body: &'a str, pattern: &str) -> Option<&'a str
 /// Parse branch name from issue body
 /// Only looks for the "git branch: <branch-name>" pattern
 /// Branch name can be plain text, markdown link text, or HTML link text
-fn parse_branch_from_body(body: &str) -> Option<String> {
+pub fn parse_branch_from_body(body: &str) -> Option<String> {
     let pattern = "git branch: ";
     let start = body.find(pattern)?;
     let branch_start = start + pattern.len();
