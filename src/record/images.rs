@@ -1,5 +1,6 @@
 use regex::Regex;
 use reqwest::{self, Client, StatusCode, Url};
+use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
@@ -7,37 +8,19 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-#[cfg(test)]
-use mockall::automock;
-
-/// Represents an image found in an issue with its text URL, HTML URL, and download path
-///
-/// This struct ensures one-to-one mapping between markdown text images and HTML images
-/// to handle GitHub's redirect system properly.
-#[derive(Debug, Clone)]
-pub struct IssueImage {
-    /// The URL as it appears in the markdown text
-    pub text: String,
-    /// The JWT-secured URL from the HTML (for downloading)
-    pub html: String,
-    /// The local path where the image should be downloaded
-    pub path: PathBuf,
-}
-
-// Compile-time regex patterns
+// Markdown image regex
 static MD_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("Invalid markdown image regex")
 });
 
+// HTML image regex - required for sorting of image urls in markdown text since `scraper` does not maintain exact content
 static HTML_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<img[^>]+src=["']([^"']+)["'][^>]*/?>"#).expect("Invalid HTML image regex")
 });
 
-static JWT_URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"https://private-user-images\.githubusercontent\.com/[^"'\s>]+\?jwt=[a-zA-Z0-9._-]+"#,
-    )
-    .expect("Invalid JWT URL regex")
+// Scraper selectors for HTML parsing
+static IMG_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("img").expect("Invalid img selector")
 });
 
 /// Trait for downloading images from URLs for PDF embedding
@@ -94,53 +77,21 @@ impl ImageDownloader for HttpImageDownloader {
     }
 }
 
-/// Extract image URLs from markdown content
+#[cfg(test)]
+use mockall::automock;
+
+/// Represents an image found in an issue with its text URL, HTML URL, and download path
 ///
-/// Supports both markdown image syntax and HTML img tags commonly used in GitHub issues:
-/// - `![alt text](url)`
-/// - `<img src="url" />`
-/// - `<img width="390" height="436" alt="Image" src="url" />`
-pub fn extract_image_urls(markdown: &str) -> Vec<String> {
-    let mut urls_with_positions = Vec::new();
-
-    // Extract markdown images: ![alt](url)
-    for captures in MD_IMG_REGEX.captures_iter(markdown) {
-        if let Some(url_match) = captures.get(2) {
-            urls_with_positions.push((url_match.start(), url_match.as_str().to_string()));
-        }
-    }
-
-    // Extract HTML img tags: <img ... src="url" ... />
-    for captures in HTML_IMG_REGEX.captures_iter(markdown) {
-        if let Some(url_match) = captures.get(1) {
-            urls_with_positions.push((url_match.start(), url_match.as_str().to_string()));
-        }
-    }
-
-    // Sort by position in the document to preserve order
-    urls_with_positions.sort_by_key(|(pos, _)| *pos);
-
-    // Extract just the URLs
-    urls_with_positions
-        .into_iter()
-        .map(|(_, url)| url)
-        .collect()
-}
-
-/// Extract JWT URLs from HTML content in order of appearance
-///
-/// GitHub HTML contains JWT URLs that correspond to markdown images by position,
-/// not by URL base since GitHub uses redirects (github.com/user-attachments -> private-user-images).
-pub fn extract_jwt_urls_from_html(html: &str) -> Vec<String> {
-    let mut jwt_urls = Vec::new();
-
-    // Find all JWT URLs in HTML img src attributes in order
-    for jwt_match in JWT_URL_REGEX.find_iter(html) {
-        jwt_urls.push(jwt_match.as_str().to_string());
-    }
-
-    log::debug!("Extracted {} JWT URLs from HTML", jwt_urls.len());
-    jwt_urls
+/// This struct ensures one-to-one mapping between markdown text images and HTML images
+/// to handle GitHub's redirect system properly.
+#[derive(Debug, Clone)]
+pub struct IssueImage {
+    /// The URL as it appears in the markdown text
+    pub text: String,
+    /// The JWT-secured URL from the HTML (for downloading)
+    pub html: String,
+    /// The local path where the image should be downloaded
+    pub path: PathBuf,
 }
 
 /// Create IssueImage structs from markdown text and HTML content
@@ -152,8 +103,8 @@ pub fn create_issue_images(
     html: Option<&str>,
     base_download_dir: &std::path::Path,
 ) -> Vec<IssueImage> {
-    let text_urls = extract_image_urls(markdown);
-    let jwt_urls = html.map(extract_jwt_urls_from_html).unwrap_or_default();
+    let text_urls = extract_image_urls_from_markdown(markdown);
+    let jwt_urls = html.map(extract_image_urls_from_html).unwrap_or_default();
 
     text_urls
         .into_iter()
@@ -192,28 +143,74 @@ pub fn create_issue_images(
         .collect()
 }
 
-/// Enhanced image URL extraction that prefers JWT URLs from HTML when available
+/// Extract image URLs from markdown content in order of appearance
 ///
-/// This function extracts URLs from markdown but replaces them with JWT versions
-/// from HTML by position since GitHub redirects make URL matching impossible.
-// pub fn extract_image_urls_with_jwt_preference(markdown: &str, jwt_urls: &[String]) -> Vec<String> {
-//     let base_urls = extract_image_urls(markdown);
+/// Supports both markdown image syntax and HTML img tags commonly used in GitHub issues:
+/// - `![alt text](url)`
+/// - `<img src="url" />`
+/// - `<img width="390" height="436" alt="Image" src="url" />`
+///
+/// Returns URLs in the order they appear in the text, including duplicates if they appear multiple times.
+pub fn extract_image_urls_from_markdown(markdown: &str) -> Vec<String> {
+    let mut urls_with_positions = Vec::new();
 
-//     base_urls
-//         .into_iter()
-//         .enumerate()
-//         .map(|(index, url)| {
-//             // Use JWT URL at same index if available
-//             if let Some(jwt_url) = jwt_urls.get(index) {
-//                 log::debug!("Replacing URL at index {} with JWT version", index);
-//                 jwt_url.clone()
-//             } else {
-//                 log::debug!("No JWT URL at index {} for: {}, using original", index, url);
-//                 url
-//             }
-//         })
-//         .collect()
-// }
+    // Extract markdown images: ![alt](url) - use regex since scraper doesn't parse markdown
+    for captures in MD_IMG_REGEX.captures_iter(markdown) {
+        if let Some(url_match) = captures.get(2) {
+            urls_with_positions.push((url_match.start(), url_match.as_str().to_string()));
+        }
+    }
+
+    // Extract HTML img tags using scraper and find their positions in the original text
+    let document = Html::parse_fragment(markdown);
+    for element in document.select(&IMG_SELECTOR) {
+        if let Some(src) = element.value().attr("src") {
+            // Find the position of this img tag in the original markdown
+            let img_html = element.html();
+            log::debug!("{img_html:#?}");
+            if let Some(pos) = markdown.find(&img_html) {
+                urls_with_positions.push((pos, src.to_string()));
+            } else {
+                // Fallback: try to find just the src attribute in the text
+                let src_pattern = format!("src=\"{}\"", src);
+                if let Some(pos) = markdown.find(&src_pattern) {
+                    urls_with_positions.push((pos, src.to_string()));
+                } else {
+                    // Last fallback: add at end to preserve at least the URL
+                    urls_with_positions.push((markdown.len(), src.to_string()));
+                }
+            }
+        }
+    }
+
+    // Sort by position in the document to preserve order (including duplicates)
+    urls_with_positions.sort_by_key(|(pos, _)| *pos);
+
+    // Extract just the URLs, preserving duplicates and order
+    urls_with_positions
+        .into_iter()
+        .map(|(_, url)| url)
+        .collect()
+}
+
+/// Extract image URLs from HTML content in order of appearance
+///
+/// GitHub HTML contains image URLs that correspond to markdown images by position,
+/// not by URL base since GitHub uses redirects (github.com/user-attachments -> private-user-images).
+pub fn extract_image_urls_from_html(html: &str) -> Vec<String> {
+    let mut image_urls = Vec::new();
+
+    // Parse HTML and extract all image URLs from img src attributes in document order
+    let document = Html::parse_document(html);
+    for element in document.select(&IMG_SELECTOR) {
+        if let Some(src) = element.value().attr("src") {
+            image_urls.push(src.to_string());
+        }
+    }
+
+    log::debug!("Extracted {} image URLs from HTML", image_urls.len());
+    image_urls
+}
 
 /// Replace image URLs in markdown with LaTeX includegraphics commands
 ///
@@ -250,7 +247,7 @@ pub fn replace_images_with_latex(
         })
         .to_string();
 
-    // Replace HTML img tags: <img src="url" /> -> \includegraphics[...]{path}
+    // Replace HTML img tags using regex: <img src="url" /> -> \includegraphics[...]{path}
     result = HTML_IMG_REGEX
         .replace_all(&result, |caps: &regex::Captures| {
             let url = caps.get(1).unwrap().as_str();
@@ -322,9 +319,14 @@ mod tests {
 
     #[test]
     fn test_regex_compilation() {
-        // Test that our LazyLock regexes compile correctly
+        // Test that our LazyLock regexes and selectors compile correctly
         assert!(MD_IMG_REGEX.is_match("![test](url)"));
         assert!(HTML_IMG_REGEX.is_match(r#"<img src="url" />"#));
+
+        // Test that the IMG_SELECTOR compiles correctly
+        let html = Html::parse_fragment(r#"<img src="test.jpg" />"#);
+        let elements: Vec<_> = html.select(&IMG_SELECTOR).collect();
+        assert_eq!(elements.len(), 1);
     }
 
     #[test]
@@ -337,7 +339,7 @@ Some text here.
 More text.
 "#;
 
-        let urls = extract_image_urls(markdown);
+        let urls = extract_image_urls_from_markdown(markdown);
         assert_eq!(urls.len(), 2);
         assert_eq!(urls[0], "https://example.com/image1.png");
         assert_eq!(urls[1], "https://example.com/image2.jpg");
@@ -353,7 +355,7 @@ Some text here.
 More text.
 "#;
 
-        let urls = extract_image_urls(markdown);
+        let urls = extract_image_urls_from_markdown(markdown);
         assert_eq!(urls.len(), 2);
         assert_eq!(
             urls[0],
@@ -370,7 +372,7 @@ More text.
 ![Another markdown](https://example.com/md2.gif)
 "#;
 
-        let urls = extract_image_urls(markdown);
+        let urls = extract_image_urls_from_markdown(markdown);
         assert_eq!(urls.len(), 3);
         assert_eq!(urls[0], "https://example.com/md.png");
         assert_eq!(urls[1], "https://example.com/html.jpg");
@@ -385,7 +387,7 @@ This is just text with no images.
 Some more text here.
 "#;
 
-        let urls = extract_image_urls(markdown);
+        let urls = extract_image_urls_from_markdown(markdown);
         assert_eq!(urls.len(), 0);
     }
 

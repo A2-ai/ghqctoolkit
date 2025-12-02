@@ -13,6 +13,7 @@ pub struct GitComment {
     pub body: String,
     pub author_login: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing)]
     pub(crate) html: Option<String>,
 }
 

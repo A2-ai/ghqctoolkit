@@ -200,7 +200,7 @@ pub async fn get_milestone_issue_information(
 /// Note: Issue HTML is handled separately since issues are fetched differently than comments.
 fn needs_html_for_jwt_urls(comments: &[GitComment]) -> bool {
     comments.iter().any(|comment| {
-        let has_images = !images::extract_image_urls(&comment.body).is_empty();
+        let has_images = !images::extract_image_urls_from_markdown(&comment.body).is_empty();
         let lacks_html = comment.html.is_none();
         let needs_refetch = has_images && lacks_html;
 
