@@ -1,16 +1,28 @@
 use regex::Regex;
-use reqwest::header::HeaderMap;
-use reqwest::redirect::Policy;
 use reqwest::{self, Client, StatusCode, Url};
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use super::RecordError;
-
 #[cfg(test)]
 use mockall::automock;
+
+/// Represents an image found in an issue with its text URL, HTML URL, and download path
+///
+/// This struct ensures one-to-one mapping between markdown text images and HTML images
+/// to handle GitHub's redirect system properly.
+#[derive(Debug, Clone)]
+pub struct IssueImage {
+    /// The URL as it appears in the markdown text
+    pub text: String,
+    /// The JWT-secured URL from the HTML (for downloading)
+    pub html: String,
+    /// The local path where the image should be downloaded
+    pub path: PathBuf,
+}
 
 // Compile-time regex patterns
 static MD_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -21,31 +33,65 @@ static HTML_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<img[^>]+src=["']([^"']+)["'][^>]*/?>"#).expect("Invalid HTML image regex")
 });
 
+static JWT_URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"https://private-user-images\.githubusercontent\.com/[^"'\s>]+\?jwt=[a-zA-Z0-9._-]+"#,
+    )
+    .expect("Invalid JWT URL regex")
+});
+
 /// Trait for downloading images from URLs for PDF embedding
 ///
 /// This trait provides a testable interface for downloading images
 /// while keeping the implementation details separate from the business logic.
 #[cfg_attr(test, automock)]
 pub trait ImageDownloader {
-    /// Download an image from the given URL and return the local file path
+    /// Download an IssueImage using its HTML URL to its specified path
     ///
     /// # Arguments
-    /// * `url` - The URL of the image to download
+    /// * `issue_image` - The IssueImage containing HTML URL and target path
     ///
     /// # Returns
-    /// * `Ok(PathBuf)` - Path to the downloaded image file
-    /// * `Err(RecordError)` - If download failed
-    fn download_image(
+    /// * `Ok(())` - If download succeeded
+    /// * `Err(DownloadError)` - If download failed
+    fn download_issue_image(
         &self,
-        url: &str,
-    ) -> impl Future<Output = Result<PathBuf, DownloadError>> + Send;
+        issue_image: &IssueImage,
+    ) -> impl Future<Output = Result<(), DownloadError>> + Send;
+}
 
-    /// Clean up all downloaded images
-    ///
-    /// # Returns
-    /// * `Ok(())` - If cleanup succeeded
-    /// * `Err(RecordError)` - If cleanup failed
-    fn cleanup_images(&self) -> Result<(), RecordError>;
+/// HTTP implementation of the ImageDownloader trait
+pub struct HttpImageDownloader;
+
+impl ImageDownloader for HttpImageDownloader {
+    fn download_issue_image(
+        &self,
+        issue_image: &IssueImage,
+    ) -> impl Future<Output = Result<(), DownloadError>> + Send {
+        let url = issue_image.html.clone();
+        let path = issue_image.path.clone();
+
+        async move {
+            // Ensure parent directory exists
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+
+            // Since JWT URLs already contain auth, we can download directly
+            let client = Client::builder().user_agent("ghqctoolkit/1.0").build()?;
+
+            log::debug!("Downloading {} to {}...", url, path.display());
+
+            let response = client.get(&url).send().await?.error_for_status()?;
+
+            let bytes = response.bytes().await?;
+
+            log::debug!("Writing {} bytes to {}", bytes.len(), path.display());
+            tokio::fs::write(&path, &bytes).await?;
+
+            Ok(())
+        }
+    }
 }
 
 /// Extract image URLs from markdown content
@@ -80,6 +126,94 @@ pub fn extract_image_urls(markdown: &str) -> Vec<String> {
         .map(|(_, url)| url)
         .collect()
 }
+
+/// Extract JWT URLs from HTML content in order of appearance
+///
+/// GitHub HTML contains JWT URLs that correspond to markdown images by position,
+/// not by URL base since GitHub uses redirects (github.com/user-attachments -> private-user-images).
+pub fn extract_jwt_urls_from_html(html: &str) -> Vec<String> {
+    let mut jwt_urls = Vec::new();
+
+    // Find all JWT URLs in HTML img src attributes in order
+    for jwt_match in JWT_URL_REGEX.find_iter(html) {
+        jwt_urls.push(jwt_match.as_str().to_string());
+    }
+
+    log::debug!("Extracted {} JWT URLs from HTML", jwt_urls.len());
+    jwt_urls
+}
+
+/// Create IssueImage structs from markdown text and HTML content
+///
+/// Maps markdown image URLs to HTML JWT URLs by position and generates download paths.
+/// This ensures one-to-one mapping between text images and HTML images.
+pub fn create_issue_images(
+    markdown: &str,
+    html: Option<&str>,
+    base_download_dir: &std::path::Path,
+) -> Vec<IssueImage> {
+    let text_urls = extract_image_urls(markdown);
+    let jwt_urls = html.map(extract_jwt_urls_from_html).unwrap_or_default();
+
+    text_urls
+        .into_iter()
+        .enumerate()
+        .map(|(index, text_url)| {
+            // Use JWT URL at same index if available, otherwise use text URL
+            let html_url = jwt_urls.get(index).cloned().unwrap_or_else(|| {
+                log::debug!(
+                    "No JWT URL at index {} for: {}, using text URL",
+                    index,
+                    text_url
+                );
+                text_url.clone()
+            });
+
+            // Generate a unique filename based on hash of text URL
+            let mut hasher = DefaultHasher::new();
+            text_url.hash(&mut hasher);
+            let hash = hasher.finish();
+            let filename = format!("image_{:x}.png", hash);
+            let path = base_download_dir.join(filename);
+
+            log::debug!(
+                "Created IssueImage: text={}, html={}, path={}",
+                text_url,
+                html_url,
+                path.display()
+            );
+
+            IssueImage {
+                text: text_url,
+                html: html_url,
+                path,
+            }
+        })
+        .collect()
+}
+
+/// Enhanced image URL extraction that prefers JWT URLs from HTML when available
+///
+/// This function extracts URLs from markdown but replaces them with JWT versions
+/// from HTML by position since GitHub redirects make URL matching impossible.
+// pub fn extract_image_urls_with_jwt_preference(markdown: &str, jwt_urls: &[String]) -> Vec<String> {
+//     let base_urls = extract_image_urls(markdown);
+
+//     base_urls
+//         .into_iter()
+//         .enumerate()
+//         .map(|(index, url)| {
+//             // Use JWT URL at same index if available
+//             if let Some(jwt_url) = jwt_urls.get(index) {
+//                 log::debug!("Replacing URL at index {} with JWT version", index);
+//                 jwt_url.clone()
+//             } else {
+//                 log::debug!("No JWT URL at index {} for: {}, using original", index, url);
+//                 url
+//             }
+//         })
+//         .collect()
+// }
 
 /// Replace image URLs in markdown with LaTeX includegraphics commands
 ///
@@ -137,30 +271,6 @@ pub fn replace_images_with_latex(
     result
 }
 
-/// HTTP implementation of the ImageDownloader trait
-pub struct HttpImageDownloader {
-    temp_dir: PathBuf,
-    auth_token: Option<String>,
-}
-
-impl HttpImageDownloader {
-    /// Create a new HttpImageDownloader
-    ///
-    /// Downloads will be stored in a temporary directory under the system temp dir
-    ///
-    /// # Arguments
-    /// * `auth_token` - Optional GitHub authentication token for accessing user-attachments
-    pub fn new(auth_token: Option<String>) -> Result<Self, RecordError> {
-        let temp_dir = std::env::temp_dir().join("ghqc-images");
-        std::fs::create_dir_all(&temp_dir)?;
-
-        Ok(Self {
-            temp_dir,
-            auth_token,
-        })
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
     #[error("request failed: {0}")]
@@ -171,131 +281,39 @@ pub enum DownloadError {
     Io(#[from] std::io::Error),
 }
 
-fn is_amz_redirect(headers: &HeaderMap) -> bool {
-    let server = headers
-        .get("server")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    let amz_id = headers
-        .get("x-amz-request-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if server.eq_ignore_ascii_case("AmazonS3") && !amz_id.is_empty() {
-        log::debug!("url is an amz redirect");
-        true
-    } else {
-        false
-    }
-}
+// fn is_amz_redirect(headers: &HeaderMap) -> bool {
+//     let server = headers
+//         .get("server")
+//         .and_then(|v| v.to_str().ok())
+//         .unwrap_or_default();
+//     let amz_id = headers
+//         .get("x-amz-request-id")
+//         .and_then(|v| v.to_str().ok())
+//         .unwrap_or_default();
+//     if server.eq_ignore_ascii_case("AmazonS3") && !amz_id.is_empty() {
+//         log::debug!("url is an amz redirect");
+//         true
+//     } else {
+//         false
+//     }
+// }
 
-fn is_ghe_redirect(headers: &HeaderMap) -> bool {
-    let server = headers
-        .get("server")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    let gh_id = headers
-        .get("x-github-request-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if server.eq_ignore_ascii_case("GitHub.com") && !gh_id.is_empty() {
-        log::debug!("url is an ghe redirect");
-        true
-    } else {
-        false
-    }
-}
-
-impl ImageDownloader for HttpImageDownloader {
-    fn download_image(
-        &self,
-        url: &str,
-    ) -> impl Future<Output = Result<PathBuf, DownloadError>> + Send {
-        let url = url.to_string();
-
-        async move {
-            // 1) Build two clients: one that DOESN'T follow redirects (to observe/log), and one that does.
-            let client_noredir = Client::builder()
-                .user_agent("ghqctoolkit/1.0")
-                .redirect(Policy::none())
-                .build()?;
-
-            let client = Client::builder().user_agent("ghqctoolkit/1.0").build()?;
-
-            // Helper that sets Accept + optional bearer
-            let mut first_req = client_noredir
-                .get(&url)
-                .header(reqwest::header::ACCEPT, "application/vnd.github.full+json");
-            if let Some(token) = &self.auth_token {
-                first_req = first_req.bearer_auth(token);
-            }
-
-            log::debug!("Downloading {url}...");
-
-            // 2) First hop WITHOUT following redirects: we can see 3xx + Location
-            let first_resp = first_req.send().await?;
-            let status = first_resp.status();
-            let first_url = first_resp.url().clone();
-            let headers = first_resp.headers().clone();
-
-            log::debug!("Request to {} returned status: {}", first_url, status);
-
-            // Prefer the explicit redirect Location when present
-            let redirect_target = if status.is_redirection() {
-                if let Some(loc) = first_resp.headers().get(reqwest::header::LOCATION) {
-                    let loc = loc.to_str().unwrap_or_default();
-                    let final_url = first_url
-                        .join(loc)
-                        .unwrap_or_else(|_| Url::parse(loc).unwrap());
-                    log::debug!("{url} redirected to {final_url}");
-                    Some(final_url)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // If not a 3xx, treat like your httr2 override: OK if success OR GH/S3 signal headers
-            if redirect_target.is_none() {
-                let ok_like_httr2 =
-                    status.is_success() || is_amz_redirect(&headers) || is_ghe_redirect(&headers);
-                if !ok_like_httr2 {
-                    return Err(DownloadError::Http {
-                        status,
-                        url: first_url.clone(),
-                    });
-                }
-            }
-
-            // 3) Determine the asset URL to actually fetch
-            let asset_url = redirect_target.unwrap_or_else(|| first_url.clone());
-
-            // 4) Second hop: actually download the image (follow redirects is fine here)
-            let mut img_req = client.get(asset_url.clone());
-            if let Some(token) = &self.auth_token {
-                img_req = img_req.bearer_auth(token);
-            }
-            // You can keep this Accept or omit it for the final asset.
-            img_req = img_req.header(reqwest::header::ACCEPT, "application/vnd.github.full+json");
-
-            let bytes = img_req.send().await?.error_for_status()?.bytes().await?;
-
-            let path = self.temp_dir.join("image.png");
-            log::debug!("Writing {} bytes to {}", bytes.len(), path.display());
-            tokio::fs::write(&path, &bytes).await?;
-            Ok(path.to_path_buf())
-        }
-    }
-
-    fn cleanup_images(&self) -> Result<(), RecordError> {
-        if self.temp_dir.exists() {
-            std::fs::remove_dir_all(&self.temp_dir)
-                .map_err(|e| RecordError::ImageCleanupFailed(e.to_string()))?;
-            log::debug!("Cleaned up image directory: {}", self.temp_dir.display());
-        }
-        Ok(())
-    }
-}
+// fn is_ghe_redirect(headers: &HeaderMap) -> bool {
+//     let server = headers
+//         .get("server")
+//         .and_then(|v| v.to_str().ok())
+//         .unwrap_or_default();
+//     let gh_id = headers
+//         .get("x-github-request-id")
+//         .and_then(|v| v.to_str().ok())
+//         .unwrap_or_default();
+//     if server.eq_ignore_ascii_case("GitHub.com") && !gh_id.is_empty() {
+//         log::debug!("url is an ghe redirect");
+//         true
+//     } else {
+//         false
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

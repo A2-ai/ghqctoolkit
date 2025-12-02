@@ -193,6 +193,28 @@ pub async fn get_milestone_issue_information(
     Ok(res)
 }
 
+/// Detect if comments contain images but lack HTML for JWT URL extraction
+///
+/// Returns true if any comment has images in the body but no HTML content,
+/// indicating we need to re-fetch from the API to get HTML with JWT URLs.
+/// Note: Issue HTML is handled separately since issues are fetched differently than comments.
+fn needs_html_for_jwt_urls(comments: &[GitComment]) -> bool {
+    comments.iter().any(|comment| {
+        let has_images = !images::extract_image_urls(&comment.body).is_empty();
+        let lacks_html = comment.html.is_none();
+        let needs_refetch = has_images && lacks_html;
+
+        if needs_refetch {
+            log::debug!(
+                "Comment from {} has images but no HTML",
+                comment.created_at.format("%Y-%m-%d %H:%M:%S")
+            );
+        }
+
+        needs_refetch
+    })
+}
+
 /// Create detailed issue information from an issue
 pub async fn create_issue_information(
     issue: &Issue,
@@ -203,8 +225,45 @@ pub async fn create_issue_information(
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     image_downloader: &impl images::ImageDownloader,
 ) -> Result<IssueInformation, RecordError> {
-    // Get comments and create issue thread
-    let comments = get_issue_comments(issue, cache, git_info).await?;
+    // Get comments and check if we need HTML for JWT URLs
+    let mut comments = get_issue_comments(issue, cache, git_info).await?;
+
+    // Check if we need HTML for JWT URLs
+    if needs_html_for_jwt_urls(&comments) {
+        log::info!(
+            "Issue #{} contains images but cached comments lack HTML - re-fetching with HTML",
+            issue.number
+        );
+
+        // Invalidate cache for this issue to force fresh fetch with HTML
+        if let Some(cache) = cache {
+            let cache_key = format!("issue_{}", issue.number);
+            if let Err(e) = cache.invalidate(&["issues", "comments"], &cache_key) {
+                log::warn!(
+                    "Failed to invalidate cache for issue #{}: {}",
+                    issue.number,
+                    e
+                );
+            }
+        }
+
+        // Re-fetch comments (will now include HTML since cache is invalidated)
+        comments = git_info.get_issue_comments(issue).await?;
+
+        // Verify we got HTML content for JWT URLs
+        if needs_html_for_jwt_urls(&comments) {
+            return Err(RecordError::HtmlRequiredForJwtUrls {
+                issue_number: issue.number,
+            });
+        }
+
+        log::debug!(
+            "Re-fetched {} comments with HTML for issue #{}",
+            comments.len(),
+            issue.number
+        );
+    }
+
     let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info).await?;
     let open = matches!(issue.state, octocrab::models::IssueState::Closed);
 
@@ -283,45 +342,65 @@ pub async fn create_issue_information(
         .map(|c| format!("{}", c))
         .unwrap_or_else(|| "No commits".to_string());
 
-    // Extract image URLs from issue body and comments, then download them
-    let mut all_image_urls = Vec::new();
+    // Create IssueImage structs for all images in the issue and comments
+    let temp_dir = std::env::temp_dir().join("ghqc-images");
+    std::fs::create_dir_all(&temp_dir)?;
 
-    // Extract URLs from issue body
+    let mut all_issue_images = Vec::new();
+
+    // Create IssueImages from issue body
     if let Some(body_text) = &issue.body {
-        all_image_urls.extend(images::extract_image_urls(body_text));
+        let issue_images = images::create_issue_images(
+            body_text,
+            issue.body_html.as_deref(),
+            &temp_dir,
+        );
+        all_issue_images.extend(issue_images);
     }
 
-    // Extract URLs from all comments
+    // Create IssueImages from each comment
     for comment in &comments {
-        all_image_urls.extend(images::extract_image_urls(&comment.body));
+        let comment_images = images::create_issue_images(
+            &comment.body,
+            comment.html.as_deref(),
+            &temp_dir,
+        );
+        all_issue_images.extend(comment_images);
     }
+
+    log::debug!(
+        "Created {} IssueImages for issue #{}",
+        all_issue_images.len(),
+        issue.number
+    );
 
     // Download all images in parallel
-    let download_futures: Vec<_> = all_image_urls
+    let download_futures: Vec<_> = all_issue_images
         .iter()
-        .map(|url| {
-            let url_clone = url.clone();
+        .map(|issue_image| {
+            let issue_image_clone = issue_image.clone();
             async move {
-                let result = image_downloader.download_image(&url_clone).await;
-                (url_clone, result)
+                let result = image_downloader.download_issue_image(&issue_image_clone).await;
+                (issue_image_clone, result)
             }
         })
         .collect();
 
     let download_results = futures::future::join_all(download_futures).await;
 
-    // Build URL-to-path map and collect failures
+    // Build URL-to-path map from successful downloads and collect failures
     let mut image_url_map = HashMap::new();
     let mut failed_downloads = Vec::new();
 
-    for (url, result) in download_results {
+    for (issue_image, result) in download_results {
         match result {
-            Ok(path) => {
-                image_url_map.insert(url, path);
+            Ok(_) => {
+                // Map text URL to downloaded path
+                image_url_map.insert(issue_image.text, issue_image.path);
             }
             Err(e) => {
-                log::error!("Failed to download image {}: {}", url, e);
-                failed_downloads.push(format!("{}: {}", url, e));
+                log::error!("Failed to download image {}: {}", issue_image.html, e);
+                failed_downloads.push(format!("{}: {}", issue_image.html, e));
             }
         }
     }
@@ -483,7 +562,6 @@ pub(crate) fn format_events(events: &[serde_json::Value], repo_users: &[RepoUser
             .map(|name| format!("{} ({})", name, actor_login))
             .unwrap_or_else(|| actor_login.to_string());
 
-
         let formatted_event = match event_type {
             "milestoned" => {
                 let milestone_title = event
@@ -510,7 +588,6 @@ pub(crate) fn format_events(events: &[serde_json::Value], repo_users: &[RepoUser
                     .and_then(|l| l.as_str())
                     .unwrap_or(actor_login); // Fallback to actor if assigner is not available
 
-
                 let assignee_display = repo_users
                     .iter()
                     .find(|user| user.login == assignee_login)
@@ -525,7 +602,6 @@ pub(crate) fn format_events(events: &[serde_json::Value], repo_users: &[RepoUser
                     .and_then(|user| user.name.as_ref())
                     .map(|name| format!("{} ({})", name, assigner_login))
                     .unwrap_or_else(|| assigner_login.to_string());
-
 
                 let formatted_message = format!(
                     "{} - {} assigned by {}",
@@ -774,4 +850,8 @@ pub enum RecordError {
     MultipleImageDownloadsFailed { failures: Vec<String> },
     #[error("Image cleanup failed: {0}")]
     ImageCleanupFailed(String),
+    #[error(
+        "Unable to fetch HTML content for JWT URL extraction in issue #{issue_number}. Images detected but GitHub API did not provide body_html field."
+    )]
+    HtmlRequiredForJwtUrls { issue_number: u64 },
 }

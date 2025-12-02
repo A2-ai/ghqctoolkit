@@ -11,7 +11,7 @@ use ghqctoolkit::cli::{
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
-    GitStatusOps, HttpImageDownloader, ImageDownloader, IssueThread, QCStatus, RelevantFile,
+    GitStatusOps, HttpImageDownloader, IssueThread, QCStatus, RelevantFile,
     compress, configuration_status, create_labels_if_needed, determine_config_dir,
     fetch_milestone_issues, get_archive_content, get_milestone_issue_information, get_repo_users,
     record, render, setup_configuration,
@@ -618,7 +618,7 @@ async fn main() -> Result<()> {
                         };
 
                     let issues = fetch_milestone_issues(&selected_milestones, &git_info).await?;
-                    let image_downloader = HttpImageDownloader::new(git_info.auth_token().clone())?;
+                    let image_downloader = HttpImageDownloader;
                     let issue_information = get_milestone_issue_information(
                         &issues,
                         cache.as_ref(),
@@ -660,10 +660,6 @@ async fn main() -> Result<()> {
 
                     render(&record_str, &record_path)?;
 
-                    // Clean up downloaded images
-                    if let Err(e) = image_downloader.cleanup_images() {
-                        log::warn!("Failed to cleanup downloaded images: {}", e);
-                    }
 
                     println!(
                         "✅ Record successfully generated at {}",

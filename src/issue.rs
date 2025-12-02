@@ -570,6 +570,7 @@ mod tests {
                     .unwrap_or("test-user")
                     .to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             })
             .collect();
 
@@ -632,6 +633,7 @@ mod tests {
                     .unwrap_or("test-user")
                     .to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             })
             .collect();
 
@@ -694,6 +696,7 @@ mod tests {
                     .unwrap_or("test-user")
                     .to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             })
             .collect();
 
@@ -760,6 +763,7 @@ mod tests {
                     .unwrap_or("test-user")
                     .to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             })
             .collect();
 
@@ -864,11 +868,13 @@ mod tests {
                 body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             },
             GitComment {
                 body: "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             },
         ];
 
@@ -893,11 +899,13 @@ mod tests {
                 body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             },
             GitComment {
                 body: "current commit: def456789abc012345678901234567890123abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             },
         ];
 
@@ -922,16 +930,19 @@ mod tests {
                 body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             },
             GitComment {
                 body: "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             },
             GitComment {
                 body: "# QC Un-Approval\nWithdrawing approval".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None,
             },
         ];
 
@@ -956,11 +967,13 @@ mod tests {
                 body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
             GitComment {
                 body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: def456789abc012345678901234567890123abcd\n[file at commit](url)".to_string(),
                 author_login: "reviewer".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
         ];
 
@@ -985,11 +998,13 @@ mod tests {
                 body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
             GitComment {
                 body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
                 author_login: "reviewer".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
         ];
 
@@ -1010,11 +1025,13 @@ mod tests {
                 body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
                 author_login: "reviewer".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
             GitComment {
                 body: "approved qc commit: abc123def456789012345678901234567890abcd".to_string(),
                 author_login: "test-user".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
         ];
 
@@ -1035,11 +1052,13 @@ mod tests {
                 body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
                 author_login: "reviewer1".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
             GitComment {
                 body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
                 author_login: "reviewer2".to_string(),
                 created_at: chrono::Utc::now(),
+                html: None
             },
         ];
 

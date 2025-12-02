@@ -1,8 +1,8 @@
-use std::future::Future;
-
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
+use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 
 use super::{GitHubApiError, RepoUser};
 use crate::git::GitInfo;
@@ -13,6 +13,7 @@ pub struct GitComment {
     pub body: String,
     pub author_login: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) html: Option<String>,
 }
 
 #[cfg(test)]
@@ -263,10 +264,29 @@ impl GitHubReader for GitInfo {
                     &owner, &repo, issue_number, per_page, page
                 );
 
+                // let parameters = [
+                //     // ("Accept", "application/vnd.github.v3.raw"),
+                //     ("Accept", "application/vnd.github.full+json"),
+                // ]
+                // .into_iter()
+                // .collect::<HashMap<_, _>>();
+
+                let headers = [(
+                    ACCEPT,
+                    HeaderValue::from_static("application/vnd.github.full+json"),
+                )]
+                .into_iter()
+                .collect::<HeaderMap<_>>();
+
                 let comments: Vec<serde_json::Value> = octocrab
-                    .get(url, None::<&()>)
+                    .get_with_headers(url, None::<&()>, Some(headers))
                     .await
                     .map_err(GitHubApiError::APIError)?;
+
+                // let comments: Vec<serde_json::Value> = octocrab
+                //     .get(url, Some(&parameters))
+                //     .await
+                //     .map_err(GitHubApiError::APIError)?;
 
                 if comments.is_empty() {
                     break; // No more pages
@@ -300,10 +320,7 @@ impl GitHubReader for GitInfo {
 
                 // Extract body
                 let body = match comment.get("body").and_then(|b| b.as_str()) {
-                    Some(body) => {
-                        log::debug!("Comment body: {body}");
-                        body.to_string()
-                    }
+                    Some(body) => body.to_string(),
                     None => {
                         error_count += 1;
                         if is_last_comment {
@@ -346,10 +363,17 @@ impl GitHubReader for GitInfo {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|| chrono::Utc::now());
 
+                // Extract HTML body (with JWT URLs) - only available from fresh API calls
+                let html = comment.get("body_html").and_then(|h| h.as_str()).map(|h| {
+                    log::debug!("Comment HTML available: {} chars", h.len());
+                    h.to_string()
+                });
+
                 git_comments.push(GitComment {
                     body,
                     author_login,
                     created_at,
+                    html,
                 });
             }
 
