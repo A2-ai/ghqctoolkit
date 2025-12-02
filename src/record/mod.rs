@@ -374,19 +374,14 @@ pub async fn create_issue_information(
         issue.number
     );
 
-    // Download all images in parallel
-    let download_futures: Vec<_> = all_issue_images
+    // Download all images sequentially
+    let download_results: Vec<_> = all_issue_images
         .iter()
         .map(|issue_image| {
-            let issue_image_clone = issue_image.clone();
-            async move {
-                let result = image_downloader.download_issue_image(&issue_image_clone).await;
-                (issue_image_clone, result)
-            }
+            let result = image_downloader.download_issue_image(issue_image);
+            (issue_image.clone(), result)
         })
         .collect();
-
-    let download_results = futures::future::join_all(download_futures).await;
 
     // Build URL-to-path map from successful downloads and collect failures
     let mut image_url_map = HashMap::new();

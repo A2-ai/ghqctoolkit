@@ -1,10 +1,9 @@
 use regex::Regex;
-use reqwest::{self, Client, StatusCode, Url};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
-use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -37,43 +36,36 @@ pub trait ImageDownloader {
     /// # Returns
     /// * `Ok(())` - If download succeeded
     /// * `Err(DownloadError)` - If download failed
-    fn download_issue_image(
-        &self,
-        issue_image: &IssueImage,
-    ) -> impl Future<Output = Result<(), DownloadError>> + Send;
+    fn download_issue_image(&self, issue_image: &IssueImage) -> Result<(), DownloadError>;
 }
 
 /// HTTP implementation of the ImageDownloader trait
 pub struct HttpImageDownloader;
 
 impl ImageDownloader for HttpImageDownloader {
-    fn download_issue_image(
-        &self,
-        issue_image: &IssueImage,
-    ) -> impl Future<Output = Result<(), DownloadError>> + Send {
-        let url = issue_image.html.clone();
-        let path = issue_image.path.clone();
+    fn download_issue_image(&self, issue_image: &IssueImage) -> Result<(), DownloadError> {
+        let url = &issue_image.html;
+        let path = &issue_image.path;
 
-        async move {
-            // Ensure parent directory exists
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-
-            // Since JWT URLs already contain auth, we can download directly
-            let client = Client::builder().user_agent("ghqctoolkit/1.0").build()?;
-
-            log::debug!("Downloading {} to {}...", url, path.display());
-
-            let response = client.get(&url).send().await?.error_for_status()?;
-
-            let bytes = response.bytes().await?;
-
-            log::debug!("Writing {} bytes to {}", bytes.len(), path.display());
-            tokio::fs::write(&path, &bytes).await?;
-
-            Ok(())
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+
+        log::debug!("Downloading {} to {}...", url, path.display());
+
+        // Download using ureq - since JWT URLs already contain auth, we can download directly
+        let response = ureq::get(url)
+            .set("User-Agent", "ghqctoolkit/1.0")
+            .call()?;
+
+        let mut bytes = Vec::new();
+        response.into_reader().read_to_end(&mut bytes)?;
+
+        log::debug!("Writing {} bytes to {}", bytes.len(), path.display());
+        std::fs::write(path, &bytes)?;
+
+        Ok(())
     }
 }
 
@@ -271,9 +263,7 @@ pub fn replace_images_with_latex(
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
     #[error("request failed: {0}")]
-    Reqwest(#[from] reqwest::Error),
-    #[error("unexpected response {status} from {url}")]
-    Http { status: StatusCode, url: Url },
+    Ureq(#[from] ureq::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
