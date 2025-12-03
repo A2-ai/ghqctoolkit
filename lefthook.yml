@@ -1,0 +1,10 @@
+pre-commit:
+  parallel: true
+  commands:
+    check:
+      run: cargo check --all
+    test:
+      run: cargo test --all
+    fmt:
+      run: cargo fmt --all
+      stage_fixed: true

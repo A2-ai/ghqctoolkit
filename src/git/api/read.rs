@@ -1,8 +1,8 @@
-use std::future::Future;
-
+use http::header::{ACCEPT, HeaderMap, HeaderValue};
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 
 use super::{GitHubApiError, RepoUser};
 use crate::git::GitInfo;
@@ -13,6 +13,8 @@ pub struct GitComment {
     pub body: String,
     pub author_login: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing)]
+    pub(crate) html: Option<String>,
 }
 
 #[cfg(test)]
@@ -263,8 +265,15 @@ impl GitHubReader for GitInfo {
                     &owner, &repo, issue_number, per_page, page
                 );
 
+                let headers = [(
+                    ACCEPT,
+                    HeaderValue::from_static("application/vnd.github.full+json"),
+                )]
+                .into_iter()
+                .collect::<HeaderMap<_>>();
+
                 let comments: Vec<serde_json::Value> = octocrab
-                    .get(url, None::<&()>)
+                    .get_with_headers(url, None::<&()>, Some(headers))
                     .await
                     .map_err(GitHubApiError::APIError)?;
 
@@ -343,10 +352,17 @@ impl GitHubReader for GitInfo {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|| chrono::Utc::now());
 
+                // Extract HTML body (with JWT URLs) - only available from fresh API calls
+                let html = comment.get("body_html").and_then(|h| h.as_str()).map(|h| {
+                    log::debug!("Comment HTML available: {} chars", h.len());
+                    h.to_string()
+                });
+
                 git_comments.push(GitComment {
                     body,
                     author_login,
                     created_at,
+                    html,
                 });
             }
 

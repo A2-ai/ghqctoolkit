@@ -11,9 +11,10 @@ use ghqctoolkit::cli::{
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
-    GitStatusOps, IssueThread, QCStatus, RelevantFile, compress, configuration_status,
-    create_labels_if_needed, determine_config_dir, fetch_milestone_issues, get_archive_content,
-    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
+    GitStatusOps, HttpImageDownloader, IssueThread, QCStatus, RelevantFile, compress,
+    configuration_status, create_labels_if_needed, determine_config_dir, fetch_milestone_issues,
+    get_archive_content, get_milestone_issue_information, get_repo_users, record, render,
+    setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -617,8 +618,14 @@ async fn main() -> Result<()> {
                         };
 
                     let issues = fetch_milestone_issues(&selected_milestones, &git_info).await?;
-                    let issue_information =
-                        get_milestone_issue_information(&issues, cache.as_ref(), &git_info).await?;
+                    let image_downloader = HttpImageDownloader;
+                    let issue_information = get_milestone_issue_information(
+                        &issues,
+                        cache.as_ref(),
+                        &git_info,
+                        &image_downloader,
+                    )
+                    .await?;
 
                     let record_str = record(
                         &selected_milestones,
@@ -631,9 +638,15 @@ async fn main() -> Result<()> {
                     let final_record_path = interactive_record_path.or(record_path);
                     let record_path = if let Some(mut record_path) = final_record_path {
                         record_path.set_extension(".pdf");
-                        record_path
+                        // Make path relative to the directory argument
+                        if record_path.is_relative() {
+                            cli.directory.join(record_path)
+                        } else {
+                            record_path
+                        }
                     } else {
-                        PathBuf::from(format!(
+                        // Default record path in the directory argument location
+                        cli.directory.join(format!(
                             "{}-{}.pdf",
                             git_info.repo(),
                             issues

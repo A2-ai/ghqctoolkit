@@ -148,6 +148,24 @@ impl DiskCache {
 
         Ok(())
     }
+
+    /// Invalidate a specific cache entry by removing the file
+    ///
+    /// This is useful when we need to force a fresh fetch from the API,
+    /// such as when we need HTML content for JWT URL extraction.
+    pub fn invalidate(&self, path: &[&str], key: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let file_path = self.path(path, key);
+        if file_path.exists() {
+            std::fs::remove_file(&file_path)?;
+            log::debug!("Invalidated cache entry: {}", file_path.display());
+        } else {
+            log::debug!(
+                "Cache entry not found for invalidation: {}",
+                file_path.display()
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Get the default cache TTL from environment or use 1 hour default

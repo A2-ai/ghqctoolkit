@@ -35,9 +35,10 @@ pub use git::{
     GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
     GitStatusError, GitStatusOps, RepoUser, find_file_commits,
 };
-pub use issue::{IssueCommit, IssueError, IssueThread};
+pub use issue::{IssueCommit, IssueError, IssueThread, parse_branch_from_body};
 pub use qc_status::{ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists};
 pub use record::{
-    IssueInformation, fetch_milestone_issues, get_milestone_issue_information, record, render,
+    HttpImageDownloader, ImageDownloader, IssueInformation, fetch_milestone_issues,
+    get_milestone_issue_information, record, render,
 };
 pub use review::QCReview;

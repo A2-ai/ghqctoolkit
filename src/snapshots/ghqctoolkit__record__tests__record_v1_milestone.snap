@@ -34,20 +34,27 @@ header-includes:
   - \usepackage{listings}
   - \justifying
   - \sloppy
-  - \lstset{breaklines=true}
+  - \lstset{breaklines=true,breakatwhitespace=true,columns=flexible,basicstyle=\ttfamily\small,breakindent=20pt}
   - \usepackage{titlesec}
   - \titleformat{\paragraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
   - \titlespacing*{\paragraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
   - \titleformat{\subparagraph}[block]{\normalfont\normalsize\bfseries}{}{}{}
   - \titlespacing*{\subparagraph}{0pt}{1ex plus .5ex minus .2ex}{.7ex}
+  - \usepackage{fontspec}
+  - \defaultfontfeatures{Ligatures=TeX}
+  - \setmainfont{Times New Roman}
+  - "% Cross-platform emoji font fallback: Apple Color Emoji (macOS), Noto Color Emoji (Linux), Segoe UI Emoji (Windows), Times New Roman (fallback)"
+  - \IfFontExistsTF{Apple Color Emoji}{\newfontfamily\emojifont{Apple Color Emoji}[Renderer=HarfBuzz]}{\IfFontExistsTF{Noto Color Emoji}{\newfontfamily\emojifont{Noto Color Emoji}[Renderer=HarfBuzz]}{\IfFontExistsTF{Segoe UI Emoji}{\newfontfamily\emojifont{Segoe UI Emoji}[Renderer=HarfBuzz]}{\newfontfamily\emojifont{Times New Roman}}}}
+  - \DeclareRobustCommand{\emoji}[1]{{\emojifont{#1}}}
 
 format:
   pdf:
-    pdf-engine: xelatex
+    pdf-engine: lualatex
     toc: true
     toc-depth: 2
     code-overflow: wrap
-    mainfont: Times New Roman
+    code-block-border-left: false
+    fontsize: 12pt
 ---
 
 \newpage
