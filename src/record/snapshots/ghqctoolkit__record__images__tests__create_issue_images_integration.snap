@@ -1,26 +1,26 @@
 ---
 source: src/record/images.rs
-expression: issue_images
+expression: normalized_images
 ---
 [
-    IssueImage {
-        text: "https://github.com/user-attachments/assets/abc123-def456-ghi789.png",
-        html: "https://private-user-images.githubusercontent.com/12345/abc123-def456-ghi789.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTEifQ.jwt_signature_here",
-        path: "/tmp/test_images/image_d5645c9c2aa5f1e4.png",
-    },
-    IssueImage {
-        text: "https://github.com/user-attachments/assets/xyz789-uvw456-rst123.jpg",
-        html: "https://private-user-images.githubusercontent.com/12345/xyz789-uvw456-rst123.jpg?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTIifQ.jwt_signature_here2",
-        path: "/tmp/test_images/image_cb010e80dd24402a.png",
-    },
-    IssueImage {
-        text: "https://github.com/user-attachments/assets/qwe456-asd789-zxc012.gif",
-        html: "https://private-user-images.githubusercontent.com/12345/qwe456-asd789-zxc012.gif?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTMifQ.jwt_signature_here3",
-        path: "/tmp/test_images/image_8b70100195990936.png",
-    },
-    IssueImage {
-        text: "https://github.com/user-attachments/assets/final123-image456.png",
-        html: "https://private-user-images.githubusercontent.com/12345/final123-image456.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTQifQ.jwt_signature_here4",
-        path: "/tmp/test_images/image_2986d3c5ae26b5d.png",
-    },
+    (
+        "https://github.com/user-attachments/assets/abc123-def456-ghi789.png",
+        "https://private-user-images.githubusercontent.com/12345/abc123-def456-ghi789.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTEifQ.jwt_signature_here",
+        "/tmp/test_images/image_d5645c9c2aa5f1e4.png",
+    ),
+    (
+        "https://github.com/user-attachments/assets/xyz789-uvw456-rst123.jpg",
+        "https://private-user-images.githubusercontent.com/12345/xyz789-uvw456-rst123.jpg?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTIifQ.jwt_signature_here2",
+        "/tmp/test_images/image_cb010e80dd24402a.png",
+    ),
+    (
+        "https://github.com/user-attachments/assets/qwe456-asd789-zxc012.gif",
+        "https://private-user-images.githubusercontent.com/12345/qwe456-asd789-zxc012.gif?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTMifQ.jwt_signature_here3",
+        "/tmp/test_images/image_8b70100195990936.png",
+    ),
+    (
+        "https://github.com/user-attachments/assets/final123-image456.png",
+        "https://private-user-images.githubusercontent.com/12345/final123-image456.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTQifQ.jwt_signature_here4",
+        "/tmp/test_images/image_2986d3c5ae26b5d.png",
+    ),
 ]

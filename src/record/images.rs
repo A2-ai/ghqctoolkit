@@ -490,7 +490,21 @@ And finally an HTML image without dimensions:
         let base_dir = PathBuf::from("/tmp/test_images");
         let issue_images = create_issue_images(markdown, Some(html), &base_dir);
 
-        // Snapshot test the results
-        insta::assert_debug_snapshot!(issue_images);
+        // Create normalized version for cross-platform snapshot testing
+        let normalized_images: Vec<_> = issue_images
+            .iter()
+            .map(|img| {
+                // Normalize path separators for consistent snapshots across platforms
+                let normalized_path = img.path.to_string_lossy().replace('\\', "/");
+                (
+                    &img.text,
+                    &img.html,
+                    normalized_path,
+                )
+            })
+            .collect();
+
+        // Snapshot test the normalized results
+        insta::assert_debug_snapshot!(normalized_images);
     }
 }
