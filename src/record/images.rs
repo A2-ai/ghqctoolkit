@@ -265,40 +265,6 @@ pub enum DownloadError {
     Io(#[from] std::io::Error),
 }
 
-// fn is_amz_redirect(headers: &HeaderMap) -> bool {
-//     let server = headers
-//         .get("server")
-//         .and_then(|v| v.to_str().ok())
-//         .unwrap_or_default();
-//     let amz_id = headers
-//         .get("x-amz-request-id")
-//         .and_then(|v| v.to_str().ok())
-//         .unwrap_or_default();
-//     if server.eq_ignore_ascii_case("AmazonS3") && !amz_id.is_empty() {
-//         log::debug!("url is an amz redirect");
-//         true
-//     } else {
-//         false
-//     }
-// }
-
-// fn is_ghe_redirect(headers: &HeaderMap) -> bool {
-//     let server = headers
-//         .get("server")
-//         .and_then(|v| v.to_str().ok())
-//         .unwrap_or_default();
-//     let gh_id = headers
-//         .get("x-github-request-id")
-//         .and_then(|v| v.to_str().ok())
-//         .unwrap_or_default();
-//     if server.eq_ignore_ascii_case("GitHub.com") && !gh_id.is_empty() {
-//         log::debug!("url is an ghe redirect");
-//         true
-//     } else {
-//         false
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +442,55 @@ Some more text here.
         // Should convert backslashes to forward slashes for LaTeX
         assert!(result.contains("C:/temp/test.png"));
         assert!(!result.contains(r"C:\temp\test.png"));
+    }
+
+    #[test]
+    fn test_create_issue_images_integration() {
+        // Create realistic markdown with mixed image types (like GitHub issues)
+        let markdown = r#"
+# Issue Title
+
+Here's a markdown image: ![Screenshot of error](https://github.com/user-attachments/assets/abc123-def456-ghi789.png)
+
+Some description text here.
+
+<img width="500" height="300" alt="Another screenshot" src="https://github.com/user-attachments/assets/xyz789-uvw456-rst123.jpg" />
+
+More text and then another markdown image:
+
+![Code snippet](https://github.com/user-attachments/assets/qwe456-asd789-zxc012.gif)
+
+And finally an HTML image without dimensions:
+<img src="https://github.com/user-attachments/assets/final123-image456.png" alt="Final image" />
+"#;
+
+        // Create corresponding HTML with JWT URLs (simulating GitHub's API response)
+        let html = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Issue Title</h1>
+
+<p>Here's a markdown image: <img src="https://private-user-images.githubusercontent.com/12345/abc123-def456-ghi789.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTEifQ.jwt_signature_here" alt="Screenshot of error" /></p>
+
+<p>Some description text here.</p>
+
+<img width="500" height="300" alt="Another screenshot" src="https://private-user-images.githubusercontent.com/12345/xyz789-uvw456-rst123.jpg?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTIifQ.jwt_signature_here2" />
+
+<p>More text and then another markdown image:</p>
+
+<p><img src="https://private-user-images.githubusercontent.com/12345/qwe456-asd789-zxc012.gif?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTMifQ.jwt_signature_here3" alt="Code snippet" /></p>
+
+<p>And finally an HTML image without dimensions:
+<img src="https://private-user-images.githubusercontent.com/12345/final123-image456.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTQifQ.jwt_signature_here4" alt="Final image" /></p>
+</body>
+</html>
+"#;
+
+        let base_dir = PathBuf::from("/tmp/test_images");
+        let issue_images = create_issue_images(markdown, Some(html), &base_dir);
+
+        // Snapshot test the results
+        insta::assert_debug_snapshot!(issue_images);
     }
 }
