@@ -350,21 +350,15 @@ pub async fn create_issue_information(
 
     // Create IssueImages from issue body
     if let Some(body_text) = &issue.body {
-        let issue_images = images::create_issue_images(
-            body_text,
-            issue.body_html.as_deref(),
-            &temp_dir,
-        );
+        let issue_images =
+            images::create_issue_images(body_text, issue.body_html.as_deref(), &temp_dir);
         all_issue_images.extend(issue_images);
     }
 
     // Create IssueImages from each comment
     for comment in &comments {
-        let comment_images = images::create_issue_images(
-            &comment.body,
-            comment.html.as_deref(),
-            &temp_dir,
-        );
+        let comment_images =
+            images::create_issue_images(&comment.body, comment.html.as_deref(), &temp_dir);
         all_issue_images.extend(comment_images);
     }
 

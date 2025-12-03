@@ -18,9 +18,8 @@ static HTML_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 // Scraper selectors for HTML parsing
-static IMG_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse("img").expect("Invalid img selector")
-});
+static IMG_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("img").expect("Invalid img selector"));
 
 /// Trait for downloading images from URLs for PDF embedding
 ///
@@ -55,9 +54,7 @@ impl ImageDownloader for HttpImageDownloader {
         log::debug!("Downloading {} to {}...", url, path.display());
 
         // Download using ureq - since JWT URLs already contain auth, we can download directly
-        let response = ureq::get(url)
-            .set("User-Agent", "ghqctoolkit/1.0")
-            .call()?;
+        let response = ureq::get(url).set("User-Agent", "ghqctoolkit/1.0").call()?;
 
         let mut bytes = Vec::new();
         response.into_reader().read_to_end(&mut bytes)?;

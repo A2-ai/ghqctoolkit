@@ -159,7 +159,10 @@ impl DiskCache {
             std::fs::remove_file(&file_path)?;
             log::debug!("Invalidated cache entry: {}", file_path.display());
         } else {
-            log::debug!("Cache entry not found for invalidation: {}", file_path.display());
+            log::debug!(
+                "Cache entry not found for invalidation: {}",
+                file_path.display()
+            );
         }
         Ok(())
     }

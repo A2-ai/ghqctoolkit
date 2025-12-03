@@ -11,10 +11,10 @@ use ghqctoolkit::cli::{
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
-    GitStatusOps, HttpImageDownloader, IssueThread, QCStatus, RelevantFile,
-    compress, configuration_status, create_labels_if_needed, determine_config_dir,
-    fetch_milestone_issues, get_archive_content, get_milestone_issue_information, get_repo_users,
-    record, render, setup_configuration,
+    GitStatusOps, HttpImageDownloader, IssueThread, QCStatus, RelevantFile, compress,
+    configuration_status, create_labels_if_needed, determine_config_dir, fetch_milestone_issues,
+    get_archive_content, get_milestone_issue_information, get_repo_users, record, render,
+    setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -659,7 +659,6 @@ async fn main() -> Result<()> {
                     };
 
                     render(&record_str, &record_path)?;
-
 
                     println!(
                         "✅ Record successfully generated at {}",
