@@ -383,11 +383,11 @@ pub async fn setup_configuration(
         }
     }
 
-    log::debug!(
-        "Cloning configuration repository from {} to {}",
-        git,
-        config_dir.display()
-    );
+    // log::debug!(
+    //     "Cloning configuration repository from {} to {}",
+    //     git,
+    //     config_dir.display()
+    // );
 
     if let Some(parent) = config_dir.parent() {
         if !parent.is_dir() {

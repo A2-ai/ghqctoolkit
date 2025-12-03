@@ -1,6 +1,6 @@
+use http::header::{ACCEPT, HeaderMap, HeaderValue};
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
-use http::header::{HeaderMap, HeaderValue, ACCEPT};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 
