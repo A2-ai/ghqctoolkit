@@ -1,6 +1,6 @@
 use octocrab::models::Milestone;
 use octocrab::models::issues::Issue;
-use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
+use http::header::{HeaderMap, HeaderValue, ACCEPT};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 
@@ -265,13 +265,6 @@ impl GitHubReader for GitInfo {
                     &owner, &repo, issue_number, per_page, page
                 );
 
-                // let parameters = [
-                //     // ("Accept", "application/vnd.github.v3.raw"),
-                //     ("Accept", "application/vnd.github.full+json"),
-                // ]
-                // .into_iter()
-                // .collect::<HashMap<_, _>>();
-
                 let headers = [(
                     ACCEPT,
                     HeaderValue::from_static("application/vnd.github.full+json"),
@@ -283,11 +276,6 @@ impl GitHubReader for GitInfo {
                     .get_with_headers(url, None::<&()>, Some(headers))
                     .await
                     .map_err(GitHubApiError::APIError)?;
-
-                // let comments: Vec<serde_json::Value> = octocrab
-                //     .get(url, Some(&parameters))
-                //     .await
-                //     .map_err(GitHubApiError::APIError)?;
 
                 if comments.is_empty() {
                     break; // No more pages
