@@ -53,7 +53,7 @@ impl ImageDownloader for HttpImageDownloader {
 
         log::debug!("Downloading {} to {}...", url, path.display());
 
-        // Download using ureq - since JWT URLs already contain auth, we can download directly
+        // Download using ureq - since URLs extracted from the HTML already contain auth, we can download directly
         let response = ureq::get(url).set("User-Agent", "ghqctoolkit/1.0").call()?;
 
         let mut bytes = Vec::new();
@@ -77,7 +77,7 @@ use mockall::automock;
 pub struct IssueImage {
     /// The URL as it appears in the markdown text
     pub text: String,
-    /// The JWT-secured URL from the HTML (for downloading)
+    /// The URL from the HTML. Used for downloading since contains auth
     pub html: String,
     /// The local path where the image should be downloaded
     pub path: PathBuf,
@@ -85,7 +85,7 @@ pub struct IssueImage {
 
 /// Create IssueImage structs from markdown text and HTML content
 ///
-/// Maps markdown image URLs to HTML JWT URLs by position and generates download paths.
+/// Maps markdown image URLs to HTML URLs by position and generates download paths.
 /// This ensures one-to-one mapping between text images and HTML images.
 pub fn create_issue_images(
     markdown: &str,
@@ -93,16 +93,16 @@ pub fn create_issue_images(
     base_download_dir: &std::path::Path,
 ) -> Vec<IssueImage> {
     let text_urls = extract_image_urls_from_markdown(markdown);
-    let jwt_urls = html.map(extract_image_urls_from_html).unwrap_or_default();
+    let html_urls = html.map(extract_image_urls_from_html).unwrap_or_default();
 
     text_urls
         .into_iter()
         .enumerate()
         .map(|(index, text_url)| {
-            // Use JWT URL at same index if available, otherwise use text URL
-            let html_url = jwt_urls.get(index).cloned().unwrap_or_else(|| {
+            // Use HTML URL at same index if available, otherwise use text URL
+            let html_url = html_urls.get(index).cloned().unwrap_or_else(|| {
                 log::debug!(
-                    "No JWT URL at index {} for: {}, using text URL",
+                    "No HTML URL at index {} for: {}, using text URL",
                     index,
                     text_url
                 );
@@ -116,7 +116,7 @@ pub fn create_issue_images(
             let filename = format!("image_{:x}.png", hash);
             let path = base_download_dir.join(filename);
 
-            log::debug!(
+            log::trace!(
                 "Created IssueImage: text={}, html={}, path={}",
                 text_url,
                 html_url,
@@ -464,7 +464,7 @@ And finally an HTML image without dimensions:
 <img src="https://github.com/user-attachments/assets/final123-image456.png" alt="Final image" />
 "#;
 
-        // Create corresponding HTML with JWT URLs (simulating GitHub's API response)
+        // Create corresponding HTML with URLs (simulating GitHub's API response)
         let html = r#"
 <!DOCTYPE html>
 <html>
