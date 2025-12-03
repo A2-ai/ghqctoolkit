@@ -496,11 +496,7 @@ And finally an HTML image without dimensions:
             .map(|img| {
                 // Normalize path separators for consistent snapshots across platforms
                 let normalized_path = img.path.to_string_lossy().replace('\\', "/");
-                (
-                    &img.text,
-                    &img.html,
-                    normalized_path,
-                )
+                (&img.text, &img.html, normalized_path)
             })
             .collect();
 
