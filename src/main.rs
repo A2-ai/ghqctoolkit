@@ -5,15 +5,17 @@ use octocrab::models::Milestone;
 use std::path::PathBuf;
 
 use ghqctoolkit::cli::{
-    RelevantFileParser, find_issue, interactive_milestone_status, interactive_status,
-    milestone_status, prompt_milestone_archive, prompt_milestone_record, single_issue_status,
+    FileCommitPair, FileCommitPairParser, MilestoneSelectionFilter, RelevantFileParser, find_issue,
+    generate_archive_name, get_milestone_issue_threads, interactive_milestone_status,
+    interactive_status, milestone_status, prompt_archive, prompt_milestone_record,
+    single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    Configuration, DiskCache, GitCommand, GitHubReader, GitHubWriter, GitInfo, GitRepository,
-    GitStatusOps, HttpImageDownloader, IssueThread, QCStatus, RelevantFile, compress,
-    configuration_status, create_labels_if_needed, determine_config_dir, fetch_milestone_issues,
-    get_archive_content, get_milestone_issue_information, get_repo_users, record, render,
+    ArchiveFile, ArchiveMetadata, Configuration, DiskCache, GitCommand, GitFileOps, GitHubReader,
+    GitHubWriter, GitInfo, GitRepository, GitStatusOps, HttpImageDownloader, IssueThread, QCStatus,
+    RelevantFile, archive, configuration_status, create_labels_if_needed, determine_config_dir,
+    fetch_milestone_issues, get_milestone_issue_information, get_repo_users, record, render,
     setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
@@ -208,7 +210,11 @@ enum MilestoneCommands {
         /// Milestone names to archive
         milestones: Vec<String>,
 
-        /// Archive all milestones
+        /// Archive all closed milestones
+        #[arg(long, conflicts_with = "all_milestones")]
+        all_closed_milestones: bool,
+
+        /// Archive all milestones (including open)
         #[arg(long)]
         all_milestones: bool,
 
@@ -223,6 +229,10 @@ enum MilestoneCommands {
         /// File name to save the archive as. Will default to <repo>_<milestone names>.tar.gz
         #[arg(short, long)]
         archive_path: Option<PathBuf>,
+
+        /// Additional files to include with specific commits (format: file:commit)
+        #[arg(long, value_parser = FileCommitPairParser)]
+        additional_file: Vec<FileCommitPair>,
     },
 }
 
@@ -667,86 +677,159 @@ async fn main() -> Result<()> {
                 }
                 MilestoneCommands::Archive {
                     milestones,
+                    all_closed_milestones,
                     all_milestones,
                     include_unapproved,
                     flatten,
                     archive_path,
+                    additional_file,
                 } => {
+                    let selected_archive_files = if !additional_file.is_empty() {
+                        let commits = git_info.commits(&None)?;
+                        additional_file
+                            .iter()
+                            .map(|file| file.into_archive_file(&commits, flatten))
+                            .collect::<Result<Vec<_>>>()?
+                    } else {
+                        Vec::new()
+                    };
+
                     let cache = DiskCache::from_git_info(&git_info).ok();
 
                     let milestones_data = git_info.get_milestones().await?;
 
-                    let (
-                        selected_milestones,
-                        interactive_archive_path,
-                        interactive_include_unapproved,
-                        interactive_flatten,
-                    ) = match (
+                    // Determine milestone selection first
+                    let (mut archive_files, archive_path) = match (
                         milestones.is_empty(),
+                        all_closed_milestones,
                         all_milestones,
-                        archive_path.is_none(),
                     ) {
+                        (true, false, false)
+                            if archive_path.is_none() && additional_file.is_empty() =>
+                        {
+                            // Interactive mode - no milestones, no archive_path, no file_commit
+                            prompt_archive(
+                                &milestones_data,
+                                &cli.directory,
+                                &git_info,
+                                cache.as_ref(),
+                            )
+                            .await?
+                        }
+                        (true, false, false) => {
+                            if additional_file.is_empty() {
+                                bail!(
+                                    "Must specify milestones and/or file commits to generate an archive"
+                                );
+                            }
+                            // No milestones but have file_commit or archive_path - just use empty milestone files
+                            let archive_path = archive_path.unwrap_or(
+                                PathBuf::from("archive")
+                                    .join(generate_archive_name(&[], &git_info)),
+                            );
+                            (Vec::new(), archive_path)
+                        }
                         (true, false, true) => {
-                            // Interactive mode - no milestones specified, not all_milestones, and no archive_path
-                            prompt_milestone_archive(&milestones_data)?
-                        }
-                        (true, true, _) => {
                             // All milestones requested
-                            (milestones_data, None, include_unapproved, flatten)
+                            let selected_milestones =
+                                MilestoneSelectionFilter::All.filter_milestones(&milestones_data);
+                            let artifact_files = get_milestone_issue_threads(
+                                &selected_milestones,
+                                &git_info,
+                                cache.as_ref(),
+                            )
+                            .await?
+                            .into_iter()
+                            .filter(|i| include_unapproved || i.approved_commit().is_some())
+                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
+                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+
+                            let archive_path = archive_path.unwrap_or(
+                                PathBuf::from("archive")
+                                    .join(generate_archive_name(&selected_milestones, &git_info)),
+                            );
+                            (artifact_files, archive_path)
                         }
-                        (false, false, _) => {
-                            // Specific milestones provided - filter by name
-                            let selected: Vec<Milestone> = milestones_data
-                                .into_iter()
+                        (true, true, false) => {
+                            // All closed milestones requested
+                            let selected_milestones = MilestoneSelectionFilter::ClosedOnly
+                                .filter_milestones(&milestones_data);
+
+                            if selected_milestones.is_empty() {
+                                bail!("No closed milestones found in repository");
+                            }
+
+                            let artifact_files = get_milestone_issue_threads(
+                                &selected_milestones,
+                                &git_info,
+                                cache.as_ref(),
+                            )
+                            .await?
+                            .into_iter()
+                            .filter(|i| include_unapproved || i.approved_commit().is_some())
+                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
+                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+
+                            let archive_path = archive_path.unwrap_or(
+                                PathBuf::from("archive")
+                                    .join(generate_archive_name(&selected_milestones, &git_info)),
+                            );
+                            (artifact_files, archive_path)
+                        }
+                        (false, false, false) => {
+                            // Specific milestones provided
+                            let selected_milestones: Vec<_> = milestones_data
+                                .iter()
                                 .filter(|m| milestones.contains(&m.title))
                                 .collect();
 
-                            if selected.is_empty() {
+                            if selected_milestones.is_empty() {
                                 bail!(
                                     "No matching milestones found for: {}",
                                     milestones.join(", ")
                                 );
                             }
 
-                            (selected, None, include_unapproved, flatten)
+                            let artifact_files = get_milestone_issue_threads(
+                                &selected_milestones,
+                                &git_info,
+                                cache.as_ref(),
+                            )
+                            .await?
+                            .into_iter()
+                            .filter(|i| include_unapproved || i.approved_commit().is_some())
+                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
+                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+
+                            let archive_path = archive_path.unwrap_or(
+                                PathBuf::from("archive")
+                                    .join(generate_archive_name(&selected_milestones, &git_info)),
+                            );
+                            (artifact_files, archive_path)
                         }
-                        (false, true, _) => {
+                        (false, true, true) => {
                             bail!("Cannot specify both milestone names and --all-milestones flag");
                         }
-                        (true, false, false) => {
+                        (false, true, false) => {
                             bail!(
-                                "Cannot use interactive mode when archive_path is specified. Please specify milestone names or use --all-milestones."
+                                "Cannot specify both milestone names and --all-closed-milestones flag"
+                            );
+                        }
+                        (false, false, true) => {
+                            bail!("Cannot specify both milestone names and --all-milestones flag");
+                        }
+                        (true, true, true) => {
+                            bail!(
+                                "Cannot specify both --all-closed-milestones and --all-milestones flags"
                             );
                         }
                     };
 
-                    let archive_content = get_archive_content(
-                        cache.as_ref(),
-                        &selected_milestones,
-                        interactive_include_unapproved,
-                        &git_info,
-                    )
-                    .await?;
+                    archive_files.extend(selected_archive_files);
 
-                    let final_archive_path = interactive_archive_path.or(archive_path);
-                    let archive_path = if let Some(mut archive_path) = final_archive_path {
-                        if !archive_path.to_string_lossy().ends_with(".tar.gz") {
-                            archive_path.set_extension("tar.gz");
-                        }
-                        archive_path
-                    } else {
-                        let milestone_names: Vec<&str> = selected_milestones
-                            .iter()
-                            .map(|m| m.title.as_str())
-                            .collect();
-                        PathBuf::from(format!(
-                            "{}-{}.tar.gz",
-                            git_info.repo(),
-                            milestone_names.join("-").replace(" ", "-")
-                        ))
-                    };
-
-                    compress(&archive_content, interactive_flatten, &archive_path)?;
+                    // Create the actual archive using ArchiveFile approach
+                    let metadata = ArchiveMetadata::new(archive_files, &env)?;
+                    archive(metadata, &git_info, &archive_path)?;
 
                     println!(
                         "✅ Archive successfully created at {}",

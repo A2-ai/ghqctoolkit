@@ -403,6 +403,7 @@ mod tests {
                 branch: "main".to_string(),
                 open: issue_open,
                 commits,
+                milestone: "milestone".to_string(),
             };
 
             let status = QCStatus::determine_status(&issue_thread).unwrap();

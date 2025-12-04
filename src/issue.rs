@@ -54,6 +54,7 @@ pub struct IssueThread {
     pub branch: String,
     pub(crate) open: bool,
     pub commits: Vec<IssueCommit>,
+    pub(crate) milestone: String,
 }
 
 impl IssueThread {
@@ -65,6 +66,11 @@ impl IssueThread {
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
         let issue_is_open = matches!(issue.state, IssueState::Open);
+        let milestone = if let Some(m) = &issue.milestone {
+            m.title.to_string()
+        } else {
+            return Err(IssueError::MilestoneNotFound);
+        };
 
         // 1. Parse the branch from the issue body first
         let branch = issue
@@ -153,6 +159,7 @@ impl IssueThread {
             branch,
             open: issue_is_open,
             commits: issue_commits,
+            milestone,
         })
     }
 
@@ -341,6 +348,8 @@ pub enum IssueError {
     InitialCommitNotFound,
     #[error("Branch not found in issue body")]
     BranchNotFound,
+    #[error("Milestone not found for issue")]
+    MilestoneNotFound,
     #[error("Commit string '{0}' could not be parsed to a valid ObjectId")]
     CommitNotParseable(String),
 }
