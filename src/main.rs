@@ -826,6 +826,11 @@ async fn main() -> Result<()> {
                     };
 
                     archive_files.extend(selected_archive_files);
+                    let archive_path = if archive_path.is_absolute() {
+                        archive_path
+                    } else {
+                        cli.directory.join(&archive_path)
+                    };
 
                     // Create the actual archive using ArchiveFile approach
                     let metadata = ArchiveMetadata::new(archive_files, &env)?;

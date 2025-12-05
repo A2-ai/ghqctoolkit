@@ -13,9 +13,9 @@ use serde::Serialize;
 use crate::{GitFileOps, GitFileOpsError, IssueError, IssueThread, utils::EnvProvider};
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ArchiveQC {
-    milestone: String,
-    approved: bool,
+pub struct ArchiveQC {
+    pub milestone: String,
+    pub approved: bool,
 }
 
 fn display_as_string<S, T>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
@@ -28,17 +28,17 @@ where
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArchiveFile {
-    pub(crate) repository_file: PathBuf,
-    pub(crate) archive_file: PathBuf,
+    pub repository_file: PathBuf,
+    pub archive_file: PathBuf,
     #[serde(serialize_with = "display_as_string")]
-    pub(crate) commit: ObjectId,
+    pub commit: ObjectId,
     // archive file will only ever have a milestone AND approval status or neither
     #[serde(flatten)]
-    pub(crate) qc: Option<ArchiveQC>,
+    pub qc: Option<ArchiveQC>,
 }
 
 impl ArchiveFile {
-    fn file_content(&self, git_info: &impl GitFileOps) -> Result<Vec<u8>, GitFileOpsError> {
+    pub fn file_content(&self, git_info: &impl GitFileOps) -> Result<Vec<u8>, GitFileOpsError> {
         git_info.file_bytes_at_commit(&self.repository_file, &self.commit)
     }
 
@@ -138,12 +138,10 @@ impl ArchiveMetadata {
                 })
                 .collect();
 
-            let error_message = format!(
-                "Flattening conflicts detected:\n{}",
-                conflict_descriptions.join("\n")
-            );
+            let error_message =
+                format!("Conflicts detected:\n{}", conflict_descriptions.join("\n"));
 
-            return Err(ArchiveError::FlatteningConflict(error_message));
+            return Err(ArchiveError::FileConflict(error_message));
         }
 
         let creator = env.var("USER").ok();
@@ -223,8 +221,8 @@ pub enum ArchiveError {
     IssueError(#[from] IssueError),
     #[error("Failed to get file content at commit due to: {0}")]
     GitFileOpsError(#[from] GitFileOpsError),
-    #[error("Cannot flatten archive: multiple files have the same basename '{0}'")]
-    FlatteningConflict(String),
+    #[error("Cannot create archive: multiple files have the same archive name '{0}'")]
+    FileConflict(String),
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
     #[error("Failed to determine commit for {0}")]

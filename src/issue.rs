@@ -54,7 +54,7 @@ pub struct IssueThread {
     pub branch: String,
     pub(crate) open: bool,
     pub commits: Vec<IssueCommit>,
-    pub(crate) milestone: String,
+    pub milestone: String,
 }
 
 impl IssueThread {
