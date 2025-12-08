@@ -19,7 +19,7 @@
     "created_at": "2025-01-15T09:30:00Z",
     "updated_at": "2025-01-15T09:30:00Z",
     "author_association": "OWNER",
-    "body": "# QC Notification\n\n@reviewer2\n\n## Metadata\ncurrent commit: 456def789abc012345678901234567890123cdef\nprevious commit: def456abc789012345678901234567890123abcd\n\nImplemented security fixes as requested.",
+    "body": "# QC Notification\n\n@reviewer2\n\n## Metadata\ncurrent commit: 456def789abc012345678901234567890123cdef\nprevious commit: def456789abc012345678901234567890123abcd\n\nImplemented security fixes as requested.",
     "reactions": {
       "url": "https://api.github.com/repos/owner/repo/issues/comments/2001/reactions",
       "total_count": 0,

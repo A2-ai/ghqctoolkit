@@ -54,6 +54,7 @@ pub struct IssueThread {
     pub branch: String,
     pub(crate) open: bool,
     pub commits: Vec<IssueCommit>,
+    pub milestone: String,
 }
 
 impl IssueThread {
@@ -65,6 +66,11 @@ impl IssueThread {
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
         let issue_is_open = matches!(issue.state, IssueState::Open);
+        let milestone = if let Some(m) = &issue.milestone {
+            m.title.to_string()
+        } else {
+            return Err(IssueError::MilestoneNotFound);
+        };
 
         // 1. Parse the branch from the issue body first
         let branch = issue
@@ -153,6 +159,7 @@ impl IssueThread {
             branch,
             open: issue_is_open,
             commits: issue_commits,
+            milestone,
         })
     }
 
@@ -341,6 +348,8 @@ pub enum IssueError {
     InitialCommitNotFound,
     #[error("Branch not found in issue body")]
     BranchNotFound,
+    #[error("Milestone not found for issue")]
+    MilestoneNotFound,
     #[error("Commit string '{0}' could not be parsed to a valid ObjectId")]
     CommitNotParseable(String),
 }
@@ -612,7 +621,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_from_issue_closed_with_approval() {
         // Comment sequence:
         // 1. Initial commit: def456abc789012345678901234567890123abcd (from issue body)
@@ -648,21 +656,18 @@ mod tests {
         // Verify initial commit
         assert_eq!(
             result.initial_commit(),
-            Some(&ObjectId::from_str("def456abc789012345678901234567890123abcd").unwrap())
+            Some(&ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap())
         );
 
-        // Should have one notification commit and one approved commit
+        // Should have zero notification commits (the one notification was later approved)
+        // and one approved commit
         let notification_commits: Vec<&ObjectId> = result
             .commits
             .iter()
             .filter(|c| matches!(c.state, CommitState::Notification))
             .map(|c| &c.hash)
             .collect();
-        assert_eq!(notification_commits.len(), 1);
-        assert_eq!(
-            *notification_commits[0],
-            ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap()
-        );
+        assert_eq!(notification_commits.len(), 0);
 
         // Closed issue with approval should have approved commit
         assert_eq!(
