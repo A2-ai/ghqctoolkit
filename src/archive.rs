@@ -8,11 +8,11 @@ use std::{
 
 use flate2::{Compression, write::GzEncoder};
 use gix::ObjectId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{GitFileOps, GitFileOpsError, IssueError, IssueThread, utils::EnvProvider};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ArchiveQC {
     pub milestone: String,
     pub approved: bool,
@@ -26,11 +26,22 @@ where
     serializer.serialize_str(&value.to_string())
 }
 
-#[derive(Debug, Clone, Serialize)]
+fn parse_from_string<'de, D>(deserializer: D) -> Result<ObjectId, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    ObjectId::from_hex(s.as_bytes()).map_err(serde::de::Error::custom)
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ArchiveFile {
     pub repository_file: PathBuf,
     pub archive_file: PathBuf,
-    #[serde(serialize_with = "display_as_string")]
+    #[serde(
+        serialize_with = "display_as_string",
+        deserialize_with = "parse_from_string"
+    )]
     pub commit: ObjectId,
     // archive file will only ever have a milestone AND approval status or neither
     #[serde(flatten)]
@@ -97,7 +108,7 @@ impl ArchiveFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ArchiveMetadata {
     creator: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
@@ -229,4 +240,503 @@ pub enum ArchiveError {
     CommitDetermination(PathBuf),
     #[error("Failed to serialize metadata: {0}")]
     Serde(#[from] serde_json::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        IssueCommit, IssueThread, git::MockGitFileOps, issue::CommitState, utils::MockEnvProvider,
+    };
+    use flate2::read::GzDecoder;
+    use gix::ObjectId;
+    use std::collections::HashMap;
+    use tar::Archive;
+    use tempfile::TempDir;
+
+    fn create_test_object_id(suffix: &str) -> ObjectId {
+        // Create a valid 40-character hex string for SHA-1
+        let hex_str = format!("{:0<40}", format!("deadbeef{}", suffix));
+        ObjectId::from_hex(hex_str.as_bytes()).unwrap()
+    }
+
+    fn create_test_issue_thread() -> IssueThread {
+        IssueThread {
+            file: PathBuf::from("src/test.rs"),
+            branch: "main".to_string(),
+            open: false,
+            commits: vec![
+                IssueCommit {
+                    hash: create_test_object_id("123"),
+                    message: "Initial commit".to_string(),
+                    state: CommitState::Initial,
+                    file_changed: true,
+                    reviewed: false,
+                },
+                IssueCommit {
+                    hash: create_test_object_id("456"),
+                    message: "Fix bug".to_string(),
+                    state: CommitState::Approved,
+                    file_changed: true,
+                    reviewed: true,
+                },
+            ],
+            milestone: "v1.0".to_string(),
+        }
+    }
+
+    fn setup_mock_env_with_user() -> MockEnvProvider {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("USER"))
+            .returning(|_| Ok("test_user".to_string()));
+        mock_env
+    }
+
+    fn setup_mock_env_no_user() -> MockEnvProvider {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("USER"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        mock_env
+    }
+
+    #[test]
+    fn test_archive_metadata_new_success() {
+        let mock_env = setup_mock_env_with_user();
+
+        let files = vec![
+            ArchiveFile {
+                repository_file: PathBuf::from("src/main.rs"),
+                archive_file: PathBuf::from("src/main.rs"),
+                commit: create_test_object_id("123"),
+                qc: Some(ArchiveQC {
+                    milestone: "v1.0".to_string(),
+                    approved: true,
+                }),
+            },
+            ArchiveFile {
+                repository_file: PathBuf::from("src/lib.rs"),
+                archive_file: PathBuf::from("src/lib.rs"),
+                commit: create_test_object_id("456"),
+                qc: Some(ArchiveQC {
+                    milestone: "v1.0".to_string(),
+                    approved: false,
+                }),
+            },
+        ];
+
+        let result = ArchiveMetadata::new(files.clone(), &mock_env);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.creator, Some("test_user".to_string()));
+        assert_eq!(metadata.files.len(), 2);
+        assert_eq!(
+            metadata.files[0].repository_file,
+            PathBuf::from("src/main.rs")
+        );
+        assert_eq!(
+            metadata.files[1].repository_file,
+            PathBuf::from("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn test_archive_metadata_new_no_user() {
+        let mock_env = setup_mock_env_no_user();
+
+        let files = vec![ArchiveFile {
+            repository_file: PathBuf::from("src/main.rs"),
+            archive_file: PathBuf::from("main.rs"),
+            commit: create_test_object_id("123"),
+            qc: None,
+        }];
+
+        let result = ArchiveMetadata::new(files, &mock_env);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.creator, None);
+        assert_eq!(metadata.files.len(), 1);
+    }
+
+    #[test]
+    fn test_archive_metadata_new_duplicate_paths_error() {
+        let mock_env = setup_mock_env_with_user();
+
+        // Create files that will conflict in the archive (same archive_file path)
+        let files = vec![
+            ArchiveFile {
+                repository_file: PathBuf::from("src/main.rs"),
+                archive_file: PathBuf::from("main.rs"), // Flattened path
+                commit: create_test_object_id("123"),
+                qc: None,
+            },
+            ArchiveFile {
+                repository_file: PathBuf::from("tests/main.rs"),
+                archive_file: PathBuf::from("main.rs"), // Same flattened path!
+                commit: create_test_object_id("456"),
+                qc: None,
+            },
+        ];
+
+        let result = ArchiveMetadata::new(files, &mock_env);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ArchiveError::FileConflict(msg) => {
+                assert!(msg.contains("Conflicts detected"));
+                assert!(msg.contains("src/main.rs + tests/main.rs -> main.rs"));
+            }
+            _ => panic!("Expected FileConflict error"),
+        }
+    }
+
+    #[test]
+    fn test_archive_metadata_new_multiple_conflicts() {
+        let mock_env = setup_mock_env_with_user();
+
+        let files = vec![
+            // First conflict: main.rs
+            ArchiveFile {
+                repository_file: PathBuf::from("src/main.rs"),
+                archive_file: PathBuf::from("main.rs"),
+                commit: create_test_object_id("123"),
+                qc: None,
+            },
+            ArchiveFile {
+                repository_file: PathBuf::from("tests/main.rs"),
+                archive_file: PathBuf::from("main.rs"),
+                commit: create_test_object_id("456"),
+                qc: None,
+            },
+            // Second conflict: config.rs
+            ArchiveFile {
+                repository_file: PathBuf::from("src/config.rs"),
+                archive_file: PathBuf::from("config.rs"),
+                commit: create_test_object_id("789"),
+                qc: None,
+            },
+            ArchiveFile {
+                repository_file: PathBuf::from("lib/config.rs"),
+                archive_file: PathBuf::from("config.rs"),
+                commit: create_test_object_id("abc"),
+                qc: None,
+            },
+        ];
+
+        let result = ArchiveMetadata::new(files, &mock_env);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ArchiveError::FileConflict(msg) => {
+                assert!(msg.contains("Conflicts detected"));
+                // Should contain both conflicts
+                assert!(msg.contains("main.rs"));
+                assert!(msg.contains("config.rs"));
+            }
+            _ => panic!("Expected FileConflict error"),
+        }
+    }
+
+    #[test]
+    fn test_archive_file_from_issue_thread_approved() {
+        let issue_thread = create_test_issue_thread();
+
+        let result = ArchiveFile::from_issue_thread(&issue_thread, false);
+        assert!(result.is_ok());
+
+        let archive_file = result.unwrap();
+        assert_eq!(archive_file.repository_file, PathBuf::from("src/test.rs"));
+        assert_eq!(archive_file.archive_file, PathBuf::from("src/test.rs"));
+        assert_eq!(archive_file.commit, create_test_object_id("456")); // Approved commit
+
+        let qc = archive_file.qc.unwrap();
+        assert_eq!(qc.milestone, "v1.0");
+        assert!(qc.approved);
+    }
+
+    #[test]
+    fn test_archive_file_from_issue_thread_flattened() {
+        let issue_thread = create_test_issue_thread();
+
+        let result = ArchiveFile::from_issue_thread(&issue_thread, true);
+        assert!(result.is_ok());
+
+        let archive_file = result.unwrap();
+        assert_eq!(archive_file.repository_file, PathBuf::from("src/test.rs"));
+        assert_eq!(archive_file.archive_file, PathBuf::from("test.rs")); // Flattened
+        assert_eq!(archive_file.commit, create_test_object_id("456"));
+    }
+
+    #[test]
+    fn test_archive_file_from_issue_thread_not_approved() {
+        let mut issue_thread = create_test_issue_thread();
+        // Remove the approved commit, should use latest instead
+        // Commits are stored newest first, so 789 should be first to be "latest"
+        issue_thread.commits = vec![
+            IssueCommit {
+                hash: create_test_object_id("789"),
+                message: "Latest commit".to_string(),
+                state: CommitState::Notification,
+                file_changed: true,
+                reviewed: false,
+            },
+            IssueCommit {
+                hash: create_test_object_id("123"),
+                message: "Initial commit".to_string(),
+                state: CommitState::Initial,
+                file_changed: true,
+                reviewed: false,
+            },
+        ];
+
+        let result = ArchiveFile::from_issue_thread(&issue_thread, false);
+        assert!(result.is_ok());
+
+        let archive_file = result.unwrap();
+        assert_eq!(archive_file.commit, create_test_object_id("789")); // Latest commit
+
+        let qc = archive_file.qc.unwrap();
+        assert!(!qc.approved);
+    }
+
+    #[test]
+    fn test_archive_file_from_issue_thread_no_commits() {
+        let mut issue_thread = create_test_issue_thread();
+        issue_thread.commits = vec![];
+
+        let result = ArchiveFile::from_issue_thread(&issue_thread, false);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ArchiveError::CommitDetermination(path) => {
+                assert_eq!(path, PathBuf::from("src/test.rs"));
+            }
+            _ => panic!("Expected CommitDetermination error"),
+        }
+    }
+
+    #[test]
+    fn test_archive_file_from_file() {
+        let file_path = PathBuf::from("src/example.rs");
+        let commit = create_test_object_id("123");
+
+        let archive_file = ArchiveFile::from_file(&file_path, commit.clone(), false);
+
+        assert_eq!(archive_file.repository_file, file_path);
+        assert_eq!(archive_file.archive_file, PathBuf::from("src/example.rs"));
+        assert_eq!(archive_file.commit, commit);
+        assert!(archive_file.qc.is_none());
+    }
+
+    #[test]
+    fn test_archive_file_from_file_flattened() {
+        let file_path = PathBuf::from("src/example.rs");
+        let commit = create_test_object_id("123");
+
+        let archive_file = ArchiveFile::from_file(&file_path, commit.clone(), true);
+
+        assert_eq!(archive_file.repository_file, file_path);
+        assert_eq!(archive_file.archive_file, PathBuf::from("example.rs")); // Flattened
+        assert_eq!(archive_file.commit, commit);
+    }
+
+    #[test]
+    fn test_archive_file_content() {
+        let mut mock_git = MockGitFileOps::new();
+        let file_content = b"fn main() { println!(\"Hello\"); }";
+        let commit = create_test_object_id("123");
+
+        mock_git
+            .expect_file_bytes_at_commit()
+            .with(
+                mockall::predicate::eq(PathBuf::from("src/main.rs")),
+                mockall::predicate::eq(commit.clone()),
+            )
+            .returning(move |_, _| Ok(file_content.to_vec()));
+
+        let archive_file = ArchiveFile {
+            repository_file: PathBuf::from("src/main.rs"),
+            archive_file: PathBuf::from("main.rs"),
+            commit: commit.clone(),
+            qc: None,
+        };
+
+        let result = archive_file.file_content(&mock_git);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), file_content.to_vec());
+    }
+
+    #[test]
+    fn test_archive_creates_valid_tar_gz() {
+        let temp_dir = TempDir::new().unwrap();
+        let archive_path = temp_dir.path().join("test_archive.tar.gz");
+
+        let mut mock_git = MockGitFileOps::new();
+        let file1_content = b"content of file1";
+        let file2_content = b"content of file2";
+
+        mock_git
+            .expect_file_bytes_at_commit()
+            .with(
+                mockall::predicate::eq(PathBuf::from("src/file1.rs")),
+                mockall::predicate::eq(create_test_object_id("123")),
+            )
+            .returning(move |_, _| Ok(file1_content.to_vec()));
+
+        mock_git
+            .expect_file_bytes_at_commit()
+            .with(
+                mockall::predicate::eq(PathBuf::from("src/file2.rs")),
+                mockall::predicate::eq(create_test_object_id("456")),
+            )
+            .returning(move |_, _| Ok(file2_content.to_vec()));
+
+        let mock_env = setup_mock_env_with_user();
+
+        let files = vec![
+            ArchiveFile {
+                repository_file: PathBuf::from("src/file1.rs"),
+                archive_file: PathBuf::from("file1.rs"),
+                commit: create_test_object_id("123"),
+                qc: Some(ArchiveQC {
+                    milestone: "v1.0".to_string(),
+                    approved: true,
+                }),
+            },
+            ArchiveFile {
+                repository_file: PathBuf::from("src/file2.rs"),
+                archive_file: PathBuf::from("file2.rs"),
+                commit: create_test_object_id("456"),
+                qc: Some(ArchiveQC {
+                    milestone: "v1.0".to_string(),
+                    approved: false,
+                }),
+            },
+        ];
+
+        let metadata = ArchiveMetadata::new(files, &mock_env).unwrap();
+        let result = archive(metadata, &mock_git, &archive_path);
+
+        assert!(result.is_ok());
+        assert!(archive_path.exists());
+
+        // Verify the archive can be read and contains expected files
+        let file = std::fs::File::open(&archive_path).unwrap();
+        let decoder = GzDecoder::new(file);
+        let mut archive = Archive::new(decoder);
+
+        let mut entries: HashMap<String, Vec<u8>> = HashMap::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap().to_string_lossy().to_string();
+            let mut contents = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut contents).unwrap();
+            entries.insert(path, contents);
+        }
+
+        // Should contain metadata file + 2 source files
+        assert_eq!(entries.len(), 3);
+        assert!(entries.contains_key("ghqc_archive_metadata.json"));
+        assert!(entries.contains_key("file1.rs"));
+        assert!(entries.contains_key("file2.rs"));
+
+        // Verify file contents
+        assert_eq!(entries["file1.rs"], file1_content);
+        assert_eq!(entries["file2.rs"], file2_content);
+
+        // Verify metadata file contains valid JSON
+        let metadata_content =
+            String::from_utf8(entries["ghqc_archive_metadata.json"].clone()).unwrap();
+        let parsed_metadata: ArchiveMetadata = serde_json::from_str(&metadata_content).unwrap();
+        assert_eq!(parsed_metadata.creator, Some("test_user".to_string()));
+        assert_eq!(parsed_metadata.files.len(), 2);
+    }
+
+    #[test]
+    fn test_archive_creates_directory_structure() {
+        let temp_dir = TempDir::new().unwrap();
+        let nested_path = temp_dir
+            .path()
+            .join("nested")
+            .join("directory")
+            .join("archive.tar.gz");
+
+        let mut mock_git = MockGitFileOps::new();
+        let file_content = b"test content";
+
+        mock_git
+            .expect_file_bytes_at_commit()
+            .returning(move |_, _| Ok(file_content.to_vec()));
+
+        let mock_env = setup_mock_env_with_user();
+
+        let files = vec![ArchiveFile {
+            repository_file: PathBuf::from("src/test.rs"),
+            archive_file: PathBuf::from("test.rs"),
+            commit: create_test_object_id("123"),
+            qc: None,
+        }];
+
+        let metadata = ArchiveMetadata::new(files, &mock_env).unwrap();
+        let result = archive(metadata, &mock_git, &nested_path);
+
+        assert!(result.is_ok());
+        assert!(nested_path.exists());
+        assert!(nested_path.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn test_archive_preserves_directory_structure() {
+        let temp_dir = TempDir::new().unwrap();
+        let archive_path = temp_dir.path().join("structured_archive.tar.gz");
+
+        let mut mock_git = MockGitFileOps::new();
+        let file_content = b"content";
+
+        mock_git
+            .expect_file_bytes_at_commit()
+            .returning(move |_, _| Ok(file_content.to_vec()));
+
+        let mock_env = setup_mock_env_with_user();
+
+        let files = vec![
+            ArchiveFile {
+                repository_file: PathBuf::from("src/main.rs"),
+                archive_file: PathBuf::from("src/main.rs"), // Keep directory structure
+                commit: create_test_object_id("123"),
+                qc: None,
+            },
+            ArchiveFile {
+                repository_file: PathBuf::from("tests/integration.rs"),
+                archive_file: PathBuf::from("tests/integration.rs"), // Keep directory structure
+                commit: create_test_object_id("456"),
+                qc: None,
+            },
+        ];
+
+        let metadata = ArchiveMetadata::new(files, &mock_env).unwrap();
+        let result = archive(metadata, &mock_git, &archive_path);
+
+        assert!(result.is_ok());
+
+        // Verify directory structure is preserved in archive
+        let file = std::fs::File::open(&archive_path).unwrap();
+        let decoder = GzDecoder::new(file);
+        let mut archive = Archive::new(decoder);
+
+        let paths: Vec<String> = archive
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap().path().unwrap().to_string_lossy().to_string())
+            .collect();
+
+        assert!(paths.contains(&"src/main.rs".to_string()));
+        assert!(paths.contains(&"tests/integration.rs".to_string()));
+        assert!(paths.contains(&"ghqc_archive_metadata.json".to_string()));
+    }
 }

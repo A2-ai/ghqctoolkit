@@ -17,6 +17,9 @@ pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{
     GitAuthor, GitCommit, GitFileOps, GitFileOpsError, find_file_commits, get_commits_robust,
 };
+
+#[cfg(test)]
+pub use file_ops::MockGitFileOps;
 pub use helpers::GitHelpers;
 pub use repository::{GitRepository, GitRepositoryError};
 pub use status::{GitStatus, GitStatusError, GitStatusOps};

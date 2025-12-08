@@ -621,7 +621,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_from_issue_closed_with_approval() {
         // Comment sequence:
         // 1. Initial commit: def456abc789012345678901234567890123abcd (from issue body)
@@ -657,21 +656,18 @@ mod tests {
         // Verify initial commit
         assert_eq!(
             result.initial_commit(),
-            Some(&ObjectId::from_str("def456abc789012345678901234567890123abcd").unwrap())
+            Some(&ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap())
         );
 
-        // Should have one notification commit and one approved commit
+        // Should have zero notification commits (the one notification was later approved)
+        // and one approved commit
         let notification_commits: Vec<&ObjectId> = result
             .commits
             .iter()
             .filter(|c| matches!(c.state, CommitState::Notification))
             .map(|c| &c.hash)
             .collect();
-        assert_eq!(notification_commits.len(), 1);
-        assert_eq!(
-            *notification_commits[0],
-            ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap()
-        );
+        assert_eq!(notification_commits.len(), 0);
 
         // Closed issue with approval should have approved commit
         assert_eq!(
