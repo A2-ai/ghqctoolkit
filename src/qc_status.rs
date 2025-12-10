@@ -418,6 +418,15 @@ mod tests {
                 false, // issue closed
                 "ApprovalRequired",
             ),
+            (
+                "I/A: Approved",
+                vec![(
+                    make_statuses(&[CommitStatus::Initial, CommitStatus::Approved]),
+                    false,
+                )],
+                false,
+                "Approved",
+            ),
         ];
 
         for (scenario, commit_data, issue_open, expected_status) in test_cases {
