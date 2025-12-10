@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     Configuration, DiskCache, GitHubReader, GitHubWriter, GitInfo, GitRepository, QCApprove,
-    QCIssue, QCReview, QCUnapprove, RelevantFile, RepoUser,
+    QCIssue, QCReview, QCUnapprove, RepoUser,
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
-        prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
+        prompt_issue, prompt_milestone, prompt_note, prompt_single_commit,
     },
     comment::QCComment,
     issue::IssueThread,
@@ -21,7 +21,6 @@ impl QCIssue {
         file: PathBuf,
         checklist_name: String,
         assignees: Option<Vec<String>>,
-        relevant_files: Option<Vec<RelevantFile>>,
         description: Option<String>,
         milestones: Vec<Milestone>,
         repo_users: &[RepoUser],
@@ -73,7 +72,6 @@ impl QCIssue {
             git_info,
             milestone.number as u64,
             assignees,
-            relevant_files.unwrap_or_default(),
             checklist,
         )?;
 
@@ -98,7 +96,6 @@ impl QCIssue {
         let file = prompt_file(project_dir, &milestone_issues)?;
         let checklist = prompt_checklist(&configuration)?;
         let assignees = prompt_assignees(&repo_users)?;
-        let relevant_files = prompt_relevant_files(project_dir)?;
 
         // Display summary
         println!("\n✨ Creating issue with:");
@@ -108,16 +105,6 @@ impl QCIssue {
         if !assignees.is_empty() {
             println!("   👥 Assignees: {}", assignees.join(", "));
         }
-        if !relevant_files.is_empty() {
-            println!(
-                "   🔗 Relevant files: {}",
-                relevant_files
-                    .iter()
-                    .map(|f| f.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
         println!();
 
         // Create the QCIssue
@@ -126,7 +113,6 @@ impl QCIssue {
             git_info,
             milestone.number as u64,
             assignees,
-            relevant_files,
             checklist,
         )?;
 

@@ -1,8 +1,4 @@
-use std::{
-    fmt,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::path::{Path, PathBuf};
 
 use crate::{
     configuration::Checklist,
@@ -17,89 +13,6 @@ pub enum QCIssueError {
     GitFileOpsError(#[from] GitFileOpsError),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct RelevantFile {
-    pub name: String,
-    pub path: PathBuf,
-    pub notes: Option<String>,
-}
-
-impl fmt::Display for RelevantFile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.path.display())
-    }
-}
-
-impl FromStr for RelevantFile {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some((name, path)) = s.split_once(':') {
-            if path.trim().is_empty() {
-                return Err("Path cannot be empty".to_string());
-            }
-            let path_trimmed = path.trim();
-            let path_buf = PathBuf::from(path_trimmed);
-
-            // If name is empty or just whitespace, use the file name from path as the name
-            let final_name = if name.trim().is_empty() {
-                path_buf
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(path_trimmed)
-                    .to_string()
-            } else {
-                name.trim().to_string()
-            };
-
-            Ok(Self {
-                name: final_name,
-                path: path_buf,
-                notes: None,
-            })
-        } else {
-            // No colon separator - treat the whole string as a path and derive name from it
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                return Err("Path cannot be empty".to_string());
-            }
-
-            let path_buf = PathBuf::from(trimmed);
-            let name = path_buf
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(trimmed)
-                .to_string();
-
-            Ok(Self {
-                name,
-                path: path_buf,
-                notes: None,
-            })
-        }
-    }
-}
-
-impl RelevantFile {
-    fn as_string(&self, git_info: &impl GitHelpers, branch: &str) -> String {
-        let note = if let Some(n) = &self.notes {
-            // Convert literal \n sequences to actual newlines, then format with proper indentation
-            let converted_notes = n.replace("\\n", "\n");
-            format!("\n\t> {}", converted_notes.replace("\n", "\n\t> "))
-        } else {
-            String::new()
-        };
-
-        format!(
-            "- **{}**\n\t- [`{}`]({}){}",
-            self.name,
-            self.path.display(),
-            git_info.file_content_url(branch, &self.path),
-            note
-        )
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct QCIssue {
     pub(crate) milestone_id: u64,
@@ -109,7 +22,6 @@ pub struct QCIssue {
     authors: Vec<GitAuthor>,
     checklist: Checklist,
     pub(crate) assignees: Vec<String>,
-    relevant_files: Vec<RelevantFile>,
 }
 
 impl QCIssue {
@@ -146,16 +58,6 @@ impl QCIssue {
 
         let mut body = vec![metadata.join("\n* ")];
 
-        if !self.relevant_files.is_empty() {
-            let rel_files = self
-                .relevant_files
-                .iter()
-                .map(|r| r.as_string(git_info, &self.branch))
-                .collect::<Vec<_>>()
-                .join("\n");
-            metadata.push(format!("## Relevant files\n\n{rel_files}"));
-        };
-
         body.push(self.checklist.to_string());
 
         body.join("\n\n")
@@ -174,7 +76,6 @@ impl QCIssue {
         git_info: &(impl GitRepository + GitFileOps),
         milestone_id: u64,
         assignees: Vec<String>,
-        relevant_files: Vec<RelevantFile>,
         checklist: Checklist,
     ) -> Result<Self, QCIssueError> {
         Ok(Self {
@@ -185,7 +86,6 @@ impl QCIssue {
             checklist,
             assignees,
             milestone_id,
-            relevant_files,
         })
     }
 }
@@ -220,18 +120,6 @@ mod tests {
                 "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
             ),
             assignees: vec!["reviewer1".to_string(), "reviewer2".to_string()],
-            relevant_files: vec![
-                RelevantFile {
-                    name: "rel file".to_string(),
-                    path: PathBuf::from("path/to/file.rel"),
-                    notes: Some("this\nis\na note".to_string())
-                },
-                RelevantFile {
-                    name: "rel file2".to_string(),
-                    path: PathBuf::from("path/to/file2.rel"),
-                    notes: None,
-                }
-            ]
         }
     }
 
@@ -259,164 +147,11 @@ mod tests {
     }
 
     #[test]
-    fn test_issue_body_snapshot_with_rel_files() {
+    fn test_issue_body_snapshot() {
         let issue = create_test_issue();
         let git_helpers = TestGitHelpers;
 
         let body = issue.body(&git_helpers);
         insta::assert_snapshot!(body);
-    }
-
-    #[test]
-    fn test_issue_body_snapshot_without_rel_files() {
-        let mut issue = create_test_issue();
-        issue.relevant_files = Vec::new();
-
-        let git_helpers = TestGitHelpers;
-
-        let body = issue.body(&git_helpers);
-        insta::assert_snapshot!(body);
-    }
-
-    #[test]
-    fn test_named_file_parsing_matrix() {
-        let test_cases = vec![
-            // (input, expected_result, test_description)
-            (
-                "Config File:src/config.rs",
-                Ok(RelevantFile {
-                    name: "Config File".to_string(),
-                    path: PathBuf::from("src/config.rs"),
-                    notes: None,
-                }),
-                "basic parsing with name and path",
-            ),
-            (
-                "  Test File  :  src/test.rs  ",
-                Ok(RelevantFile {
-                    name: "Test File".to_string(),
-                    path: PathBuf::from("src/test.rs"),
-                    notes: None,
-                }),
-                "parsing with extra spaces",
-            ),
-            (
-                "Database:db/models.rs",
-                Ok(RelevantFile {
-                    name: "Database".to_string(),
-                    path: PathBuf::from("db/models.rs"),
-                    notes: None,
-                }),
-                "single word name",
-            ),
-            (
-                "Very Long Config File Name:path/to/very/long/file/name.rs",
-                Ok(RelevantFile {
-                    name: "Very Long Config File Name".to_string(),
-                    path: PathBuf::from("path/to/very/long/file/name.rs"),
-                    notes: None,
-                }),
-                "long names and paths",
-            ),
-            (
-                "File with: colon:src/special.rs",
-                Ok(RelevantFile {
-                    name: "File with".to_string(),
-                    path: PathBuf::from("colon:src/special.rs"),
-                    notes: None,
-                }),
-                "multiple colons (only first is separator)",
-            ),
-            (
-                "src/config.rs",
-                Ok(RelevantFile {
-                    name: "config.rs".to_string(),
-                    path: PathBuf::from("src/config.rs"),
-                    notes: None,
-                }),
-                "no separator - path only, name derived from filename",
-            ),
-            (
-                "path/to/file.txt",
-                Ok(RelevantFile {
-                    name: "file.txt".to_string(),
-                    path: PathBuf::from("path/to/file.txt"),
-                    notes: None,
-                }),
-                "no separator - derive name from file extension",
-            ),
-            (
-                "single_file",
-                Ok(RelevantFile {
-                    name: "single_file".to_string(),
-                    path: PathBuf::from("single_file"),
-                    notes: None,
-                }),
-                "no separator - single filename",
-            ),
-            (
-                ":src/file.rs",
-                Ok(RelevantFile {
-                    name: "file.rs".to_string(),
-                    path: PathBuf::from("src/file.rs"),
-                    notes: None,
-                }),
-                "empty name - derive from filename",
-            ),
-            (
-                "   :  src/test.rs  ",
-                Ok(RelevantFile {
-                    name: "test.rs".to_string(),
-                    path: PathBuf::from("src/test.rs"),
-                    notes: None,
-                }),
-                "whitespace name - derive from filename",
-            ),
-            (
-                "Name:",
-                Err("Path cannot be empty".to_string()),
-                "empty path with colon",
-            ),
-            (
-                "",
-                Err("Path cannot be empty".to_string()),
-                "completely empty",
-            ),
-            (
-                "   ",
-                Err("Path cannot be empty".to_string()),
-                "only whitespace",
-            ),
-        ];
-
-        for (input, expected, description) in test_cases {
-            let result: Result<RelevantFile, String> = input.parse();
-            match (result, expected) {
-                (Ok(actual), Ok(expected)) => {
-                    assert_eq!(actual, expected, "Test case failed: {}", description);
-                }
-                (Err(actual_err), Err(expected_err)) => {
-                    assert!(
-                        actual_err.contains(&expected_err),
-                        "Test case '{}' failed: expected error containing '{}', got '{}'",
-                        description,
-                        expected_err,
-                        actual_err
-                    );
-                }
-                (Ok(actual), Err(expected_err)) => {
-                    panic!(
-                        "Test case '{}' failed: expected error '{}', but got success: {:?}",
-                        description, expected_err, actual
-                    );
-                }
-                (Err(actual_err), Ok(expected)) => {
-                    panic!(
-                        "Test case '{}' failed: expected success {:?}, but got error '{}'",
-                        description, expected, actual_err
-                    );
-                }
-            }
-        }
     }
 }

@@ -5,7 +5,7 @@ use octocrab::models::Milestone;
 use std::path::PathBuf;
 
 use ghqctoolkit::cli::{
-    FileCommitPair, FileCommitPairParser, MilestoneSelectionFilter, RelevantFileParser, find_issue,
+    FileCommitPair, FileCommitPairParser, MilestoneSelectionFilter, find_issue,
     generate_archive_name, get_milestone_issue_threads, interactive_milestone_status,
     interactive_status, milestone_status, prompt_archive, prompt_milestone_record,
     single_issue_status,
@@ -14,7 +14,7 @@ use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     ArchiveFile, ArchiveMetadata, Configuration, DiskCache, GitCommand, GitFileOps, GitHubReader,
     GitHubWriter, GitInfo, GitRepository, GitStatusOps, HttpImageDownloader, IssueThread, QCStatus,
-    RelevantFile, archive, configuration_status, create_labels_if_needed, determine_config_dir,
+    archive, configuration_status, create_labels_if_needed, determine_config_dir,
     fetch_milestone_issues, get_milestone_issue_information, get_repo_users, record, render,
     setup_configuration,
 };
@@ -76,10 +76,6 @@ enum IssueCommands {
         /// Assignees for the issue (usernames)
         #[arg(short, long)]
         assignees: Option<Vec<String>>,
-
-        /// Additional relevant files for the issue (format: "name:path" or just "path")
-        #[arg(short = 'r', long, value_parser = RelevantFileParser)]
-        relevant_files: Option<Vec<RelevantFile>>,
 
         /// Description for the milestone (only used when creating a new milestone)
         #[arg(short = 'D', long)]
@@ -271,7 +267,6 @@ async fn main() -> Result<()> {
                     file,
                     checklist_name,
                     assignees,
-                    relevant_files,
                     description,
                 } => {
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
@@ -290,7 +285,6 @@ async fn main() -> Result<()> {
                                 file,
                                 checklist_name,
                                 assignees,
-                                relevant_files,
                                 description,
                                 milestones,
                                 &repo_users,

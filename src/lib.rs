@@ -28,7 +28,7 @@ pub use configuration::{
     Checklist, Configuration, ConfigurationOptions, configuration_status, determine_config_dir,
     setup_configuration,
 };
-pub use create::{QCIssue, RelevantFile};
+pub use create::QCIssue;
 pub use git::{
     AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitCommit, GitCommitAnalysis,
     GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
