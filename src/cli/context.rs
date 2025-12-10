@@ -308,10 +308,12 @@ impl QCApprove {
         }
 
         // Select single commit to approve with status annotations
-        // Default to latest_commit if available, otherwise use position 0 (most recent file change)
+        // Default to latest_commit position, otherwise use position 0 (most recent file change)
+        let latest = issue_thread.latest_commit();
         let default_position = issue_thread
-            .latest_commit()
-            .and_then(|latest| issue_thread.commits.iter().position(|c| c.hash == *latest))
+            .commits
+            .iter()
+            .position(|c| c.hash == latest.hash)
             .unwrap_or(0);
 
         let approved_commit = prompt_single_commit(
@@ -642,13 +644,8 @@ impl QCReview {
             }
         }
 
-        // Try latest_commit from issue thread
-        if let Some(latest) = issue_thread.latest_commit() {
-            return *latest;
-        }
-
-        // Final fallback: most recent file commit
-        issue_thread.commits[0].hash
+        // Use latest_commit from issue thread as fallback
+        issue_thread.latest_commit().hash
     }
 }
 

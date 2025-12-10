@@ -691,19 +691,34 @@ fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<
                 }
             };
 
-            // Determine commit status
-            let status_indicator = match commit.state {
-                crate::issue::CommitState::Initial => "🌱", // Initial commit
-                crate::issue::CommitState::Notification => "💬", // Has comments
-                crate::issue::CommitState::Approved => "✅", // Approved commit
-                crate::issue::CommitState::NoComment => {
-                    // Check if it's the latest commit
-                    if Some(&commit.hash) == issue_thread.latest_commit() {
-                        "📍" // Latest commit
-                    } else {
-                        "  " // Regular commit
-                    }
+            // Determine commit status with priority display system
+            // Priority: Show Initial+Approved both, hide Notification when others present
+            let status_indicator = if commit
+                .statuses
+                .contains(&crate::issue::CommitStatus::Approved)
+            {
+                if commit
+                    .statuses
+                    .contains(&crate::issue::CommitStatus::Initial)
+                {
+                    "🌱✅" // Initial + Approved
+                } else {
+                    "✅" // Approved only
                 }
+            } else if commit
+                .statuses
+                .contains(&crate::issue::CommitStatus::Initial)
+            {
+                "🌱" // Initial commit
+            } else if commit
+                .statuses
+                .contains(&crate::issue::CommitStatus::Notification)
+            {
+                "💬" // Has comments
+            } else if commit.hash == issue_thread.latest_commit().hash {
+                "📍" // Latest commit
+            } else {
+                "  " // Regular commit
             };
 
             // Add file change indicator

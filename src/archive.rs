@@ -59,10 +59,8 @@ impl ArchiveFile {
     ) -> Result<Self, ArchiveError> {
         let (commit, approved) = if let Some(approved_commit) = issue_thread.approved_commit() {
             (approved_commit.hash, true)
-        } else if let Some(latest_commit) = issue_thread.latest_commit() {
-            (latest_commit.clone(), false)
         } else {
-            return Err(ArchiveError::CommitDetermination(issue_thread.file.clone()));
+            (issue_thread.latest_commit().hash.clone(), false)
         };
 
         let archive_file = if flatten {
@@ -246,7 +244,7 @@ pub enum ArchiveError {
 mod tests {
     use super::*;
     use crate::{
-        IssueCommit, IssueThread, git::MockGitFileOps, issue::CommitState, utils::MockEnvProvider,
+        IssueCommit, IssueThread, git::MockGitFileOps, issue::CommitStatus, utils::MockEnvProvider,
     };
     use flate2::read::GzDecoder;
     use gix::ObjectId;
@@ -269,16 +267,23 @@ mod tests {
                 IssueCommit {
                     hash: create_test_object_id("123"),
                     message: "Initial commit".to_string(),
-                    state: CommitState::Initial,
+                    statuses: {
+                        let mut set = std::collections::HashSet::new();
+                        set.insert(CommitStatus::Initial);
+                        set
+                    },
                     file_changed: true,
-                    reviewed: false,
                 },
                 IssueCommit {
                     hash: create_test_object_id("456"),
                     message: "Fix bug".to_string(),
-                    state: CommitState::Approved,
+                    statuses: {
+                        let mut set = std::collections::HashSet::new();
+                        set.insert(CommitStatus::Approved);
+                        set.insert(CommitStatus::Reviewed);
+                        set
+                    },
                     file_changed: true,
-                    reviewed: true,
                 },
             ],
             milestone: "v1.0".to_string(),
@@ -481,16 +486,22 @@ mod tests {
             IssueCommit {
                 hash: create_test_object_id("789"),
                 message: "Latest commit".to_string(),
-                state: CommitState::Notification,
+                statuses: {
+                    let mut set = std::collections::HashSet::new();
+                    set.insert(CommitStatus::Notification);
+                    set
+                },
                 file_changed: true,
-                reviewed: false,
             },
             IssueCommit {
                 hash: create_test_object_id("123"),
                 message: "Initial commit".to_string(),
-                state: CommitState::Initial,
+                statuses: {
+                    let mut set = std::collections::HashSet::new();
+                    set.insert(CommitStatus::Initial);
+                    set
+                },
                 file_changed: true,
-                reviewed: false,
             },
         ];
 
@@ -502,22 +513,6 @@ mod tests {
 
         let qc = archive_file.qc.unwrap();
         assert!(!qc.approved);
-    }
-
-    #[test]
-    fn test_archive_file_from_issue_thread_no_commits() {
-        let mut issue_thread = create_test_issue_thread();
-        issue_thread.commits = vec![];
-
-        let result = ArchiveFile::from_issue_thread(&issue_thread, false);
-        assert!(result.is_err());
-
-        match result.unwrap_err() {
-            ArchiveError::CommitDetermination(path) => {
-                assert_eq!(path, PathBuf::from("src/test.rs"));
-            }
-            _ => panic!("Expected CommitDetermination error"),
-        }
     }
 
     #[test]

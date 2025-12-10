@@ -1,4 +1,4 @@
-use std::{fmt, path::PathBuf, str::FromStr, sync::LazyLock};
+use std::{collections::HashSet, fmt, path::PathBuf, str::FromStr, sync::LazyLock};
 
 use gix::ObjectId;
 use octocrab::models::{IssueState, issues::Issue};
@@ -19,21 +19,21 @@ static HTML_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]*)</a>"#).unwrap()
 });
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum CommitState {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CommitStatus {
     Initial,
     Notification,
     Approved,
-    NoComment,
+    Reviewed,
 }
 
-impl fmt::Display for CommitState {
+impl fmt::Display for CommitStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let self_str = match self {
             Self::Initial => "initial",
             Self::Notification => "notification",
             Self::Approved => "approved",
-            Self::NoComment => "no_comment",
+            Self::Reviewed => "reviewed",
         };
         write!(f, "{self_str}")
     }
@@ -43,9 +43,8 @@ impl fmt::Display for CommitState {
 pub struct IssueCommit {
     pub hash: ObjectId,
     pub message: String,
-    pub state: CommitState,
+    pub statuses: HashSet<CommitStatus>,
     pub file_changed: bool,
-    pub reviewed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,14 +88,17 @@ impl IssueThread {
         // 3. Parse notification and approval commit strings from comments
         let mut issue_thread_commits = parse_commits_from_comments(comments);
 
-        // 4. Include the initial commit in the map
-        let existing_reviewed = issue_thread_commits
-            .get(initial_commit_str)
-            .map_or(false, |(_, reviewed)| *reviewed);
-        issue_thread_commits.insert(
-            initial_commit_str,
-            (CommitState::Initial, existing_reviewed),
-        );
+        // 4. Include the initial commit in the map and ensure only one Initial exists
+        // First, remove Initial status from any existing commits (shouldn't happen, but safety check)
+        for statuses in issue_thread_commits.values_mut() {
+            statuses.remove(&CommitStatus::Initial);
+        }
+
+        // Now add Initial status to the correct commit
+        let initial_statuses = issue_thread_commits
+            .entry(initial_commit_str)
+            .or_insert_with(HashSet::new);
+        initial_statuses.insert(CommitStatus::Initial);
 
         // 5. Find first parseable ObjectId for robust commit retrieval
         let mut reference_commit = None;
@@ -122,21 +124,21 @@ impl IssueThread {
         // We want to iter rev to "look" from the bottom for the first qc notification to kick-off recording commits.
         // Typically the first qc notification will be initial, but flexible enough to accept any
         for commit in all_commits.into_iter().rev() {
-            let (state, reviewed) = issue_thread_commits
+            let statuses = issue_thread_commits
                 .iter()
-                .find_map(|(issue_commit_str, (state, reviewed))| {
+                .find_map(|(issue_commit_str, statuses)| {
                     let full_sha = commit.commit.to_string();
                     // Handle both exact matches and short SHA matches
                     if **issue_commit_str == full_sha
                         || (issue_commit_str.len() >= 7 && full_sha.starts_with(issue_commit_str))
                     {
                         qc_notif_found = true;
-                        Some((state.clone(), *reviewed))
+                        Some(statuses.clone())
                     } else {
                         None
                     }
                 })
-                .unwrap_or((CommitState::NoComment, false));
+                .unwrap_or_else(HashSet::new);
             let file_changed = commit.files.contains(&file);
 
             if qc_notif_found {
@@ -146,12 +148,16 @@ impl IssueThread {
                     IssueCommit {
                         hash: commit.commit,
                         message: commit.message,
-                        state,
+                        statuses,
                         file_changed,
-                        reviewed,
                     },
                 );
             }
+        }
+
+        // Ensure we have at least one commit before creating IssueThread
+        if issue_commits.is_empty() {
+            return Err(IssueError::CommitNotFound(file));
         }
 
         Ok(IssueThread {
@@ -176,35 +182,36 @@ impl IssueThread {
         Self::from_issue_comments(issue, &comments, git_info).await
     }
 
-    pub fn latest_commit(&self) -> Option<&ObjectId> {
-        // Find the latest commit with the highest priority state
-        // Priority: Approved > (Notification | Initial | NoComment with review) - with tie-break to most recent
-        let mut latest_commentable = None; // Notification, Initial, or NoComment with review
+    pub fn latest_commit(&self) -> &IssueCommit {
+        // Find the latest commit with the highest priority status
+        // Priority: Approved > (Notification | Initial | Reviewed) - with tie-break to most recent
+        let mut latest_commentable = None; // Notification, Initial, or Reviewed
 
         // Iterate in forward order (newest first) to find most recent commits first
         for commit in &self.commits {
-            match commit.state {
-                CommitState::Approved => return Some(&commit.hash), // Return immediately on first approved
-                CommitState::Notification | CommitState::Initial => {
-                    if latest_commentable.is_none() {
-                        latest_commentable = Some(&commit.hash); // Track first commentable we find
-                    }
-                }
-                CommitState::NoComment => {
-                    if commit.reviewed && latest_commentable.is_none() {
-                        latest_commentable = Some(&commit.hash); // Track first reviewed NoComment we find
-                    }
+            // Return immediately on first approved commit (highest priority)
+            if commit.statuses.contains(&CommitStatus::Approved) {
+                return &commit;
+            }
+
+            // Track first significant commit we find as fallback
+            if latest_commentable.is_none() {
+                if commit.statuses.contains(&CommitStatus::Notification)
+                    || commit.statuses.contains(&CommitStatus::Initial)
+                    || commit.statuses.contains(&CommitStatus::Reviewed)
+                {
+                    latest_commentable = Some(commit);
                 }
             }
         }
 
-        latest_commentable
+        latest_commentable.expect("IssueThread must have at least one commit with Initial status")
     }
 
     pub fn approved_commit(&self) -> Option<&IssueCommit> {
         self.commits
             .iter()
-            .find(|commit| matches!(commit.state, CommitState::Approved))
+            .find(|commit| commit.statuses.contains(&CommitStatus::Approved))
     }
 
     pub fn file_commits(&self) -> Vec<&ObjectId> {
@@ -215,21 +222,23 @@ impl IssueThread {
             .collect()
     }
 
-    pub fn initial_commit(&self) -> Option<&ObjectId> {
-        self.commits
+    pub fn initial_commit(&self) -> &ObjectId {
+        &self
+            .commits
             .iter()
-            .find(|commit| matches!(commit.state, CommitState::Initial))
-            .map(|commit| &commit.hash)
+            .find(|commit| commit.statuses.contains(&CommitStatus::Initial))
+            .expect("IssueThread must have exactly one commit with Initial status")
+            .hash
     }
 }
 
 /// Parse notification and approval commits from comment bodies
-/// Returns a HashMap of commit strings to their final states and review status
-/// Approval is only invalidated if an unapproval occurs after approval
+/// Returns a HashMap of commit strings to their accumulated status sets
+/// Uses accumulative approach - commits can hold multiple statuses simultaneously
 fn parse_commits_from_comments<'a>(
     comments: &'a [GitComment],
-) -> std::collections::HashMap<&'a str, (CommitState, bool)> {
-    let mut commit_states = std::collections::HashMap::new();
+) -> std::collections::HashMap<&'a str, HashSet<CommitStatus>> {
+    let mut commit_statuses = std::collections::HashMap::new();
     let mut approved_commit = None;
     let mut approval_comment_index = None;
 
@@ -237,21 +246,21 @@ fn parse_commits_from_comments<'a>(
     for (index, comment) in comments.iter().enumerate() {
         // Check for notification commit: "current commit: {hash}"
         if let Some(commit) = parse_commit_from_pattern(&comment.body, "current commit: ") {
-            // Only set to notification if not already approved (approvals "stick")
-            if !matches!(commit_states.get(commit), Some((CommitState::Approved, _))) {
-                let existing_reviewed = commit_states
-                    .get(commit)
-                    .map_or(false, |(_, reviewed)| *reviewed);
-                commit_states.insert(commit, (CommitState::Notification, existing_reviewed));
-            }
+            // Add notification status (accumulative approach)
+            let statuses = commit_statuses.entry(commit).or_insert_with(HashSet::new);
+            statuses.insert(CommitStatus::Notification);
         }
 
         // Check for approval commit: "approved qc commit: {hash}"
         if let Some(commit) = parse_commit_from_pattern(&comment.body, "approved qc commit: ") {
-            let existing_reviewed = commit_states
-                .get(commit)
-                .map_or(false, |(_, reviewed)| *reviewed);
-            commit_states.insert(commit, (CommitState::Approved, existing_reviewed));
+            // Remove Approved status from all other commits (only one approval allowed)
+            for statuses in commit_statuses.values_mut() {
+                statuses.remove(&CommitStatus::Approved);
+            }
+
+            // Add approved status to this commit
+            let statuses = commit_statuses.entry(commit).or_insert_with(HashSet::new);
+            statuses.insert(CommitStatus::Approved);
             approved_commit = Some(commit);
             approval_comment_index = Some(index);
         }
@@ -259,25 +268,21 @@ fn parse_commits_from_comments<'a>(
         // Check for review commit: "comparing commit: {hash}" in "# QC Review" comments
         if comment.body.contains("# QC Review") {
             if let Some(commit) = parse_commit_from_pattern(&comment.body, "comparing commit: ") {
-                let existing_state = commit_states
-                    .get(commit)
-                    .map_or(CommitState::NoComment, |(state, _)| state.clone());
-                commit_states.insert(commit, (existing_state, true)); // First review wins - set reviewed to true
+                // Add reviewed status (accumulative approach)
+                let statuses = commit_statuses.entry(commit).or_insert_with(HashSet::new);
+                statuses.insert(CommitStatus::Reviewed);
             }
         }
 
         // Check for unapproval: "# QC Un-Approval"
         if comment.body.contains("# QC Un-Approval") {
-            // If this unapproval comes after an approval, invalidate the approval
+            // If this unapproval comes after an approval, remove the approval status
             if let Some(approval_index) = approval_comment_index {
                 if index > approval_index {
-                    // Revert the approved commit back to notification state
                     if let Some(commit) = approved_commit {
-                        let existing_reviewed = commit_states
-                            .get(commit)
-                            .map_or(false, |(_, reviewed)| *reviewed);
-                        commit_states
-                            .insert(commit, (CommitState::Notification, existing_reviewed));
+                        if let Some(statuses) = commit_statuses.get_mut(commit) {
+                            statuses.remove(&CommitStatus::Approved);
+                        }
                     }
                     approved_commit = None;
                     approval_comment_index = None;
@@ -286,7 +291,7 @@ fn parse_commits_from_comments<'a>(
         }
     }
 
-    commit_states
+    commit_statuses
 }
 
 /// Parse a commit from a body using the given pattern
@@ -352,6 +357,8 @@ pub enum IssueError {
     MilestoneNotFound,
     #[error("Commit string '{0}' could not be parsed to a valid ObjectId")]
     CommitNotParseable(String),
+    #[error("No commits found for file: {0}")]
+    CommitNotFound(PathBuf),
 }
 
 #[cfg(test)]
@@ -593,15 +600,15 @@ mod tests {
 
         // Verify initial commit parsing
         assert_eq!(
-            result.initial_commit(),
-            Some(&ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap())
+            *result.initial_commit(),
+            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()
         );
 
         // Verify notification commits (both full and short SHAs should be parsed)
         let notification_commits: Vec<&ObjectId> = result
             .commits
             .iter()
-            .filter(|c| matches!(c.state, CommitState::Notification))
+            .filter(|c| c.statuses.contains(&CommitStatus::Notification))
             .map(|c| &c.hash)
             .collect();
         assert_eq!(notification_commits.len(), 2);
@@ -655,19 +662,25 @@ mod tests {
 
         // Verify initial commit
         assert_eq!(
-            result.initial_commit(),
-            Some(&ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap())
+            *result.initial_commit(),
+            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap()
         );
 
-        // Should have zero notification commits (the one notification was later approved)
-        // and one approved commit
-        let notification_commits: Vec<&ObjectId> = result
+        // Should have one commit that is both a notification and approval
+        let notification_and_approval_commits: Vec<&ObjectId> = result
             .commits
             .iter()
-            .filter(|c| matches!(c.state, CommitState::Notification))
+            .filter(|c| {
+                c.statuses.contains(&CommitStatus::Notification)
+                    && c.statuses.contains(&CommitStatus::Approved)
+            })
             .map(|c| &c.hash)
             .collect();
-        assert_eq!(notification_commits.len(), 0);
+        assert_eq!(notification_and_approval_commits.len(), 1);
+        assert_eq!(
+            *notification_and_approval_commits[0],
+            ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap()
+        );
 
         // Closed issue with approval should have approved commit
         assert_eq!(
@@ -717,8 +730,8 @@ mod tests {
 
         // Verify initial commit
         assert_eq!(
-            result.initial_commit(),
-            Some(&ObjectId::from_str("789abc12def345678901234567890123456789ef").unwrap())
+            *result.initial_commit(),
+            ObjectId::from_str("789abc12def345678901234567890123456789ef").unwrap()
         );
 
         // Should have notification commits from the comments
@@ -727,7 +740,7 @@ mod tests {
         let notification_commits: Vec<&ObjectId> = result
             .commits
             .iter()
-            .filter(|c| matches!(c.state, CommitState::Notification))
+            .filter(|c| c.statuses.contains(&CommitStatus::Notification))
             .map(|c| &c.hash)
             .collect();
         assert_eq!(notification_commits.len(), 2);
@@ -797,22 +810,31 @@ mod tests {
 
         // Verify initial commit
         assert_eq!(
-            result.initial_commit(),
-            Some(&ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap())
+            *result.initial_commit(),
+            ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap()
         );
 
-        // Should have 1 notification commit (333cdef78 -> 333cdef...)
-        // 222abc... was notification → approved, so it should be approved, not notification
+        // Should have 2 notification commits: 333cdef... (notification only) and 222abc... (notification + approved)
         let notification_commits: Vec<&ObjectId> = result
             .commits
             .iter()
-            .filter(|c| matches!(c.state, CommitState::Notification))
+            .filter(|c| c.statuses.contains(&CommitStatus::Notification))
             .map(|c| &c.hash)
             .collect();
-        assert_eq!(notification_commits.len(), 1);
-        assert_eq!(
-            *notification_commits[0],
-            ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap() // Resolved from short SHA
+        assert_eq!(notification_commits.len(), 2);
+
+        // The first should be 222abc (notification + approved)
+        assert!(
+            notification_commits.contains(
+                &&ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap()
+            )
+        );
+
+        // The second should be 333cdef (notification only)
+        assert!(
+            notification_commits.contains(
+                &&ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap()
+            )
         );
 
         // Should have approved commit (remains valid despite issue being open)
@@ -883,18 +905,22 @@ mod tests {
             },
         ];
 
-        let commit_states = parse_commits_from_comments(&comments);
+        let commit_statuses = parse_commits_from_comments(&comments);
 
         // Should have notification + approval
-        assert_eq!(commit_states.len(), 2);
-        assert_eq!(
-            commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&(CommitState::Notification, false))
-        );
-        assert_eq!(
-            commit_states.get("def456789abc012345678901234567890123abcd"),
-            Some(&(CommitState::Approved, false))
-        );
+        assert_eq!(commit_statuses.len(), 2);
+
+        let abc_statuses = commit_statuses
+            .get("abc123def456789012345678901234567890abcd")
+            .unwrap();
+        assert!(abc_statuses.contains(&CommitStatus::Notification));
+        assert!(!abc_statuses.contains(&CommitStatus::Approved));
+
+        let def_statuses = commit_statuses
+            .get("def456789abc012345678901234567890123abcd")
+            .unwrap();
+        assert!(def_statuses.contains(&CommitStatus::Approved));
+        assert!(!def_statuses.contains(&CommitStatus::Notification));
     }
 
     #[test]
@@ -914,18 +940,22 @@ mod tests {
             },
         ];
 
-        let commit_states = parse_commits_from_comments(&comments);
+        let commit_statuses = parse_commits_from_comments(&comments);
 
         // Only notifications, no approval
-        assert_eq!(commit_states.len(), 2);
-        assert_eq!(
-            commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&(CommitState::Notification, false))
-        );
-        assert_eq!(
-            commit_states.get("def456789abc012345678901234567890123abcd"),
-            Some(&(CommitState::Notification, false))
-        );
+        assert_eq!(commit_statuses.len(), 2);
+
+        let abc_statuses = commit_statuses
+            .get("abc123def456789012345678901234567890abcd")
+            .unwrap();
+        assert!(abc_statuses.contains(&CommitStatus::Notification));
+        assert!(!abc_statuses.contains(&CommitStatus::Approved));
+
+        let def_statuses = commit_statuses
+            .get("def456789abc012345678901234567890123abcd")
+            .unwrap();
+        assert!(def_statuses.contains(&CommitStatus::Notification));
+        assert!(!def_statuses.contains(&CommitStatus::Approved));
     }
 
     #[test]
@@ -951,18 +981,22 @@ mod tests {
             },
         ];
 
-        let commit_states = parse_commits_from_comments(&comments);
+        let commit_statuses = parse_commits_from_comments(&comments);
 
-        // Unapproval should invalidate approval and move it back to notification
-        assert_eq!(commit_states.len(), 2);
-        assert_eq!(
-            commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&(CommitState::Notification, false))
-        );
-        assert_eq!(
-            commit_states.get("def456789abc012345678901234567890123abcd"),
-            Some(&(CommitState::Notification, false))
-        ); // Should be reverted to Notification
+        // Unapproval should invalidate approval and remove approved status
+        assert_eq!(commit_statuses.len(), 2);
+
+        let abc_statuses = commit_statuses
+            .get("abc123def456789012345678901234567890abcd")
+            .unwrap();
+        assert!(abc_statuses.contains(&CommitStatus::Notification));
+        assert!(!abc_statuses.contains(&CommitStatus::Approved));
+
+        let def_statuses = commit_statuses
+            .get("def456789abc012345678901234567890123abcd")
+            .unwrap();
+        assert!(!def_statuses.contains(&CommitStatus::Approved)); // Approval removed by unapproval
+        assert!(!def_statuses.contains(&CommitStatus::Notification)); // No notification status for this commit
     }
 
     #[test]
@@ -982,18 +1016,22 @@ mod tests {
             },
         ];
 
-        let commit_states = parse_commits_from_comments(&comments);
+        let commit_statuses = parse_commits_from_comments(&comments);
 
         // Should have notification + review
-        assert_eq!(commit_states.len(), 2);
-        assert_eq!(
-            commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&(CommitState::Notification, false))
-        );
-        assert_eq!(
-            commit_states.get("def456789abc012345678901234567890123abcd"),
-            Some(&(CommitState::NoComment, true)) // Review sets reviewed=true but keeps NoComment state
-        );
+        assert_eq!(commit_statuses.len(), 2);
+
+        let abc_statuses = commit_statuses
+            .get("abc123def456789012345678901234567890abcd")
+            .unwrap();
+        assert!(abc_statuses.contains(&CommitStatus::Notification));
+        assert!(!abc_statuses.contains(&CommitStatus::Reviewed));
+
+        let def_statuses = commit_statuses
+            .get("def456789abc012345678901234567890123abcd")
+            .unwrap();
+        assert!(def_statuses.contains(&CommitStatus::Reviewed)); // Review sets reviewed status
+        assert!(!def_statuses.contains(&CommitStatus::Notification)); // No notification for this commit
     }
 
     #[test]
@@ -1013,14 +1051,16 @@ mod tests {
             },
         ];
 
-        let commit_states = parse_commits_from_comments(&comments);
+        let commit_statuses = parse_commits_from_comments(&comments);
 
-        // Same commit has notification then review - should preserve notification state but add reviewed flag
-        assert_eq!(commit_states.len(), 1);
-        assert_eq!(
-            commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&(CommitState::Notification, true)) // Notification state preserved, reviewed flag added
-        );
+        // Same commit has notification then review - should have both statuses
+        assert_eq!(commit_statuses.len(), 1);
+
+        let abc_statuses = commit_statuses
+            .get("abc123def456789012345678901234567890abcd")
+            .unwrap();
+        assert!(abc_statuses.contains(&CommitStatus::Notification)); // Notification status preserved
+        assert!(abc_statuses.contains(&CommitStatus::Reviewed)); // Reviewed status added
     }
 
     #[test]
@@ -1040,14 +1080,16 @@ mod tests {
             },
         ];
 
-        let commit_states = parse_commits_from_comments(&comments);
+        let commit_statuses = parse_commits_from_comments(&comments);
 
-        // Review then approval - should be approved with reviewed flag preserved
-        assert_eq!(commit_states.len(), 1);
-        assert_eq!(
-            commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&(CommitState::Approved, true)) // Approved state, reviewed flag preserved
-        );
+        // Review then approval - should be approved with reviewed status preserved
+        assert_eq!(commit_statuses.len(), 1);
+
+        let abc_statuses = commit_statuses
+            .get("abc123def456789012345678901234567890abcd")
+            .unwrap();
+        assert!(abc_statuses.contains(&CommitStatus::Approved)); // Approved status added
+        assert!(abc_statuses.contains(&CommitStatus::Reviewed)); // Reviewed status preserved
     }
 
     #[test]
@@ -1067,14 +1109,16 @@ mod tests {
             },
         ];
 
-        let commit_states = parse_commits_from_comments(&comments);
+        let commit_statuses = parse_commits_from_comments(&comments);
 
-        // Multiple reviews on same commit - first review wins (reviewed stays true)
-        assert_eq!(commit_states.len(), 1);
-        assert_eq!(
-            commit_states.get("abc123def456789012345678901234567890abcd"),
-            Some(&(CommitState::NoComment, true)) // First review sets reviewed=true, subsequent reviews don't change it
-        );
+        // Multiple reviews on same commit - reviewed status is set
+        assert_eq!(commit_statuses.len(), 1);
+
+        let abc_statuses = commit_statuses
+            .get("abc123def456789012345678901234567890abcd")
+            .unwrap();
+        assert!(abc_statuses.contains(&CommitStatus::Reviewed)); // Review status set
+        assert!(!abc_statuses.contains(&CommitStatus::Notification)); // No notification for this commit
     }
 
     #[test]
