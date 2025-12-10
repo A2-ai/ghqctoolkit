@@ -333,14 +333,8 @@ pub async fn create_issue_information(
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
 
     // Commit information
-    let initial_qc_commit = issue_thread
-        .initial_commit()
-        .map(|c| format!("{}", c))
-        .unwrap_or_else(|| "No initial commit".to_string());
-    let latest_qc_commit = issue_thread
-        .latest_commit()
-        .map(|c| format!("{}", c))
-        .unwrap_or_else(|| "No commits".to_string());
+    let initial_qc_commit = issue_thread.initial_commit().to_string();
+    let latest_qc_commit = issue_thread.latest_commit().hash.to_string();
 
     // Create IssueImage structs for all images in the issue and comments
     let temp_dir = std::env::temp_dir().join("ghqc-images");
