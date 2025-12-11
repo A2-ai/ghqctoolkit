@@ -10,6 +10,7 @@ mod git;
 mod issue;
 mod qc_status;
 mod record;
+mod relevant_files;
 mod review;
 pub mod utils;
 

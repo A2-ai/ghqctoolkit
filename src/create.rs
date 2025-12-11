@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     configuration::Checklist,
     git::{GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitRepository, GitRepositoryError},
+    relevant_files::{RelevantFile, RelevantFileClass},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -22,6 +23,7 @@ pub struct QCIssue {
     authors: Vec<GitAuthor>,
     checklist: Checklist,
     pub(crate) assignees: Vec<String>,
+    relevant_files: Vec<RelevantFile>,
 }
 
 impl QCIssue {
@@ -58,6 +60,8 @@ impl QCIssue {
 
         let mut body = vec![metadata.join("\n* ")];
 
+        body.push(relevant_files_section(&self.relevant_files, git_info));
+
         body.push(self.checklist.to_string());
 
         body.join("\n\n")
@@ -77,6 +81,7 @@ impl QCIssue {
         milestone_id: u64,
         assignees: Vec<String>,
         checklist: Checklist,
+        relevant_files: Vec<RelevantFile>,
     ) -> Result<Self, QCIssueError> {
         Ok(Self {
             title: file.as_ref().to_path_buf(),
@@ -86,7 +91,95 @@ impl QCIssue {
             checklist,
             assignees,
             milestone_id,
+            relevant_files,
         })
+    }
+}
+
+fn relevant_files_section(relevant_files: &[RelevantFile], git_info: &impl GitHelpers) -> String {
+    let mut previous = Vec::new();
+    let mut gating_qc = Vec::new();
+    let mut non_gating_qc = Vec::new();
+    let mut rel_file = Vec::new();
+
+    let make_issue_bullet = |issue_number: &u64, description: &Option<String>, file_name: &Path| {
+        format!(
+            "[{}]({}){}",
+            file_name.display(),
+            git_info.issue_url(*issue_number),
+            description
+                .as_ref()
+                .map(|d| format!(" - {d}"))
+                .unwrap_or_default()
+        )
+    };
+
+    for file in relevant_files {
+        match &file.class {
+            RelevantFileClass::PreviousQC {
+                issue_number,
+                description,
+            } => {
+                previous.push(make_issue_bullet(
+                    issue_number,
+                    description,
+                    &file.file_name,
+                ));
+            }
+            RelevantFileClass::GatingQC {
+                issue_number,
+                description,
+            } => {
+                gating_qc.push(make_issue_bullet(
+                    issue_number,
+                    description,
+                    &file.file_name,
+                ));
+            }
+            RelevantFileClass::RelevantQC {
+                issue_number,
+                description,
+            } => {
+                non_gating_qc.push(make_issue_bullet(
+                    issue_number,
+                    description,
+                    &file.file_name,
+                ));
+            }
+            RelevantFileClass::File { justification } => {
+                rel_file.push(format!(
+                    "**{}** - {justification}",
+                    file.file_name.display()
+                ));
+            }
+        }
+    }
+
+    let mut res = vec!["## Relevant Files".to_string()];
+
+    if !previous.is_empty() {
+        res.push(format!("### Previous QC\n > Issues which are previous QCs of this file (or a similar file)\n- {}", previous.join("\n- ")));
+    }
+
+    if !gating_qc.is_empty() {
+        res.push(format!("### Gating QC\n > Issues which must be approved before the approval of this issue \n- {}", gating_qc.join("\n- ")));
+    }
+
+    if !non_gating_qc.is_empty() {
+        res.push(format!("### Relevant QC\n > Issues related to the file, but do not have a direct impact on results \n- {}", non_gating_qc.join("\n- ")));
+    }
+
+    if !rel_file.is_empty() {
+        res.push(format!(
+            "### Relevant File\n > Files relevant to the QC, but do not require QC \n- {}",
+            rel_file.join("\n- ")
+        ));
+    }
+
+    if res.len() > 1 {
+        res.join("\n\n")
+    } else {
+        String::new()
     }
 }
 
@@ -120,6 +213,24 @@ mod tests {
                 "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
             ),
             assignees: vec!["reviewer1".to_string(), "reviewer2".to_string()],
+            relevant_files: vec![
+                RelevantFile {
+                    file_name: PathBuf::from("previous.R"),
+                    class: RelevantFileClass::PreviousQC { issue_number: 1, description: Some("This file has been previously QCed".to_string()) },
+                },
+                RelevantFile {
+                    file_name: PathBuf::from("gating.R"),
+                    class: RelevantFileClass::GatingQC { issue_number: 2, description: Some("This file gates the approval of this QC".to_string()) }
+                },
+                RelevantFile {
+                    file_name: PathBuf::from("related.R"),
+                    class: RelevantFileClass::RelevantQC { issue_number: 3, description: None }
+                },
+                RelevantFile {
+                    file_name: PathBuf::from("file.R"),
+                    class: RelevantFileClass::File { justification: "A required justification".to_string() }
+                }
+            ]
         }
     }
 
@@ -143,6 +254,10 @@ mod tests {
                 "https://github.com/owner/repo/compare/{}..{}",
                 previous_commit, current_commit
             )
+        }
+
+        fn issue_url(&self, issue_number: u64) -> String {
+            format!("https://github.com/owner/repo/issues/{issue_number}")
         }
     }
 

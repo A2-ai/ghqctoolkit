@@ -93,6 +93,10 @@ mod tests {
         ) -> String {
             "https://github.com/owner/repo/compare/abc123..def456".to_string()
         }
+        
+        fn issue_url(&self, issue_number: u64) -> String {
+            format!("https://github.com/owner/repo/issues/{issue_number}")
+        }
     }
 
     impl GitFileOps for MockGitHelpers {

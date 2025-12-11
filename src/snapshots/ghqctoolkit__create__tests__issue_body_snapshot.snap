@@ -9,6 +9,24 @@ expression: body
 * collaborators: Jane Smith (jane@example.com)
 * [file contents at initial qc commit](https://github.com/owner/repo/blob/abc123d/src/example.rs)
 
+## Relevant Files
+
+### Previous QC
+ > Issues which are previous QCs of this file (or a similar file)
+- [previous.R](https://github.com/owner/repo/issues/1) - This file has been previously QCed
+
+### Gating QC
+ > Issues which must be approved before the approval of this issue 
+- [gating.R](https://github.com/owner/repo/issues/2) - This file gates the approval of this QC
+
+### Relevant QC
+ > Issues related to the file, but do not have a direct impact on results 
+- [related.R](https://github.com/owner/repo/issues/3)
+
+### Relevant File
+ > Files relevant to the QC, but do not require QC 
+- **file.R** - A required justification
+
 # Code Review Checklist
 
 NOTE
