@@ -158,22 +158,19 @@ fn relevant_files_section(relevant_files: &[RelevantFile], git_info: &impl GitHe
     let mut res = vec!["## Relevant Files".to_string()];
 
     if !previous.is_empty() {
-        res.push(format!("### Previous QC\n > Issues which are previous QCs of this file (or a similar file)\n- {}", previous.join("\n- ")));
+        res.push(format!("### Previous QC\n- {}", previous.join("\n- ")));
     }
 
     if !gating_qc.is_empty() {
-        res.push(format!("### Gating QC\n > Issues which must be approved before the approval of this issue \n- {}", gating_qc.join("\n- ")));
+        res.push(format!("### Gating QC\n- {}", gating_qc.join("\n- ")));
     }
 
     if !non_gating_qc.is_empty() {
-        res.push(format!("### Relevant QC\n > Issues related to the file, but do not have a direct impact on results \n- {}", non_gating_qc.join("\n- ")));
+        res.push(format!("### Relevant QC\n- {}", non_gating_qc.join("\n- ")));
     }
 
     if !rel_file.is_empty() {
-        res.push(format!(
-            "### Relevant File\n > Files relevant to the QC, but do not require QC \n- {}",
-            rel_file.join("\n- ")
-        ));
+        res.push(format!("### Relevant File\n- {}", rel_file.join("\n- ")));
     }
 
     if res.len() > 1 {

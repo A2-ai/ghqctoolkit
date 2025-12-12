@@ -20,7 +20,7 @@ pub(crate) enum RelevantFileClass {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RelevantFile {
+pub struct RelevantFile {
     pub(crate) file_name: PathBuf,
     pub(crate) class: RelevantFileClass,
 }

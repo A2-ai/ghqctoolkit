@@ -5,14 +5,16 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Configuration, DiskCache, GitHubReader, GitHubWriter, GitInfo, GitRepository, QCApprove,
-    QCIssue, QCReview, QCUnapprove, RepoUser,
+    Configuration, DiskCache, GitHubReader, GitHubWriter, GitHelpers, GitInfo, GitRepository,
+    QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
+    cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
         prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
         prompt_issue, prompt_milestone, prompt_note, prompt_single_commit,
     },
     comment::QCComment,
     issue::IssueThread,
+    relevant_files::{RelevantFile, RelevantFileClass},
 };
 
 impl QCIssue {
@@ -22,6 +24,10 @@ impl QCIssue {
         checklist_name: String,
         assignees: Option<Vec<String>>,
         description: Option<String>,
+        previous_qc: Vec<IssueUrlArg>,
+        gating_qc: Vec<IssueUrlArg>,
+        relevant_qc: Vec<IssueUrlArg>,
+        relevant_file: Vec<RelevantFileArg>,
         milestones: Vec<Milestone>,
         repo_users: &[RepoUser],
         configuration: Configuration,
@@ -67,12 +73,17 @@ impl QCIssue {
             .ok_or(anyhow!("No checklist named {checklist_name}"))?
             .clone();
 
+        // Validate and convert issue URL arguments to RelevantFile structs
+        let relevant_files =
+            validate_and_convert_relevant_files(previous_qc, gating_qc, relevant_qc, relevant_file, git_info)?;
+
         let issue = QCIssue::new(
             file,
             git_info,
             milestone.number as u64,
             assignees,
             checklist,
+            relevant_files,
         )?;
 
         Ok(issue)
@@ -114,10 +125,98 @@ impl QCIssue {
             milestone.number as u64,
             assignees,
             checklist,
+            Vec::new(), // relevant_files not supported in interactive mode yet
         )?;
 
         Ok(issue)
     }
+}
+
+/// Validates and converts CLI relevant file arguments to RelevantFile structs.
+/// Collects all validation errors and returns them together.
+fn validate_and_convert_relevant_files(
+    previous_qc: Vec<IssueUrlArg>,
+    gating_qc: Vec<IssueUrlArg>,
+    relevant_qc: Vec<IssueUrlArg>,
+    relevant_file: Vec<RelevantFileArg>,
+    git_info: &GitInfo,
+) -> Result<Vec<RelevantFile>> {
+    let mut result = Vec::new();
+    let mut errors = Vec::new();
+
+    // Helper to validate issue URL and add to results or errors
+    let mut process_issue_arg =
+        |arg: IssueUrlArg, relevant_file: RelevantFile, flag_name: &str| {
+            let expected_url = git_info.issue_url(arg.issue_number);
+            if arg.url != expected_url {
+                errors.push(format!(
+                    "{}: Issue URL '{}' does not match expected repository URL '{}'",
+                    flag_name, arg.url, expected_url
+                ));
+            } else {
+                result.push(relevant_file);
+            }
+        };
+
+    // Process previous QC issues
+    for arg in previous_qc {
+        let relevant = RelevantFile {
+            file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
+            class: RelevantFileClass::PreviousQC {
+                issue_number: arg.issue_number,
+                description: arg.description.clone(),
+            },
+        };
+        process_issue_arg(arg, relevant, "--previous-qc");
+    }
+
+    // Process gating QC issues
+    for arg in gating_qc {
+        let relevant = RelevantFile {
+            file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
+            class: RelevantFileClass::GatingQC {
+                issue_number: arg.issue_number,
+                description: arg.description.clone(),
+            },
+        };
+        process_issue_arg(arg, relevant, "--gating-qc");
+    }
+
+    // Process relevant QC issues
+    for arg in relevant_qc {
+        let relevant = RelevantFile {
+            file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
+            class: RelevantFileClass::RelevantQC {
+                issue_number: arg.issue_number,
+                description: arg.description.clone(),
+            },
+        };
+        process_issue_arg(arg, relevant, "--relevant-qc");
+    }
+
+    // Process relevant files (validate file exists in repository)
+    for arg in relevant_file {
+        if !arg.file.exists() {
+            errors.push(format!(
+                "--relevant-file: File '{}' does not exist",
+                arg.file.display()
+            ));
+        } else {
+            result.push(RelevantFile {
+                file_name: arg.file,
+                class: RelevantFileClass::File {
+                    justification: arg.justification,
+                },
+            });
+        }
+    }
+
+    // Return all errors if any were found
+    if !errors.is_empty() {
+        bail!("Validation errors:\n  - {}", errors.join("\n  - "));
+    }
+
+    Ok(result)
 }
 
 impl QCComment {

@@ -5,10 +5,10 @@ use octocrab::models::Milestone;
 use std::path::PathBuf;
 
 use ghqctoolkit::cli::{
-    FileCommitPair, FileCommitPairParser, MilestoneSelectionFilter, find_issue,
-    generate_archive_name, get_milestone_issue_threads, interactive_milestone_status,
-    interactive_status, milestone_status, prompt_archive, prompt_milestone_record,
-    single_issue_status,
+    FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
+    RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
+    get_milestone_issue_threads, interactive_milestone_status, interactive_status, milestone_status,
+    prompt_archive, prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -80,6 +80,30 @@ enum IssueCommands {
         /// Description for the milestone (only used when creating a new milestone)
         #[arg(short = 'D', long)]
         description: Option<String>,
+
+        /// Previous QC issues (issues which are previous QCs of this file or a similar file)
+        /// Format: <issue_url>[::description]
+        /// Example: https://github.com/owner/repo/issues/123::Previous version of this file
+        #[arg(long, value_parser = IssueUrlArgParser)]
+        previous_qc: Vec<IssueUrlArg>,
+
+        /// Gating QC issues (issues which must be approved before approving this issue)
+        /// Format: <issue_url>[::description]
+        /// Example: https://github.com/owner/repo/issues/456::Upstream dependency
+        #[arg(long, value_parser = IssueUrlArgParser)]
+        gating_qc: Vec<IssueUrlArg>,
+
+        /// Related QC issues (issues related to the file but don't have a direct impact on results)
+        /// Format: <issue_url>[::description]
+        /// Example: https://github.com/owner/repo/issues/789::Related analysis
+        #[arg(long, value_parser = IssueUrlArgParser)]
+        relevant_qc: Vec<IssueUrlArg>,
+
+        /// Relevant files (files relevant to the QC but don't require QC themselves)
+        /// Format: file_path::justification (justification is required)
+        /// Example: data/config.yaml::Configuration used by this script
+        #[arg(long, value_parser = RelevantFileArgParser)]
+        relevant_file: Vec<RelevantFileArg>,
     },
     /// Comment on an existing issue, providing updated context
     Comment {
@@ -268,6 +292,10 @@ async fn main() -> Result<()> {
                     checklist_name,
                     assignees,
                     description,
+                    previous_qc,
+                    gating_qc,
+                    relevant_qc,
+                    relevant_file,
                 } => {
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let mut configuration = Configuration::from_path(&config_dir);
@@ -286,6 +314,10 @@ async fn main() -> Result<()> {
                                 checklist_name,
                                 assignees,
                                 description,
+                                previous_qc,
+                                gating_qc,
+                                relevant_qc,
+                                relevant_file,
                                 milestones,
                                 &repo_users,
                                 configuration,
