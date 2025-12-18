@@ -1,10 +1,6 @@
 use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
-    hash::{Hash, Hasher},
-    io::{self, BufRead, BufReader},
-    path::{Path, PathBuf, absolute},
-    process::{Command, Stdio},
-    thread,
+    collections::HashMap,
+    path::{PathBuf, absolute},
 };
 
 use chrono;
@@ -25,12 +21,14 @@ use crate::{
 // Re-export submodules
 mod images;
 mod latex;
+mod render;
 mod tables;
 
 // Re-export public items from submodules
 pub use latex::{escape_latex, format_markdown};
 // Template functions - used by tera templates, not directly by Rust code
 pub use images::{HttpImageDownloader, ImageDownloader};
+pub use render::{ContextPosition, QCContext, render};
 #[allow(unused_imports)]
 pub use tables::{
     create_milestone_df, insert_breaks, render_issue_summary_table_rows,
@@ -653,164 +651,10 @@ pub(crate) fn format_comments(
     formatted_comments
 }
 
-/// Render a Quarto document to PDF using the quarto CLI tool
-///
-/// # Arguments
-/// * `report` - The Quarto markdown content to render
-/// * `path` - The output path for the rendered PDF (without extension)
-///
-/// # Returns
-/// * `Ok(())` - If rendering succeeded
-/// * `Err(RecordError)` - If rendering failed
-///
-/// # Example
-/// ```no_run
-/// use std::path::Path;
-/// use ghqctoolkit::render;
-///
-/// let report = "---\ntitle: My Report\n---\n# Hello World";
-/// render(report, Path::new("output/my-report")).unwrap();
-/// // Creates output/my-report.pdf
-/// ```
-pub fn render(record_str: &str, path: impl AsRef<Path>) -> Result<(), RecordError> {
-    let path = path.as_ref();
-
-    // Create staging directory using hash of report content
-    let mut hasher = DefaultHasher::new();
-    record_str.hash(&mut hasher);
-    let hash = hasher.finish();
-    let staging_dir = std::env::temp_dir().join(format!("ghqc-render-{:x}", hash));
-    std::fs::create_dir_all(&staging_dir)?;
-
-    let cleanup_staging = || {
-        if let Err(e) = std::fs::remove_dir_all(&staging_dir) {
-            log::warn!(
-                "Failed to cleanup staging directory {}: {}",
-                staging_dir.display(),
-                e
-            );
-        }
-    };
-
-    let result = render_in_staging(&staging_dir, record_str, &path);
-
-    // Always cleanup staging directory
-    cleanup_staging();
-
-    result
-}
-
-pub fn render_in_staging(
-    staging_dir: &Path,
-    report: &str,
-    final_pdf_path: &Path,
-) -> Result<(), RecordError> {
-    let qmd_file = staging_dir.join("record.qmd");
-    let staging_pdf_path = staging_dir.join("record.pdf");
-
-    log::debug!("Writing Quarto document to staging: {}", qmd_file.display());
-    std::fs::write(&qmd_file, report)?;
-
-    log::debug!(
-        "Rendering PDF with Quarto: {} -> {}",
-        qmd_file.display(),
-        final_pdf_path.display()
-    );
-
-    // Execute quarto render command with combined stdout/stderr
-    let mut cmd = Command::new("quarto");
-    cmd.args(&["render", qmd_file.to_str().unwrap()])
-        .current_dir(staging_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()); // Capture stderr separately
-
-    log::debug!("Executing command: {:?}", cmd);
-
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            RecordError::QuartoNotFound
-        } else {
-            RecordError::Io(e)
-        }
-    })?;
-
-    // Collect both stdout and stderr
-    let stdout = child.stdout.take().expect("Failed to get stdout");
-    let stderr = child.stderr.take().expect("Failed to get stderr");
-
-    let stdout_handle = thread::spawn(move || {
-        let mut lines = Vec::new();
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                lines.push(line);
-            }
-        }
-        lines
-    });
-
-    let stderr_handle = thread::spawn(move || {
-        let mut lines = Vec::new();
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                lines.push(line);
-            }
-        }
-        lines
-    });
-
-    // Wait for process to complete
-    let exit_status = child.wait()?;
-
-    // Get the collected output from both streams
-    let stdout_lines = stdout_handle
-        .join()
-        .unwrap_or_else(|_| vec!["Failed to collect stdout".to_string()]);
-    let stderr_lines = stderr_handle
-        .join()
-        .unwrap_or_else(|_| vec!["Failed to collect stderr".to_string()]);
-
-    let mut combined_lines = Vec::new();
-    combined_lines.extend(stdout_lines);
-    combined_lines.extend(stderr_lines);
-    let combined_output = combined_lines.join("\n");
-
-    // Check if command succeeded
-    if !exit_status.success() {
-        let exit_code = exit_status.code().unwrap_or(-1);
-        return Err(RecordError::QuartoRenderFailed {
-            code: exit_code,
-            stderr: combined_output,
-        });
-    }
-
-    // Verify PDF was created in staging
-    if !staging_pdf_path.exists() {
-        return Err(RecordError::Io(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("PDF not created in staging: {}", staging_pdf_path.display()),
-        )));
-    }
-
-    // Ensure output directory exists
-    if let Some(parent) = final_pdf_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Copy PDF from staging to final location
-    log::debug!("Copying PDF from staging to: {}", final_pdf_path.display());
-    std::fs::copy(&staging_pdf_path, &final_pdf_path)?;
-
-    log::debug!("Successfully rendered PDF: {}", final_pdf_path.display());
-
-    Ok(())
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
     #[error("IO Error: {0}")]
-    Io(#[from] io::Error),
+    Io(#[from] std::io::Error),
     #[error("Template Error: {0}")]
     Template(#[from] tera::Error),
     #[error("GitHub API Error: {0}")]

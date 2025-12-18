@@ -39,6 +39,8 @@ lazy_static = "1.5"
 tar = "0.4"
 flate2 = "1.1"
 calamine = "0.31.0"
+libreofficekit = "0.5"
+lopdf = "0.38"
 
 [features]
 cli = [

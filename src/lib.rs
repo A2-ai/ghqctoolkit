@@ -38,7 +38,7 @@ pub use git::{
 pub use issue::{CommitStatus, IssueCommit, IssueError, IssueThread, parse_branch_from_body};
 pub use qc_status::{ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists};
 pub use record::{
-    HttpImageDownloader, ImageDownloader, IssueInformation, fetch_milestone_issues,
-    get_milestone_issue_information, record, render,
+    ContextPosition, HttpImageDownloader, ImageDownloader, IssueInformation, QCContext,
+    fetch_milestone_issues, get_milestone_issue_information, record, render,
 };
 pub use review::QCReview;
