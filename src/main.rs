@@ -205,13 +205,13 @@ enum MilestoneCommands {
         #[arg(long)]
         only_tables: bool,
 
-        /// Word documents (.doc/.docx) to convert to PDF and prepend before the main findings.
-        /// Files are rendered in the order listed.
+        /// Documents (.doc/.docx/.pdf) to prepend before the main findings.
+        /// Word documents are converted to PDF. Files are rendered in the order listed.
         #[arg(long)]
         prepended_context: Vec<PathBuf>,
 
-        /// Word documents (.doc/.docx) to convert to PDF and append after the main findings.
-        /// Files are rendered in the order listed.
+        /// Documents (.doc/.docx/.pdf) to append after the main findings.
+        /// Word documents are converted to PDF. Files are rendered in the order listed.
         #[arg(long)]
         appended_context: Vec<PathBuf>,
     },

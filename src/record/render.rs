@@ -10,6 +10,69 @@ use std::{
 use libreofficekit::{DocUrl, Office};
 use lopdf::{Bookmark, Document, Object, ObjectId};
 
+/// Trait for converting documents (Word, etc.) to PDF
+pub trait DocumentConverter {
+    /// Convert a document file to PDF and return the loaded PDF Document
+    fn convert_to_pdf(&self, input: &Path, output_dir: &Path) -> Result<Document, RenderError>;
+}
+
+/// LibreOffice-based document converter
+pub struct LibreOfficeConverter {
+    office: Office,
+}
+
+impl LibreOfficeConverter {
+    /// Try to create a converter, returns None if LibreOffice isn't installed
+    pub fn try_new() -> Option<Self> {
+        Office::find_install_path()
+            .and_then(|p| {
+                log::debug!("Found LibreOffice at: {}", p.display());
+                Office::new(p).ok()
+            })
+            .map(|office| Self { office })
+    }
+}
+
+impl DocumentConverter for LibreOfficeConverter {
+    fn convert_to_pdf(&self, input: &Path, output_dir: &Path) -> Result<Document, RenderError> {
+        let output_file_name = input.with_extension("pdf");
+        let output_file = output_dir.join(output_file_name.file_name().ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "provided context file does not have file name: {}",
+                input.display()
+            ),
+        ))?);
+
+        log::debug!(
+            "Converting {} to PDF at {}",
+            input.display(),
+            output_file.display()
+        );
+
+        let input_doc = DocUrl::from_relative_path(input.to_string_lossy())?;
+        let output_pdf = DocUrl::from_absolute_path(output_file.to_string_lossy())?;
+
+        let mut document = self.office.document_load(&input_doc)?;
+        let success = document.save_as(&output_pdf, "pdf", None)?;
+
+        if !success {
+            log::error!("Failed to convert {} to PDF", input.display());
+            return Err(RenderError::OfficeError(
+                libreofficekit::OfficeError::OfficeError(format!(
+                    "Conversion of {} to PDF was not successful",
+                    input.display()
+                )),
+            ));
+        }
+
+        Document::load(&output_file).map_err(|error| RenderError::PdfReadError {
+            file: output_file,
+            error,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QCContext {
     file: PathBuf,
@@ -86,11 +149,11 @@ pub fn render(
         Document::load(&file).map_err(|error| RenderError::PdfReadError { file, error })
     })?;
     let mut doc = if !qc_context.is_empty() {
-        let office = Office::find_install_path().and_then(|p| Office::new(p).ok());
+        let converter = LibreOfficeConverter::try_new();
         let context_docs = qc_context
             .iter()
             .map(|context| {
-                render_context_file_to_pdf(&context.file, &staging_dir, office.as_ref())
+                load_context_file(&context.file, &staging_dir, converter.as_ref())
                     .map(|d| (d, context.position))
             })
             .collect::<Result<Vec<(Document, ContextPosition)>, RenderError>>()?;
@@ -381,45 +444,37 @@ fn render_findings_in_staging(
     Ok(staging_pdf_path)
 }
 
-fn render_context_file_to_pdf(
+/// Load a context file as a PDF Document.
+/// PDFs are loaded directly; other formats require a converter.
+fn load_context_file(
     file: impl AsRef<Path>,
     staging_dir: impl AsRef<Path>,
-    office: Option<&Office>,
+    converter: Option<&impl DocumentConverter>,
 ) -> Result<Document, RenderError> {
     let input_file = file.as_ref();
-    let output_file_name = input_file.with_extension(".pdf");
-    let output_file = staging_dir
-        .as_ref()
-        .join(output_file_name.file_name().ok_or(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "provided context file does not have file name: {}",
-                input_file.display()
-            ),
-        ))?);
 
-    if let Some(office) = office {
-        let input_doc = DocUrl::from_relative_path(input_file.to_string_lossy())?;
-        let output_pdf = DocUrl::from_absolute_path(output_file.to_string_lossy())?;
+    // Check if the file is already a PDF - load it directly
+    let is_pdf = input_file
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase() == "pdf")
+        .unwrap_or(false);
 
-        let mut document = office.document_load(&input_doc)?;
-        let success = document.save_as(&output_pdf, "pdf", None)?;
-
-        if !success {
-            log::error!("Failed to convert {} to pdf", input_file.display());
-            return Err(RenderError::OfficeError(
-                libreofficekit::OfficeError::OfficeError(format!(
-                    "Conversion of {} to pdf was not successful",
-                    input_file.display()
-                )),
-            ));
-        }
+    if is_pdf {
+        log::debug!("Loading PDF directly: {}", input_file.display());
+        return Document::load(input_file).map_err(|error| RenderError::PdfReadError {
+            file: input_file.to_path_buf(),
+            error,
+        });
     }
 
-    Document::load(&output_file).map_err(|error| RenderError::PdfReadError {
-        file: output_file,
-        error,
-    })
+    // For non-PDF files, we need a converter
+    let Some(converter) = converter else {
+        return Err(RenderError::ConverterUnavailable {
+            file: input_file.to_path_buf(),
+        });
+    };
+
+    converter.convert_to_pdf(input_file, staging_dir.as_ref())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -444,4 +499,8 @@ pub enum RenderError {
     PdfMergeMissingCatalog,
     #[error("PDF merge failed: Could not retrieve object {0:?}")]
     PdfMergeMissingObject(ObjectId),
+    #[error(
+        "Cannot convert {file} to PDF: LibreOffice is not available. Install LibreOffice or use a PDF file directly."
+    )]
+    ConverterUnavailable { file: PathBuf },
 }

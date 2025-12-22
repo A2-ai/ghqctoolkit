@@ -1127,10 +1127,10 @@ pub fn prompt_milestone_archive(
 }
 
 /// Interactive context file selection for record generation
-/// Lists .doc/.docx files and allows users to select and choose prepend/append position
+/// Lists .doc/.docx/.pdf files and allows users to select and choose prepend/append position
 pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
-    // Find all .doc and .docx files in the directory
-    let word_files: Vec<PathBuf> = fs::read_dir(current_dir)
+    // Find all .doc, .docx, and .pdf files in the directory
+    let context_files_available: Vec<PathBuf> = fs::read_dir(current_dir)
         .map_err(|e| anyhow::anyhow!("Failed to read directory: {}", e))?
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
@@ -1138,7 +1138,7 @@ pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     let ext_lower = ext.to_string_lossy().to_lowercase();
-                    if ext_lower == "doc" || ext_lower == "docx" {
+                    if ext_lower == "doc" || ext_lower == "docx" || ext_lower == "pdf" {
                         return Some(path);
                     }
                 }
@@ -1147,17 +1147,17 @@ pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
         })
         .collect();
 
-    if word_files.is_empty() {
-        println!("ℹ️  No Word documents (.doc/.docx) found in directory");
+    if context_files_available.is_empty() {
+        println!("ℹ️  No context documents (.doc/.docx/.pdf) found in directory");
         return Ok(Vec::new());
     }
 
     let mut context_files: Vec<QCContext> = Vec::new();
-    let mut available_files = word_files.clone();
+    let mut available_files = context_files_available.clone();
 
     loop {
         if available_files.is_empty() {
-            println!("ℹ️  No more Word documents available to add");
+            println!("ℹ️  No more context documents available to add");
             break;
         }
 
@@ -1170,9 +1170,9 @@ pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
         options.insert(0, "✅ Done adding context files".to_string());
 
         let prompt_text = if context_files.is_empty() {
-            "📄 Select a Word document to include as context (or Done to skip):"
+            "📄 Select a document to include as context (or Done to skip):"
         } else {
-            "📄 Select another Word document (or Done to finish):"
+            "📄 Select another document (or Done to finish):"
         };
 
         let selection = Select::new(prompt_text, options)
