@@ -12,11 +12,11 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
-    GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps,
-    HttpImageDownloader, IssueThread, QCContext, QCStatus, RelevantFile, archive,
-    configuration_status, create_labels_if_needed, determine_config_dir, fetch_milestone_issues,
-    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
+    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand, GitFileOps, GitHubReader,
+    GitHubWriter, GitInfo, GitRepository, GitStatusOps, HttpImageDownloader, IssueThread, QCContext, QCStatus,
+    RelevantFile, archive, configuration_status, create_labels_if_needed, create_staging_dir, determine_config_dir,
+    fetch_milestone_issues, get_milestone_issue_information, get_repo_users, record, render,
+    setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -669,12 +669,17 @@ async fn main() -> Result<()> {
                     };
 
                     let issues = fetch_milestone_issues(&selected_milestones, &git_info).await?;
+
+                    // Create staging directory for images, logo, and template
+                    let staging_dir = create_staging_dir()?;
+
                     let image_downloader = HttpImageDownloader;
                     let issue_information = get_milestone_issue_information(
                         &issues,
                         cache.as_ref(),
                         &git_info,
                         &image_downloader,
+                        &staging_dir,
                     )
                     .await?;
 
@@ -685,6 +690,7 @@ async fn main() -> Result<()> {
                         &git_info,
                         &env,
                         interactive_only_tables,
+                        &staging_dir,
                     )?;
                     let final_record_path = interactive_record_path.or(record_path);
                     let record_path = if let Some(mut record_path) = final_record_path {
@@ -709,7 +715,7 @@ async fn main() -> Result<()> {
                         ))
                     };
 
-                    render(&record_str, &record_path, &context_files)?;
+                    render(&record_str, &record_path, &staging_dir, &context_files)?;
 
                     println!(
                         "✅ Record successfully generated at {}",

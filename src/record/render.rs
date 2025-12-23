@@ -5,10 +5,32 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use libreofficekit::{DocUrl, Office};
 use lopdf::{Bookmark, Document, Object, ObjectId};
+
+/// Create a staging directory for record generation
+///
+/// Creates a unique staging directory in the system temp folder using a hash.
+/// This directory is used to store downloaded images, the logo, and the rendered template.
+pub fn create_staging_dir() -> Result<PathBuf, RenderError> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    let mut hasher = DefaultHasher::new();
+    timestamp.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let staging_dir = std::env::temp_dir().join(format!("ghqc-render-{:x}", hash));
+    std::fs::create_dir_all(&staging_dir)?;
+
+    log::debug!("Created staging directory: {}", staging_dir.display());
+    Ok(staging_dir)
+}
 
 /// Trait for converting documents (Word, etc.) to PDF
 pub trait DocumentConverter {
@@ -102,41 +124,38 @@ pub enum ContextPosition {
     Append,
 }
 
-/// Render a Quarto document to PDF using the quarto CLI tool
+/// Render a Typst document to PDF using the typst CLI tool
 ///
 /// # Arguments
-/// * `report` - The Quarto markdown content to render
-/// * `path` - The output path for the rendered PDF (without extension)
+/// * `record_str` - The Typst document content to render
+/// * `path` - The output path for the rendered PDF
+/// * `staging_dir` - The staging directory containing the template and assets (images, logo)
+/// * `qc_context` - Optional context files to prepend/append to the PDF
 ///
 /// # Returns
 /// * `Ok(())` - If rendering succeeded
-/// * `Err(RecordError)` - If rendering failed
+/// * `Err(RenderError)` - If rendering failed
 ///
 /// # Example
 /// ```no_run
 /// use std::path::Path;
-/// use ghqctoolkit::{render, QCContext, ContextPosition};
+/// use ghqctoolkit::{render, QCContext, ContextPosition, create_staging_dir};
 ///
-/// let report = "---\ntitle: My Report\n---\n# Hello World";
-/// render(report, Path::new("output/my-report"), &[QCContext::new("path/to/file.pdf", ContextPosition::Prepend), QCContext::new("path/to/file.pdf", ContextPosition::Append)]).unwrap();
-/// // Creates output/my-report.pdf
+/// let report = "#set document(title: \"My Report\")\n= Hello World";
+/// let staging_dir = create_staging_dir().unwrap();
+/// render(report, Path::new("output/my-report.pdf"), &staging_dir, &[]).unwrap();
 /// ```
 pub fn render(
     record_str: &str,
     path: impl AsRef<Path>,
+    staging_dir: impl AsRef<Path>,
     qc_context: &[QCContext],
 ) -> Result<(), RenderError> {
     let output_path = path.as_ref();
-
-    // Create staging directory using hash of report content
-    let mut hasher = DefaultHasher::new();
-    record_str.hash(&mut hasher);
-    let hash = hasher.finish();
-    let staging_dir = std::env::temp_dir().join(format!("ghqc-render-{:x}", hash));
-    std::fs::create_dir_all(&staging_dir)?;
+    let staging_dir = staging_dir.as_ref();
 
     let cleanup_staging = || {
-        if let Err(e) = std::fs::remove_dir_all(&staging_dir) {
+        if let Err(e) = std::fs::remove_dir_all(staging_dir) {
             log::warn!(
                 "Failed to cleanup staging directory {}: {}",
                 staging_dir.display(),
@@ -145,15 +164,16 @@ pub fn render(
         }
     };
 
-    let findings_doc = render_findings_in_staging(&staging_dir, record_str).and_then(|file| {
+    let findings_doc = render_typst_in_staging(staging_dir, record_str).and_then(|file| {
         Document::load(&file).map_err(|error| RenderError::PdfReadError { file, error })
     })?;
+
     let mut doc = if !qc_context.is_empty() {
         let converter = LibreOfficeConverter::try_new();
         let context_docs = qc_context
             .iter()
             .map(|context| {
-                load_context_file(&context.file, &staging_dir, converter.as_ref())
+                load_context_file(&context.file, staging_dir, converter.as_ref())
                     .map(|d| (d, context.position))
             })
             .collect::<Result<Vec<(Document, ContextPosition)>, RenderError>>()?;
@@ -350,31 +370,35 @@ fn merge_pdfs(
     Ok(document)
 }
 
-fn render_findings_in_staging(
-    staging_dir: impl AsRef<Path>,
-    report: &str,
-) -> Result<PathBuf, RenderError> {
-    let staging_dir = staging_dir.as_ref();
-    let qmd_file = staging_dir.join("record.qmd");
+fn render_typst_in_staging(staging_dir: &Path, report: &str) -> Result<PathBuf, RenderError> {
+    let typ_file = staging_dir.join("record.typ");
     let staging_pdf_path = staging_dir.join("record.pdf");
 
-    log::debug!("Writing Quarto document to staging: {}", qmd_file.display());
-    std::fs::write(&qmd_file, report)?;
+    log::debug!("Writing Typst document to staging: {}", typ_file.display());
+    std::fs::write(&typ_file, report)?;
 
-    log::debug!("Rendering findings PDF with Quarto: {}", qmd_file.display());
+    log::debug!(
+        "Rendering PDF with Typst: {} -> {}",
+        typ_file.display(),
+        staging_pdf_path.display()
+    );
 
-    // Execute quarto render command with combined stdout/stderr
-    let mut cmd = Command::new("quarto");
-    cmd.args(&["render", qmd_file.to_str().unwrap()])
-        .current_dir(staging_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()); // Capture stderr separately
+    // Execute typst compile command with combined stdout/stderr
+    let mut cmd = Command::new("typst");
+    cmd.args([
+        "compile",
+        typ_file.to_str().unwrap(),
+        staging_pdf_path.to_str().unwrap(),
+    ])
+    .current_dir(staging_dir)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
 
     log::debug!("Executing command: {:?}", cmd);
 
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
-            RenderError::QuartoNotFound
+            RenderError::TypstNotFound
         } else {
             RenderError::Io(e)
         }
@@ -425,7 +449,7 @@ fn render_findings_in_staging(
     // Check if command succeeded
     if !exit_status.success() {
         let exit_code = exit_status.code().unwrap_or(-1);
-        return Err(RenderError::QuartoRenderFailed {
+        return Err(RenderError::TypstRenderFailed {
             code: exit_code,
             stderr: combined_output,
         });
@@ -479,12 +503,10 @@ fn load_context_file(
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
-    #[error("Quarto render failed with exit code {code}: {stderr}")]
-    QuartoRenderFailed { code: i32, stderr: String },
-    #[error(
-        "Quarto command not found. Please install Quarto: https://quarto.org/docs/get-started/"
-    )]
-    QuartoNotFound,
+    #[error("Typst render failed with exit code {code}: {stderr}")]
+    TypstRenderFailed { code: i32, stderr: String },
+    #[error("Typst command not found. Please install Typst: https://typst.app")]
+    TypstNotFound,
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Failed to convert office file to pdf: {0}")]

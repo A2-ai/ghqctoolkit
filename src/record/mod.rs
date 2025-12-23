@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::{PathBuf, absolute},
+    path::{Path, PathBuf, absolute},
 };
 
 use chrono;
@@ -20,33 +20,66 @@ use crate::{
 
 // Re-export submodules
 mod images;
-mod latex;
 mod render;
 mod tables;
+mod typst;
 
 // Re-export public items from submodules
-pub use latex::{escape_latex, format_markdown};
+pub use typst::{escape_typst, format_markdown};
 // Template functions - used by tera templates, not directly by Rust code
 pub use images::{HttpImageDownloader, ImageDownloader};
-pub use render::{ContextPosition, QCContext, render};
+pub use render::{ContextPosition, QCContext, create_staging_dir, render};
 #[allow(unused_imports)]
 pub use tables::{
     create_milestone_df, insert_breaks, render_issue_summary_table_rows,
     render_milestone_table_rows,
 };
 
+/// Built-in Typst template embedded at compile time
+pub const BUILTIN_TEMPLATE: &str = include_str!("../templates/record.typ");
+
+/// Load template from configuration or fall back to built-in
+///
+/// Checks if a custom template exists at the configuration's record_path.
+/// If found, loads from file. Otherwise, uses the built-in template.
+pub fn load_template(configuration: &Configuration) -> Result<String, RecordError> {
+    let custom_path = configuration.record_path();
+
+    if custom_path.exists() {
+        log::info!("Using custom template from: {}", custom_path.display());
+        std::fs::read_to_string(&custom_path).map_err(RecordError::Io)
+    } else {
+        log::debug!(
+            "Custom template not found at {}, using built-in template",
+            custom_path.display()
+        );
+        Ok(BUILTIN_TEMPLATE.to_string())
+    }
+}
+
+/// Create a Tera instance with the given template
+fn create_tera_with_template(template: &str) -> Result<Tera, RecordError> {
+    let mut tera = Tera::default();
+
+    tera.add_raw_template("record.typ", template)
+        .map_err(RecordError::Template)?;
+
+    // Register custom functions from tables module
+    tera.register_function(
+        "render_milestone_table_rows",
+        tables::render_milestone_table_rows,
+    );
+    tera.register_function(
+        "render_issue_summary_table_rows",
+        tables::render_issue_summary_table_rows,
+    );
+
+    Ok(tera)
+}
+
 lazy_static! {
     pub static ref TEMPLATES: Tera = {
-        let mut tera = Tera::default();
-
-        tera.add_raw_template("record.qmd", include_str!("../templates/record.qmd"))
-            .unwrap();
-
-        // Register custom functions from tables module
-        tera.register_function("render_milestone_table_rows", tables::render_milestone_table_rows);
-        tera.register_function("render_issue_summary_table_rows", tables::render_issue_summary_table_rows);
-
-        tera
+        create_tera_with_template(BUILTIN_TEMPLATE).expect("Failed to create default Tera instance")
     };
 }
 
@@ -57,29 +90,37 @@ pub fn record(
     git_info: &impl GitRepository,
     env: &impl EnvProvider,
     only_tables: bool,
+    staging_dir: impl AsRef<Path>,
 ) -> Result<String, RecordError> {
+    let staging_dir = staging_dir.as_ref();
     let mut context = Context::new();
 
-    context.insert("repository_name", &escape_latex(git_info.repo()));
+    context.insert("repository_name", &escape_typst(git_info.repo()));
     context.insert(
         "checklist_name",
-        &escape_latex(&configuration.options.checklist_display_name),
+        &escape_typst(&configuration.options.checklist_display_name),
     );
 
     if let Ok(author) = env.var("USER") {
-        context.insert("author", &escape_latex(&author));
+        context.insert("author", &escape_typst(&author));
     }
 
     let date = if let Ok(custom_date) = env.var("GHQC_RECORD_DATE") {
-        escape_latex(&custom_date)
+        escape_typst(&custom_date)
     } else {
-        escape_latex(&chrono::Local::now().format("%B %d, %Y").to_string())
+        escape_typst(&chrono::Local::now().format("%B %d, %Y").to_string())
     };
     context.insert("date", &date);
 
+    // Copy logo to staging directory and use relative path
     let logo_path = absolute(configuration.logo_path())?;
     if logo_path.exists() {
-        context.insert("logo_path", &logo_path);
+        if let Some(filename) = logo_path.file_name() {
+            let staging_logo_path = staging_dir.join(filename);
+            std::fs::copy(&logo_path, &staging_logo_path)?;
+            // Use just the filename since Typst runs from staging_dir
+            context.insert("logo_path", &PathBuf::from(filename));
+        }
     }
 
     // Generate milestone dataframe
@@ -107,13 +148,17 @@ pub fn record(
         .collect::<Vec<_>>();
     context.insert(
         "milestone_names",
-        &escape_latex(&milestone_names.join(", ")),
+        &escape_typst(&milestone_names.join(", ")),
     );
 
     context.insert("only_tables", &only_tables);
 
-    Ok(TEMPLATES
-        .render("record.qmd", &context)
+    // Load template from configuration or use built-in
+    let template = load_template(configuration)?;
+    let tera = create_tera_with_template(&template)?;
+
+    Ok(tera
+        .render("record.typ", &context)
         .map_err(RecordError::Template)?)
 }
 
@@ -155,7 +200,9 @@ pub async fn get_milestone_issue_information(
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps),
     image_downloader: &impl images::ImageDownloader,
+    staging_dir: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
+    let staging_dir = staging_dir.as_ref();
     let repo_users = get_repo_users(cache, git_info).await?;
     let git_status = git_info.status()?;
 
@@ -176,6 +223,7 @@ pub async fn get_milestone_issue_information(
                         cache,
                         git_info,
                         image_downloader,
+                        staging_dir,
                     )
                     .await
                 }
@@ -222,6 +270,7 @@ pub async fn create_issue_information(
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     image_downloader: &impl images::ImageDownloader,
+    staging_dir: &Path,
 ) -> Result<IssueInformation, RecordError> {
     // Get comments and check if we need HTML for JWT URLs
     let mut comments = get_issue_comments(issue, cache, git_info).await?;
@@ -335,22 +384,20 @@ pub async fn create_issue_information(
     let latest_qc_commit = issue_thread.latest_commit().hash.to_string();
 
     // Create IssueImage structs for all images in the issue and comments
-    let temp_dir = std::env::temp_dir().join("ghqc-images");
-    std::fs::create_dir_all(&temp_dir)?;
-
+    // Images are downloaded to staging_dir for use during Typst rendering
     let mut all_issue_images = Vec::new();
 
     // Create IssueImages from issue body
     if let Some(body_text) = &issue.body {
         let issue_images =
-            images::create_issue_images(body_text, issue.body_html.as_deref(), &temp_dir);
+            images::create_issue_images(body_text, issue.body_html.as_deref(), staging_dir);
         all_issue_images.extend(issue_images);
     }
 
     // Create IssueImages from each comment
     for comment in &comments {
         let comment_images =
-            images::create_issue_images(&comment.body, comment.html.as_deref(), &temp_dir);
+            images::create_issue_images(&comment.body, comment.html.as_deref(), staging_dir);
         all_issue_images.extend(comment_images);
     }
 
@@ -376,8 +423,10 @@ pub async fn create_issue_information(
     for (issue_image, result) in download_results {
         match result {
             Ok(_) => {
-                // Map text URL to downloaded path
-                image_url_map.insert(issue_image.text, issue_image.path);
+                // Map text URL to filename only (Typst runs from staging_dir)
+                if let Some(filename) = issue_image.path.file_name() {
+                    image_url_map.insert(issue_image.text, PathBuf::from(filename));
+                }
             }
             Err(e) => {
                 log::error!("Failed to download image {}: {}", issue_image.html, e);
@@ -410,28 +459,28 @@ pub async fn create_issue_information(
     let timeline = create_combined_timeline(&formatted_events, &formatted_comments);
 
     Ok(IssueInformation {
-        title: escape_latex(&issue.title),
+        title: escape_typst(&issue.title),
         number: issue.number,
-        milestone: escape_latex(milestone_name),
-        created_by: escape_latex(&created_by),
-        created_at: escape_latex(&created_at),
-        qcer: qcer.into_iter().map(|q| escape_latex(&q)).collect(),
-        qc_status: escape_latex(&qc_status),
-        checklist_summary: escape_latex(&checklist_summary),
-        git_status: escape_latex(&git_status_str),
-        initial_qc_commit: escape_latex(&initial_qc_commit),
-        latest_qc_commit: escape_latex(&latest_qc_commit),
-        issue_url: escape_latex(&issue.html_url.to_string()),
-        state: escape_latex(&if open { "Open" } else { "Closed" }.to_string()),
-        closed_by: closed_by.map(|c| escape_latex(&c)),
-        closed_at: closed_at.map(|c| escape_latex(&c)),
+        milestone: escape_typst(milestone_name),
+        created_by: escape_typst(&created_by),
+        created_at: escape_typst(&created_at),
+        qcer: qcer.into_iter().map(|q| escape_typst(&q)).collect(),
+        qc_status: escape_typst(&qc_status),
+        checklist_summary: escape_typst(&checklist_summary),
+        git_status: escape_typst(&git_status_str),
+        initial_qc_commit: escape_typst(&initial_qc_commit),
+        latest_qc_commit: escape_typst(&latest_qc_commit),
+        issue_url: escape_typst(&issue.html_url.to_string()),
+        state: escape_typst(&if open { "Open" } else { "Closed" }.to_string()),
+        closed_by: closed_by.map(|c| escape_typst(&c)),
+        closed_at: closed_at.map(|c| escape_typst(&c)),
         body, // body already processed with format_markdown_with_min_level which handles LaTeX
         comments: formatted_comments, // comments already processed with format_markdown_with_min_level
         events: formatted_events
             .into_iter()
-            .map(|e| escape_latex(&e))
+            .map(|e| escape_typst(&e))
             .collect(),
-        timeline: timeline.into_iter().map(|t| escape_latex(&t)).collect(),
+        timeline: timeline.into_iter().map(|t| escape_typst(&t)).collect(),
     })
 }
 
@@ -638,8 +687,8 @@ pub(crate) fn format_comments(
         let created_at = comment.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
         let header = format!(
             "{} - Comment by {}",
-            escape_latex(&created_at),
-            escape_latex(&author_display)
+            escape_typst(&created_at),
+            escape_typst(&author_display)
         );
 
         // Format comment body (min level 4 since it will be under #### header in template)
@@ -665,12 +714,8 @@ pub enum RecordError {
     QCStatus(#[from] crate::qc_status::QCStatusError),
     #[error("Git Status Error: {0}")]
     GitStatus(#[from] crate::git::GitStatusError),
-    #[error("Quarto render failed with exit code {code}: {stderr}")]
-    QuartoRenderFailed { code: i32, stderr: String },
-    #[error(
-        "Quarto command not found. Please install Quarto: https://quarto.org/docs/get-started/"
-    )]
-    QuartoNotFound,
+    #[error("Render Error: {0}")]
+    Render(#[from] render::RenderError),
     #[error("Image download failed for URL {url}: {error}")]
     ImageDownloadFailed { url: String, error: String },
     #[error("Multiple image downloads failed: {failures:?}")]
