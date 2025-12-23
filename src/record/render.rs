@@ -115,10 +115,10 @@ pub enum ContextPosition {
 /// # Example
 /// ```no_run
 /// use std::path::Path;
-/// use ghqctoolkit::render;
+/// use ghqctoolkit::{render, QCContext, ContextPosition};
 ///
 /// let report = "---\ntitle: My Report\n---\n# Hello World";
-/// render(report, Path::new("output/my-report")).unwrap();
+/// render(report, Path::new("output/my-report"), &[QCContext::new("path/to/file.pdf", ContextPosition::Prepend), QCContext::new("path/to/file.pdf", ContextPosition::Append)]).unwrap();
 /// // Creates output/my-report.pdf
 /// ```
 pub fn render(
@@ -503,4 +503,295 @@ pub enum RenderError {
         "Cannot convert {file} to PDF: LibreOffice is not available. Install LibreOffice or use a PDF file directly."
     )]
     ConverterUnavailable { file: PathBuf },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // Helper to create a minimal valid PDF for testing
+    fn create_test_pdf() -> Document {
+        use lopdf::dictionary;
+
+        let mut doc = Document::with_version("1.5");
+
+        // Create a minimal page
+        let pages_id = doc.new_object_id();
+        let page_id = doc.new_object_id();
+        let content_id = doc.new_object_id();
+
+        // Add content stream (empty)
+        doc.objects.insert(
+            content_id,
+            Object::Stream(lopdf::Stream::new(dictionary! {}, vec![])),
+        );
+
+        // Add page
+        let page = dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        };
+        doc.objects.insert(page_id, Object::Dictionary(page));
+
+        // Add pages
+        let pages = dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+
+        // Add catalog
+        let catalog_id = doc.new_object_id();
+        let catalog = dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        };
+        doc.objects.insert(catalog_id, Object::Dictionary(catalog));
+
+        // Set trailer
+        doc.trailer.set("Root", catalog_id);
+        doc.max_id = doc.objects.len() as u32;
+
+        doc
+    }
+
+    // Mock converter for testing
+    struct MockConverter {
+        should_succeed: bool,
+    }
+
+    impl DocumentConverter for MockConverter {
+        fn convert_to_pdf(
+            &self,
+            input: &Path,
+            _output_dir: &Path,
+        ) -> Result<Document, RenderError> {
+            if self.should_succeed {
+                Ok(create_test_pdf())
+            } else {
+                Err(RenderError::OfficeError(
+                    libreofficekit::OfficeError::OfficeError(format!(
+                        "Mock conversion failed for {}",
+                        input.display()
+                    )),
+                ))
+            }
+        }
+    }
+
+    // ===================
+    // QCContext tests
+    // ===================
+
+    #[test]
+    fn test_qc_context_new() {
+        let ctx = QCContext::new("/path/to/file.pdf", ContextPosition::Prepend);
+        assert_eq!(ctx.file(), Path::new("/path/to/file.pdf"));
+        assert!(matches!(ctx.position(), ContextPosition::Prepend));
+    }
+
+    #[test]
+    fn test_qc_context_append_position() {
+        let ctx = QCContext::new("document.docx", ContextPosition::Append);
+        assert_eq!(ctx.file(), Path::new("document.docx"));
+        assert!(matches!(ctx.position(), ContextPosition::Append));
+    }
+
+    #[test]
+    fn test_qc_context_clone() {
+        let ctx1 = QCContext::new("/test/path.pdf", ContextPosition::Prepend);
+        let ctx2 = ctx1.clone();
+        assert_eq!(ctx1.file(), ctx2.file());
+        assert!(matches!(ctx1.position(), ContextPosition::Prepend));
+        assert!(matches!(ctx2.position(), ContextPosition::Prepend));
+    }
+
+    // ===================
+    // load_context_file tests
+    // ===================
+
+    #[test]
+    fn test_load_context_file_pdf_directly() {
+        let temp_dir = TempDir::new().unwrap();
+        let pdf_path = temp_dir.path().join("test.pdf");
+
+        // Create and save a test PDF
+        let mut doc = create_test_pdf();
+        doc.save(&pdf_path).unwrap();
+
+        // Load without converter (should work for PDFs)
+        let result = load_context_file(&pdf_path, temp_dir.path(), None::<&MockConverter>);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_load_context_file_non_pdf_without_converter() {
+        let temp_dir = TempDir::new().unwrap();
+        let docx_path = temp_dir.path().join("test.docx");
+
+        // Create a dummy file
+        std::fs::write(&docx_path, b"dummy content").unwrap();
+
+        // Try to load without converter
+        let result = load_context_file(&docx_path, temp_dir.path(), None::<&MockConverter>);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            RenderError::ConverterUnavailable { file } => {
+                assert_eq!(file, docx_path);
+            }
+            e => panic!("Expected ConverterUnavailable, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_load_context_file_non_pdf_with_converter() {
+        let temp_dir = TempDir::new().unwrap();
+        let docx_path = temp_dir.path().join("test.docx");
+
+        // Create a dummy file
+        std::fs::write(&docx_path, b"dummy content").unwrap();
+
+        // Load with mock converter
+        let converter = MockConverter {
+            should_succeed: true,
+        };
+        let result = load_context_file(&docx_path, temp_dir.path(), Some(&converter));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_load_context_file_converter_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        let docx_path = temp_dir.path().join("test.docx");
+
+        // Create a dummy file
+        std::fs::write(&docx_path, b"dummy content").unwrap();
+
+        // Load with failing converter
+        let converter = MockConverter {
+            should_succeed: false,
+        };
+        let result = load_context_file(&docx_path, temp_dir.path(), Some(&converter));
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RenderError::OfficeError(_)));
+    }
+
+    #[test]
+    fn test_load_context_file_pdf_case_insensitive() {
+        let temp_dir = TempDir::new().unwrap();
+        let pdf_path = temp_dir.path().join("test.PDF"); // uppercase extension
+
+        // Create and save a test PDF
+        let mut doc = create_test_pdf();
+        doc.save(&pdf_path).unwrap();
+
+        // Should recognize .PDF as PDF
+        let result = load_context_file(&pdf_path, temp_dir.path(), None::<&MockConverter>);
+        assert!(result.is_ok());
+    }
+
+    // ===================
+    // merge_pdfs tests
+    // ===================
+
+    #[test]
+    fn test_merge_pdfs_no_context() {
+        let findings = create_test_pdf();
+        let context_docs = vec![];
+
+        let result = merge_pdfs(findings, context_docs);
+        assert!(result.is_ok());
+
+        let merged = result.unwrap();
+        assert_eq!(merged.get_pages().len(), 1);
+    }
+
+    #[test]
+    fn test_merge_pdfs_with_prepend() {
+        let findings = create_test_pdf();
+        let prepend_doc = create_test_pdf();
+
+        let context_docs = vec![(prepend_doc, ContextPosition::Prepend)];
+
+        let result = merge_pdfs(findings, context_docs);
+        assert!(result.is_ok());
+
+        let merged = result.unwrap();
+        assert_eq!(merged.get_pages().len(), 2);
+    }
+
+    #[test]
+    fn test_merge_pdfs_with_append() {
+        let findings = create_test_pdf();
+        let append_doc = create_test_pdf();
+
+        let context_docs = vec![(append_doc, ContextPosition::Append)];
+
+        let result = merge_pdfs(findings, context_docs);
+        assert!(result.is_ok());
+
+        let merged = result.unwrap();
+        assert_eq!(merged.get_pages().len(), 2);
+    }
+
+    #[test]
+    fn test_merge_pdfs_prepend_and_append() {
+        let findings = create_test_pdf();
+        let prepend_doc = create_test_pdf();
+        let append_doc = create_test_pdf();
+
+        let context_docs = vec![
+            (prepend_doc, ContextPosition::Prepend),
+            (append_doc, ContextPosition::Append),
+        ];
+
+        let result = merge_pdfs(findings, context_docs);
+        assert!(result.is_ok());
+
+        let merged = result.unwrap();
+        assert_eq!(merged.get_pages().len(), 3);
+    }
+
+    #[test]
+    fn test_merge_pdfs_multiple_prepend() {
+        let findings = create_test_pdf();
+        let prepend1 = create_test_pdf();
+        let prepend2 = create_test_pdf();
+
+        let context_docs = vec![
+            (prepend1, ContextPosition::Prepend),
+            (prepend2, ContextPosition::Prepend),
+        ];
+
+        let result = merge_pdfs(findings, context_docs);
+        assert!(result.is_ok());
+
+        let merged = result.unwrap();
+        assert_eq!(merged.get_pages().len(), 3);
+    }
+
+    #[test]
+    fn test_merge_pdfs_output_is_valid() {
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("merged.pdf");
+
+        let findings = create_test_pdf();
+        let prepend_doc = create_test_pdf();
+
+        let context_docs = vec![(prepend_doc, ContextPosition::Prepend)];
+
+        let mut merged = merge_pdfs(findings, context_docs).unwrap();
+
+        // Save and reload to verify it's a valid PDF
+        merged.save(&output_path).unwrap();
+        let reloaded = Document::load(&output_path);
+        assert!(reloaded.is_ok());
+    }
 }
