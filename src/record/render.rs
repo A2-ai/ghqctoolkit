@@ -151,19 +151,29 @@ pub fn render(
     staging_dir: impl AsRef<Path>,
     qc_context: &[QCContext],
 ) -> Result<(), RenderError> {
-    let output_path = path.as_ref();
     let staging_dir = staging_dir.as_ref();
 
-    let cleanup_staging = || {
-        if let Err(e) = std::fs::remove_dir_all(staging_dir) {
-            log::warn!(
-                "Failed to cleanup staging directory {}: {}",
-                staging_dir.display(),
-                e
-            );
-        }
-    };
+    // Run the actual render logic, capturing the result
+    let result = render_inner(record_str, path.as_ref(), staging_dir, qc_context);
 
+    // Always cleanup staging directory, regardless of success or failure
+    if let Err(e) = std::fs::remove_dir_all(staging_dir) {
+        log::warn!(
+            "Failed to cleanup staging directory {}: {}",
+            staging_dir.display(),
+            e
+        );
+    }
+
+    result
+}
+
+fn render_inner(
+    record_str: &str,
+    output_path: &Path,
+    staging_dir: &Path,
+    qc_context: &[QCContext],
+) -> Result<(), RenderError> {
     let findings_doc = render_typst_in_staging(staging_dir, record_str).and_then(|file| {
         Document::load(&file).map_err(|error| RenderError::PdfReadError { file, error })
     })?;
@@ -184,9 +194,6 @@ pub fn render(
     };
 
     doc.save(output_path)?;
-
-    // Always cleanup staging directory
-    cleanup_staging();
 
     Ok(())
 }
