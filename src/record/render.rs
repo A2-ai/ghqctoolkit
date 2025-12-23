@@ -11,6 +11,8 @@ use std::{
 use libreofficekit::{DocUrl, Office};
 use lopdf::{Bookmark, Document, Object, ObjectId};
 
+use crate::utils::EnvProvider;
+
 /// Create a staging directory for record generation
 ///
 /// Creates a unique staging directory in the system temp folder using a hash.
@@ -179,6 +181,9 @@ fn render_inner(
     })?;
 
     let mut doc = if !qc_context.is_empty() {
+        // Suppress LibreOffice logging noise
+        crate::utils::StdEnvProvider.set_var("SAL_LOG", "-INFO-WARN");
+
         let converter = LibreOfficeConverter::try_new();
         let context_docs = qc_context
             .iter()
@@ -187,6 +192,12 @@ fn render_inner(
                     .map(|d| (d, context.position))
             })
             .collect::<Result<Vec<(Document, ContextPosition)>, RenderError>>()?;
+
+        // Prevent LibreOffice cleanup segfault by forgetting the converter
+        // This leaks memory but avoids the crash - LibreOffice's cleanup is notoriously buggy
+        if let Some(converter) = converter {
+            std::mem::forget(converter);
+        }
 
         merge_pdfs(findings_doc, context_docs)?
     } else {
