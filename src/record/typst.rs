@@ -1,124 +1,85 @@
-use super::images::replace_images_with_latex;
-/// LaTeX formatting utilities for the record generation system.
-/// This module handles markdown processing, LaTeX escaping, and emoji wrapping.
+use super::images::replace_images_with_typst;
+/// Typst formatting utilities for the record generation system.
+/// This module handles markdown processing and Typst escaping.
+use crate::issue::HTML_LINK_REGEX;
+use regex::Regex;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
-/// Escape LaTeX special characters in user-provided text and wrap emojis
-/// This function escapes characters that have special meaning in LaTeX to prevent
-/// them from being interpreted as LaTeX commands when they appear in user content,
-/// and wraps emoji characters with the \emoji{} command for proper rendering
-pub fn escape_latex(text: &str) -> String {
-    let escaped = text
-        .replace('{', r"\{")
-        .replace('}', r"\}")
-        .replace('\\', r"\textbackslash{}")
-        .replace('$', r"\$")
-        .replace('&', r"\&")
-        .replace('%', r"\%")
-        .replace('#', r"\#")
-        .replace('^', r"\textasciicircum{}")
-        .replace('_', r"\_")
-        .replace('~', r"\textasciitilde{}");
+// Regex for markdown bold **text**
+static BOLD_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").expect("Invalid bold regex"));
 
-    wrap_emojis(&escaped)
+// Regex for markdown italic *text* (after bold is replaced, any remaining *...* is italic)
+static ITALIC_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\*([^*]+)\*").expect("Invalid italic regex"));
+
+/// Escape Typst special characters in user-provided text
+/// This function escapes characters that have special meaning in Typst to prevent
+/// them from being interpreted as Typst markup when they appear in user content.
+///
+/// Typst special characters that need escaping:
+/// - `#` - function/keyword marker
+/// - `$` - math mode delimiter
+/// - `*` - bold/strong emphasis
+/// - `_` - emphasis/subscript
+/// - `` ` `` - raw text/code
+/// - `@` - reference/citation marker
+/// - `<` `>` - label markers
+/// - `\` - escape character
+/// - `[` `]` - content blocks
+pub fn escape_typst(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('#', "\\#")
+        .replace('$', "\\$")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
+        .replace('`', "\\`")
+        .replace('@', "\\@")
+        .replace('<', "\\<")
+        .replace('>', "\\>")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
 }
 
-/// Wrap emoji characters with \emoji{} command for LaTeX rendering
-/// Skips emoji wrapping inside code blocks and verbatim environments
-pub fn wrap_emojis(text: &str) -> String {
-    let mut result = String::new();
-    let mut chars = text.chars().peekable();
-    let mut in_code_block = false;
-    let mut in_inline_code = false;
+/// Convert inline markdown formatting to Typst syntax
+///
+/// Handles (in order):
+/// 1. `<a href="url">text</a>` → `#link("url")[text]` (HTML links to Typst links)
+/// 2. `**bold**` → `*bold*` (Typst bold)
+/// 3. `*italic*` → `_italic_` (Typst italic)
+/// 4. Escape special characters: `@`, `<`, `>`
+fn convert_inline_markdown(text: &str) -> String {
+    // Use placeholder to protect bold markers from italic conversion
+    const BOLD_PLACEHOLDER: &str = "\x00TYPST_BOLD\x00";
 
-    while let Some(ch) = chars.next() {
-        // Check for code block markers
-        if ch == '`' {
-            let mut backtick_count = 1;
-            let mut lookahead = chars.clone();
+    // Step 1: Convert HTML links to Typst links
+    let with_links = HTML_LINK_REGEX.replace_all(text, |caps: &regex::Captures| {
+        let url = &caps[1];
+        let display_text = &caps[2];
+        format!("#link(\"{}\")[{}]", url, display_text)
+    });
 
-            // Count consecutive backticks
-            while let Some(&next_ch) = lookahead.peek() {
-                if next_ch == '`' {
-                    backtick_count += 1;
-                    lookahead.next();
-                } else {
-                    break;
-                }
-            }
+    // Step 2: Replace **bold** with placeholder
+    let with_bold_placeholder = BOLD_REGEX.replace_all(&with_links, |caps: &regex::Captures| {
+        format!("{}{}{}", BOLD_PLACEHOLDER, &caps[1], BOLD_PLACEHOLDER)
+    });
 
-            if backtick_count >= 3 {
-                // This is a code fence (```)
-                in_code_block = !in_code_block;
-                // Consume the additional backticks
-                for _ in 1..backtick_count {
-                    if chars.peek().is_some() && *chars.peek().unwrap() == '`' {
-                        result.push(chars.next().unwrap());
-                    }
-                }
-            } else if backtick_count == 1 && !in_code_block {
-                // This might be inline code
-                in_inline_code = !in_inline_code;
-            }
-        }
+    // Step 3: Replace *italic* with _italic_
+    let with_italic =
+        ITALIC_REGEX.replace_all(&with_bold_placeholder, |caps: &regex::Captures| {
+            format!("_{}_", &caps[1])
+        });
 
-        // Only wrap emojis if we're not in any kind of code block
-        if !in_code_block && !in_inline_code && is_emoji(ch) {
-            // Collect consecutive emoji characters
-            let mut emoji_sequence = String::new();
-            emoji_sequence.push(ch);
+    // Step 4: Replace placeholder with Typst bold syntax
+    let with_bold = with_italic.replace(BOLD_PLACEHOLDER, "*");
 
-            // Check for additional emoji characters or combining characters
-            while let Some(&next_ch) = chars.peek() {
-                if is_emoji(next_ch) || is_emoji_modifier(next_ch) {
-                    emoji_sequence.push(chars.next().unwrap());
-                } else {
-                    break;
-                }
-            }
-
-            result.push_str(&format!(r"\emoji{{{}}}", emoji_sequence));
-        } else {
-            result.push(ch);
-        }
-    }
-
-    result
-}
-
-/// Check if a character is an emoji
-pub fn is_emoji(ch: char) -> bool {
-    let code = ch as u32;
-
-    // Common emoji ranges
-    matches!(code,
-        0x1F600..=0x1F64F | // Emoticons
-        0x1F300..=0x1F5FF | // Miscellaneous Symbols and Pictographs
-        0x1F680..=0x1F6FF | // Transport and Map
-        0x1F1E6..=0x1F1FF | // Regional Indicator Symbols
-        0x2600..=0x26FF |   // Miscellaneous Symbols
-        0x2700..=0x27BF |   // Dingbats
-        0x1F900..=0x1F9FF |  // Supplemental Symbols and Pictographs
-        0x1F018..=0x1F270 | // Various symbols
-        0x238C..=0x2454 |   // Miscellaneous Technical
-        0x20D0..=0x20FF |   // Combining Diacritical Marks for Symbols
-        0x2B00..=0x2BFF |   // Miscellaneous Symbols and Arrows (includes ⭐)
-        0x3030 | 0x303D |  // Wavy dash, part alternation mark
-        0x3297 | 0x3299     // Ideographic circle symbols
-    )
-}
-
-/// Check if a character is an emoji modifier (like skin tone modifiers)
-pub fn is_emoji_modifier(ch: char) -> bool {
-    let code = ch as u32;
-    matches!(
-        code,
-        0x1F3FB
-            ..=0x1F3FF | // Skin tone modifiers
-        0x200D |            // Zero Width Joiner
-        0xFE0F // Variation Selector-16
-    )
+    // Step 5: Escape special characters that have meaning in Typst
+    with_bold
+        .replace('@', "\\@")
+        .replace('<', "\\<")
+        .replace('>', "\\>")
 }
 
 /// Translate markdown headers to ensure minimum level and wrap long code lines
@@ -127,7 +88,11 @@ pub fn format_markdown(
     min_level: usize,
     image_url_map: &HashMap<String, PathBuf>,
 ) -> String {
-    let lines: Vec<&str> = markdown.lines().collect();
+    // IMPORTANT: Replace images FIRST before any escaping happens
+    // This prevents @ in URLs from being escaped and breaking the lookup
+    let with_images = replace_images_with_typst(markdown, image_url_map);
+
+    let lines: Vec<&str> = with_images.lines().collect();
     let mut result = Vec::new();
     let mut in_diff_block = false;
     let mut in_code_block = false;
@@ -159,10 +124,10 @@ pub fn format_markdown(
                 let is_h2_underline = next_line.chars().all(|c| c == '-') && next_line.len() >= 3;
 
                 if is_h1_underline || is_h2_underline {
-                    // Convert setext header to ATX header
+                    // Convert setext header to Typst header
                     let header_level = if is_h1_underline { 1 } else { 2 };
                     let new_level = std::cmp::min(std::cmp::max(header_level, min_level), 6);
-                    let new_header = "#".repeat(new_level);
+                    let new_header = "=".repeat(new_level);
                     let header_text = line.trim();
                     result.push(format!("{} {}", new_header, header_text));
                     i += 2; // Skip both the header line and the underline
@@ -172,16 +137,21 @@ pub fn format_markdown(
         }
 
         if trimmed.starts_with('#') {
-            // Count existing header levels
+            // Count existing header levels and convert to Typst = syntax
+            // But only if followed by space (markdown header), not a letter (Typst command like #image)
             let header_level = trimmed.chars().take_while(|&c| c == '#').count();
-            if header_level <= 6 {
+            let after_hashes = &trimmed[header_level..];
+            let is_markdown_header =
+                header_level <= 6 && (after_hashes.is_empty() || after_hashes.starts_with(' '));
+
+            if is_markdown_header {
                 // Ensure header is at least at min_level
                 let new_level = std::cmp::min(std::cmp::max(header_level, min_level), 6);
-                let new_header = "#".repeat(new_level);
+                let new_header = "=".repeat(new_level);
                 let header_text = trimmed.trim_start_matches('#').trim_start();
                 result.push(format!("{} {}", new_header, header_text));
             } else {
-                // Keep as-is if already max level
+                // It's a Typst command like #image(), keep as-is
                 result.push(line.to_string());
             }
         } else if in_diff_block && (line.starts_with('+') || line.starts_with('-')) {
@@ -190,6 +160,17 @@ pub fn format_markdown(
         } else if in_code_block && line.len() > 75 {
             // We're in a code block - wrap long lines at 75 characters
             result.extend(simple_wrap_line(line, 75));
+        } else if !in_code_block && (trimmed.starts_with("* ") || trimmed.starts_with("+ ")) {
+            // Convert markdown bullet points (* or +) to Typst bullet points (-)
+            // In Typst, * starts bold text, so we must use - for lists
+            let indent = &line[..line.len() - trimmed.len()];
+            let content = &trimmed[2..]; // Skip "* " or "+ "
+            let converted = convert_inline_markdown(content);
+            result.push(format!("{}- {}", indent, converted));
+        } else if !in_code_block {
+            // Convert markdown syntax to Typst for regular content
+            let converted = convert_inline_markdown(line);
+            result.push(converted);
         } else {
             result.push(line.to_string());
         }
@@ -197,16 +178,7 @@ pub fn format_markdown(
         i += 1;
     }
 
-    let joined = result
-        .join("\n")
-        .replace("---", "`---`")
-        .replace("```diff", "``` diff");
-
-    // Replace images with LaTeX commands
-    let with_images = replace_images_with_latex(&joined, image_url_map);
-
-    // Wrap emojis in the final result
-    wrap_emojis(&with_images)
+    result.join("\n")
 }
 
 /// Smart line wrapping - looks for good break points within ±5 chars of max_width, otherwise breaks at max_width
@@ -321,140 +293,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_emoji_detection() {
-        // Test various emoji ranges
-        assert!(is_emoji('😀')); // Emoticons
-        assert!(is_emoji('🎯')); // Miscellaneous Symbols and Pictographs
-        assert!(is_emoji('🚀')); // Transport and Map
-        assert!(is_emoji('⭐')); // Miscellaneous Symbols
-        assert!(is_emoji('✅')); // Dingbats
-        assert!(is_emoji('🤖')); // Supplemental Symbols and Pictographs
-
-        // Test non-emojis
-        assert!(!is_emoji('A'));
-        assert!(!is_emoji('1'));
-        assert!(!is_emoji(' '));
-        assert!(!is_emoji('!'));
+    fn test_escape_typst_special_chars() {
+        // Test that escape_typst escapes Typst special characters
+        assert_eq!(escape_typst("Hello #world"), "Hello \\#world");
+        assert_eq!(escape_typst("Price: $5"), "Price: \\$5");
+        assert_eq!(escape_typst("*bold* text"), "\\*bold\\* text");
+        assert_eq!(escape_typst("_emphasis_"), "\\_emphasis\\_");
+        assert_eq!(escape_typst("`code`"), "\\`code\\`");
+        assert_eq!(escape_typst("@reference"), "\\@reference");
+        assert_eq!(escape_typst("<label>"), "\\<label\\>");
+        assert_eq!(escape_typst("back\\slash"), "back\\\\slash");
+        assert_eq!(escape_typst("[content]"), "\\[content\\]");
     }
 
     #[test]
-    fn test_emoji_modifier_detection() {
-        // Test skin tone modifiers
-        assert!(is_emoji_modifier('🏻')); // Light skin tone
-        assert!(is_emoji_modifier('🏽')); // Medium skin tone
-        assert!(is_emoji_modifier('🏿')); // Dark skin tone
-
-        // Test other modifiers
-        assert!(is_emoji_modifier('\u{200D}')); // Zero Width Joiner
-        assert!(is_emoji_modifier('\u{FE0F}')); // Variation Selector-16
-
-        // Test non-modifiers
-        assert!(!is_emoji_modifier('A'));
-        assert!(!is_emoji_modifier('😀'));
-    }
-
-    #[test]
-    fn test_wrap_emojis_basic() {
-        // Test single emoji
-        assert_eq!(wrap_emojis("Hello 😀 world"), "Hello \\emoji{😀} world");
-
-        // Test multiple emojis
+    fn test_escape_typst_combined() {
+        // Test multiple special characters in one string
         assert_eq!(
-            wrap_emojis("😀 🎯 ✅"),
-            "\\emoji{😀} \\emoji{🎯} \\emoji{✅}"
-        );
-
-        // Test emoji sequence
-        assert_eq!(wrap_emojis("👨‍💻"), "\\emoji{👨‍💻}"); // Man technologist (composite emoji)
-
-        // Test no emojis
-        assert_eq!(wrap_emojis("Hello world"), "Hello world");
-
-        // Test mixed content
-        assert_eq!(
-            wrap_emojis("Status: ✅ Complete! 🎉"),
-            "Status: \\emoji{✅} Complete! \\emoji{🎉}"
-        );
-    }
-
-    #[test]
-    fn test_wrap_emojis_code_blocks() {
-        // Test that emojis in code fences are not wrapped
-        let markdown_with_code = r#"# Header 😀
-
-```bash
-echo "Hello 🌍 World!"
-ls -la 📁
-```
-
-Normal text with emoji 🎯"#;
-
-        let expected = r#"# Header \emoji{😀}
-
-```bash
-echo "Hello 🌍 World!"
-ls -la 📁
-```
-
-Normal text with emoji \emoji{🎯}"#;
-
-        assert_eq!(wrap_emojis(markdown_with_code), expected);
-    }
-
-    #[test]
-    fn test_wrap_emojis_inline_code() {
-        // Test that emojis in inline code are not wrapped
-        let text_with_inline_code =
-            "Use `echo \"Hello 🌍\"` to print emoji. But this 😀 should be wrapped.";
-        let expected =
-            "Use `echo \"Hello 🌍\"` to print emoji. But this \\emoji{😀} should be wrapped.";
-
-        assert_eq!(wrap_emojis(text_with_inline_code), expected);
-    }
-
-    #[test]
-    fn test_wrap_emojis_complex_code_blocks() {
-        // Test nested backticks and complex scenarios
-        let complex_markdown = r#"Text with 😀 emoji.
-
-```diff
-+ Added emoji support 🎉
-- Old version without emojis
-```
-
-More text 🚀 here.
-
-`inline code with 📁 emoji`
-
-Final emoji 🎯."#;
-
-        let expected = r#"Text with \emoji{😀} emoji.
-
-```diff
-+ Added emoji support 🎉
-- Old version without emojis
-```
-
-More text \emoji{🚀} here.
-
-`inline code with 📁 emoji`
-
-Final emoji \emoji{🎯}."#;
-
-        assert_eq!(wrap_emojis(complex_markdown), expected);
-    }
-
-    #[test]
-    fn test_escape_latex_with_emojis() {
-        // Test that escape_latex both escapes LaTeX chars and wraps emojis
-        assert_eq!(
-            escape_latex("Hello & 😀 world!"),
-            "Hello \\& \\emoji{😀} world!"
-        );
-        assert_eq!(escape_latex("Price: $5 💰"), "Price: \\$5 \\emoji{💰}");
-        assert_eq!(
-            escape_latex("100% complete ✅"),
-            "100\\% complete \\emoji{✅}"
+            escape_typst("Hello #world with $5 and *bold*"),
+            "Hello \\#world with \\$5 and \\*bold\\*"
         );
     }
 
@@ -503,11 +360,11 @@ Regular content after everything."#;
         let empty_image_map = HashMap::new();
         let result = format_markdown(markdown, 4, &empty_image_map);
 
-        // Basic verification that headers are processed correctly
-        assert!(result.contains("#### README – TMDD SimBiology Model"));
-        assert!(result.contains("#### Some Subheading"));
-        assert!(result.contains("#### Another Setext H1"));
-        assert!(result.contains("#### Final Setext H2"));
+        // Basic verification that headers are converted to Typst = syntax
+        assert!(result.contains("==== README – TMDD SimBiology Model"));
+        assert!(result.contains("==== Some Subheading"));
+        assert!(result.contains("==== Another Setext H1"));
+        assert!(result.contains("==== Final Setext H2"));
     }
 
     #[test]
@@ -690,6 +547,109 @@ More regular text."#;
     }
 
     #[test]
+    fn test_markdown_bullet_conversion() {
+        // Test that markdown bullet points (* and +) are converted to Typst bullet points (-)
+        let empty_image_map = HashMap::new();
+
+        // Test * bullets
+        let asterisk_bullets = "* First item\n* Second item\n* Third item";
+        let result = format_markdown(asterisk_bullets, 4, &empty_image_map);
+        assert_eq!(result, "- First item\n- Second item\n- Third item");
+
+        // Test + bullets
+        let plus_bullets = "+ First item\n+ Second item";
+        let result = format_markdown(plus_bullets, 4, &empty_image_map);
+        assert_eq!(result, "- First item\n- Second item");
+
+        // Test - bullets (should remain unchanged)
+        let dash_bullets = "- First item\n- Second item";
+        let result = format_markdown(dash_bullets, 4, &empty_image_map);
+        assert_eq!(result, "- First item\n- Second item");
+
+        // Test indented bullets
+        let indented = "  * Indented item\n    * More indented";
+        let result = format_markdown(indented, 4, &empty_image_map);
+        assert_eq!(result, "  - Indented item\n    - More indented");
+
+        // Test mixed content with bullets
+        let mixed = "Some text\n* Bullet item\nMore text";
+        let result = format_markdown(mixed, 4, &empty_image_map);
+        assert_eq!(result, "Some text\n- Bullet item\nMore text");
+
+        // Test bullet with link (the original error case)
+        let bullet_with_link = "* [commit comparison](https://example.com/compare/abc..def)";
+        let result = format_markdown(bullet_with_link, 4, &empty_image_map);
+        assert_eq!(
+            result,
+            "- [commit comparison](https://example.com/compare/abc..def)"
+        );
+    }
+
+    #[test]
+    fn test_markdown_inline_conversion() {
+        let empty_image_map = HashMap::new();
+
+        // Test **bold** -> *bold*
+        let bold_text = "This is **bold text** in markdown";
+        let result = format_markdown(bold_text, 4, &empty_image_map);
+        assert_eq!(result, "This is *bold text* in markdown");
+
+        // Test *italic* -> _italic_
+        let italic_text = "This is *italic text* in markdown";
+        let result = format_markdown(italic_text, 4, &empty_image_map);
+        assert_eq!(result, "This is _italic text_ in markdown");
+
+        // Test combined bold and italic
+        let combined_format = "This is **bold** and *italic* text";
+        let result = format_markdown(combined_format, 4, &empty_image_map);
+        assert_eq!(result, "This is *bold* and _italic_ text");
+
+        // Test @ escaping
+        let at_text = "@reviewer mentioned something";
+        let result = format_markdown(at_text, 4, &empty_image_map);
+        assert_eq!(result, "\\@reviewer mentioned something");
+
+        // Test email with @
+        let email = "Contact: reviewer@example.com";
+        let result = format_markdown(email, 4, &empty_image_map);
+        assert_eq!(result, "Contact: reviewer\\@example.com");
+
+        // Test combined bold and @
+        let combined = "**@reviewer** wrote this";
+        let result = format_markdown(combined, 4, &empty_image_map);
+        assert_eq!(result, "*\\@reviewer* wrote this");
+
+        // Test HTML link conversion to Typst link
+        let html_link = r#"<a href="https://example.com">link text</a>"#;
+        let result = format_markdown(html_link, 4, &empty_image_map);
+        assert_eq!(result, r#"#link("https://example.com")[link text]"#);
+
+        // Test angle brackets get escaped (not part of HTML tags)
+        let angle_brackets = "email: <user@example.com>";
+        let result = format_markdown(angle_brackets, 4, &empty_image_map);
+        assert_eq!(result, r"email: \<user\@example.com\>");
+
+        // Test that formatting is NOT converted inside code blocks
+        let code_block = "```\n**bold** and *italic* and @mention and <tag>\n```";
+        let result = format_markdown(code_block, 4, &empty_image_map);
+        assert!(result.contains("**bold**"));
+        assert!(result.contains("*italic*"));
+        assert!(result.contains("@mention"));
+        assert!(result.contains("<tag>"));
+    }
+
+    #[test]
+    fn test_bullets_not_converted_in_code_blocks() {
+        // Bullets inside code blocks should NOT be converted
+        let empty_image_map = HashMap::new();
+
+        let code_with_bullets = "```\n* This is code, not a bullet\n+ Also code\n```";
+        let result = format_markdown(code_with_bullets, 4, &empty_image_map);
+        assert!(result.contains("* This is code"));
+        assert!(result.contains("+ Also code"));
+    }
+
+    #[test]
     fn test_diff_vs_regular_code_blocks() {
         // Test that diff blocks still use diff-specific wrapping while regular code blocks use simple wrapping
         let markdown_with_both = r#"Regular code block:
@@ -709,7 +669,7 @@ Diff code block:
         // Both should be wrapped, but this test mainly ensures no crashes occur
         // and that the different wrapping logic is applied appropriately
         assert!(result.contains("```r"));
-        assert!(result.contains("``` diff")); // Note: ```diff gets converted to ``` diff
+        assert!(result.contains("```diff"));
         assert!(result.len() > markdown_with_both.len()); // Should be longer due to wrapping
     }
 }

@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-// use serde::{Deserialize, Serialize}; // Currently unused
 use octocrab::models::Milestone;
 use tera::{Result as TeraResult, Value};
 
-use super::latex::escape_latex;
+use super::typst::escape_typst;
 use super::{IssueInformation, MilestoneRow};
 
 /// Create milestone dataframe equivalent to R function
@@ -23,11 +22,11 @@ pub fn create_milestone_df(
             .map(|issue| {
                 let mut issue_name = insert_breaks(&issue.title, 42);
                 if issue.checklist_summary.contains("100.0%") {
-                    issue_name = format!("{}\\textcolor{{red}}{{U}}", issue_name);
+                    issue_name = format!("{} #text(fill: red)[U]", issue_name);
                 }
 
                 if issue.qc_status.contains("Approved") {
-                    issue_name = format!("{}\\textcolor{{red}}{{C}}", issue_name);
+                    issue_name = format!("{} #text(fill: red)[C]", issue_name);
                 }
 
                 issue_name
@@ -38,11 +37,11 @@ pub fn create_milestone_df(
         let issues_str = if issue_names.is_empty() {
             String::new()
         } else {
-            issue_names.join("\\newline \\newline ")
+            issue_names.join("\n\n")
         };
 
         // Format milestone status
-        let status = escape_latex(
+        let status = escape_typst(
             &milestone
                 .state
                 .as_ref()
@@ -55,11 +54,11 @@ pub fn create_milestone_df(
         let description = milestone
             .description
             .as_ref()
-            .map(|d| insert_breaks(&escape_latex(d), 20))
+            .map(|d| insert_breaks(&escape_typst(d), 20))
             .unwrap_or_else(|| "NA".to_string());
 
         // Format milestone name with line breaks
-        let name = insert_breaks(&escape_latex(&milestone.title), 18);
+        let name = insert_breaks(&escape_typst(&milestone.title), 18);
 
         milestone_rows.push(MilestoneRow {
             name,
@@ -99,7 +98,7 @@ pub fn insert_breaks(text: &str, max_width: usize) -> String {
     result
 }
 
-/// Tera function to render milestone table rows only
+/// Tera function to render milestone table rows only (Typst format)
 pub fn render_milestone_table_rows(args: &HashMap<String, Value>) -> TeraResult<Value> {
     let data = args
         .get("data")
@@ -110,32 +109,21 @@ pub fn render_milestone_table_rows(args: &HashMap<String, Value>) -> TeraResult<
 
     let mut table_rows = Vec::new();
 
-    // Add data rows only
-    for (i, row) in rows.iter().enumerate() {
-        if i < rows.len() - 1 {
-            table_rows.push(format!(
-                r"{} & {} & {} & {}\\",
-                row.name,        // already escaped in create_milestone_df
-                row.description, // already escaped in create_milestone_df
-                row.status,      // already escaped in create_milestone_df
-                row.issues       // issues string already contains LaTeX formatting commands
-            ));
-            table_rows.push(r"\addlinespace\addlinespace".to_string());
-        } else {
-            table_rows.push(format!(
-                r"{} & {} & {} & {}\\*",
-                row.name,        // already escaped in create_milestone_df
-                row.description, // already escaped in create_milestone_df
-                row.status,      // already escaped in create_milestone_df
-                row.issues       // issues string already contains LaTeX formatting commands
-            ));
-        }
+    // Add data rows as Typst table cells
+    for row in rows.iter() {
+        table_rows.push(format!(
+            "[{}], [{}], [{}], [{}],",
+            row.name,        // already escaped in create_milestone_df
+            row.description, // already escaped in create_milestone_df
+            row.status,      // already escaped in create_milestone_df
+            row.issues       // issues string already contains Typst formatting commands
+        ));
     }
 
     Ok(Value::String(table_rows.join("\n")))
 }
 
-/// Tera function to render issue summary table rows only
+/// Tera function to render issue summary table rows only (Typst format)
 pub fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraResult<Value> {
     let data = args
         .get("data")
@@ -150,8 +138,8 @@ pub fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraRes
 
     let mut table_rows = Vec::new();
 
-    // Add data rows only
-    for (i, row) in rows.iter().enumerate() {
+    // Add data rows as Typst table cells
+    for row in rows.iter() {
         // Extract author name from "Name (login)" format, fallback to full string
         let author_display = row.created_by.split(" (").next().unwrap_or(&row.created_by);
 
@@ -161,7 +149,7 @@ pub fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraRes
             .iter()
             .map(|qcer| qcer.split(" (").next().unwrap_or(qcer))
             .collect::<Vec<_>>()
-            .join(",\\newline ");
+            .join(", ");
 
         // Extract closer name from "Name (login)" format, fallback to full string
         let closer_display = row
@@ -170,18 +158,10 @@ pub fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraRes
             .map(|closer| closer.split(" (").next().unwrap_or(closer))
             .unwrap_or("NA");
 
-        if i < rows.len() - 1 {
-            table_rows.push(format!(
-                r"{} & {} & {} & {} & {}\\",
-                &row.title, &row.qc_status, author_display, &qcer_display, closer_display
-            ));
-            table_rows.push(r"\addlinespace\addlinespace".to_string());
-        } else {
-            table_rows.push(format!(
-                r"{} & {} & {} & {} & {}\\*",
-                &row.title, &row.qc_status, author_display, &qcer_display, closer_display
-            ));
-        }
+        table_rows.push(format!(
+            "[{}], [{}], [{}], [{}], [{}],",
+            &row.title, &row.qc_status, author_display, &qcer_display, closer_display
+        ));
     }
 
     Ok(Value::String(table_rows.join("\n")))
@@ -269,11 +249,11 @@ mod tests {
         let row = &result[0];
         assert_eq!(row.name, "v1.0");
 
-        // Should contain both issues with proper formatting
+        // Should contain both issues with proper Typst formatting
         assert!(row.issues.contains("Test Issue 1"));
         assert!(row.issues.contains("Test Issue 2"));
-        assert!(row.issues.contains("\\textcolor{red}{U}")); // 100% issue should have U marker
-        assert!(row.issues.contains("\\textcolor{red}{C}")); // Approved issue should have C marker
+        assert!(row.issues.contains("#text(fill: red)[U]")); // 100% issue should have U marker
+        assert!(row.issues.contains("#text(fill: red)[C]")); // Approved issue should have C marker
     }
 
     #[test]
@@ -295,7 +275,7 @@ mod tests {
                 name: "v1.0".to_string(),
                 description: "First version".to_string(),
                 status: "open".to_string(),
-                issues: "Issue 1\\newline \\newline Issue 2".to_string(),
+                issues: "Issue 1\n\nIssue 2".to_string(),
             },
             MilestoneRow {
                 name: "v2.0".to_string(),
@@ -311,13 +291,9 @@ mod tests {
         let result = render_milestone_table_rows(&args).unwrap();
         let result_str = result.as_str().unwrap();
 
-        // Should contain LaTeX table rows
-        assert!(
-            result_str
-                .contains("v1.0 & First version & open & Issue 1\\newline \\newline Issue 2\\\\")
-        );
-        assert!(result_str.contains("v2.0 & Second version & closed & Issue 3\\\\*"));
-        assert!(result_str.contains("\\addlinespace\\addlinespace"));
+        // Should contain Typst table cells
+        assert!(result_str.contains("[v1.0], [First version], [open], [Issue 1"));
+        assert!(result_str.contains("[v2.0], [Second version], [closed], [Issue 3],"));
     }
 
     #[test]
@@ -333,10 +309,9 @@ mod tests {
         let result = render_issue_summary_table_rows(&args).unwrap();
         let result_str = result.as_str().unwrap();
 
-        // Should contain LaTeX table rows
-        assert!(result_str.contains("Test Issue 1 & In Progress & author & qcer1 & NA\\\\"));
-        assert!(result_str.contains("Test Issue 2 & Approved & author & qcer1 & NA\\\\*"));
-        assert!(result_str.contains("\\addlinespace\\addlinespace"));
+        // Should contain Typst table cells
+        assert!(result_str.contains("[Test Issue 1], [In Progress], [author], [qcer1], [NA],"));
+        assert!(result_str.contains("[Test Issue 2], [Approved], [author], [qcer1], [NA],"));
     }
 
     #[test]

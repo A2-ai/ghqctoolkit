@@ -201,55 +201,49 @@ pub fn extract_image_urls_from_html(html: &str) -> Vec<String> {
     image_urls
 }
 
-/// Replace image URLs in markdown with LaTeX includegraphics commands
+/// Replace image URLs in markdown with Typst image commands
 ///
 /// This function processes the markdown content and replaces image references
-/// with LaTeX commands that point to the downloaded local files.
+/// with Typst #image() commands that point to the downloaded local files.
 ///
 /// # Arguments
 /// * `markdown` - The original markdown content
 /// * `url_to_path_map` - Map from original URLs to local file paths
 ///
 /// # Returns
-/// * Updated markdown with LaTeX image commands
-pub fn replace_images_with_latex(
+/// * Updated markdown with Typst image commands
+pub fn replace_images_with_typst(
     markdown: &str,
     url_to_path_map: &HashMap<String, PathBuf>,
 ) -> String {
     let mut result = markdown.to_string();
 
-    // Replace markdown images: ![alt](url) -> \includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{path}
+    // Replace markdown images: ![alt](url) -> #image("path", width: 100%)
     result = MD_IMG_REGEX
         .replace_all(&result, |caps: &regex::Captures| {
             let url = caps.get(2).unwrap().as_str();
             if let Some(local_path) = url_to_path_map.get(url) {
-                // Use absolute path and escape backslashes for LaTeX
-                let latex_path = local_path.display().to_string().replace('\\', "/");
-                format!(
-                    r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{{{}}}",
-                    latex_path
-                )
+                // Use absolute path with forward slashes for Typst
+                let typst_path = local_path.display().to_string().replace('\\', "/");
+                format!(r#"#image("{}", width: 100%)"#, typst_path)
             } else {
-                // If image wasn't downloaded, keep original or show placeholder
-                format!("\\textbf{{[Image not available: {}]}}", url)
+                // If image wasn't downloaded, show placeholder
+                format!("*[Image not available: {}]*", url)
             }
         })
         .to_string();
 
-    // Replace HTML img tags using regex: <img src="url" /> -> \includegraphics[...]{path}
+    // Replace HTML img tags using regex: <img src="url" /> -> #image("path", width: 100%)
     result = HTML_IMG_REGEX
         .replace_all(&result, |caps: &regex::Captures| {
             let url = caps.get(1).unwrap().as_str();
             if let Some(local_path) = url_to_path_map.get(url) {
-                // Use absolute path and escape backslashes for LaTeX
-                let latex_path = local_path.display().to_string().replace('\\', "/");
-                format!(
-                    r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{{{}}}",
-                    latex_path
-                )
+                // Use absolute path with forward slashes for Typst
+                let typst_path = local_path.display().to_string().replace('\\', "/");
+                format!(r#"#image("{}", width: 100%)"#, typst_path)
             } else {
-                // If image wasn't downloaded, keep original or show placeholder
-                format!("\\textbf{{[Image not available: {}]}}", url)
+                // If image wasn't downloaded, show placeholder
+                format!("*[Image not available: {}]*", url)
             }
         })
         .to_string();
@@ -345,7 +339,7 @@ Some more text here.
     }
 
     #[test]
-    fn test_replace_images_with_latex_markdown() {
+    fn test_replace_images_with_typst_markdown() {
         let markdown =
             "Here is an image: ![Alt text](https://example.com/image.png) and some more text.";
 
@@ -355,13 +349,13 @@ Some more text here.
             PathBuf::from("/tmp/downloaded_image.png"),
         );
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        assert!(result.contains(r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/downloaded_image.png}"));
+        let result = replace_images_with_typst(markdown, &url_map);
+        assert!(result.contains(r#"#image("/tmp/downloaded_image.png", width: 100%)"#));
         assert!(!result.contains("![Alt text](https://example.com/image.png)"));
     }
 
     #[test]
-    fn test_replace_images_with_latex_html() {
+    fn test_replace_images_with_typst_html() {
         let markdown = r#"Here is an image: <img src="https://example.com/image.jpg" alt="Test" /> and more text."#;
 
         let mut url_map = HashMap::new();
@@ -370,27 +364,25 @@ Some more text here.
             PathBuf::from("/tmp/downloaded_image.jpg"),
         );
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        assert!(result.contains(r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/downloaded_image.jpg}"));
+        let result = replace_images_with_typst(markdown, &url_map);
+        assert!(result.contains(r#"#image("/tmp/downloaded_image.jpg", width: 100%)"#));
         assert!(!result.contains(r#"<img src="https://example.com/image.jpg" alt="Test" />"#));
     }
 
     #[test]
-    fn test_replace_images_with_latex_missing_image() {
+    fn test_replace_images_with_typst_missing_image() {
         let markdown =
             "Here is an image: ![Alt text](https://example.com/missing.png) and some more text.";
 
         let url_map = HashMap::new(); // Empty map - no downloaded images
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        assert!(
-            result.contains(r"\textbf{[Image not available: https://example.com/missing.png]}")
-        );
+        let result = replace_images_with_typst(markdown, &url_map);
+        assert!(result.contains("*[Image not available: https://example.com/missing.png]*"));
         assert!(!result.contains("![Alt text](https://example.com/missing.png)"));
     }
 
     #[test]
-    fn test_replace_images_with_latex_mixed() {
+    fn test_replace_images_with_typst_mixed() {
         let markdown = r#"
 ![Markdown image](https://example.com/md.png)
 <img src="https://example.com/html.jpg" alt="HTML image" />
@@ -408,20 +400,14 @@ Some more text here.
         );
         // Note: missing.png not in map
 
-        let result = replace_images_with_latex(markdown, &url_map);
+        let result = replace_images_with_typst(markdown, &url_map);
 
-        // Should replace available images
-        assert!(result.contains(
-            r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/md.png}"
-        ));
-        assert!(result.contains(
-            r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/html.jpg}"
-        ));
+        // Should replace available images with Typst #image() syntax
+        assert!(result.contains(r#"#image("/tmp/md.png", width: 100%)"#));
+        assert!(result.contains(r#"#image("/tmp/html.jpg", width: 100%)"#));
 
         // Should show placeholder for missing image
-        assert!(
-            result.contains(r"\textbf{[Image not available: https://example.com/missing.png]}")
-        );
+        assert!(result.contains("*[Image not available: https://example.com/missing.png]*"));
 
         // Should not contain original syntax
         assert!(!result.contains("![Markdown image](https://example.com/md.png)"));
@@ -438,8 +424,8 @@ Some more text here.
             PathBuf::from(r"C:\temp\test.png"),
         );
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        // Should convert backslashes to forward slashes for LaTeX
+        let result = replace_images_with_typst(markdown, &url_map);
+        // Should convert backslashes to forward slashes for Typst
         assert!(result.contains("C:/temp/test.png"));
         assert!(!result.contains(r"C:\temp\test.png"));
     }

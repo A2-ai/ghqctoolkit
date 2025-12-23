@@ -22,6 +22,8 @@ pub struct ConfigurationOptions {
     pub logo_path: PathBuf,
     // Path to the checklist directory within the configuration repo. Default: checklists
     pub checklist_directory: PathBuf,
+    // Path to the record template within the configuration repo. Default: record.typ
+    pub record_path: PathBuf,
 }
 
 impl Default for ConfigurationOptions {
@@ -31,6 +33,7 @@ impl Default for ConfigurationOptions {
             checklist_display_name: "checklists".to_string(),
             logo_path: PathBuf::from("logo.png"),
             checklist_directory: PathBuf::from("checklists"),
+            record_path: PathBuf::from("record.typ"),
         }
     }
 }
@@ -208,6 +211,10 @@ impl Configuration {
 
     pub fn logo_path(&self) -> PathBuf {
         self.path.join(&self.options.logo_path)
+    }
+
+    pub fn record_path(&self) -> PathBuf {
+        self.path.join(&self.options.record_path)
     }
 
     pub fn checklist_display_name(&self) -> &str {
