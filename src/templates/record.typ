@@ -9,7 +9,8 @@
   paper: "us-letter",
   margin: (x: 1in, y: 1in),
   {% if logo_path %}
-  header: align(right)[#image("{{ logo_path }}", width: 2cm)],
+  header: align(right)[#image("{{ logo_path }}", height: 0.7in)],
+  header-ascent: 25%,
   {% endif %}
   footer: context [
     #align(center)[Page #counter(page).display() of #counter(page).final().first()]
