@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use octocrab::models::Milestone;
+use std::collections::HashMap;
 use tera::{Result as TeraResult, Value};
 
 use super::typst::escape_typst;

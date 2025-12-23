@@ -67,10 +67,9 @@ fn convert_inline_markdown(text: &str) -> String {
     });
 
     // Step 3: Replace *italic* with _italic_
-    let with_italic =
-        ITALIC_REGEX.replace_all(&with_bold_placeholder, |caps: &regex::Captures| {
-            format!("_{}_", &caps[1])
-        });
+    let with_italic = ITALIC_REGEX.replace_all(&with_bold_placeholder, |caps: &regex::Captures| {
+        format!("_{}_", &caps[1])
+    });
 
     // Step 4: Replace placeholder with Typst bold syntax
     let with_bold = with_italic.replace(BOLD_PLACEHOLDER, "*");

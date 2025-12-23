@@ -24,8 +24,8 @@ use crate::{
 
 // Re-export submodules
 mod images;
-mod typst;
 mod tables;
+mod typst;
 
 // Re-export public items from submodules
 pub use typst::{escape_typst, format_markdown};
@@ -67,7 +67,10 @@ fn create_tera_with_template(template: &str) -> Result<Tera, RecordError> {
         .map_err(RecordError::Template)?;
 
     // Register custom functions from tables module
-    tera.register_function("render_milestone_table_rows", tables::render_milestone_table_rows);
+    tera.register_function(
+        "render_milestone_table_rows",
+        tables::render_milestone_table_rows,
+    );
     tera.register_function(
         "render_issue_summary_table_rows",
         tables::render_issue_summary_table_rows,
