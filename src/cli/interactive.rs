@@ -1127,9 +1127,9 @@ pub fn prompt_milestone_archive(
 }
 
 /// Interactive context file selection for record generation
-/// Lists .doc/.docx/.pdf files and allows users to select and choose prepend/append position
+/// Lists PDF files and allows users to select and choose prepend/append position
 pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
-    // Find all .doc, .docx, and .pdf files in the directory
+    // Find all .pdf files in the directory
     let context_files_available: Vec<PathBuf> = fs::read_dir(current_dir)
         .map_err(|e| anyhow::anyhow!("Failed to read directory: {}", e))?
         .filter_map(|entry| entry.ok())
@@ -1138,7 +1138,7 @@ pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     let ext_lower = ext.to_string_lossy().to_lowercase();
-                    if ext_lower == "doc" || ext_lower == "docx" || ext_lower == "pdf" {
+                    if ext_lower == "pdf" {
                         return Some(path);
                     }
                 }
@@ -1148,7 +1148,7 @@ pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
         .collect();
 
     if context_files_available.is_empty() {
-        println!("ℹ️  No context documents (.doc/.docx/.pdf) found in directory");
+        println!("ℹ️  No PDF context documents found in directory");
         return Ok(Vec::new());
     }
 

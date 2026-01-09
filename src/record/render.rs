@@ -8,10 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use libreofficekit::{DocUrl, Office};
 use lopdf::{Bookmark, Document, Object, ObjectId};
-
-use crate::utils::EnvProvider;
 
 /// Create a staging directory for record generation
 ///
@@ -32,69 +29,6 @@ pub fn create_staging_dir() -> Result<PathBuf, RenderError> {
 
     log::debug!("Created staging directory: {}", staging_dir.display());
     Ok(staging_dir)
-}
-
-/// Trait for converting documents (Word, etc.) to PDF
-pub trait DocumentConverter {
-    /// Convert a document file to PDF and return the loaded PDF Document
-    fn convert_to_pdf(&self, input: &Path, output_dir: &Path) -> Result<Document, RenderError>;
-}
-
-/// LibreOffice-based document converter
-pub struct LibreOfficeConverter {
-    office: Office,
-}
-
-impl LibreOfficeConverter {
-    /// Try to create a converter, returns None if LibreOffice isn't installed
-    pub fn try_new() -> Option<Self> {
-        Office::find_install_path()
-            .and_then(|p| {
-                log::debug!("Found LibreOffice at: {}", p.display());
-                Office::new(p).ok()
-            })
-            .map(|office| Self { office })
-    }
-}
-
-impl DocumentConverter for LibreOfficeConverter {
-    fn convert_to_pdf(&self, input: &Path, output_dir: &Path) -> Result<Document, RenderError> {
-        let output_file_name = input.with_extension("pdf");
-        let output_file = output_dir.join(output_file_name.file_name().ok_or(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "provided context file does not have file name: {}",
-                input.display()
-            ),
-        ))?);
-
-        log::debug!(
-            "Converting {} to PDF at {}",
-            input.display(),
-            output_file.display()
-        );
-
-        let input_doc = DocUrl::from_relative_path(input.to_string_lossy())?;
-        let output_pdf = DocUrl::from_absolute_path(output_file.to_string_lossy())?;
-
-        let mut document = self.office.document_load(&input_doc)?;
-        let success = document.save_as(&output_pdf, "pdf", None)?;
-
-        if !success {
-            log::error!("Failed to convert {} to PDF", input.display());
-            return Err(RenderError::OfficeError(
-                libreofficekit::OfficeError::OfficeError(format!(
-                    "Conversion of {} to PDF was not successful",
-                    input.display()
-                )),
-            ));
-        }
-
-        Document::load(&output_file).map_err(|error| RenderError::PdfReadError {
-            file: output_file,
-            error,
-        })
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -181,23 +115,12 @@ fn render_inner(
     })?;
 
     let mut doc = if !qc_context.is_empty() {
-        // Suppress LibreOffice logging noise
-        crate::utils::StdEnvProvider.set_var("SAL_LOG", "-INFO-WARN");
-
-        let converter = LibreOfficeConverter::try_new();
         let context_docs = qc_context
             .iter()
             .map(|context| {
-                load_context_file(&context.file, staging_dir, converter.as_ref())
-                    .map(|d| (d, context.position))
+                load_context_file(&context.file).map(|d| (d, context.position))
             })
             .collect::<Result<Vec<(Document, ContextPosition)>, RenderError>>()?;
-
-        // Prevent LibreOffice cleanup segfault by forgetting the converter
-        // This leaks memory but avoids the crash - LibreOffice's cleanup is notoriously buggy
-        if let Some(converter) = converter {
-            std::mem::forget(converter);
-        }
 
         merge_pdfs(findings_doc, context_docs)?
     } else {
@@ -487,36 +410,27 @@ fn render_typst_in_staging(staging_dir: &Path, report: &str) -> Result<PathBuf, 
 }
 
 /// Load a context file as a PDF Document.
-/// PDFs are loaded directly; other formats require a converter.
-fn load_context_file(
-    file: impl AsRef<Path>,
-    staging_dir: impl AsRef<Path>,
-    converter: Option<&impl DocumentConverter>,
-) -> Result<Document, RenderError> {
+/// Only PDF files are supported - users must convert Word documents to PDF first.
+fn load_context_file(file: impl AsRef<Path>) -> Result<Document, RenderError> {
     let input_file = file.as_ref();
 
-    // Check if the file is already a PDF - load it directly
+    // Check if the file is a PDF
     let is_pdf = input_file
         .extension()
         .map(|ext| ext.to_string_lossy().to_lowercase() == "pdf")
         .unwrap_or(false);
 
-    if is_pdf {
-        log::debug!("Loading PDF directly: {}", input_file.display());
-        return Document::load(input_file).map_err(|error| RenderError::PdfReadError {
+    if !is_pdf {
+        return Err(RenderError::UnsupportedFileFormat {
             file: input_file.to_path_buf(),
-            error,
         });
     }
 
-    // For non-PDF files, we need a converter
-    let Some(converter) = converter else {
-        return Err(RenderError::ConverterUnavailable {
-            file: input_file.to_path_buf(),
-        });
-    };
-
-    converter.convert_to_pdf(input_file, staging_dir.as_ref())
+    log::debug!("Loading PDF: {}", input_file.display());
+    Document::load(input_file).map_err(|error| RenderError::PdfReadError {
+        file: input_file.to_path_buf(),
+        error,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -527,8 +441,6 @@ pub enum RenderError {
     TypstNotFound,
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Failed to convert office file to pdf: {0}")]
-    OfficeError(#[from] libreofficekit::OfficeError),
     #[error("Failed to read pdf at {file}: {error}")]
     PdfReadError { file: PathBuf, error: lopdf::Error },
     #[error("Failed to write pdf: {0}")]
@@ -540,9 +452,9 @@ pub enum RenderError {
     #[error("PDF merge failed: Could not retrieve object {0:?}")]
     PdfMergeMissingObject(ObjectId),
     #[error(
-        "Cannot convert {file} to PDF: LibreOffice is not available. Install LibreOffice or use a PDF file directly."
+        "Unsupported file format for {file}: only PDF files are supported. Please convert the file to PDF first."
     )]
-    ConverterUnavailable { file: PathBuf },
+    UnsupportedFileFormat { file: PathBuf },
 }
 
 #[cfg(test)]
@@ -599,30 +511,6 @@ mod tests {
         doc
     }
 
-    // Mock converter for testing
-    struct MockConverter {
-        should_succeed: bool,
-    }
-
-    impl DocumentConverter for MockConverter {
-        fn convert_to_pdf(
-            &self,
-            input: &Path,
-            _output_dir: &Path,
-        ) -> Result<Document, RenderError> {
-            if self.should_succeed {
-                Ok(create_test_pdf())
-            } else {
-                Err(RenderError::OfficeError(
-                    libreofficekit::OfficeError::OfficeError(format!(
-                        "Mock conversion failed for {}",
-                        input.display()
-                    )),
-                ))
-            }
-        }
-    }
-
     // ===================
     // QCContext tests
     // ===================
@@ -655,7 +543,7 @@ mod tests {
     // ===================
 
     #[test]
-    fn test_load_context_file_pdf_directly() {
+    fn test_load_context_file_pdf() {
         let temp_dir = TempDir::new().unwrap();
         let pdf_path = temp_dir.path().join("test.pdf");
 
@@ -663,64 +551,27 @@ mod tests {
         let mut doc = create_test_pdf();
         doc.save(&pdf_path).unwrap();
 
-        // Load without converter (should work for PDFs)
-        let result = load_context_file(&pdf_path, temp_dir.path(), None::<&MockConverter>);
+        let result = load_context_file(&pdf_path);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_load_context_file_non_pdf_without_converter() {
+    fn test_load_context_file_non_pdf_rejected() {
         let temp_dir = TempDir::new().unwrap();
         let docx_path = temp_dir.path().join("test.docx");
 
         // Create a dummy file
         std::fs::write(&docx_path, b"dummy content").unwrap();
 
-        // Try to load without converter
-        let result = load_context_file(&docx_path, temp_dir.path(), None::<&MockConverter>);
+        let result = load_context_file(&docx_path);
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            RenderError::ConverterUnavailable { file } => {
+            RenderError::UnsupportedFileFormat { file } => {
                 assert_eq!(file, docx_path);
             }
-            e => panic!("Expected ConverterUnavailable, got {:?}", e),
+            e => panic!("Expected UnsupportedFileFormat, got {:?}", e),
         }
-    }
-
-    #[test]
-    fn test_load_context_file_non_pdf_with_converter() {
-        let temp_dir = TempDir::new().unwrap();
-        let docx_path = temp_dir.path().join("test.docx");
-
-        // Create a dummy file
-        std::fs::write(&docx_path, b"dummy content").unwrap();
-
-        // Load with mock converter
-        let converter = MockConverter {
-            should_succeed: true,
-        };
-        let result = load_context_file(&docx_path, temp_dir.path(), Some(&converter));
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_load_context_file_converter_failure() {
-        let temp_dir = TempDir::new().unwrap();
-        let docx_path = temp_dir.path().join("test.docx");
-
-        // Create a dummy file
-        std::fs::write(&docx_path, b"dummy content").unwrap();
-
-        // Load with failing converter
-        let converter = MockConverter {
-            should_succeed: false,
-        };
-        let result = load_context_file(&docx_path, temp_dir.path(), Some(&converter));
-
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RenderError::OfficeError(_)));
     }
 
     #[test]
@@ -733,7 +584,7 @@ mod tests {
         doc.save(&pdf_path).unwrap();
 
         // Should recognize .PDF as PDF
-        let result = load_context_file(&pdf_path, temp_dir.path(), None::<&MockConverter>);
+        let result = load_context_file(&pdf_path);
         assert!(result.is_ok());
     }
 
