@@ -2,10 +2,20 @@ use super::images::replace_images_with_typst;
 /// Typst formatting utilities for the record generation system.
 /// This module handles markdown processing and Typst escaping.
 use crate::issue::HTML_LINK_REGEX;
+use chrono::{Datelike, FixedOffset, Utc};
 use regex::Regex;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use typst::diag::{FileError, FileResult, PackageError, PackageResult};
+use typst::ecow::{EcoString, eco_format};
+use typst::foundations::Bytes;
+use typst::syntax::package::PackageSpec;
+use typst::syntax::{FileId, Source};
+use typst::text::FontBook;
+use typst::utils::LazyHash;
+use typst::{Library, LibraryExt};
+use typst_kit::fonts::{FontSearcher, FontSlot};
 
 // Regex for markdown bold **text**
 static BOLD_REGEX: LazyLock<Regex> =
@@ -285,6 +295,173 @@ pub(crate) fn wrap_diff_line(line: &str, max_width: usize) -> Vec<String> {
     }
 
     wrapped_lines
+}
+
+pub(crate) struct TypstWorld {
+    root: PathBuf,
+    source: Source,
+    library: LazyHash<Library>,
+    book: LazyHash<FontBook>,
+    fonts: Vec<FontSlot>,
+    files: Arc<Mutex<HashMap<FileId, FileEntry>>>,
+    cache_directory: PathBuf,
+    http: ureq::Agent,
+    time: chrono::DateTime<Utc>,
+}
+
+impl TypstWorld {
+    pub(crate) fn new(
+        root: impl AsRef<Path>,
+        source: String,
+        cache_root: impl AsRef<Path>,
+    ) -> Self {
+        let root = root.as_ref().to_path_buf();
+        let fonts = FontSearcher::new().include_system_fonts(true).search();
+        Self {
+            library: LazyHash::new(Library::default()),
+            book: LazyHash::new(fonts.book),
+            root,
+            fonts: fonts.fonts,
+            source: Source::detached(source),
+            time: Utc::now(),
+            cache_directory: cache_root.as_ref().join("typst"),
+            http: ureq::Agent::new(),
+            files: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn file_lookup(&self, id: FileId) -> FileResult<FileEntry> {
+        let mut files = self.files.lock().map_err(|_| FileError::AccessDenied)?;
+        if let Some(entry) = files.get(&id) {
+            return Ok(entry.clone());
+        }
+        let path = if let Some(package) = id.package() {
+            let package_dir = self.download_package(package)?;
+            id.vpath().resolve(&package_dir)
+        } else {
+            id.vpath().resolve(&self.root)
+        }
+        .ok_or(FileError::AccessDenied)?;
+
+        let content = std::fs::read(&path).map_err(|err| FileError::from_io(err, &path))?;
+        Ok(files
+            .entry(id)
+            .or_insert(FileEntry::new(content, None))
+            .clone())
+    }
+
+    fn download_package(&self, package: &PackageSpec) -> PackageResult<PathBuf> {
+        let package_subdir = format!("{}/{}/{}", package.namespace, package.name, package.version);
+        let path = self.cache_directory.join(package_subdir);
+
+        if path.exists() {
+            return Ok(path);
+        }
+
+        log::debug!("Downloading {package}...");
+        let url = format!(
+            "https://packages.typst.org/{}/{}-{}.tar.gz",
+            package.namespace, package.name, package.version
+        );
+
+        let download_archive = || -> Result<Vec<u8>, EcoString> {
+            let response = self.http.get(&url).call().map_err(|e| eco_format!("{e}"))?;
+            let status = response.status();
+            if status / 100 != 2 {
+                return Err(eco_format!(
+                    "Response returned unsuccessful status code: {status}"
+                ));
+            }
+
+            let mut compressed_archive = Vec::new();
+            response
+                .into_reader()
+                .read_to_end(&mut compressed_archive)
+                .map_err(|e| eco_format!("{e}"))?;
+            Ok(compressed_archive)
+        };
+
+        let compressed_archive =
+            download_archive().map_err(|e| PackageError::NetworkFailed(Some(e)))?;
+
+        let raw_archive = flate2::read::GzDecoder::new(&compressed_archive[..]);
+        let mut archive = tar::Archive::new(raw_archive);
+        archive.unpack(&path).map_err(|error| {
+            _ = std::fs::remove_dir_all(&path);
+            PackageError::MalformedArchive(Some(eco_format!("{error}")))
+        })?;
+
+        Ok(path)
+    }
+}
+
+impl typst::World for TypstWorld {
+    fn library(&self) -> &LazyHash<Library> {
+        &self.library
+    }
+
+    fn book(&self) -> &LazyHash<FontBook> {
+        &self.book
+    }
+
+    fn main(&self) -> FileId {
+        self.source.id()
+    }
+
+    fn source(&self, id: FileId) -> typst::diag::FileResult<Source> {
+        if id == self.source.id() {
+            Ok(self.source.clone())
+        } else {
+            self.file_lookup(id)?.source(id)
+        }
+    }
+
+    fn file(&self, id: FileId) -> typst::diag::FileResult<Bytes> {
+        self.file_lookup(id).map(|file| file.bytes.clone())
+    }
+
+    fn font(&self, index: usize) -> Option<typst::text::Font> {
+        self.fonts[index].get()
+    }
+
+    fn today(&self, offset: Option<i64>) -> Option<typst::foundations::Datetime> {
+        let offset_hours = offset.unwrap_or(0);
+        let offset_secs = i32::try_from(offset_hours * 3600).ok()?;
+        let tz = FixedOffset::east_opt(offset_secs)?;
+        let local_time = self.time.with_timezone(&tz);
+        typst::foundations::Datetime::from_ymd(
+            local_time.year(),
+            local_time.month().try_into().ok()?,
+            local_time.day().try_into().ok()?,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FileEntry {
+    bytes: Bytes,
+    source: Option<Source>,
+}
+
+impl FileEntry {
+    fn new(bytes: Vec<u8>, source: Option<Source>) -> Self {
+        Self {
+            bytes: Bytes::new(bytes),
+            source,
+        }
+    }
+
+    fn source(&mut self, id: FileId) -> FileResult<Source> {
+        let source = if let Some(source) = &self.source {
+            source
+        } else {
+            let contents = std::str::from_utf8(&self.bytes).map_err(|_| FileError::InvalidUtf8)?;
+            let contents = contents.trim_start_matches('\u{feff}');
+            let source = Source::new(id, contents.to_string());
+            self.source.insert(source)
+        };
+        Ok(source.clone())
+    }
 }
 
 #[cfg(test)]

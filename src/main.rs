@@ -12,9 +12,10 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand, GitFileOps, GitHubReader,
-    GitHubWriter, GitInfo, GitRepository, GitStatusOps, HttpImageDownloader, IssueThread, QCContext, QCStatus,
-    RelevantFile, archive, configuration_status, create_labels_if_needed, create_staging_dir, determine_config_dir,
+    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
+    GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps,
+    HttpImageDownloader, IssueThread, QCContext, QCStatus, RelevantFile, archive,
+    configuration_status, create_labels_if_needed, create_staging_dir, determine_config_dir,
     fetch_milestone_issues, get_milestone_issue_information, get_repo_users, record, render,
     setup_configuration,
 };
@@ -715,7 +716,13 @@ async fn main() -> Result<()> {
                         ))
                     };
 
-                    render(&record_str, &record_path, &staging_dir, &context_files)?;
+                    render(
+                        &record_str,
+                        &record_path,
+                        &staging_dir,
+                        &context_files,
+                        cache.as_ref(),
+                    )?;
 
                     println!(
                         "✅ Record successfully generated at {}",

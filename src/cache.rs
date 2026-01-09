@@ -59,7 +59,7 @@ impl<T> CacheEntry<T> {
 /// Simple disk-based cache for GitHub API responses
 #[derive(Debug, Clone)]
 pub struct DiskCache {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
     owner: String,
     repo: String,
     ttl: Duration,
