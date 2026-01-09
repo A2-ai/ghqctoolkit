@@ -1,4 +1,4 @@
-use super::images::replace_images_with_typst;
+use super::images::{HttpDownloader, replace_images_with_typst};
 /// Typst formatting utilities for the record generation system.
 /// This module handles markdown processing and Typst escaping.
 use crate::issue::HTML_LINK_REGEX;
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use typst::diag::{FileError, FileResult, PackageError, PackageResult};
-use typst::ecow::{EcoString, eco_format};
+use typst::ecow::eco_format;
 use typst::foundations::Bytes;
 use typst::syntax::package::PackageSpec;
 use typst::syntax::{FileId, Source};
@@ -305,7 +305,7 @@ pub(crate) struct TypstWorld {
     fonts: Vec<FontSlot>,
     files: Arc<Mutex<HashMap<FileId, FileEntry>>>,
     cache_directory: PathBuf,
-    http: ureq::Agent,
+    http: Box<dyn HttpDownloader>,
     time: chrono::DateTime<Utc>,
 }
 
@@ -314,6 +314,7 @@ impl TypstWorld {
         root: impl AsRef<Path>,
         source: String,
         cache_root: impl AsRef<Path>,
+        http: impl HttpDownloader + 'static,
     ) -> Self {
         let root = root.as_ref().to_path_buf();
         let fonts = FontSearcher::new().include_system_fonts(true).search();
@@ -325,7 +326,7 @@ impl TypstWorld {
             source: Source::detached(source),
             time: Utc::now(),
             cache_directory: cache_root.as_ref().join("typst"),
-            http: ureq::Agent::new(),
+            http: Box::new(http),
             files: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -352,7 +353,7 @@ impl TypstWorld {
 
     fn download_package(&self, package: &PackageSpec) -> PackageResult<PathBuf> {
         let package_subdir = format!("{}/{}/{}", package.namespace, package.name, package.version);
-        let path = self.cache_directory.join(package_subdir);
+        let path = self.cache_directory.join(&package_subdir);
 
         if path.exists() {
             return Ok(path);
@@ -364,25 +365,23 @@ impl TypstWorld {
             package.namespace, package.name, package.version
         );
 
-        let download_archive = || -> Result<Vec<u8>, EcoString> {
-            let response = self.http.get(&url).call().map_err(|e| eco_format!("{e}"))?;
-            let status = response.status();
-            if status / 100 != 2 {
-                return Err(eco_format!(
-                    "Response returned unsuccessful status code: {status}"
-                ));
-            }
+        // Download archive to a temporary file in cache directory
+        let archive_path = self
+            .cache_directory
+            .join(format!("{}-{}.tar.gz", package.name, package.version));
 
-            let mut compressed_archive = Vec::new();
-            response
-                .into_reader()
-                .read_to_end(&mut compressed_archive)
-                .map_err(|e| eco_format!("{e}"))?;
-            Ok(compressed_archive)
-        };
+        self.http
+            .download(&url, &archive_path)
+            .map_err(|e| PackageError::NetworkFailed(Some(eco_format!("{e}"))))?;
 
-        let compressed_archive =
-            download_archive().map_err(|e| PackageError::NetworkFailed(Some(e)))?;
+        // Read the downloaded archive
+        let compressed_archive = std::fs::read(&archive_path).map_err(|e| {
+            let _ = std::fs::remove_file(&archive_path);
+            PackageError::NetworkFailed(Some(eco_format!("Failed to read downloaded archive: {e}")))
+        })?;
+
+        // Clean up the archive file
+        let _ = std::fs::remove_file(&archive_path);
 
         let raw_archive = flate2::read::GzDecoder::new(&compressed_archive[..]);
         let mut archive = tar::Archive::new(raw_archive);

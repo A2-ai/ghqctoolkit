@@ -14,7 +14,7 @@ use typst::{
 };
 use typst_pdf::PdfOptions;
 
-use crate::{DiskCache, record::typst::TypstWorld};
+use crate::{DiskCache, record::images::HttpDownloader, record::typst::TypstWorld};
 
 /// Create a staging directory for record generation
 ///
@@ -66,13 +66,15 @@ pub enum ContextPosition {
     Append,
 }
 
-/// Render a Typst document to PDF using the typst CLI tool
+/// Render a Typst document to PDF using the typst library
 ///
 /// # Arguments
 /// * `record_str` - The Typst document content to render
 /// * `path` - The output path for the rendered PDF
 /// * `staging_dir` - The staging directory containing the template and assets (images, logo)
 /// * `qc_context` - Optional context files to prepend/append to the PDF
+/// * `cache` - Optional disk cache for typst package caching
+/// * `http` - HTTP downloader for fetching Typst packages
 ///
 /// # Returns
 /// * `Ok(())` - If rendering succeeded
@@ -81,11 +83,11 @@ pub enum ContextPosition {
 /// # Example
 /// ```no_run
 /// use std::path::Path;
-/// use ghqctoolkit::{render, QCContext, ContextPosition, create_staging_dir};
+/// use ghqctoolkit::{render, QCContext, ContextPosition, create_staging_dir, UreqDownloader};
 ///
 /// let report = "#set document(title: \"My Report\")\n= Hello World";
 /// let staging_dir = create_staging_dir().unwrap();
-/// render(report, Path::new("output/my-report.pdf"), &staging_dir, &[]).unwrap();
+/// render(report, Path::new("output/my-report.pdf"), &staging_dir, &[], None, &UreqDownloader::new()).unwrap();
 /// ```
 pub fn render(
     record_str: &str,
@@ -93,11 +95,19 @@ pub fn render(
     staging_dir: impl AsRef<Path>,
     qc_context: &[QCContext],
     cache: Option<&DiskCache>,
+    http: &(impl HttpDownloader + Clone + 'static),
 ) -> Result<(), RenderError> {
     let staging_dir = staging_dir.as_ref();
 
     // Run the actual render logic, capturing the result
-    let result = render_inner(record_str, path.as_ref(), staging_dir, qc_context, cache);
+    let result = render_inner(
+        record_str,
+        path.as_ref(),
+        staging_dir,
+        qc_context,
+        cache,
+        http,
+    );
 
     // Always cleanup staging directory, regardless of success or failure
     if let Err(e) = std::fs::remove_dir_all(staging_dir) {
@@ -117,9 +127,10 @@ fn render_inner(
     staging_dir: &Path,
     qc_context: &[QCContext],
     cache: Option<&DiskCache>,
+    http: &(impl HttpDownloader + Clone + 'static),
 ) -> Result<(), RenderError> {
     let findings_doc =
-        render_typst_in_staging(staging_dir, record_str, cache).and_then(|file| {
+        render_typst_in_staging(staging_dir, record_str, cache, http).and_then(|file| {
             Document::load(&file).map_err(|error| RenderError::PdfReadError { file, error })
         })?;
 
@@ -322,11 +333,13 @@ fn render_typst_in_staging(
     staging_dir: &Path,
     report: &str,
     cache: Option<&DiskCache>,
+    http: &(impl HttpDownloader + Clone + 'static),
 ) -> Result<PathBuf, RenderError> {
     let cache_dir = cache
         .map(|c| c.root.to_path_buf())
         .unwrap_or(tempdir().map_err(RenderError::Io)?.path().to_path_buf());
-    let world = TypstWorld::new(staging_dir, report.to_string(), &cache_dir);
+    let world = TypstWorld::new(staging_dir, report.to_string(), &cache_dir, http.clone());
+    log::debug!("Rendering pdf record from typst...");
     let generate_compile_error_message = |v: EcoVec<SourceDiagnostic>| -> RenderError {
         let err = v
             .iter()
@@ -356,100 +369,6 @@ fn render_typst_in_staging(
     let staging_pdf_path = staging_dir.join("record.pdf");
 
     fs::write(&staging_pdf_path, pdf).map_err(RenderError::Io)?;
-
-    // let typ_file = staging_dir.join("record.typ");
-    // let staging_pdf_path = staging_dir.join("record.pdf");
-
-    // log::debug!("Writing Typst document to staging: {}", typ_file.display());
-    // std::fs::write(&typ_file, report)?;
-
-    // log::debug!(
-    //     "Rendering PDF with Typst: {} -> {}",
-    //     typ_file.display(),
-    //     staging_pdf_path.display()
-    // );
-
-    // // Execute typst compile command with combined stdout/stderr
-    // let mut cmd = Command::new("typst");
-    // cmd.args([
-    //     "compile",
-    //     typ_file.to_str().unwrap(),
-    //     staging_pdf_path.to_str().unwrap(),
-    // ])
-    // .current_dir(staging_dir)
-    // .stdout(Stdio::piped())
-    // .stderr(Stdio::piped());
-
-    // log::debug!("Executing command: {:?}", cmd);
-
-    // let mut child = cmd.spawn().map_err(|e| {
-    //     if e.kind() == io::ErrorKind::NotFound {
-    //         RenderError::TypstNotFound
-    //     } else {
-    //         RenderError::Io(e)
-    //     }
-    // })?;
-
-    // // Collect both stdout and stderr
-    // let stdout = child.stdout.take().expect("Failed to get stdout");
-    // let stderr = child.stderr.take().expect("Failed to get stderr");
-
-    // let stdout_handle = thread::spawn(move || {
-    //     let mut lines = Vec::new();
-    //     let reader = BufReader::new(stdout);
-    //     for line in reader.lines() {
-    //         if let Ok(line) = line {
-    //             lines.push(line);
-    //         }
-    //     }
-    //     lines
-    // });
-
-    // let stderr_handle = thread::spawn(move || {
-    //     let mut lines = Vec::new();
-    //     let reader = BufReader::new(stderr);
-    //     for line in reader.lines() {
-    //         if let Ok(line) = line {
-    //             lines.push(line);
-    //         }
-    //     }
-    //     lines
-    // });
-
-    // // Wait for process to complete
-    // let exit_status = child.wait()?;
-
-    // // Get the collected output from both streams
-    // let stdout_lines = stdout_handle
-    //     .join()
-    //     .unwrap_or_else(|_| vec!["Failed to collect stdout".to_string()]);
-    // let stderr_lines = stderr_handle
-    //     .join()
-    //     .unwrap_or_else(|_| vec!["Failed to collect stderr".to_string()]);
-
-    // let mut combined_lines = Vec::new();
-    // combined_lines.extend(stdout_lines);
-    // combined_lines.extend(stderr_lines);
-    // let combined_output = combined_lines.join("\n");
-
-    // // Check if command succeeded
-    // if !exit_status.success() {
-    //     let exit_code = exit_status.code().unwrap_or(-1);
-    //     return Err(RenderError::TypstRenderFailed {
-    //         code: exit_code,
-    //         stderr: combined_output,
-    //     });
-    // }
-
-    // // Verify PDF was created in staging
-    // if !staging_pdf_path.exists() {
-    //     return Err(RenderError::Io(io::Error::new(
-    //         io::ErrorKind::NotFound,
-    //         format!("PDF not created in staging: {}", staging_pdf_path.display()),
-    //     )));
-    // }
-
-    // log::debug!("Successfully rendered PDF: {}", staging_pdf_path.display());
 
     Ok(staging_pdf_path)
 }

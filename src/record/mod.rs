@@ -27,7 +27,7 @@ mod typst;
 // Re-export public items from submodules
 pub use typst::{escape_typst, format_markdown};
 // Template functions - used by tera templates, not directly by Rust code
-pub use images::{HttpImageDownloader, ImageDownloader};
+pub use images::{HttpDownloader, UreqDownloader};
 pub use render::{ContextPosition, QCContext, create_staging_dir, render};
 #[allow(unused_imports)]
 pub use tables::{
@@ -199,7 +199,7 @@ pub async fn get_milestone_issue_information(
     milestone_issues: &HashMap<String, Vec<Issue>>,
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps),
-    image_downloader: &impl images::ImageDownloader,
+    http_downloader: &impl images::HttpDownloader,
     staging_dir: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
     let staging_dir = staging_dir.as_ref();
@@ -222,7 +222,7 @@ pub async fn get_milestone_issue_information(
                         &git_status_clone,
                         cache,
                         git_info,
-                        image_downloader,
+                        http_downloader,
                         staging_dir,
                     )
                     .await
@@ -269,7 +269,7 @@ pub async fn create_issue_information(
     git_status: &GitStatus,
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
-    image_downloader: &impl images::ImageDownloader,
+    http_downloader: &impl images::HttpDownloader,
     staging_dir: &Path,
 ) -> Result<IssueInformation, RecordError> {
     // Get comments and check if we need HTML for JWT URLs
@@ -411,7 +411,7 @@ pub async fn create_issue_information(
     let download_results: Vec<_> = all_issue_images
         .iter()
         .map(|issue_image| {
-            let result = image_downloader.download_issue_image(issue_image);
+            let result = issue_image.download(http_downloader);
             (issue_image.clone(), result)
         })
         .collect();

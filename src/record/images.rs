@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::Duration;
 
 // Markdown image regex
 static MD_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -21,31 +22,57 @@ static HTML_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static IMG_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("img").expect("Invalid img selector"));
 
-/// Trait for downloading images from URLs for PDF embedding
+/// Maximum download size (50 MB)
+const MAX_DOWNLOAD_SIZE: usize = 50 * 1024 * 1024;
+
+/// Generic HTTP downloader trait for downloading URLs to local paths
 ///
-/// This trait provides a testable interface for downloading images
-/// while keeping the implementation details separate from the business logic.
+/// This trait abstracts HTTP downloads to enable testing and reuse
+/// across image downloads and Typst package downloads.
 #[cfg_attr(test, automock)]
-pub trait ImageDownloader {
-    /// Download an IssueImage using its HTML URL to its specified path
+pub trait HttpDownloader: Send + Sync {
+    /// Download content from a URL to a local path
     ///
     /// # Arguments
-    /// * `issue_image` - The IssueImage containing HTML URL and target path
+    /// * `url` - The URL to download from
+    /// * `path` - The local path to write to
     ///
     /// # Returns
     /// * `Ok(())` - If download succeeded
     /// * `Err(DownloadError)` - If download failed
-    fn download_issue_image(&self, issue_image: &IssueImage) -> Result<(), DownloadError>;
+    fn download(&self, url: &str, path: &Path) -> Result<(), DownloadError>;
 }
 
-/// HTTP implementation of the ImageDownloader trait
-pub struct HttpImageDownloader;
+/// HTTP implementation of the HttpDownloader trait using ureq
+///
+/// Configured with:
+/// - 30 second connection timeout
+/// - 60 second read timeout
+/// - 50 MB maximum download size
+#[derive(Clone)]
+pub struct UreqDownloader {
+    agent: ureq::Agent,
+}
 
-impl ImageDownloader for HttpImageDownloader {
-    fn download_issue_image(&self, issue_image: &IssueImage) -> Result<(), DownloadError> {
-        let url = &issue_image.html;
-        let path = &issue_image.path;
+impl UreqDownloader {
+    pub fn new() -> Self {
+        Self {
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(30))
+                .timeout_read(Duration::from_secs(60))
+                .build(),
+        }
+    }
+}
 
+impl Default for UreqDownloader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpDownloader for UreqDownloader {
+    fn download(&self, url: &str, path: &Path) -> Result<(), DownloadError> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -53,11 +80,25 @@ impl ImageDownloader for HttpImageDownloader {
 
         log::debug!("Downloading {} to {}...", url, path.display());
 
-        // Download using ureq - since URLs extracted from the HTML already contain auth, we can download directly
-        let response = ureq::get(url).set("User-Agent", "ghqctoolkit/1.0").call()?;
+        let response = self
+            .agent
+            .get(url)
+            .set("User-Agent", "ghqctoolkit/1.0")
+            .call()?;
 
         let mut bytes = Vec::new();
-        response.into_reader().read_to_end(&mut bytes)?;
+        response
+            .into_reader()
+            .take(MAX_DOWNLOAD_SIZE as u64 + 1)
+            .read_to_end(&mut bytes)?;
+
+        if bytes.len() > MAX_DOWNLOAD_SIZE {
+            return Err(DownloadError::FileTooLarge {
+                url: url.to_string(),
+                size: bytes.len(),
+                max_size: MAX_DOWNLOAD_SIZE,
+            });
+        }
 
         log::debug!("Writing {} bytes to {}", bytes.len(), path.display());
         std::fs::write(path, &bytes)?;
@@ -81,6 +122,20 @@ pub struct IssueImage {
     pub html: String,
     /// The local path where the image should be downloaded
     pub path: PathBuf,
+}
+
+impl IssueImage {
+    /// Download this image using the provided HTTP downloader
+    ///
+    /// Uses the HTML URL (which contains auth tokens) to download to the local path.
+    pub fn download(&self, downloader: &impl HttpDownloader) -> Result<(), DownloadError> {
+        log::debug!(
+            "Downloading image {} to {}...",
+            self.html,
+            self.path.display()
+        );
+        downloader.download(&self.html, &self.path)
+    }
 }
 
 /// Create IssueImage structs from markdown text and HTML content
@@ -253,10 +308,16 @@ pub fn replace_images_with_typst(
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
-    #[error("request failed: {0}")]
+    #[error("HTTP request failed: {0}")]
     Ureq(#[from] ureq::Error),
-    #[error("io error: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("File too large: {url} is {size} bytes (max: {max_size})")]
+    FileTooLarge {
+        url: String,
+        size: usize,
+        max_size: usize,
+    },
 }
 
 #[cfg(test)]
