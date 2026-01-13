@@ -15,7 +15,7 @@ use crate::{
 static MARKDOWN_LINK_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap());
 
-static HTML_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static HTML_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]*)</a>"#).unwrap()
 });
 

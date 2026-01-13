@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::Duration;
 
 // Markdown image regex
 static MD_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -21,31 +22,57 @@ static HTML_IMG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static IMG_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("img").expect("Invalid img selector"));
 
-/// Trait for downloading images from URLs for PDF embedding
+/// Maximum download size (50 MB)
+const MAX_DOWNLOAD_SIZE: usize = 50 * 1024 * 1024;
+
+/// Generic HTTP downloader trait for downloading URLs to local paths
 ///
-/// This trait provides a testable interface for downloading images
-/// while keeping the implementation details separate from the business logic.
+/// This trait abstracts HTTP downloads to enable testing and reuse
+/// across image downloads and Typst package downloads.
 #[cfg_attr(test, automock)]
-pub trait ImageDownloader {
-    /// Download an IssueImage using its HTML URL to its specified path
+pub trait HttpDownloader: Send + Sync {
+    /// Download content from a URL to a local path
     ///
     /// # Arguments
-    /// * `issue_image` - The IssueImage containing HTML URL and target path
+    /// * `url` - The URL to download from
+    /// * `path` - The local path to write to
     ///
     /// # Returns
     /// * `Ok(())` - If download succeeded
     /// * `Err(DownloadError)` - If download failed
-    fn download_issue_image(&self, issue_image: &IssueImage) -> Result<(), DownloadError>;
+    fn download(&self, url: &str, path: &Path) -> Result<(), DownloadError>;
 }
 
-/// HTTP implementation of the ImageDownloader trait
-pub struct HttpImageDownloader;
+/// HTTP implementation of the HttpDownloader trait using ureq
+///
+/// Configured with:
+/// - 30 second connection timeout
+/// - 60 second read timeout
+/// - 50 MB maximum download size
+#[derive(Clone)]
+pub struct UreqDownloader {
+    agent: ureq::Agent,
+}
 
-impl ImageDownloader for HttpImageDownloader {
-    fn download_issue_image(&self, issue_image: &IssueImage) -> Result<(), DownloadError> {
-        let url = &issue_image.html;
-        let path = &issue_image.path;
+impl UreqDownloader {
+    pub fn new() -> Self {
+        Self {
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(30))
+                .timeout_read(Duration::from_secs(60))
+                .build(),
+        }
+    }
+}
 
+impl Default for UreqDownloader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpDownloader for UreqDownloader {
+    fn download(&self, url: &str, path: &Path) -> Result<(), DownloadError> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -53,11 +80,25 @@ impl ImageDownloader for HttpImageDownloader {
 
         log::debug!("Downloading {} to {}...", url, path.display());
 
-        // Download using ureq - since URLs extracted from the HTML already contain auth, we can download directly
-        let response = ureq::get(url).set("User-Agent", "ghqctoolkit/1.0").call()?;
+        let response = self
+            .agent
+            .get(url)
+            .set("User-Agent", "ghqctoolkit/1.0")
+            .call()?;
 
         let mut bytes = Vec::new();
-        response.into_reader().read_to_end(&mut bytes)?;
+        response
+            .into_reader()
+            .take(MAX_DOWNLOAD_SIZE as u64 + 1)
+            .read_to_end(&mut bytes)?;
+
+        if bytes.len() > MAX_DOWNLOAD_SIZE {
+            return Err(DownloadError::FileTooLarge {
+                url: url.to_string(),
+                size: bytes.len(),
+                max_size: MAX_DOWNLOAD_SIZE,
+            });
+        }
 
         log::debug!("Writing {} bytes to {}", bytes.len(), path.display());
         std::fs::write(path, &bytes)?;
@@ -81,6 +122,20 @@ pub struct IssueImage {
     pub html: String,
     /// The local path where the image should be downloaded
     pub path: PathBuf,
+}
+
+impl IssueImage {
+    /// Download this image using the provided HTTP downloader
+    ///
+    /// Uses the HTML URL (which contains auth tokens) to download to the local path.
+    pub fn download(&self, downloader: &impl HttpDownloader) -> Result<(), DownloadError> {
+        log::debug!(
+            "Downloading image {} to {}...",
+            self.html,
+            self.path.display()
+        );
+        downloader.download(&self.html, &self.path)
+    }
 }
 
 /// Create IssueImage structs from markdown text and HTML content
@@ -201,55 +256,49 @@ pub fn extract_image_urls_from_html(html: &str) -> Vec<String> {
     image_urls
 }
 
-/// Replace image URLs in markdown with LaTeX includegraphics commands
+/// Replace image URLs in markdown with Typst image commands
 ///
 /// This function processes the markdown content and replaces image references
-/// with LaTeX commands that point to the downloaded local files.
+/// with Typst #image() commands that point to the downloaded local files.
 ///
 /// # Arguments
 /// * `markdown` - The original markdown content
 /// * `url_to_path_map` - Map from original URLs to local file paths
 ///
 /// # Returns
-/// * Updated markdown with LaTeX image commands
-pub fn replace_images_with_latex(
+/// * Updated markdown with Typst image commands
+pub fn replace_images_with_typst(
     markdown: &str,
     url_to_path_map: &HashMap<String, PathBuf>,
 ) -> String {
     let mut result = markdown.to_string();
 
-    // Replace markdown images: ![alt](url) -> \includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{path}
+    // Replace markdown images: ![alt](url) -> #image("path", width: 100%)
     result = MD_IMG_REGEX
         .replace_all(&result, |caps: &regex::Captures| {
             let url = caps.get(2).unwrap().as_str();
             if let Some(local_path) = url_to_path_map.get(url) {
-                // Use absolute path and escape backslashes for LaTeX
-                let latex_path = local_path.display().to_string().replace('\\', "/");
-                format!(
-                    r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{{{}}}",
-                    latex_path
-                )
+                // Use absolute path with forward slashes for Typst
+                let typst_path = local_path.display().to_string().replace('\\', "/");
+                format!(r#"#image("{}", width: 100%)"#, typst_path)
             } else {
-                // If image wasn't downloaded, keep original or show placeholder
-                format!("\\textbf{{[Image not available: {}]}}", url)
+                // If image wasn't downloaded, show placeholder
+                format!("*[Image not available: {}]*", url)
             }
         })
         .to_string();
 
-    // Replace HTML img tags using regex: <img src="url" /> -> \includegraphics[...]{path}
+    // Replace HTML img tags using regex: <img src="url" /> -> #image("path", width: 100%)
     result = HTML_IMG_REGEX
         .replace_all(&result, |caps: &regex::Captures| {
             let url = caps.get(1).unwrap().as_str();
             if let Some(local_path) = url_to_path_map.get(url) {
-                // Use absolute path and escape backslashes for LaTeX
-                let latex_path = local_path.display().to_string().replace('\\', "/");
-                format!(
-                    r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{{{}}}",
-                    latex_path
-                )
+                // Use absolute path with forward slashes for Typst
+                let typst_path = local_path.display().to_string().replace('\\', "/");
+                format!(r#"#image("{}", width: 100%)"#, typst_path)
             } else {
-                // If image wasn't downloaded, keep original or show placeholder
-                format!("\\textbf{{[Image not available: {}]}}", url)
+                // If image wasn't downloaded, show placeholder
+                format!("*[Image not available: {}]*", url)
             }
         })
         .to_string();
@@ -259,10 +308,16 @@ pub fn replace_images_with_latex(
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
-    #[error("request failed: {0}")]
+    #[error("HTTP request failed: {0}")]
     Ureq(#[from] ureq::Error),
-    #[error("io error: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("File too large: {url} is {size} bytes (max: {max_size})")]
+    FileTooLarge {
+        url: String,
+        size: usize,
+        max_size: usize,
+    },
 }
 
 #[cfg(test)]
@@ -345,7 +400,7 @@ Some more text here.
     }
 
     #[test]
-    fn test_replace_images_with_latex_markdown() {
+    fn test_replace_images_with_typst_markdown() {
         let markdown =
             "Here is an image: ![Alt text](https://example.com/image.png) and some more text.";
 
@@ -355,13 +410,13 @@ Some more text here.
             PathBuf::from("/tmp/downloaded_image.png"),
         );
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        assert!(result.contains(r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/downloaded_image.png}"));
+        let result = replace_images_with_typst(markdown, &url_map);
+        assert!(result.contains(r#"#image("/tmp/downloaded_image.png", width: 100%)"#));
         assert!(!result.contains("![Alt text](https://example.com/image.png)"));
     }
 
     #[test]
-    fn test_replace_images_with_latex_html() {
+    fn test_replace_images_with_typst_html() {
         let markdown = r#"Here is an image: <img src="https://example.com/image.jpg" alt="Test" /> and more text."#;
 
         let mut url_map = HashMap::new();
@@ -370,27 +425,25 @@ Some more text here.
             PathBuf::from("/tmp/downloaded_image.jpg"),
         );
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        assert!(result.contains(r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/downloaded_image.jpg}"));
+        let result = replace_images_with_typst(markdown, &url_map);
+        assert!(result.contains(r#"#image("/tmp/downloaded_image.jpg", width: 100%)"#));
         assert!(!result.contains(r#"<img src="https://example.com/image.jpg" alt="Test" />"#));
     }
 
     #[test]
-    fn test_replace_images_with_latex_missing_image() {
+    fn test_replace_images_with_typst_missing_image() {
         let markdown =
             "Here is an image: ![Alt text](https://example.com/missing.png) and some more text.";
 
         let url_map = HashMap::new(); // Empty map - no downloaded images
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        assert!(
-            result.contains(r"\textbf{[Image not available: https://example.com/missing.png]}")
-        );
+        let result = replace_images_with_typst(markdown, &url_map);
+        assert!(result.contains("*[Image not available: https://example.com/missing.png]*"));
         assert!(!result.contains("![Alt text](https://example.com/missing.png)"));
     }
 
     #[test]
-    fn test_replace_images_with_latex_mixed() {
+    fn test_replace_images_with_typst_mixed() {
         let markdown = r#"
 ![Markdown image](https://example.com/md.png)
 <img src="https://example.com/html.jpg" alt="HTML image" />
@@ -408,20 +461,14 @@ Some more text here.
         );
         // Note: missing.png not in map
 
-        let result = replace_images_with_latex(markdown, &url_map);
+        let result = replace_images_with_typst(markdown, &url_map);
 
-        // Should replace available images
-        assert!(result.contains(
-            r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/md.png}"
-        ));
-        assert!(result.contains(
-            r"\includegraphics[width=\textwidth,height=\textheight,keepaspectratio]{/tmp/html.jpg}"
-        ));
+        // Should replace available images with Typst #image() syntax
+        assert!(result.contains(r#"#image("/tmp/md.png", width: 100%)"#));
+        assert!(result.contains(r#"#image("/tmp/html.jpg", width: 100%)"#));
 
         // Should show placeholder for missing image
-        assert!(
-            result.contains(r"\textbf{[Image not available: https://example.com/missing.png]}")
-        );
+        assert!(result.contains("*[Image not available: https://example.com/missing.png]*"));
 
         // Should not contain original syntax
         assert!(!result.contains("![Markdown image](https://example.com/md.png)"));
@@ -438,8 +485,8 @@ Some more text here.
             PathBuf::from(r"C:\temp\test.png"),
         );
 
-        let result = replace_images_with_latex(markdown, &url_map);
-        // Should convert backslashes to forward slashes for LaTeX
+        let result = replace_images_with_typst(markdown, &url_map);
+        // Should convert backslashes to forward slashes for Typst
         assert!(result.contains("C:/temp/test.png"));
         assert!(!result.contains(r"C:\temp\test.png"));
     }
