@@ -10,7 +10,8 @@ use std::{fmt, fs};
 
 use crate::GitHubWriter;
 use crate::{
-    Configuration, RelevantFile, configuration::Checklist, git::RepoUser, issue::IssueThread,
+    Configuration, ContextPosition, QCContext, RelevantFile, configuration::Checklist,
+    git::RepoUser, issue::IssueThread,
 };
 
 pub enum MilestoneStatus {
@@ -1123,4 +1124,136 @@ pub fn prompt_milestone_archive(
         include_unapproved,
         flatten,
     ))
+}
+
+/// Interactive context file selection for record generation
+/// Lists PDF files and allows users to select and choose prepend/append position
+pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
+    // Find all .pdf files in the directory
+    let context_files_available: Vec<PathBuf> = fs::read_dir(current_dir)
+        .map_err(|e| anyhow::anyhow!("Failed to read directory: {}", e))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    let ext_lower = ext.to_string_lossy().to_lowercase();
+                    if ext_lower == "pdf" {
+                        return Some(path);
+                    }
+                }
+            }
+            None
+        })
+        .collect();
+
+    if context_files_available.is_empty() {
+        println!("ℹ️  No PDF context documents found in directory");
+        return Ok(Vec::new());
+    }
+
+    let mut context_files: Vec<QCContext> = Vec::new();
+    let mut available_files = context_files_available.clone();
+
+    loop {
+        if available_files.is_empty() {
+            println!("ℹ️  No more context documents available to add");
+            break;
+        }
+
+        // Create options list with file names
+        let mut options: Vec<String> = available_files
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| format!("📄 {}", n.to_string_lossy()))
+            .collect();
+        options.insert(0, "✅ Done adding context files".to_string());
+
+        let prompt_text = if context_files.is_empty() {
+            "📄 Select a document to include as context (or Done to skip):"
+        } else {
+            "📄 Select another document (or Done to finish):"
+        };
+
+        let selection = Select::new(prompt_text, options)
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+        if selection.starts_with("✅") {
+            break;
+        }
+
+        // Extract filename from selection
+        let selected_name = selection.strip_prefix("📄 ").unwrap_or(&selection);
+
+        // Find the matching file path
+        let selected_path = available_files
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy() == selected_name)
+                    .unwrap_or(false)
+            })
+            .cloned();
+
+        if let Some(path) = selected_path {
+            // Ask whether to prepend or append
+            let position_options = vec![
+                "⬆️  Prepend (before main findings)".to_string(),
+                "⬇️  Append (after main findings)".to_string(),
+            ];
+
+            let position_selection = Select::new(
+                &format!("📍 Where should '{}' appear?", selected_name),
+                position_options,
+            )
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+            let position = if position_selection.starts_with("⬆️") {
+                ContextPosition::Prepend
+            } else {
+                ContextPosition::Append
+            };
+
+            context_files.push(QCContext::new(&path, position));
+
+            // Remove from available files
+            available_files.retain(|p| p != &path);
+
+            println!(
+                "✅ Added '{}' to {} context",
+                selected_name,
+                if matches!(position, ContextPosition::Prepend) {
+                    "prepended"
+                } else {
+                    "appended"
+                }
+            );
+        }
+    }
+
+    // Show summary if any files were selected
+    if !context_files.is_empty() {
+        println!("\n📋 Context files summary:");
+        for ctx in &context_files {
+            let pos = match ctx.position() {
+                ContextPosition::Prepend => "prepend",
+                ContextPosition::Append => "append",
+            };
+            println!(
+                "   {} {} ({})",
+                if matches!(ctx.position(), ContextPosition::Prepend) {
+                    "⬆️"
+                } else {
+                    "⬇️"
+                },
+                ctx.file().display(),
+                pos
+            );
+        }
+        println!();
+    }
+
+    Ok(context_files)
 }

@@ -39,6 +39,11 @@ lazy_static = "1.5"
 tar = "0.4"
 flate2 = "1.1"
 calamine = "0.31.0"
+lopdf = "0.38"
+typst = "0.14"
+typst-kit = { version = "0.14", features = ["embed-fonts"] }
+typst-pdf = "0.14"
+tempfile = "3.0"
 
 [features]
 cli = [
@@ -51,7 +56,6 @@ cli = [
 
 [dev-dependencies]
 mockall = "0.12"
-tempfile = "3.0"
 insta = "1.34"
 toml = "0.8"
 

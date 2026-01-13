@@ -7,16 +7,16 @@ use std::path::PathBuf;
 use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, MilestoneSelectionFilter, RelevantFileParser, find_issue,
     generate_archive_name, get_milestone_issue_threads, interactive_milestone_status,
-    interactive_status, milestone_status, prompt_archive, prompt_milestone_record,
-    single_issue_status,
+    interactive_status, milestone_status, prompt_archive, prompt_context_files,
+    prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, Configuration, DiskCache, GitCommand, GitFileOps, GitHubReader,
-    GitHubWriter, GitInfo, GitRepository, GitStatusOps, HttpImageDownloader, IssueThread, QCStatus,
-    RelevantFile, archive, configuration_status, create_labels_if_needed, create_staging_dir,
-    determine_config_dir, fetch_milestone_issues, get_milestone_issue_information, get_repo_users,
-    record, render, setup_configuration,
+    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
+    GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps, IssueThread,
+    QCContext, QCStatus, RelevantFile, UreqDownloader, archive, configuration_status,
+    create_labels_if_needed, create_staging_dir, determine_config_dir, fetch_milestone_issues,
+    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -204,6 +204,16 @@ enum MilestoneCommands {
         /// Only include tables and skip detailed issue content
         #[arg(long)]
         only_tables: bool,
+
+        /// PDF documents to prepend before the main findings.
+        /// Files are rendered in the order listed.
+        #[arg(long)]
+        prepended_context: Vec<PathBuf>,
+
+        /// PDF documents to append after the main findings.
+        /// Files are rendered in the order listed.
+        #[arg(long)]
+        appended_context: Vec<PathBuf>,
     },
     /// Create an archive of files from milestones
     Archive {
@@ -581,6 +591,8 @@ async fn main() -> Result<()> {
                     all_milestones,
                     record_path,
                     only_tables,
+                    prepended_context,
+                    appended_context,
                 } => {
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let configuration = Configuration::from_path(&config_dir);
@@ -589,11 +601,24 @@ async fn main() -> Result<()> {
 
                     let milestones_data = git_info.get_milestones().await?;
 
+                    // Determine if we're in interactive mode (no CLI args provided)
+                    let is_interactive_mode = milestones.is_empty()
+                        && !all_milestones
+                        && record_path.is_none()
+                        && prepended_context.is_empty()
+                        && appended_context.is_empty();
+
                     let (selected_milestones, interactive_record_path, interactive_only_tables) =
                         match (milestones.is_empty(), all_milestones, record_path.is_none()) {
-                            (true, false, true) => {
+                            (true, false, true) if is_interactive_mode => {
                                 // Interactive mode - no milestones specified, not all_milestones, and no record_path
                                 prompt_milestone_record(&milestones_data)?
+                            }
+                            (true, false, true) => {
+                                // Context files provided but no milestones - need milestones
+                                bail!(
+                                    "Please specify milestone names or use --all-milestones when using context files."
+                                );
                             }
                             (true, true, _) => {
                                 // All milestones requested
@@ -627,17 +652,33 @@ async fn main() -> Result<()> {
                             }
                         };
 
+                    // Build context files from CLI args or interactive prompt
+                    let context_files: Vec<QCContext> = if is_interactive_mode {
+                        // Interactive mode - prompt for context files
+                        prompt_context_files(&cli.directory)?
+                    } else {
+                        // CLI mode - build from prepended_context and appended_context args
+                        let mut contexts = Vec::new();
+                        for path in prepended_context {
+                            contexts.push(QCContext::new(&path, ContextPosition::Prepend));
+                        }
+                        for path in appended_context {
+                            contexts.push(QCContext::new(&path, ContextPosition::Append));
+                        }
+                        contexts
+                    };
+
                     let issues = fetch_milestone_issues(&selected_milestones, &git_info).await?;
 
                     // Create staging directory for images, logo, and template
                     let staging_dir = create_staging_dir()?;
 
-                    let image_downloader = HttpImageDownloader;
+                    let http_downloader = UreqDownloader::new();
                     let issue_information = get_milestone_issue_information(
                         &issues,
                         cache.as_ref(),
                         &git_info,
-                        &image_downloader,
+                        &http_downloader,
                         &staging_dir,
                     )
                     .await?;
@@ -674,7 +715,14 @@ async fn main() -> Result<()> {
                         ))
                     };
 
-                    render(&record_str, &record_path, &staging_dir)?;
+                    render(
+                        &record_str,
+                        &record_path,
+                        &staging_dir,
+                        &context_files,
+                        cache.as_ref(),
+                        &http_downloader,
+                    )?;
 
                     println!(
                         "✅ Record successfully generated at {}",

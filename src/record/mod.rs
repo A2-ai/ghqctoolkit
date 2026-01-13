@@ -1,10 +1,6 @@
 use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
-    hash::{Hash, Hasher},
-    io::{self, BufRead, BufReader},
+    collections::HashMap,
     path::{Path, PathBuf, absolute},
-    process::{Command, Stdio},
-    thread,
 };
 
 use chrono;
@@ -24,13 +20,15 @@ use crate::{
 
 // Re-export submodules
 mod images;
+mod render;
 mod tables;
 mod typst;
 
 // Re-export public items from submodules
 pub use typst::{escape_typst, format_markdown};
 // Template functions - used by tera templates, not directly by Rust code
-pub use images::{HttpImageDownloader, ImageDownloader};
+pub use images::{HttpDownloader, UreqDownloader};
+pub use render::{ContextPosition, QCContext, create_staging_dir, render};
 #[allow(unused_imports)]
 pub use tables::{
     create_milestone_df, insert_breaks, render_issue_summary_table_rows,
@@ -201,7 +199,7 @@ pub async fn get_milestone_issue_information(
     milestone_issues: &HashMap<String, Vec<Issue>>,
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps),
-    image_downloader: &impl images::ImageDownloader,
+    http_downloader: &impl images::HttpDownloader,
     staging_dir: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
     let staging_dir = staging_dir.as_ref();
@@ -224,7 +222,7 @@ pub async fn get_milestone_issue_information(
                         &git_status_clone,
                         cache,
                         git_info,
-                        image_downloader,
+                        http_downloader,
                         staging_dir,
                     )
                     .await
@@ -271,7 +269,7 @@ pub async fn create_issue_information(
     git_status: &GitStatus,
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
-    image_downloader: &impl images::ImageDownloader,
+    http_downloader: &impl images::HttpDownloader,
     staging_dir: &Path,
 ) -> Result<IssueInformation, RecordError> {
     // Get comments and check if we need HTML for JWT URLs
@@ -413,7 +411,7 @@ pub async fn create_issue_information(
     let download_results: Vec<_> = all_issue_images
         .iter()
         .map(|issue_image| {
-            let result = image_downloader.download_issue_image(issue_image);
+            let result = issue_image.download(http_downloader);
             (issue_image.clone(), result)
         })
         .collect();
@@ -702,187 +700,10 @@ pub(crate) fn format_comments(
     formatted_comments
 }
 
-/// Create a staging directory for record generation
-///
-/// Creates a unique staging directory in the system temp folder using a hash.
-/// This directory is used to store downloaded images, the logo, and the rendered template.
-pub fn create_staging_dir() -> Result<PathBuf, RecordError> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-
-    let mut hasher = DefaultHasher::new();
-    timestamp.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let staging_dir = std::env::temp_dir().join(format!("ghqc-render-{:x}", hash));
-    std::fs::create_dir_all(&staging_dir)?;
-
-    log::debug!("Created staging directory: {}", staging_dir.display());
-    Ok(staging_dir)
-}
-
-/// Render a Typst document to PDF using the typst CLI tool
-///
-/// # Arguments
-/// * `record_str` - The Typst document content to render
-/// * `path` - The output path for the rendered PDF
-/// * `staging_dir` - The staging directory containing the template and assets (images, logo)
-///
-/// # Returns
-/// * `Ok(())` - If rendering succeeded
-/// * `Err(RecordError)` - If rendering failed
-///
-/// # Example
-/// ```no_run
-/// use std::path::Path;
-/// use ghqctoolkit::render;
-///
-/// let report = "#set document(title: \"My Report\")\n= Hello World";
-/// let staging = Path::new("/tmp/staging");
-/// std::fs::create_dir_all(staging).unwrap();
-/// render(report, Path::new("output/my-report.pdf"), staging).unwrap();
-/// ```
-pub fn render(
-    record_str: &str,
-    path: impl AsRef<Path>,
-    staging_dir: impl AsRef<Path>,
-) -> Result<(), RecordError> {
-    let path = path.as_ref();
-    let staging_dir = staging_dir.as_ref();
-
-    let result = render_in_staging(staging_dir, record_str, path);
-
-    // Cleanup staging directory after rendering
-    if let Err(e) = std::fs::remove_dir_all(staging_dir) {
-        log::warn!(
-            "Failed to cleanup staging directory {}: {}",
-            staging_dir.display(),
-            e
-        );
-    }
-
-    result
-}
-
-pub fn render_in_staging(
-    staging_dir: &Path,
-    report: &str,
-    final_pdf_path: &Path,
-) -> Result<(), RecordError> {
-    let typ_file = staging_dir.join("record.typ");
-    let staging_pdf_path = staging_dir.join("record.pdf");
-
-    log::debug!("Writing Typst document to staging: {}", typ_file.display());
-    std::fs::write(&typ_file, report)?;
-
-    log::debug!(
-        "Rendering PDF with Typst: {} -> {}",
-        typ_file.display(),
-        final_pdf_path.display()
-    );
-
-    // Execute typst compile command with combined stdout/stderr
-    let mut cmd = Command::new("typst");
-    cmd.args([
-        "compile",
-        typ_file.to_str().unwrap(),
-        staging_pdf_path.to_str().unwrap(),
-    ])
-    .current_dir(staging_dir)
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-
-    log::debug!("Executing command: {:?}", cmd);
-
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            RecordError::TypstNotFound
-        } else {
-            RecordError::Io(e)
-        }
-    })?;
-
-    // Collect both stdout and stderr
-    let stdout = child.stdout.take().expect("Failed to get stdout");
-    let stderr = child.stderr.take().expect("Failed to get stderr");
-
-    let stdout_handle = thread::spawn(move || {
-        let mut lines = Vec::new();
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                lines.push(line);
-            }
-        }
-        lines
-    });
-
-    let stderr_handle = thread::spawn(move || {
-        let mut lines = Vec::new();
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                lines.push(line);
-            }
-        }
-        lines
-    });
-
-    // Wait for process to complete
-    let exit_status = child.wait()?;
-
-    // Get the collected output from both streams
-    let stdout_lines = stdout_handle
-        .join()
-        .unwrap_or_else(|_| vec!["Failed to collect stdout".to_string()]);
-    let stderr_lines = stderr_handle
-        .join()
-        .unwrap_or_else(|_| vec!["Failed to collect stderr".to_string()]);
-
-    let mut combined_lines = Vec::new();
-    combined_lines.extend(stdout_lines);
-    combined_lines.extend(stderr_lines);
-    let combined_output = combined_lines.join("\n");
-
-    // Check if command succeeded
-    if !exit_status.success() {
-        let exit_code = exit_status.code().unwrap_or(-1);
-        return Err(RecordError::TypstRenderFailed {
-            code: exit_code,
-            stderr: combined_output,
-        });
-    }
-
-    // Verify PDF was created in staging
-    if !staging_pdf_path.exists() {
-        return Err(RecordError::Io(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("PDF not created in staging: {}", staging_pdf_path.display()),
-        )));
-    }
-
-    // Ensure output directory exists
-    if let Some(parent) = final_pdf_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Copy PDF from staging to final location
-    log::debug!("Copying PDF from staging to: {}", final_pdf_path.display());
-    std::fs::copy(&staging_pdf_path, &final_pdf_path)?;
-
-    log::debug!("Successfully rendered PDF: {}", final_pdf_path.display());
-
-    Ok(())
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
     #[error("IO Error: {0}")]
-    Io(#[from] io::Error),
+    Io(#[from] std::io::Error),
     #[error("Template Error: {0}")]
     Template(#[from] tera::Error),
     #[error("GitHub API Error: {0}")]
@@ -893,10 +714,8 @@ pub enum RecordError {
     QCStatus(#[from] crate::qc_status::QCStatusError),
     #[error("Git Status Error: {0}")]
     GitStatus(#[from] crate::git::GitStatusError),
-    #[error("Typst render failed with exit code {code}: {stderr}")]
-    TypstRenderFailed { code: i32, stderr: String },
-    #[error("Typst command not found. Please install Typst: https://typst.app")]
-    TypstNotFound,
+    #[error("Render Error: {0}")]
+    Render(#[from] render::RenderError),
     #[error("Image download failed for URL {url}: {error}")]
     ImageDownloadFailed { url: String, error: String },
     #[error("Multiple image downloads failed: {failures:?}")]

@@ -1,11 +1,21 @@
-use super::images::replace_images_with_typst;
+use super::images::{HttpDownloader, replace_images_with_typst};
 /// Typst formatting utilities for the record generation system.
 /// This module handles markdown processing and Typst escaping.
 use crate::issue::HTML_LINK_REGEX;
+use chrono::{Datelike, FixedOffset, Utc};
 use regex::Regex;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use typst::diag::{FileError, FileResult, PackageError, PackageResult};
+use typst::ecow::eco_format;
+use typst::foundations::Bytes;
+use typst::syntax::package::PackageSpec;
+use typst::syntax::{FileId, Source};
+use typst::text::FontBook;
+use typst::utils::LazyHash;
+use typst::{Library, LibraryExt};
+use typst_kit::fonts::{FontSearcher, FontSlot};
 
 // Regex for markdown bold **text**
 static BOLD_REGEX: LazyLock<Regex> =
@@ -285,6 +295,172 @@ pub(crate) fn wrap_diff_line(line: &str, max_width: usize) -> Vec<String> {
     }
 
     wrapped_lines
+}
+
+pub(crate) struct TypstWorld {
+    root: PathBuf,
+    source: Source,
+    library: LazyHash<Library>,
+    book: LazyHash<FontBook>,
+    fonts: Vec<FontSlot>,
+    files: Arc<Mutex<HashMap<FileId, FileEntry>>>,
+    cache_directory: PathBuf,
+    http: Box<dyn HttpDownloader>,
+    time: chrono::DateTime<Utc>,
+}
+
+impl TypstWorld {
+    pub(crate) fn new(
+        root: impl AsRef<Path>,
+        source: String,
+        cache_root: impl AsRef<Path>,
+        http: impl HttpDownloader + 'static,
+    ) -> Self {
+        let root = root.as_ref().to_path_buf();
+        let fonts = FontSearcher::new().include_system_fonts(true).search();
+        Self {
+            library: LazyHash::new(Library::default()),
+            book: LazyHash::new(fonts.book),
+            root,
+            fonts: fonts.fonts,
+            source: Source::detached(source),
+            time: Utc::now(),
+            cache_directory: cache_root.as_ref().join("typst"),
+            http: Box::new(http),
+            files: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn file_lookup(&self, id: FileId) -> FileResult<FileEntry> {
+        let mut files = self.files.lock().map_err(|_| FileError::AccessDenied)?;
+        if let Some(entry) = files.get(&id) {
+            return Ok(entry.clone());
+        }
+        let path = if let Some(package) = id.package() {
+            let package_dir = self.download_package(package)?;
+            id.vpath().resolve(&package_dir)
+        } else {
+            id.vpath().resolve(&self.root)
+        }
+        .ok_or(FileError::AccessDenied)?;
+
+        let content = std::fs::read(&path).map_err(|err| FileError::from_io(err, &path))?;
+        Ok(files
+            .entry(id)
+            .or_insert(FileEntry::new(content, None))
+            .clone())
+    }
+
+    fn download_package(&self, package: &PackageSpec) -> PackageResult<PathBuf> {
+        let package_subdir = format!("{}/{}/{}", package.namespace, package.name, package.version);
+        let path = self.cache_directory.join(&package_subdir);
+
+        if path.exists() {
+            return Ok(path);
+        }
+
+        log::debug!("Downloading {package}...");
+        let url = format!(
+            "https://packages.typst.org/{}/{}-{}.tar.gz",
+            package.namespace, package.name, package.version
+        );
+
+        // Download archive to a temporary file in cache directory
+        let archive_path = self
+            .cache_directory
+            .join(format!("{}-{}.tar.gz", package.name, package.version));
+
+        self.http
+            .download(&url, &archive_path)
+            .map_err(|e| PackageError::NetworkFailed(Some(eco_format!("{e}"))))?;
+
+        // Read the downloaded archive
+        let compressed_archive = std::fs::read(&archive_path).map_err(|e| {
+            let _ = std::fs::remove_file(&archive_path);
+            PackageError::NetworkFailed(Some(eco_format!("Failed to read downloaded archive: {e}")))
+        })?;
+
+        // Clean up the archive file
+        let _ = std::fs::remove_file(&archive_path);
+
+        let raw_archive = flate2::read::GzDecoder::new(&compressed_archive[..]);
+        let mut archive = tar::Archive::new(raw_archive);
+        archive.unpack(&path).map_err(|error| {
+            _ = std::fs::remove_dir_all(&path);
+            PackageError::MalformedArchive(Some(eco_format!("{error}")))
+        })?;
+
+        Ok(path)
+    }
+}
+
+impl typst::World for TypstWorld {
+    fn library(&self) -> &LazyHash<Library> {
+        &self.library
+    }
+
+    fn book(&self) -> &LazyHash<FontBook> {
+        &self.book
+    }
+
+    fn main(&self) -> FileId {
+        self.source.id()
+    }
+
+    fn source(&self, id: FileId) -> typst::diag::FileResult<Source> {
+        if id == self.source.id() {
+            Ok(self.source.clone())
+        } else {
+            self.file_lookup(id)?.source(id)
+        }
+    }
+
+    fn file(&self, id: FileId) -> typst::diag::FileResult<Bytes> {
+        self.file_lookup(id).map(|file| file.bytes.clone())
+    }
+
+    fn font(&self, index: usize) -> Option<typst::text::Font> {
+        self.fonts[index].get()
+    }
+
+    fn today(&self, offset: Option<i64>) -> Option<typst::foundations::Datetime> {
+        let offset_hours = offset.unwrap_or(0);
+        let offset_secs = i32::try_from(offset_hours * 3600).ok()?;
+        let tz = FixedOffset::east_opt(offset_secs)?;
+        let local_time = self.time.with_timezone(&tz);
+        typst::foundations::Datetime::from_ymd(
+            local_time.year(),
+            local_time.month().try_into().ok()?,
+            local_time.day().try_into().ok()?,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FileEntry {
+    bytes: Bytes,
+    source: Option<Source>,
+}
+
+impl FileEntry {
+    fn new(bytes: Vec<u8>, source: Option<Source>) -> Self {
+        Self {
+            bytes: Bytes::new(bytes),
+            source,
+        }
+    }
+
+    fn source(&mut self, id: FileId) -> FileResult<Source> {
+        let source = if let Some(source) = &self.source {
+            source
+        } else {
+            let contents = std::str::from_utf8(&self.bytes).map_err(|_| FileError::InvalidUtf8)?;
+            let contents = contents.trim_start_matches('\u{feff}');
+            let source = Source::new(id, contents.to_string());
+            self.source.insert(source)
+        };
+        Ok(source.clone())
+    }
 }
 
 #[cfg(test)]
@@ -670,5 +846,343 @@ Diff code block:
         assert!(result.contains("```r"));
         assert!(result.contains("```diff"));
         assert!(result.len() > markdown_with_both.len()); // Should be longer due to wrapping
+    }
+
+    // ===================
+    // TypstWorld and compilation tests
+    // ===================
+
+    use super::super::images::MockHttpDownloader;
+    use tempfile::TempDir;
+    use typst::layout::PagedDocument;
+
+    /// Helper to create a TypstWorld with a mock HTTP downloader for testing
+    fn create_test_world(source: &str) -> (TypstWorld, TempDir, TempDir) {
+        let staging_dir = TempDir::new().expect("Failed to create staging dir");
+        let cache_dir = TempDir::new().expect("Failed to create cache dir");
+
+        let mut mock_downloader = MockHttpDownloader::new();
+        // Default: no package downloads expected for basic tests
+        mock_downloader.expect_download().times(0);
+
+        let world = TypstWorld::new(
+            staging_dir.path(),
+            source.to_string(),
+            cache_dir.path(),
+            mock_downloader,
+        );
+
+        (world, staging_dir, cache_dir)
+    }
+
+    #[test]
+    fn test_typst_world_creation() {
+        let source = "= Hello World\nThis is a test document.";
+        let (world, _staging, _cache) = create_test_world(source);
+
+        // Verify the world was created with correct source
+        assert_eq!(world.source.text(), source);
+    }
+
+    #[test]
+    fn test_typst_compile_simple_document() {
+        let source = "= Hello World\n\nThis is a simple test document.";
+        let (world, _staging, _cache) = create_test_world(source);
+
+        // Compile the document
+        let result = typst::compile::<PagedDocument>(&world);
+
+        // Should compile successfully
+        assert!(
+            result.output.is_ok(),
+            "Compilation failed: {:?}",
+            result.output.err()
+        );
+
+        let document = result.output.unwrap();
+        // Should have at least one page
+        assert!(
+            document.pages.len() >= 1,
+            "Document should have at least one page"
+        );
+    }
+
+    #[test]
+    fn test_typst_compile_with_formatting() {
+        let source = r#"
+#set document(title: "Test Report")
+#set page(paper: "us-letter")
+
+= Test Report
+
+== Section One
+
+This is *bold* and _italic_ text.
+
+- Item 1
+- Item 2
+- Item 3
+
+== Section Two
+
+#table(
+  columns: 2,
+  [Header 1], [Header 2],
+  [Cell 1], [Cell 2],
+)
+"#;
+        let (world, _staging, _cache) = create_test_world(source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        assert!(
+            result.output.is_ok(),
+            "Compilation with formatting failed: {:?}",
+            result.output.err()
+        );
+    }
+
+    #[test]
+    fn test_typst_compile_syntax_error() {
+        // Invalid Typst syntax - unclosed function call
+        let source = "#set document(title: \"Unclosed";
+        let (world, _staging, _cache) = create_test_world(source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        // Should fail to compile
+        assert!(
+            result.output.is_err(),
+            "Expected compilation to fail with syntax error"
+        );
+
+        let errors = result.output.unwrap_err();
+        assert!(!errors.is_empty(), "Should have at least one error");
+    }
+
+    #[test]
+    fn test_typst_compile_undefined_function() {
+        // Reference to undefined function
+        let source = "#nonexistent_function()";
+        let (world, _staging, _cache) = create_test_world(source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        // Should fail to compile
+        assert!(
+            result.output.is_err(),
+            "Expected compilation to fail with undefined function"
+        );
+    }
+
+    #[test]
+    fn test_typst_compile_to_pdf() {
+        let source = "= PDF Test\n\nThis document will be converted to PDF.";
+        let (world, _staging, _cache) = create_test_world(source);
+
+        let compile_result = typst::compile::<PagedDocument>(&world);
+        assert!(compile_result.output.is_ok(), "Compilation failed");
+
+        let document = compile_result.output.unwrap();
+
+        // Convert to PDF
+        let pdf_result = typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default());
+        assert!(
+            pdf_result.is_ok(),
+            "PDF generation failed: {:?}",
+            pdf_result.err()
+        );
+
+        let pdf_bytes = pdf_result.unwrap();
+        // PDF should start with %PDF magic bytes
+        assert!(pdf_bytes.starts_with(b"%PDF"), "Output should be valid PDF");
+        // Should have reasonable size
+        assert!(
+            pdf_bytes.len() > 100,
+            "PDF should have content, got {} bytes",
+            pdf_bytes.len()
+        );
+    }
+
+    #[test]
+    fn test_typst_world_with_local_file() {
+        let staging_dir = TempDir::new().expect("Failed to create staging dir");
+        let cache_dir = TempDir::new().expect("Failed to create cache dir");
+
+        // Create a local file in the staging directory
+        let local_file_content = "This is content from a local file.";
+        std::fs::write(staging_dir.path().join("local.txt"), local_file_content)
+            .expect("Failed to write local file");
+
+        // Source that reads the local file
+        let source = r#"
+= Test with Local File
+
+#let content = read("local.txt")
+Local file says: #content
+"#;
+
+        let mut mock_downloader = MockHttpDownloader::new();
+        mock_downloader.expect_download().times(0);
+
+        let world = TypstWorld::new(
+            staging_dir.path(),
+            source.to_string(),
+            cache_dir.path(),
+            mock_downloader,
+        );
+
+        let result = typst::compile::<PagedDocument>(&world);
+        assert!(
+            result.output.is_ok(),
+            "Compilation with local file failed: {:?}",
+            result.output.err()
+        );
+    }
+
+    #[test]
+    fn test_typst_compile_warnings_collected() {
+        // Source that might generate warnings (empty document)
+        let source = "";
+        let (world, _staging, _cache) = create_test_world(source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        // Empty document should still compile (may have warnings)
+        // The key is that we can access both output and warnings
+        if result.output.is_ok() {
+            // Document compiled, check if there are any warnings
+            // (warnings are in result.warnings)
+            // Just verify we can access warnings - this compiles means the API is correct
+            let _ = result.warnings.len();
+        }
+    }
+
+    #[test]
+    fn test_typst_world_today_function() {
+        let source = r#"
+#let today = datetime.today()
+Today's date: #today.display()
+"#;
+        let (world, _staging, _cache) = create_test_world(source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+        assert!(
+            result.output.is_ok(),
+            "Compilation with datetime failed: {:?}",
+            result.output.err()
+        );
+    }
+
+    #[test]
+    fn test_typst_package_download_uses_http_downloader() {
+        use super::super::images::DownloadError;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let staging_dir = TempDir::new().expect("Failed to create staging dir");
+        let cache_dir = TempDir::new().expect("Failed to create cache dir");
+
+        // Track if download was called
+        let download_called = Arc::new(AtomicBool::new(false));
+        let download_called_clone = download_called.clone();
+
+        let mut mock_downloader = MockHttpDownloader::new();
+
+        // Expect exactly one download call for the package
+        mock_downloader
+            .expect_download()
+            .times(1)
+            .withf(|url: &str, _path: &Path| {
+                url.contains("packages.typst.org") && url.ends_with(".tar.gz")
+            })
+            .returning(move |_url, _path| {
+                download_called_clone.store(true, Ordering::SeqCst);
+                // Return an error to simulate network failure
+                // (We don't want to create a real tar.gz for testing)
+                Err(DownloadError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Simulated download failure for test",
+                )))
+            });
+
+        // Source that imports a package (preview/example:0.1.0 is a fake package)
+        let source = r#"
+#import "@preview/example:0.1.0": *
+
+= Test with Package
+"#;
+
+        let world = TypstWorld::new(
+            staging_dir.path(),
+            source.to_string(),
+            cache_dir.path(),
+            mock_downloader,
+        );
+
+        // Attempt to compile - this should trigger the package download
+        let result = typst::compile::<PagedDocument>(&world);
+
+        // The compilation should fail because we simulated a download failure
+        assert!(
+            result.output.is_err(),
+            "Expected compilation to fail due to package download failure"
+        );
+
+        // Verify that our mock downloader was called
+        assert!(
+            download_called.load(Ordering::SeqCst),
+            "HttpDownloader.download() should have been called for package download"
+        );
+    }
+
+    #[test]
+    fn test_typst_package_cache_hit() {
+        let staging_dir = TempDir::new().expect("Failed to create staging dir");
+        let cache_dir = TempDir::new().expect("Failed to create cache dir");
+
+        // Pre-populate the cache with a fake package
+        let package_dir = cache_dir.path().join("typst/preview/cached-pkg/0.1.0");
+        std::fs::create_dir_all(&package_dir).expect("Failed to create package dir");
+
+        // Create a minimal valid Typst package (just needs a typst.toml)
+        let toml_content = r#"[package]
+name = "cached-pkg"
+version = "0.1.0"
+entrypoint = "lib.typ"
+"#;
+        std::fs::write(package_dir.join("typst.toml"), toml_content)
+            .expect("Failed to write typst.toml");
+
+        // Create a minimal lib.typ
+        let lib_content = "#let greeting = \"Hello from cached package!\"";
+        std::fs::write(package_dir.join("lib.typ"), lib_content).expect("Failed to write lib.typ");
+
+        // Mock downloader should NOT be called since package is cached
+        let mut mock_downloader = MockHttpDownloader::new();
+        mock_downloader.expect_download().times(0);
+
+        let source = r#"
+#import "@preview/cached-pkg:0.1.0": greeting
+
+= Test with Cached Package
+#greeting
+"#;
+
+        let world = TypstWorld::new(
+            staging_dir.path(),
+            source.to_string(),
+            cache_dir.path(),
+            mock_downloader,
+        );
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        // Should compile successfully using the cached package
+        assert!(
+            result.output.is_ok(),
+            "Compilation with cached package failed: {:?}",
+            result.output.err()
+        );
     }
 }
