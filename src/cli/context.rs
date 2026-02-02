@@ -43,7 +43,7 @@ impl QCIssue {
                 .await?
         };
 
-        let milestone_issues = git_info.get_issues(octocrab::params::State::All, Some(milestone.number as u64)).await?;
+        let milestone_issues = git_info.get_issues(Some(milestone.number as u64)).await?;
         if milestone_issues
             .iter()
             .any(|i| i.title == file.display().to_string())
@@ -102,7 +102,7 @@ impl QCIssue {
         let milestone_status = prompt_milestone(milestones)?;
 
         let milestone = milestone_status.determine_milestone(git_info).await?;
-        let milestone_issues = git_info.get_issues(octocrab::params::State::All, Some(milestone.number as u64)).await?;
+        let milestone_issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         let file = prompt_file(project_dir, &milestone_issues)?;
         let checklist = prompt_checklist(&configuration)?;
@@ -298,7 +298,7 @@ impl QCComment {
         let milestone = prompt_existing_milestone(milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_issues(octocrab::params::State::All, Some(milestone.number as u64)).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         // Select issue by title
         let issue = prompt_issue(&issues)?;
@@ -363,7 +363,7 @@ impl QCApprove {
         let milestone = prompt_existing_milestone(milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_issues(octocrab::params::State::All, Some(milestone.number as u64)).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         // Filter to only show open issues (since we can only approve open issues)
         let open_issues: Vec<_> = issues
@@ -482,7 +482,7 @@ impl QCUnapprove {
         let milestone = prompt_existing_milestone(milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_issues(octocrab::params::State::All, Some(milestone.number as u64)).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
         log::debug!(
             "Found {} total issues in milestone '{}'",
             issues.len(),
@@ -575,7 +575,7 @@ impl QCReview {
         let milestone = prompt_existing_milestone(&milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_issues(octocrab::params::State::All, Some(milestone.number as u64)).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         // Select issue by title
         let issue = prompt_issue(&issues)?;
@@ -745,7 +745,7 @@ pub async fn find_issue(
         .find(|m| m.title == milestone_name)
         .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
 
-    let issues = git_info.get_issues(octocrab::params::State::All, Some(milestone.number as u64)).await?;
+    let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
     let file_str = file.as_ref().to_string_lossy();
     let issue = issues

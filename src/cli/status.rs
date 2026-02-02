@@ -20,7 +20,7 @@ pub async fn interactive_status(
 
     // Get issues for this milestone
     let issues = git_info
-        .get_issues(octocrab::params::State::All, Some(milestone.number as u64))
+        .get_issues(Some(milestone.number as u64))
         .await?;
     log::debug!(
         "Found {} total issues in milestone '{}'",
@@ -263,7 +263,7 @@ async fn get_milestone_status_rows(
     for milestone in milestones {
         // Get all issues for this milestone
         let issues = git_info
-            .get_issues(octocrab::params::State::All, Some(milestone.number as u64))
+            .get_issues(Some(milestone.number as u64))
             .await?;
 
         for issue in issues {

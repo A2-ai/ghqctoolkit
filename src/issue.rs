@@ -527,7 +527,6 @@ mod tests {
 
         async fn get_issues(
             &self,
-            _issue_state: octocrab::params::State,
             _milestone: Option<u64>,
         ) -> Result<Vec<Issue>, crate::git::GitHubApiError> {
             Ok(Vec::new())

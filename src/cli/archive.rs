@@ -211,7 +211,7 @@ pub async fn get_milestone_issue_threads(
     let futures = milestones
         .iter()
         .map(|&m| async move {
-            let issues = git_info.get_issues(octocrab::params::State::All, Some(m.number as u64)).await?;
+            let issues = git_info.get_issues(Some(m.number as u64)).await?;
             Ok::<_, anyhow::Error>(issues)
         })
         .collect::<Vec<_>>();

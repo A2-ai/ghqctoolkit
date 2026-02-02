@@ -26,7 +26,6 @@ pub trait GitHubReader {
     -> impl Future<Output = Result<Vec<Milestone>, GitHubApiError>> + Send;
     fn get_issues(
         &self,
-        issue_state: octocrab::params::State,
         milestone: Option<u64>,
     ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
     fn get_assignees(&self) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
@@ -73,7 +72,6 @@ impl GitHubReader for GitInfo {
 
     fn get_issues(
         &self,
-        issue_state: octocrab::params::State,
         milestone: Option<u64>,
     ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
         let owner = self.owner.clone();
@@ -104,7 +102,7 @@ impl GitHubReader for GitInfo {
             loop {
                 let mut builder = issues_handler
                     .list()
-                    .state(issue_state)
+                    .state(octocrab::params::State::All)
                     .labels(&labels)
                     .per_page(100)
                     .page(page);
