@@ -24,9 +24,10 @@ use mockall::automock;
 pub trait GitHubReader {
     fn get_milestones(&self)
     -> impl Future<Output = Result<Vec<Milestone>, GitHubApiError>> + Send;
-    fn get_milestone_issues(
+    fn get_issues(
         &self,
-        milestone: &Milestone,
+        issue_state: octocrab::params::State,
+        milestone: Option<u64>,
     ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
     fn get_assignees(&self) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
     fn get_user_details(
@@ -70,43 +71,67 @@ impl GitHubReader for GitInfo {
         }
     }
 
-    fn get_milestone_issues(
+    fn get_issues(
         &self,
-        milestone: &Milestone,
-    ) -> impl std::future::Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
+        issue_state: octocrab::params::State,
+        milestone: Option<u64>,
+    ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        let milestone_id = milestone.number as u64;
         let base_url = self.base_url.clone();
         let auth_token = self.auth_token.clone();
 
         async move {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
-            log::debug!(
-                "Fetching issues for milestone {} in {}/{}",
-                milestone_id,
-                owner,
-                repo
-            );
-            let issues = octocrab
-                .issues(&owner, &repo)
-                .list()
-                .milestone(milestone_id)
-                .state(octocrab::params::State::All)
-                .labels(&[String::from("ghqc")])
-                .send()
-                .await
-                .map(|issues| issues.items)
-                .map_err(GitHubApiError::APIError)?;
 
-            log::debug!(
-                "Successfully fetched {} issues for milestone {}",
-                issues.len(),
-                milestone_id
-            );
+            if let Some(id) = milestone {
+                log::debug!(
+                    "Fetching issues for milestone {} in {}/{}",
+                    id,
+                    owner,
+                    repo
+                );
+            } else {
+                log::debug!("Fetching issues for {}/{}", owner, repo);
+            }
 
-            Ok(issues)
+            let mut all_issues = Vec::new();
+            let mut page = 1u32;
+            let labels = vec!["ghqc".to_string()];
+            let issues_handler = octocrab.issues(&owner, &repo);
+
+            loop {
+                let mut builder = issues_handler
+                    .list()
+                    .state(issue_state)
+                    .labels(&labels)
+                    .per_page(100)
+                    .page(page);
+
+                if let Some(id) = milestone {
+                    builder = builder.milestone(id);
+                }
+
+                let issues = builder.send().await.map_err(GitHubApiError::APIError)?;
+
+                if issues.items.is_empty() {
+                    break;
+                }
+
+                log::debug!("Fetched {} issues on page {}", issues.items.len(), page);
+                all_issues.extend(issues.items);
+                page += 1;
+
+                if page > 100 {
+                    log::warn!("Reached maximum page limit (100) for issues");
+                    break;
+                }
+            }
+
+            log::debug!("Successfully fetched {} total issues", all_issues.len());
+
+            Ok(all_issues)
         }
     }
 

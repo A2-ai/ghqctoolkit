@@ -525,9 +525,10 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn get_milestone_issues(
+        async fn get_issues(
             &self,
-            _milestone: &octocrab::models::Milestone,
+            _issue_state: octocrab::params::State,
+            _milestone: Option<u64>,
         ) -> Result<Vec<Issue>, crate::git::GitHubApiError> {
             Ok(Vec::new())
         }
