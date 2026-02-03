@@ -205,20 +205,20 @@ impl fmt::Display for CreateResult {
         if self.parse_failed {
             return write!(
                 f,
-                "⚠️ Issue created successfully. Issue URL could not be properly parsed, resulting in no blocking issues being posted"
+                "⚠️ Issue created successfully. Issue URL could not be properly parsed, resulting in no blocking issues being posted\n"
             );
         }
 
         if self.blocking_errors.is_empty() {
-            write!(f, "✅ Issue created successfully!")?;
+            write!(f, "✅ Issue created successfully!\n")?;
         } else {
-            write!(f, "⚠️ Issue created successfully.")?;
+            write!(f, "⚠️ Issue created successfully.\n")?;
         }
 
         if !self.successful_blocking.is_empty() {
             write!(
                 f,
-                "\tIssue blocked by issue(s): {}",
+                "  Issue blocked by issue(s): {}\n",
                 self.successful_blocking
                     .iter()
                     .map(|s| format!("#{s}"))
@@ -230,15 +230,15 @@ impl fmt::Display for CreateResult {
         if !self.blocking_errors.is_empty() {
             write!(
                 f,
-                "\tFailed to post issue blocking for:
-\t\t- {}
-\tBlocking Issues may not be supported by your GitHub deployment and cause errors.
-\tThis may result in degredation of unapproval automation",
+                "  Failed to post issue blocking for:
+    - {}
+    Blocking Issues may not be supported by your GitHub deployment and cause errors.
+    This may result in degredation of unapproval automation\n",
                 self.blocking_errors
                     .iter()
-                    .map(|(i, e)| format!("#{i} - {e}"))
+                    .map(|(i, e)| format!("#{i}: {e}"))
                     .collect::<Vec<_>>()
-                    .join("\n\t\t- ")
+                    .join("\n    - ")
             )?;
         }
 
