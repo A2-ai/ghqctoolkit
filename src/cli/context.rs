@@ -9,8 +9,11 @@ use crate::{
     QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
     cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
-        prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
-        prompt_issue, prompt_milestone, prompt_note, prompt_single_commit,
+        RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees, prompt_checklist,
+        prompt_commits, prompt_existing_milestone, prompt_file, prompt_issue, prompt_milestone,
+        prompt_note, prompt_relevant_description, prompt_relevant_file_class,
+        prompt_relevant_file_path, prompt_relevant_file_source, prompt_single_commit,
+        prompt_want_relevant_files,
     },
     comment::QCComment,
     issue::IssueThread,
@@ -108,6 +111,84 @@ impl QCIssue {
         let checklist = prompt_checklist(&configuration)?;
         let assignees = prompt_assignees(&repo_users)?;
 
+        // Prompt for relevant files
+        let relevant_files = if prompt_want_relevant_files()? {
+            // Fetch all issues (need for matching file paths to issues)
+            let all_issues = git_info.get_issues(None).await?;
+
+            let mut relevant_files = Vec::new();
+            loop {
+                let relevant_file_path = prompt_relevant_file_path(project_dir, &all_issues)?;
+
+                // Find matching issues (where issue.title == file_path)
+                let matching_issues: Vec<_> = all_issues
+                    .iter()
+                    .filter(|i| i.title == relevant_file_path.display().to_string())
+                    .collect();
+
+                let relevant_file = if matching_issues.is_empty() {
+                    // No matching issues - must be File type with justification
+                    let justification = prompt_relevant_description(true)?
+                        .expect("justification required");
+                    RelevantFile {
+                        file_name: relevant_file_path,
+                        class: RelevantFileClass::File { justification },
+                    }
+                } else {
+                    // Has matching issues - let user choose
+                    match prompt_relevant_file_source(
+                        &relevant_file_path,
+                        &matching_issues,
+                        milestone.number as u64,
+                    )? {
+                        Some(issue) => {
+                            let class_type = prompt_relevant_file_class()?;
+                            let description = prompt_relevant_description(false)?;
+                            RelevantFile {
+                                file_name: relevant_file_path,
+                                class: match class_type {
+                                    RelevantFileClassType::GatingQC => RelevantFileClass::GatingQC {
+                                        issue_number: issue.number,
+                                        description,
+                                    },
+                                    RelevantFileClassType::PreviousQC => {
+                                        RelevantFileClass::PreviousQC {
+                                            issue_number: issue.number,
+                                            description,
+                                        }
+                                    }
+                                    RelevantFileClassType::RelevantQC => {
+                                        RelevantFileClass::RelevantQC {
+                                            issue_number: issue.number,
+                                            description,
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                        None => {
+                            // User chose File
+                            let justification = prompt_relevant_description(true)?
+                                .expect("justification required");
+                            RelevantFile {
+                                file_name: relevant_file_path,
+                                class: RelevantFileClass::File { justification },
+                            }
+                        }
+                    }
+                };
+
+                relevant_files.push(relevant_file);
+
+                if !prompt_add_another_relevant_file()? {
+                    break;
+                }
+            }
+            relevant_files
+        } else {
+            Vec::new()
+        };
+
         // Display summary
         println!("\n✨ Creating issue with:");
         println!("   📊 Milestone: {}", milestone_status);
@@ -115,6 +196,9 @@ impl QCIssue {
         println!("   📋 Checklist: {}", checklist.name);
         if !assignees.is_empty() {
             println!("   👥 Assignees: {}", assignees.join(", "));
+        }
+        if !relevant_files.is_empty() {
+            println!("   🔗 Relevant files: {}", relevant_files.len());
         }
         println!();
 
@@ -125,7 +209,7 @@ impl QCIssue {
             milestone.number as u64,
             assignees,
             checklist,
-            Vec::new(), // relevant_files not supported in interactive mode yet
+            relevant_files,
         )?;
 
         Ok(issue)
