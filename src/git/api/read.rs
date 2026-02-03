@@ -28,6 +28,11 @@ pub trait GitHubReader {
         &self,
         milestone: Option<u64>,
     ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
+    /// Fetch a single issue by its number
+    fn get_issue(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Issue, GitHubApiError>> + Send;
     fn get_assignees(&self) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
     fn get_user_details(
         &self,
@@ -84,12 +89,7 @@ impl GitHubReader for GitInfo {
                 .map_err(GitHubApiError::ClientCreation)?;
 
             if let Some(id) = milestone {
-                log::debug!(
-                    "Fetching issues for milestone {} in {}/{}",
-                    id,
-                    owner,
-                    repo
-                );
+                log::debug!("Fetching issues for milestone {} in {}/{}", id, owner, repo);
             } else {
                 log::debug!("Fetching issues for {}/{}", owner, repo);
             }
@@ -130,6 +130,37 @@ impl GitHubReader for GitInfo {
             log::debug!("Successfully fetched {} total issues", all_issues.len());
 
             Ok(all_issues)
+        }
+    }
+
+    fn get_issue(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Issue, GitHubApiError>> + Send {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
+
+        async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
+
+            log::debug!("Fetching issue #{} for {}/{}", issue_number, owner, repo);
+
+            let issue = octocrab
+                .issues(&owner, &repo)
+                .get(issue_number)
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::debug!(
+                "Successfully fetched issue #{} (id: {:?})",
+                issue_number,
+                issue.id
+            );
+
+            Ok(issue)
         }
     }
 

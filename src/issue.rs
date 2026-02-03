@@ -532,6 +532,10 @@ mod tests {
             Ok(Vec::new())
         }
 
+        async fn get_issue(&self, _issue_number: u64) -> Result<Issue, crate::git::GitHubApiError> {
+            Err(crate::git::GitHubApiError::NoApi)
+        }
+
         async fn get_assignees(&self) -> Result<Vec<String>, crate::git::GitHubApiError> {
             Ok(Vec::new())
         }

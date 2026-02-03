@@ -5,13 +5,13 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Configuration, DiskCache, GitHubReader, GitHubWriter, GitHelpers, GitInfo, GitRepository,
+    Configuration, DiskCache, GitHelpers, GitHubReader, GitHubWriter, GitInfo, GitRepository,
     QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
     cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
-        RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees, prompt_checklist,
-        prompt_commits, prompt_existing_milestone, prompt_file, prompt_issue, prompt_milestone,
-        prompt_note, prompt_relevant_description, prompt_relevant_file_class,
+        RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees,
+        prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file, prompt_issue,
+        prompt_milestone, prompt_note, prompt_relevant_description, prompt_relevant_file_class,
         prompt_relevant_file_path, prompt_relevant_file_source, prompt_single_commit,
         prompt_want_relevant_files,
     },
@@ -77,8 +77,13 @@ impl QCIssue {
             .clone();
 
         // Validate and convert issue URL arguments to RelevantFile structs
-        let relevant_files =
-            validate_and_convert_relevant_files(previous_qc, gating_qc, relevant_qc, relevant_file, git_info)?;
+        let relevant_files = validate_and_convert_relevant_files(
+            previous_qc,
+            gating_qc,
+            relevant_qc,
+            relevant_file,
+            git_info,
+        )?;
 
         let issue = QCIssue::new(
             file,
@@ -128,8 +133,8 @@ impl QCIssue {
 
                 let relevant_file = if matching_issues.is_empty() {
                     // No matching issues - must be File type with justification
-                    let justification = prompt_relevant_description(true)?
-                        .expect("justification required");
+                    let justification =
+                        prompt_relevant_description(true)?.expect("justification required");
                     RelevantFile {
                         file_name: relevant_file_path,
                         class: RelevantFileClass::File { justification },
@@ -144,16 +149,22 @@ impl QCIssue {
                         Some(issue) => {
                             let class_type = prompt_relevant_file_class()?;
                             let description = prompt_relevant_description(false)?;
+                            // Extract issue.id for blocking relationships
+                            let issue_id = Some(issue.id.0);
                             RelevantFile {
                                 file_name: relevant_file_path,
                                 class: match class_type {
-                                    RelevantFileClassType::GatingQC => RelevantFileClass::GatingQC {
-                                        issue_number: issue.number,
-                                        description,
-                                    },
+                                    RelevantFileClassType::GatingQC => {
+                                        RelevantFileClass::GatingQC {
+                                            issue_number: issue.number,
+                                            issue_id,
+                                            description,
+                                        }
+                                    }
                                     RelevantFileClassType::PreviousQC => {
                                         RelevantFileClass::PreviousQC {
                                             issue_number: issue.number,
+                                            issue_id,
                                             description,
                                         }
                                     }
@@ -168,8 +179,8 @@ impl QCIssue {
                         }
                         None => {
                             // User chose File
-                            let justification = prompt_relevant_description(true)?
-                                .expect("justification required");
+                            let justification =
+                                prompt_relevant_description(true)?.expect("justification required");
                             RelevantFile {
                                 file_name: relevant_file_path,
                                 class: RelevantFileClass::File { justification },
@@ -229,25 +240,27 @@ fn validate_and_convert_relevant_files(
     let mut errors = Vec::new();
 
     // Helper to validate issue URL and add to results or errors
-    let mut process_issue_arg =
-        |arg: IssueUrlArg, relevant_file: RelevantFile, flag_name: &str| {
-            let expected_url = git_info.issue_url(arg.issue_number);
-            if arg.url != expected_url {
-                errors.push(format!(
-                    "{}: Issue URL '{}' does not match expected repository URL '{}'",
-                    flag_name, arg.url, expected_url
-                ));
-            } else {
-                result.push(relevant_file);
-            }
-        };
+    let mut process_issue_arg = |arg: IssueUrlArg, relevant_file: RelevantFile, flag_name: &str| {
+        let expected_url = git_info.issue_url(arg.issue_number);
+        if arg.url != expected_url {
+            errors.push(format!(
+                "{}: Issue URL '{}' does not match expected repository URL '{}'",
+                flag_name, arg.url, expected_url
+            ));
+        } else {
+            result.push(relevant_file);
+        }
+    };
 
     // Process previous QC issues
+    // Note: issue_id is None because we only have the URL in CLI args mode.
+    // The ID will be fetched when creating blocking relationships in main.rs.
     for arg in previous_qc {
         let relevant = RelevantFile {
             file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
             class: RelevantFileClass::PreviousQC {
                 issue_number: arg.issue_number,
+                issue_id: None,
                 description: arg.description.clone(),
             },
         };
@@ -260,6 +273,7 @@ fn validate_and_convert_relevant_files(
             file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
             class: RelevantFileClass::GatingQC {
                 issue_number: arg.issue_number,
+                issue_id: None,
                 description: arg.description.clone(),
             },
         };

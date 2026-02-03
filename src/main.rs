@@ -356,10 +356,8 @@ async fn main() -> Result<()> {
                     create_labels_if_needed(cache.as_ref(), Some(qc_issue.branch()), &git_info)
                         .await?;
 
-                    let issue_url = git_info.post_issue(&qc_issue).await?;
-
-                    println!("✅ Issue created successfully!");
-                    println!("{}", issue_url);
+                    let create_result = qc_issue.post_with_blocking(&git_info).await?;
+                    println!("{create_result}");
                 }
                 IssueCommands::Comment {
                     milestone,
