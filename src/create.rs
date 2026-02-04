@@ -607,6 +607,15 @@ mod tests {
         {
             async move { Err(GitHubApiError::NoApi) }
         }
+
+        fn get_blocked_issues(
+            &self,
+            _issue_number: u64,
+        ) -> impl std::future::Future<
+            Output = Result<Vec<octocrab::models::issues::Issue>, GitHubApiError>,
+        > + Send {
+            async move { Err(GitHubApiError::NoApi) }
+        }
     }
 
     fn load_issue(issue_file: &str) -> octocrab::models::issues::Issue {

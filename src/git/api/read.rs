@@ -47,6 +47,19 @@ pub trait GitHubReader {
         &self,
         issue: &Issue,
     ) -> impl Future<Output = Result<Vec<serde_json::Value>, GitHubApiError>> + Send;
+
+    /// Get issues that are blocked by the given issue
+    ///
+    /// Uses GitHub's issue dependencies API. This API may not be available on all
+    /// GitHub deployments (especially GHE instances).
+    ///
+    /// Returns:
+    /// - `Ok(issues)` - List of issues blocked by this issue
+    /// - `Err(GitHubApiError)` - API not available or other error
+    fn get_blocked_issues(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
 }
 
 impl GitHubReader for GitInfo {
@@ -490,6 +503,97 @@ impl GitHubReader for GitInfo {
             );
 
             Ok(all_events)
+        }
+    }
+
+    fn get_blocked_issues(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
+
+        async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
+
+            log::debug!(
+                "Fetching blocked issues for issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            // Use the dependencies/blocking API endpoint
+            // This returns issues that are blocked by (depend on) the given issue
+            // Note: This API may not be available on all GitHub deployments (especially GHE)
+            let per_page = 100;
+            let mut page = 1u32;
+            let mut all_blocked_issues: Vec<Issue> = Vec::new();
+
+            loop {
+                let url = format!(
+                    "/repos/{}/{}/issues/{}/dependencies/blocking?per_page={}&page={}",
+                    &owner, &repo, issue_number, per_page, page
+                );
+
+                let response: Result<Vec<Issue>, _> = octocrab.get(&url, None::<&()>).await;
+
+                match response {
+                    Ok(issues) => {
+                        if issues.is_empty() {
+                            break; // No more pages
+                        }
+
+                        log::debug!(
+                            "Fetched {} blocked issues on page {} for issue #{}",
+                            issues.len(),
+                            page,
+                            issue_number
+                        );
+                        all_blocked_issues.extend(issues);
+                        page += 1;
+
+                        // Safety check to prevent infinite loops
+                        if page > 100 {
+                            log::warn!(
+                                "Reached maximum page limit (100) for blocked issues of #{}",
+                                issue_number
+                            );
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        // If this is the first page, propagate the error
+                        // (likely API not available)
+                        if page == 1 {
+                            log::debug!(
+                                "Failed to fetch blocked issues for #{}: {} (API may not be available)",
+                                issue_number,
+                                e
+                            );
+                            return Err(GitHubApiError::APIError(e));
+                        }
+                        // If we already have some results, log warning and return what we have
+                        log::warn!(
+                            "Error fetching page {} of blocked issues for #{}: {}",
+                            page,
+                            issue_number,
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
+
+            log::debug!(
+                "Found {} total issues blocked by issue #{}",
+                all_blocked_issues.len(),
+                issue_number
+            );
+            Ok(all_blocked_issues)
         }
     }
 }

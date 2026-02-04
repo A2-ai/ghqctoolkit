@@ -15,9 +15,10 @@ use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
     GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps, IssueThread,
-    QCContext, QCStatus, UreqDownloader, archive, configuration_status, create_labels_if_needed,
-    create_staging_dir, determine_config_dir, fetch_milestone_issues,
+    QCContext, QCStatus, UreqDownloader, approve_with_validation, archive, configuration_status,
+    create_labels_if_needed, create_staging_dir, determine_config_dir, fetch_milestone_issues,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
+    unapprove_with_impact,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -149,6 +150,10 @@ enum IssueCommands {
         /// Optional note to include in the approval
         #[arg(short, long)]
         note: Option<String>,
+
+        /// Force approval even if Blocking QCs are not approved
+        #[arg(long)]
+        force: bool,
     },
     /// Unapprove a closed issue
     Unapprove {
@@ -409,6 +414,7 @@ async fn main() -> Result<()> {
                     file,
                     approved_commit,
                     note,
+                    force,
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
@@ -420,8 +426,8 @@ async fn main() -> Result<()> {
                         }
                         (Some(milestone), Some(file), _) => {
                             QCApprove::from_args(
-                                milestone,
-                                file,
+                                milestone.clone(),
+                                file.clone(),
                                 approved_commit,
                                 note,
                                 &milestones,
@@ -437,14 +443,12 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    // Post the approval comment
-                    let approval_url = git_info.post_comment(&approval).await?;
+                    // Use approval with validation
+                    let result =
+                        approve_with_validation(&approval, &git_info, cache.as_ref(), force)
+                            .await?;
 
-                    // Close the issue
-                    git_info.close_issue(approval.issue.number).await?;
-
-                    println!("✅ Approval created and issue closed!");
-                    println!("{}", approval_url);
+                    println!("{}", result);
                 }
                 IssueCommands::Unapprove {
                     milestone,
@@ -474,14 +478,10 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    // Post the unapproval comment
-                    let unapproval_url = git_info.post_comment(&unapproval).await?;
+                    // Use unapproval with impact tree display
+                    let result = unapprove_with_impact(&unapproval, &git_info).await?;
 
-                    // Reopen the issue
-                    git_info.open_issue(unapproval.issue.number).await?;
-
-                    println!("🚫 Issue unapproved and reopened!");
-                    println!("{}", unapproval_url);
+                    println!("{}", result);
                 }
                 IssueCommands::Review {
                     milestone,

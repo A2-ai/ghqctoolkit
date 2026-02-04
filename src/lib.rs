@@ -17,7 +17,11 @@ pub mod utils;
 #[cfg(feature = "cli")]
 pub mod cli;
 
-pub use approve::{QCApprove, QCUnapprove};
+pub use approve::{
+    ApprovalError, ApprovalResult, BlockingQCCheckResult, ImpactNode, ImpactedIssues, QCApprove,
+    QCUnapprove, UnapprovalResult, approve_with_validation, get_unapproved_blocking_qcs,
+    unapprove_with_impact,
+};
 pub use archive::{ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, archive};
 pub use cache::DiskCache;
 pub use cache::{
@@ -36,8 +40,14 @@ pub use git::{
     GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
     GitStatusError, GitStatusOps, RepoUser, find_file_commits,
 };
-pub use issue::{CommitStatus, IssueCommit, IssueError, IssueThread, parse_branch_from_body};
-pub use qc_status::{ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists};
+pub use issue::{
+    BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,
+    determine_relationship_from_body, parse_blocking_qcs, parse_branch_from_body,
+};
+pub use qc_status::{
+    BlockingQCStatus, ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists,
+    get_blocking_qc_status, get_blocking_qc_status_for_qcs,
+};
 pub use record::{
     BUILTIN_TEMPLATE, ContextPosition, HttpDownloader, IssueInformation, QCContext, UreqDownloader,
     create_staging_dir, fetch_milestone_issues, get_milestone_issue_information, load_template,

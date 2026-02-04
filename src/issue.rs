@@ -3,6 +3,7 @@ use std::{collections::HashSet, fmt, path::PathBuf, str::FromStr, sync::LazyLock
 use gix::ObjectId;
 use octocrab::models::{IssueState, issues::Issue};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     cache::{DiskCache, get_issue_comments},
@@ -14,6 +15,12 @@ use crate::{
 
 static MARKDOWN_LINK_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap());
+
+/// Regex to extract file name and issue number from markdown links to issues
+/// Pattern: [file_name](url/issues/123) - captures link text and issue number
+/// Works with any host (github.com, GHE, etc.)
+static BLOCKING_QC_LINK_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\([^)]*\/issues\/(\d+)[^)]*\)").unwrap());
 
 pub(crate) static HTML_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]*)</a>"#).unwrap()
@@ -39,6 +46,39 @@ impl fmt::Display for CommitStatus {
     }
 }
 
+/// Relationship type for blocking QC issues
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockingRelationship {
+    /// A QC that was done previously on this file or a closely related one
+    PreviousQC,
+    /// A QC which the issue of interest is developed based on
+    GatingQC,
+    /// Relationship could not be determined (issue not found in child's body)
+    Unknown,
+}
+
+impl fmt::Display for BlockingRelationship {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let self_str = match self {
+            Self::PreviousQC => "previous QC",
+            Self::GatingQC => "gating QC",
+            Self::Unknown => "unknown relationship",
+        };
+        write!(f, "{self_str}")
+    }
+}
+
+/// A blocking QC issue parsed from the issue body
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingQC {
+    /// The issue number of the blocking QC
+    pub issue_number: u64,
+    /// The file name associated with the blocking QC (link text)
+    pub file_name: PathBuf,
+    /// The relationship type (GatingQC or PreviousQC)
+    pub relationship: BlockingRelationship,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct IssueCommit {
     pub hash: ObjectId,
@@ -54,6 +94,9 @@ pub struct IssueThread {
     pub(crate) open: bool,
     pub commits: Vec<IssueCommit>,
     pub milestone: String,
+    /// Blocking QC issues parsed from issue body
+    /// Includes both Gating QC and Previous QC sections
+    pub blocking_qcs: Vec<BlockingQC>,
 }
 
 impl IssueThread {
@@ -160,12 +203,20 @@ impl IssueThread {
             return Err(IssueError::CommitNotFound(file));
         }
 
+        // 7. Parse blocking QCs from issue body
+        let blocking_qcs = issue
+            .body
+            .as_ref()
+            .map(|body| parse_blocking_qcs(body))
+            .unwrap_or_default();
+
         Ok(IssueThread {
             file,
             branch,
             open: issue_is_open,
             commits: issue_commits,
             milestone,
+            blocking_qcs,
         })
     }
 
@@ -341,6 +392,99 @@ pub fn parse_branch_from_body(body: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Parse blocking QC issues from issue body
+///
+/// Looks for the "## Relevant Files" section and extracts:
+/// - `### Gating QC` subsection → `BlockingRelationship::GatingQC`
+/// - `### Previous QC` subsection → `BlockingRelationship::PreviousQC`
+///
+/// Extracts file name (link text) and issue number from markdown links.
+pub fn parse_blocking_qcs(body: &str) -> Vec<BlockingQC> {
+    let mut blocking_qcs = Vec::new();
+
+    // Find the start of "## Relevant Files" section
+    let relevant_files_start = match body.find("## Relevant Files") {
+        Some(pos) => pos,
+        None => return blocking_qcs,
+    };
+
+    let relevant_section = &body[relevant_files_start..];
+
+    // Find the end of the relevant files section (next level 2 header or end of body)
+    let section_end = relevant_section[17..] // Skip "## Relevant Files"
+        .find("\n## ")
+        .map(|pos| pos + 17)
+        .unwrap_or(relevant_section.len());
+
+    let relevant_section = &relevant_section[..section_end];
+
+    // Parse Gating QC section
+    if let Some(gating_start) = relevant_section.find("### Gating QC") {
+        let gating_section = &relevant_section[gating_start..];
+        let gating_end = gating_section[13..] // Skip "### Gating QC"
+            .find("\n### ")
+            .map(|pos| pos + 13)
+            .unwrap_or(gating_section.len());
+        let gating_section = &gating_section[..gating_end];
+
+        for capture in BLOCKING_QC_LINK_REGEX.captures_iter(gating_section) {
+            if let (Some(file_name), Some(issue_number)) = (capture.get(1), capture.get(2)) {
+                if let Ok(issue_num) = issue_number.as_str().parse::<u64>() {
+                    blocking_qcs.push(BlockingQC {
+                        issue_number: issue_num,
+                        file_name: PathBuf::from(file_name.as_str()),
+                        relationship: BlockingRelationship::GatingQC,
+                    });
+                }
+            }
+        }
+    }
+
+    // Parse Previous QC section
+    if let Some(previous_start) = relevant_section.find("### Previous QC") {
+        let previous_section = &relevant_section[previous_start..];
+        let previous_end = previous_section[15..] // Skip "### Previous QC"
+            .find("\n### ")
+            .map(|pos| pos + 15)
+            .unwrap_or(previous_section.len());
+        let previous_section = &previous_section[..previous_end];
+
+        for capture in BLOCKING_QC_LINK_REGEX.captures_iter(previous_section) {
+            if let (Some(file_name), Some(issue_number)) = (capture.get(1), capture.get(2)) {
+                if let Ok(issue_num) = issue_number.as_str().parse::<u64>() {
+                    blocking_qcs.push(BlockingQC {
+                        issue_number: issue_num,
+                        file_name: PathBuf::from(file_name.as_str()),
+                        relationship: BlockingRelationship::PreviousQC,
+                    });
+                }
+            }
+        }
+    }
+
+    blocking_qcs
+}
+
+/// Determine the relationship type from a child's body by finding where the parent issue appears
+///
+/// The relationship type is stored in the child's body - the child lists its blockers
+/// under "### Gating QC" or "### Previous QC" sections.
+pub fn determine_relationship_from_body(
+    body: &str,
+    parent_issue_number: u64,
+) -> BlockingRelationship {
+    let blocking_qcs = parse_blocking_qcs(body);
+
+    for qc in blocking_qcs {
+        if qc.issue_number == parent_issue_number {
+            return qc.relationship;
+        }
+    }
+
+    // Parent not found in child's body - indicates data inconsistency
+    BlockingRelationship::Unknown
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -565,6 +709,13 @@ mod tests {
             &self,
             _issue: &Issue,
         ) -> Result<Vec<serde_json::Value>, crate::git::GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_blocked_issues(
+            &self,
+            _issue_number: u64,
+        ) -> Result<Vec<Issue>, crate::git::GitHubApiError> {
             Ok(Vec::new())
         }
     }
@@ -1249,5 +1400,178 @@ author: test"#;
         let body = r#"<a href="https://docs.com">Code Review Process</a>"#;
         let result = parse_branch_from_body(body);
         assert_eq!(result, None); // Should ignore links with spaces in text
+    }
+
+    // Tests for parse_blocking_qcs
+
+    #[test]
+    fn test_parse_blocking_qcs_from_body() {
+        let body = r#"## Metadata
+
+* initial qc commit: abc123
+* git branch: main
+* author: test
+
+## Relevant Files
+
+### Previous QC
+- [previous.R](https://github.com/owner/repo/issues/123) - Previous version of this file
+- [old_analysis.R](https://github.com/owner/repo/issues/124)
+
+### Gating QC
+- [upstream.R](https://github.com/owner/repo/issues/200) - Upstream dependency
+
+### Relevant QC
+- [related.R](https://github.com/owner/repo/issues/300)
+
+# Code Review Checklist
+- [ ] Check 1
+- [ ] Check 2"#;
+
+        let result = parse_blocking_qcs(body);
+        assert_eq!(result.len(), 3);
+
+        // Check Previous QC entries
+        let previous_qcs: Vec<_> = result
+            .iter()
+            .filter(|qc| qc.relationship == BlockingRelationship::PreviousQC)
+            .collect();
+        assert_eq!(previous_qcs.len(), 2);
+        assert!(previous_qcs.iter().any(|qc| qc.issue_number == 123));
+        assert!(previous_qcs.iter().any(|qc| qc.issue_number == 124));
+
+        // Check Gating QC entry
+        let gating_qcs: Vec<_> = result
+            .iter()
+            .filter(|qc| qc.relationship == BlockingRelationship::GatingQC)
+            .collect();
+        assert_eq!(gating_qcs.len(), 1);
+        assert_eq!(gating_qcs[0].issue_number, 200);
+        assert_eq!(gating_qcs[0].file_name, PathBuf::from("upstream.R"));
+    }
+
+    #[test]
+    fn test_parse_blocking_qcs_empty() {
+        let body = "## Metadata\n\n* commit: abc123\n\n# Checklist\n- [ ] Item";
+        let result = parse_blocking_qcs(body);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_blocking_qcs_no_relevant_files_section() {
+        let body = "## Metadata\n\nSome content without relevant files section";
+        let result = parse_blocking_qcs(body);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_blocking_qcs_partial() {
+        // Only Gating QC section present, no Previous QC
+        let body = r#"## Relevant Files
+
+### Gating QC
+- [gating.R](https://github.com/owner/repo/issues/50)
+
+### Relevant QC
+- [other.R](https://github.com/owner/repo/issues/60)"#;
+
+        let result = parse_blocking_qcs(body);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].issue_number, 50);
+        assert_eq!(result[0].relationship, BlockingRelationship::GatingQC);
+    }
+
+    #[test]
+    fn test_parse_blocking_qcs_ghe_url() {
+        // Test with GitHub Enterprise URLs
+        let body = r#"## Relevant Files
+
+### Gating QC
+- [script.R](https://ghe.company.com/org/repo/issues/42) - Enterprise issue"#;
+
+        let result = parse_blocking_qcs(body);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].issue_number, 42);
+        assert_eq!(result[0].file_name, PathBuf::from("script.R"));
+    }
+
+    #[test]
+    fn test_parse_blocking_qcs_multiple_urls() {
+        let body = r#"## Relevant Files
+
+### Gating QC
+- [file1.R](https://github.com/owner/repo/issues/1)
+- [file2.R](https://github.com/owner/repo/issues/2)
+- [file3.R](https://github.com/owner/repo/issues/3)"#;
+
+        let result = parse_blocking_qcs(body);
+        assert_eq!(result.len(), 3);
+        let issue_numbers: Vec<u64> = result.iter().map(|qc| qc.issue_number).collect();
+        assert!(issue_numbers.contains(&1));
+        assert!(issue_numbers.contains(&2));
+        assert!(issue_numbers.contains(&3));
+    }
+
+    #[test]
+    fn test_parse_blocking_qcs_extracts_file_name() {
+        let body = r#"## Relevant Files
+
+### Previous QC
+- [path/to/complex-file_name.R](https://github.com/owner/repo/issues/99)"#;
+
+        let result = parse_blocking_qcs(body);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].file_name,
+            PathBuf::from("path/to/complex-file_name.R")
+        );
+    }
+
+    // Tests for determine_relationship_from_body
+
+    #[test]
+    fn test_determine_relationship_from_child_body_gating() {
+        let body = r#"## Relevant Files
+
+### Gating QC
+- [upstream.R](https://github.com/owner/repo/issues/50)
+
+### Previous QC
+- [old.R](https://github.com/owner/repo/issues/60)"#;
+
+        let result = determine_relationship_from_body(body, 50);
+        assert_eq!(result, BlockingRelationship::GatingQC);
+    }
+
+    #[test]
+    fn test_determine_relationship_from_child_body_previous() {
+        let body = r#"## Relevant Files
+
+### Gating QC
+- [upstream.R](https://github.com/owner/repo/issues/50)
+
+### Previous QC
+- [old.R](https://github.com/owner/repo/issues/60)"#;
+
+        let result = determine_relationship_from_body(body, 60);
+        assert_eq!(result, BlockingRelationship::PreviousQC);
+    }
+
+    #[test]
+    fn test_determine_relationship_from_child_body_not_found() {
+        let body = r#"## Relevant Files
+
+### Gating QC
+- [upstream.R](https://github.com/owner/repo/issues/50)"#;
+
+        let result = determine_relationship_from_body(body, 999);
+        assert_eq!(result, BlockingRelationship::Unknown);
+    }
+
+    #[test]
+    fn test_determine_relationship_no_relevant_files() {
+        let body = "## Metadata\n\nNo relevant files section";
+        let result = determine_relationship_from_body(body, 123);
+        assert_eq!(result, BlockingRelationship::Unknown);
     }
 }
