@@ -15,8 +15,9 @@ use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
     GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps, IssueThread,
-    QCContext, QCStatus, UreqDownloader, approve_with_validation, archive, configuration_status,
-    create_labels_if_needed, create_staging_dir, determine_config_dir, fetch_milestone_issues,
+    QCContext, QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation,
+    archive, configuration_status, create_labels_if_needed, create_staging_dir,
+    determine_config_dir, fetch_milestone_issues, get_blocking_qc_status,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
     unapprove_with_impact,
 };
@@ -529,8 +530,6 @@ async fn main() -> Result<()> {
                     let cache = DiskCache::from_git_info(&git_info).ok();
                     match (milestone, file) {
                         (Some(milestone), Some(file)) => {
-                            use ghqctoolkit::analyze_issue_checklists;
-
                             let issue =
                                 find_issue(&milestone, &file, &milestones, &git_info).await?;
                             let checklist_summaries = analyze_issue_checklists(&issue);
@@ -539,6 +538,12 @@ async fn main() -> Result<()> {
                             let git_status = git_info.status()?;
                             let qc_status = QCStatus::determine_status(&issue_thread)?;
                             let file_commits = issue_thread.file_commits();
+                            let blocking_qc_status = get_blocking_qc_status(
+                                &issue_thread.blocking_qcs,
+                                &git_info,
+                                cache.as_ref(),
+                            )
+                            .await;
                             println!(
                                 "{}",
                                 single_issue_status(
@@ -547,6 +552,7 @@ async fn main() -> Result<()> {
                                     &qc_status,
                                     &file_commits,
                                     &checklist_summaries,
+                                    &blocking_qc_status
                                 )
                             );
                         }

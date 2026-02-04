@@ -11,8 +11,8 @@ use crate::comment_system::CommentBody;
 use crate::git::{
     GitCommitAnalysis, GitFileOps, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter,
 };
-use crate::issue::{parse_blocking_qcs, BlockingQC};
-use crate::qc_status::get_blocking_qc_status_for_qcs;
+use crate::issue::{BlockingQC, parse_blocking_qcs};
+use crate::qc_status::get_blocking_qc_status;
 
 pub struct QCApprove {
     pub file: PathBuf,
@@ -186,7 +186,7 @@ pub async fn get_unapproved_blocking_qcs(
     git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
     cache: Option<&DiskCache>,
 ) -> BlockingQCCheckResult {
-    let status = get_blocking_qc_status_for_qcs(blocking_qcs, git_info, cache).await;
+    let status = get_blocking_qc_status(blocking_qcs, git_info, cache).await;
 
     BlockingQCCheckResult {
         unapproved: status
@@ -298,7 +298,7 @@ impl fmt::Display for UnapprovalResult {
             ImpactedIssues::Some(nodes) => {
                 writeln!(f, "\nThe following QCs may be impacted by this unapproval:")?;
                 for node in nodes {
-                    node.fmt_tree(f, 0)?;
+                    node.fmt_tree(f, "", true, true)?;
                 }
             }
         }
@@ -335,29 +335,52 @@ pub struct ImpactNode {
 }
 
 impl ImpactNode {
-    fn fmt_tree(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
-        let indent = "   ".repeat(depth);
-        let prefix = if depth > 0 { "|- " } else { "" };
+    fn fmt_tree(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        prefix: &str,
+        is_last: bool,
+        is_root: bool,
+    ) -> fmt::Result {
+        // Tree drawing characters
+        let branch = if is_root {
+            ""
+        } else if is_last {
+            "└── "
+        } else {
+            "├── "
+        };
 
         // Format: #issue file (milestone) (relationship)
         writeln!(
             f,
             "{}{}#{} {} ({}) ({})",
-            indent,
             prefix,
+            branch,
             self.issue_number,
             self.file_name.display(),
             self.milestone,
             self.relationship
         )?;
 
+        // Calculate prefix for children
+        let child_prefix = if is_root {
+            prefix.to_string()
+        } else if is_last {
+            format!("{}    ", prefix)
+        } else {
+            format!("{}│   ", prefix)
+        };
+
         // Show fetch error if present
         if let Some(err) = &self.fetch_error {
-            writeln!(f, "{}   ⚠️ {}", indent, err)?;
+            writeln!(f, "{}    ⚠️ {}", child_prefix, err)?;
         }
 
-        for child in &self.children {
-            child.fmt_tree(f, depth + 1)?;
+        let child_count = self.children.len();
+        for (i, child) in self.children.iter().enumerate() {
+            let is_last_child = i == child_count - 1;
+            child.fmt_tree(f, &child_prefix, is_last_child, false)?;
         }
         Ok(())
     }
@@ -815,7 +838,7 @@ mod tests {
         let display = format!("{}", result);
         assert!(display.contains("#30"));
         assert!(display.contains("#35"));
-        assert!(display.contains("|- ")); // Nested indentation marker
+        assert!(display.contains("└── ")); // Tree branch for last/only child
     }
 
     #[test]
@@ -899,9 +922,9 @@ mod tests {
         //
         // Expected tree output:
         // #2 file2.R (Milestone) (previous QC)
-        //    |- #4 file4.R (Milestone) (gating QC)
+        // └── #4 file4.R (Milestone) (gating QC)
         // #3 file3.R (Milestone) (gating QC)
-        //    |- #4 file4.R (Milestone) (gating QC)
+        // └── #4 file4.R (Milestone) (gating QC)
 
         let tree = vec![
             ImpactNode {
@@ -995,5 +1018,4 @@ mod tests {
             display
         );
     }
-
 }

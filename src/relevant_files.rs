@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::GitHelpers;
 
 #[derive(Debug, Clone)]
-pub(crate) enum RelevantFileClass {
+pub enum RelevantFileClass {
     /// A QC that was done previously on this file or a closely related one (re-QC of an analysis)
     /// Must be approved before approving the current QC
     PreviousQC {

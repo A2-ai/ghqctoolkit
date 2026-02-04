@@ -366,7 +366,7 @@ impl BlockingQCStatus {
             String::new()
         };
 
-        format!("{}/{} ({:.0}%){}", approved, total, percent, error_suffix)
+        format!("{}/{} ({:.1}%){}", approved, total, percent, error_suffix)
     }
 }
 
@@ -405,60 +405,11 @@ impl fmt::Display for BlockingQCStatus {
     }
 }
 
-/// Fetch the blocking QC status for an issue thread
-///
-/// For each blocking QC in the issue thread, fetches the issue and determines its approval status.
-/// Returns a `BlockingQCStatus` containing categorized results.
-pub async fn get_blocking_qc_status(
-    issue_thread: &IssueThread,
-    git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
-    cache: Option<&DiskCache>,
-) -> BlockingQCStatus {
-    let mut status = BlockingQCStatus::default();
-
-    let blocking_qc_futures = issue_thread
-        .blocking_qcs
-        .iter()
-        .map(|qc| async move {
-            log::debug!(
-                "Getting status for #{} - {}",
-                qc.issue_number,
-                qc.file_name.display()
-            );
-            QCStatus::from_blocking_qc(qc, cache, git_info).await
-        })
-        .collect::<Vec<_>>();
-    let results = futures::future::join_all(blocking_qc_futures).await;
-
-    for (result, blocking_qc) in results.into_iter().zip(&issue_thread.blocking_qcs) {
-        match result {
-            Ok(s) => {
-                if s.is_approved() {
-                    status
-                        .approved
-                        .insert(blocking_qc.issue_number, blocking_qc.file_name.clone());
-                } else {
-                    status
-                        .not_approved
-                        .insert(blocking_qc.issue_number, (blocking_qc.file_name.clone(), s));
-                }
-            }
-            Err(e) => {
-                status
-                    .errors
-                    .insert(blocking_qc.issue_number, e.to_string());
-            }
-        }
-    }
-
-    status
-}
-
 /// Get the approval status for a list of blocking QCs.
 ///
 /// This function works directly with a slice of `BlockingQC` without requiring an `IssueThread`,
 /// which allows it to be used when IssueThread construction might fail (e.g., missing metadata).
-pub async fn get_blocking_qc_status_for_qcs(
+pub async fn get_blocking_qc_status(
     blocking_qcs: &[BlockingQC],
     git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
     cache: Option<&DiskCache>,
@@ -710,7 +661,7 @@ mod tests {
         assert!(!status.has_errors());
         assert_eq!(status.total(), 2);
         assert_eq!(status.approved_count(), 2);
-        assert_eq!(status.as_summary_string(), "2/2 (100%)");
+        assert_eq!(status.as_summary_string(), "2/2 (100.0%)");
     }
 
     #[test]
@@ -725,7 +676,7 @@ mod tests {
         assert!(!status.has_errors());
         assert_eq!(status.total(), 2);
         assert_eq!(status.approved_count(), 1);
-        assert_eq!(status.as_summary_string(), "1/2 (50%)");
+        assert_eq!(status.as_summary_string(), "1/2 (50.0%)");
     }
 
     #[test]
@@ -742,7 +693,7 @@ mod tests {
         assert_eq!(status.total(), 3);
         assert_eq!(status.approved_count(), 1);
         assert_eq!(status.error_count(), 1);
-        assert_eq!(status.as_summary_string(), "1/3 (33%) (+1 err)");
+        assert_eq!(status.as_summary_string(), "1/3 (33.3%) (+1 err)");
     }
 
     #[test]

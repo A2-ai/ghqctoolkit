@@ -46,12 +46,12 @@ pub use issue::{
 };
 pub use qc_status::{
     BlockingQCStatus, ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists,
-    get_blocking_qc_status, get_blocking_qc_status_for_qcs,
+    get_blocking_qc_status,
 };
 pub use record::{
     BUILTIN_TEMPLATE, ContextPosition, HttpDownloader, IssueInformation, QCContext, UreqDownloader,
     create_staging_dir, fetch_milestone_issues, get_milestone_issue_information, load_template,
     record, render,
 };
-pub use relevant_files::RelevantFile;
+pub use relevant_files::{RelevantFile, RelevantFileClass};
 pub use review::QCReview;
