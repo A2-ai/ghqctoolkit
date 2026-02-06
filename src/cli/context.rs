@@ -5,14 +5,19 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Configuration, DiskCache, GitHubReader, GitHubWriter, GitInfo, GitRepository, QCApprove,
-    QCIssue, QCReview, QCUnapprove, RelevantFile, RepoUser,
+    Configuration, DiskCache, GitHelpers, GitHubReader, GitHubWriter, GitInfo, GitRepository,
+    QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
+    cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
-        prompt_assignees, prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
-        prompt_issue, prompt_milestone, prompt_note, prompt_relevant_files, prompt_single_commit,
+        RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees,
+        prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file, prompt_issue,
+        prompt_milestone, prompt_note, prompt_relevant_description, prompt_relevant_file_class,
+        prompt_relevant_file_path, prompt_relevant_file_source, prompt_single_commit,
+        prompt_want_relevant_files,
     },
     comment::QCComment,
     issue::IssueThread,
+    relevant_files::{RelevantFile, RelevantFileClass},
 };
 
 impl QCIssue {
@@ -21,8 +26,11 @@ impl QCIssue {
         file: PathBuf,
         checklist_name: String,
         assignees: Option<Vec<String>>,
-        relevant_files: Option<Vec<RelevantFile>>,
         description: Option<String>,
+        previous_qc: Vec<IssueUrlArg>,
+        gating_qc: Vec<IssueUrlArg>,
+        relevant_qc: Vec<IssueUrlArg>,
+        relevant_file: Vec<RelevantFileArg>,
         milestones: Vec<Milestone>,
         repo_users: &[RepoUser],
         configuration: Configuration,
@@ -38,7 +46,7 @@ impl QCIssue {
                 .await?
         };
 
-        let milestone_issues = git_info.get_milestone_issues(&milestone).await?;
+        let milestone_issues = git_info.get_issues(Some(milestone.number as u64)).await?;
         if milestone_issues
             .iter()
             .any(|i| i.title == file.display().to_string())
@@ -68,13 +76,22 @@ impl QCIssue {
             .ok_or(anyhow!("No checklist named {checklist_name}"))?
             .clone();
 
+        // Validate and convert issue URL arguments to RelevantFile structs
+        let relevant_files = validate_and_convert_relevant_files(
+            previous_qc,
+            gating_qc,
+            relevant_qc,
+            relevant_file,
+            git_info,
+        )?;
+
         let issue = QCIssue::new(
             file,
             git_info,
             milestone.number as u64,
             assignees,
-            relevant_files.unwrap_or_default(),
             checklist,
+            relevant_files,
         )?;
 
         Ok(issue)
@@ -93,12 +110,95 @@ impl QCIssue {
         let milestone_status = prompt_milestone(milestones)?;
 
         let milestone = milestone_status.determine_milestone(git_info).await?;
-        let milestone_issues = git_info.get_milestone_issues(milestone.as_ref()).await?;
+        let milestone_issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         let file = prompt_file(project_dir, &milestone_issues)?;
         let checklist = prompt_checklist(&configuration)?;
         let assignees = prompt_assignees(&repo_users)?;
-        let relevant_files = prompt_relevant_files(project_dir)?;
+
+        // Prompt for relevant files
+        let relevant_files = if prompt_want_relevant_files()? {
+            // Fetch all issues (need for matching file paths to issues)
+            let all_issues = git_info.get_issues(None).await?;
+
+            let mut relevant_files = Vec::new();
+            loop {
+                let relevant_file_path = prompt_relevant_file_path(project_dir, &all_issues)?;
+
+                // Find matching issues (where issue.title == file_path)
+                let matching_issues: Vec<_> = all_issues
+                    .iter()
+                    .filter(|i| i.title == relevant_file_path.display().to_string())
+                    .collect();
+
+                let relevant_file = if matching_issues.is_empty() {
+                    // No matching issues - must be File type with justification
+                    let justification =
+                        prompt_relevant_description(true)?.expect("justification required");
+                    RelevantFile {
+                        file_name: relevant_file_path,
+                        class: RelevantFileClass::File { justification },
+                    }
+                } else {
+                    // Has matching issues - let user choose
+                    match prompt_relevant_file_source(
+                        &relevant_file_path,
+                        &matching_issues,
+                        milestone.number as u64,
+                    )? {
+                        Some(issue) => {
+                            let class_type = prompt_relevant_file_class()?;
+                            let description = prompt_relevant_description(false)?;
+                            // Extract issue.id for blocking relationships
+                            let issue_id = Some(issue.id.0);
+                            RelevantFile {
+                                file_name: relevant_file_path,
+                                class: match class_type {
+                                    RelevantFileClassType::GatingQC => {
+                                        RelevantFileClass::GatingQC {
+                                            issue_number: issue.number,
+                                            issue_id,
+                                            description,
+                                        }
+                                    }
+                                    RelevantFileClassType::PreviousQC => {
+                                        RelevantFileClass::PreviousQC {
+                                            issue_number: issue.number,
+                                            issue_id,
+                                            description,
+                                        }
+                                    }
+                                    RelevantFileClassType::RelevantQC => {
+                                        RelevantFileClass::RelevantQC {
+                                            issue_number: issue.number,
+                                            description,
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                        None => {
+                            // User chose File
+                            let justification =
+                                prompt_relevant_description(true)?.expect("justification required");
+                            RelevantFile {
+                                file_name: relevant_file_path,
+                                class: RelevantFileClass::File { justification },
+                            }
+                        }
+                    }
+                };
+
+                relevant_files.push(relevant_file);
+
+                if !prompt_add_another_relevant_file()? {
+                    break;
+                }
+            }
+            relevant_files
+        } else {
+            Vec::new()
+        };
 
         // Display summary
         println!("\n✨ Creating issue with:");
@@ -109,14 +209,7 @@ impl QCIssue {
             println!("   👥 Assignees: {}", assignees.join(", "));
         }
         if !relevant_files.is_empty() {
-            println!(
-                "   🔗 Relevant files: {}",
-                relevant_files
-                    .iter()
-                    .map(|f| f.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+            println!("   🔗 Relevant files: {}", relevant_files.len());
         }
         println!();
 
@@ -126,12 +219,102 @@ impl QCIssue {
             git_info,
             milestone.number as u64,
             assignees,
-            relevant_files,
             checklist,
+            relevant_files,
         )?;
 
         Ok(issue)
     }
+}
+
+/// Validates and converts CLI relevant file arguments to RelevantFile structs.
+/// Collects all validation errors and returns them together.
+fn validate_and_convert_relevant_files(
+    previous_qc: Vec<IssueUrlArg>,
+    gating_qc: Vec<IssueUrlArg>,
+    relevant_qc: Vec<IssueUrlArg>,
+    relevant_file: Vec<RelevantFileArg>,
+    git_info: &GitInfo,
+) -> Result<Vec<RelevantFile>> {
+    let mut result = Vec::new();
+    let mut errors = Vec::new();
+
+    // Helper to validate issue URL and add to results or errors
+    let mut process_issue_arg = |arg: IssueUrlArg, relevant_file: RelevantFile, flag_name: &str| {
+        let expected_url = git_info.issue_url(arg.issue_number);
+        if arg.url != expected_url {
+            errors.push(format!(
+                "{}: Issue URL '{}' does not match expected repository URL '{}'",
+                flag_name, arg.url, expected_url
+            ));
+        } else {
+            result.push(relevant_file);
+        }
+    };
+
+    // Process previous QC issues
+    // Note: issue_id is None because we only have the URL in CLI args mode.
+    // The ID will be fetched when creating blocking relationships in main.rs.
+    for arg in previous_qc {
+        let relevant = RelevantFile {
+            file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
+            class: RelevantFileClass::PreviousQC {
+                issue_number: arg.issue_number,
+                issue_id: None,
+                description: arg.description.clone(),
+            },
+        };
+        process_issue_arg(arg, relevant, "--previous-qc");
+    }
+
+    // Process gating QC issues
+    for arg in gating_qc {
+        let relevant = RelevantFile {
+            file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
+            class: RelevantFileClass::GatingQC {
+                issue_number: arg.issue_number,
+                issue_id: None,
+                description: arg.description.clone(),
+            },
+        };
+        process_issue_arg(arg, relevant, "--gating-qc");
+    }
+
+    // Process relevant QC issues
+    for arg in relevant_qc {
+        let relevant = RelevantFile {
+            file_name: PathBuf::from(format!("issue #{}", arg.issue_number)),
+            class: RelevantFileClass::RelevantQC {
+                issue_number: arg.issue_number,
+                description: arg.description.clone(),
+            },
+        };
+        process_issue_arg(arg, relevant, "--relevant-qc");
+    }
+
+    // Process relevant files (validate file exists in repository)
+    for arg in relevant_file {
+        if !arg.file.exists() {
+            errors.push(format!(
+                "--relevant-file: File '{}' does not exist",
+                arg.file.display()
+            ));
+        } else {
+            result.push(RelevantFile {
+                file_name: arg.file,
+                class: RelevantFileClass::File {
+                    justification: arg.justification,
+                },
+            });
+        }
+    }
+
+    // Return all errors if any were found
+    if !errors.is_empty() {
+        bail!("Validation errors:\n  - {}", errors.join("\n  - "));
+    }
+
+    Ok(result)
 }
 
 impl QCComment {
@@ -213,7 +396,7 @@ impl QCComment {
         let milestone = prompt_existing_milestone(milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_milestone_issues(&milestone).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         // Select issue by title
         let issue = prompt_issue(&issues)?;
@@ -278,7 +461,7 @@ impl QCApprove {
         let milestone = prompt_existing_milestone(milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_milestone_issues(&milestone).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         // Filter to only show open issues (since we can only approve open issues)
         let open_issues: Vec<_> = issues
@@ -397,7 +580,7 @@ impl QCUnapprove {
         let milestone = prompt_existing_milestone(milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_milestone_issues(&milestone).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
         log::debug!(
             "Found {} total issues in milestone '{}'",
             issues.len(),
@@ -490,7 +673,7 @@ impl QCReview {
         let milestone = prompt_existing_milestone(&milestones)?;
 
         // Get issues for this milestone
-        let issues = git_info.get_milestone_issues(&milestone).await?;
+        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
         // Select issue by title
         let issue = prompt_issue(&issues)?;
@@ -660,7 +843,7 @@ pub async fn find_issue(
         .find(|m| m.title == milestone_name)
         .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
 
-    let issues = git_info.get_milestone_issues(milestone).await?;
+    let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
     let file_str = file.as_ref().to_string_lossy();
     let issue = issues

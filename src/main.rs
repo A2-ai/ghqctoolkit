@@ -5,18 +5,21 @@ use octocrab::models::Milestone;
 use std::path::PathBuf;
 
 use ghqctoolkit::cli::{
-    FileCommitPair, FileCommitPairParser, MilestoneSelectionFilter, RelevantFileParser, find_issue,
-    generate_archive_name, get_milestone_issue_threads, interactive_milestone_status,
-    interactive_status, milestone_status, prompt_archive, prompt_context_files,
-    prompt_milestone_record, single_issue_status,
+    FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
+    RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
+    get_milestone_issue_threads, interactive_milestone_status, interactive_status,
+    milestone_status, prompt_archive, prompt_context_files, prompt_milestone_record,
+    single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
     GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps, IssueThread,
-    QCContext, QCStatus, RelevantFile, UreqDownloader, archive, configuration_status,
-    create_labels_if_needed, create_staging_dir, determine_config_dir, fetch_milestone_issues,
+    QCContext, QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation,
+    archive, configuration_status, create_labels_if_needed, create_staging_dir,
+    determine_config_dir, fetch_milestone_issues, get_blocking_qc_status,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
+    unapprove_with_impact,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -77,13 +80,33 @@ enum IssueCommands {
         #[arg(short, long)]
         assignees: Option<Vec<String>>,
 
-        /// Additional relevant files for the issue (format: "name:path" or just "path")
-        #[arg(short = 'r', long, value_parser = RelevantFileParser)]
-        relevant_files: Option<Vec<RelevantFile>>,
-
         /// Description for the milestone (only used when creating a new milestone)
         #[arg(short = 'D', long)]
         description: Option<String>,
+
+        /// Previous QC issues (issues which are previous QCs of this file or a similar file)
+        /// Format: <issue_url>[::description]
+        /// Example: https://github.com/owner/repo/issues/123::Previous version of this file
+        #[arg(long, value_parser = IssueUrlArgParser)]
+        previous_qc: Vec<IssueUrlArg>,
+
+        /// Gating QC issues (issues which must be approved before approving this issue)
+        /// Format: <issue_url>[::description]
+        /// Example: https://github.com/owner/repo/issues/456::Upstream dependency
+        #[arg(long, value_parser = IssueUrlArgParser)]
+        gating_qc: Vec<IssueUrlArg>,
+
+        /// Related QC issues (issues related to the file but don't have a direct impact on results)
+        /// Format: <issue_url>[::description]
+        /// Example: https://github.com/owner/repo/issues/789::Related analysis
+        #[arg(long, value_parser = IssueUrlArgParser)]
+        relevant_qc: Vec<IssueUrlArg>,
+
+        /// Relevant files (files relevant to the QC but don't require QC themselves)
+        /// Format: file_path::justification (justification is required)
+        /// Example: data/config.yaml::Configuration used by this script
+        #[arg(long, value_parser = RelevantFileArgParser)]
+        relevant_file: Vec<RelevantFileArg>,
     },
     /// Comment on an existing issue, providing updated context
     Comment {
@@ -128,6 +151,10 @@ enum IssueCommands {
         /// Optional note to include in the approval
         #[arg(short, long)]
         note: Option<String>,
+
+        /// Force approval even if Blocking QCs are not approved
+        #[arg(long)]
+        force: bool,
     },
     /// Unapprove a closed issue
     Unapprove {
@@ -281,8 +308,11 @@ async fn main() -> Result<()> {
                     file,
                     checklist_name,
                     assignees,
-                    relevant_files,
                     description,
+                    previous_qc,
+                    gating_qc,
+                    relevant_qc,
+                    relevant_file,
                 } => {
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
                     let mut configuration = Configuration::from_path(&config_dir);
@@ -300,8 +330,11 @@ async fn main() -> Result<()> {
                                 file,
                                 checklist_name,
                                 assignees,
-                                relevant_files,
                                 description,
+                                previous_qc,
+                                gating_qc,
+                                relevant_qc,
+                                relevant_file,
                                 milestones,
                                 &repo_users,
                                 configuration,
@@ -329,10 +362,8 @@ async fn main() -> Result<()> {
                     create_labels_if_needed(cache.as_ref(), Some(qc_issue.branch()), &git_info)
                         .await?;
 
-                    let issue_url = git_info.post_issue(&qc_issue).await?;
-
-                    println!("✅ Issue created successfully!");
-                    println!("{}", issue_url);
+                    let create_result = qc_issue.post_with_blocking(&git_info).await?;
+                    println!("{create_result}");
                 }
                 IssueCommands::Comment {
                     milestone,
@@ -384,6 +415,7 @@ async fn main() -> Result<()> {
                     file,
                     approved_commit,
                     note,
+                    force,
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
@@ -395,8 +427,8 @@ async fn main() -> Result<()> {
                         }
                         (Some(milestone), Some(file), _) => {
                             QCApprove::from_args(
-                                milestone,
-                                file,
+                                milestone.clone(),
+                                file.clone(),
                                 approved_commit,
                                 note,
                                 &milestones,
@@ -412,14 +444,12 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    // Post the approval comment
-                    let approval_url = git_info.post_comment(&approval).await?;
+                    // Use approval with validation
+                    let result =
+                        approve_with_validation(&approval, &git_info, cache.as_ref(), force)
+                            .await?;
 
-                    // Close the issue
-                    git_info.close_issue(approval.issue.number).await?;
-
-                    println!("✅ Approval created and issue closed!");
-                    println!("{}", approval_url);
+                    println!("{}", result);
                 }
                 IssueCommands::Unapprove {
                     milestone,
@@ -449,14 +479,10 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    // Post the unapproval comment
-                    let unapproval_url = git_info.post_comment(&unapproval).await?;
+                    // Use unapproval with impact tree display
+                    let result = unapprove_with_impact(&unapproval, &git_info).await?;
 
-                    // Reopen the issue
-                    git_info.open_issue(unapproval.issue.number).await?;
-
-                    println!("🚫 Issue unapproved and reopened!");
-                    println!("{}", unapproval_url);
+                    println!("{}", result);
                 }
                 IssueCommands::Review {
                     milestone,
@@ -504,8 +530,6 @@ async fn main() -> Result<()> {
                     let cache = DiskCache::from_git_info(&git_info).ok();
                     match (milestone, file) {
                         (Some(milestone), Some(file)) => {
-                            use ghqctoolkit::analyze_issue_checklists;
-
                             let issue =
                                 find_issue(&milestone, &file, &milestones, &git_info).await?;
                             let checklist_summaries = analyze_issue_checklists(&issue);
@@ -514,6 +538,12 @@ async fn main() -> Result<()> {
                             let git_status = git_info.status()?;
                             let qc_status = QCStatus::determine_status(&issue_thread)?;
                             let file_commits = issue_thread.file_commits();
+                            let blocking_qc_status = get_blocking_qc_status(
+                                &issue_thread.blocking_qcs,
+                                &git_info,
+                                cache.as_ref(),
+                            )
+                            .await;
                             println!(
                                 "{}",
                                 single_issue_status(
@@ -522,6 +552,7 @@ async fn main() -> Result<()> {
                                     &qc_status,
                                     &file_commits,
                                     &checklist_summaries,
+                                    &blocking_qc_status
                                 )
                             );
                         }

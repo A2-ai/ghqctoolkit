@@ -44,6 +44,15 @@ pub trait GitHubWriter {
         name: &str,
         color: &str,
     ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
+
+    /// Add a blocking relationship between issues.
+    /// The blocked_issue_number will be "blocked by" the blocking_issue_id.
+    /// This uses GitHub's issue dependencies feature which may not be available on all GitHub instances.
+    fn block_issue(
+        &self,
+        blocked_issue_number: u64,
+        blocking_issue_id: u64,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
 }
 
 impl GitHubWriter for GitInfo {
@@ -281,6 +290,55 @@ impl GitHubWriter for GitInfo {
                 .map_err(GitHubApiError::APIError)?;
 
             log::debug!("Successfully created label '{}'", name);
+            Ok(())
+        }
+    }
+
+    fn block_issue(
+        &self,
+        blocked_issue_number: u64,
+        blocking_issue_id: u64,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
+
+        async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
+
+            log::debug!(
+                "Adding blocking relationship: issue #{} blocked by issue ID {} in {}/{}",
+                blocked_issue_number,
+                blocking_issue_id,
+                owner,
+                repo
+            );
+
+            // Use octocrab's raw request API since this endpoint may not be directly supported
+            // POST /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by
+            // Body: { "issue_id": <blocking_issue_id> }
+            let url = format!(
+                "/repos/{}/{}/issues/{}/dependencies/blocked_by",
+                owner, repo, blocked_issue_number
+            );
+
+            let body = serde_json::json!({
+                "issue_id": blocking_issue_id
+            });
+
+            octocrab
+                .post::<_, serde_json::Value>(url, Some(&body))
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::info!(
+                "Successfully created blocking relationship: issue #{} is now blocked by issue ID {}",
+                blocked_issue_number,
+                blocking_issue_id
+            );
+
             Ok(())
         }
     }

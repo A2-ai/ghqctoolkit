@@ -5,14 +5,23 @@ use inquire::{
 };
 use octocrab::models::{Milestone, issues::Issue};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::{fmt, fs};
 
 use crate::GitHubWriter;
 use crate::{
-    Configuration, ContextPosition, QCContext, RelevantFile, configuration::Checklist,
-    git::RepoUser, issue::IssueThread,
+    Configuration, ContextPosition, QCContext, configuration::Checklist, git::RepoUser,
+    issue::IssueThread,
 };
+
+/// Enum representing the type of relevant file class for interactive selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelevantFileClassType {
+    GatingQC,
+    PreviousQC,
+    RelevantQC,
+}
 
 pub enum MilestoneStatus {
     Existing(Milestone),
@@ -424,181 +433,6 @@ pub fn prompt_assignees(repo_users: &[RepoUser]) -> Result<Vec<String>> {
     Ok(assignees)
 }
 
-pub fn prompt_relevant_files(current_dir: &PathBuf) -> Result<Vec<RelevantFile>> {
-    #[derive(Clone)]
-    struct FileCompleter {
-        current_dir: PathBuf,
-    }
-
-    impl Autocomplete for FileCompleter {
-        fn get_suggestions(
-            &mut self,
-            input: &str,
-        ) -> std::result::Result<Vec<String>, CustomUserError> {
-            let mut suggestions = Vec::new();
-
-            let (base_path, search_term) = if input.contains('/') {
-                let mut parts = input.rsplitn(2, '/');
-                let filename = parts.next().unwrap_or("");
-                let dir_path = parts.next().unwrap_or("");
-                (self.current_dir.join(dir_path), filename)
-            } else {
-                (self.current_dir.clone(), input)
-            };
-
-            if let Ok(entries) = fs::read_dir(&base_path) {
-                let mut files = Vec::new();
-                let mut dirs = Vec::new();
-
-                for entry in entries.flatten() {
-                    if let Ok(name) = entry.file_name().into_string() {
-                        // Skip hidden files/directories
-                        if name.starts_with('.') {
-                            continue;
-                        }
-
-                        if name.to_lowercase().starts_with(&search_term.to_lowercase()) {
-                            let relative_path = if input.contains('/') {
-                                let dir_part = input.rsplitn(2, '/').nth(1).unwrap_or("");
-                                format!("{}/{}", dir_part, name)
-                            } else {
-                                name.clone()
-                            };
-
-                            if entry.path().is_file() {
-                                files.push(relative_path);
-                            } else if entry.path().is_dir() {
-                                // Add trailing slash to indicate directory
-                                dirs.push(format!("{}/", relative_path));
-                            }
-                        }
-                    }
-                }
-
-                // Sort directories and files separately, then combine
-                dirs.sort();
-                files.sort();
-                suggestions.extend(dirs);
-                suggestions.extend(files);
-            }
-
-            Ok(suggestions)
-        }
-
-        fn get_completion(
-            &mut self,
-            _input: &str,
-            highlighted_suggestion: Option<String>,
-        ) -> std::result::Result<inquire::autocompletion::Replacement, CustomUserError> {
-            Ok(match highlighted_suggestion {
-                Some(suggestion) => inquire::autocompletion::Replacement::Some(suggestion),
-                None => inquire::autocompletion::Replacement::None,
-            })
-        }
-    }
-
-    let file_completer = FileCompleter {
-        current_dir: current_dir.clone(),
-    };
-
-    let mut relevant_files = Vec::new();
-
-    loop {
-        let prompt_text = if relevant_files.is_empty() {
-            "📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none):".to_string()
-        } else {
-            format!(
-                "📁 Enter another relevant file (current: {}, Tab for autocomplete, Enter to finish):",
-                relevant_files
-                    .iter()
-                    .map(RelevantFile::to_string)
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )
-        };
-
-        let validator_dir = current_dir.clone();
-        let input = Text::new(&prompt_text)
-            .with_autocomplete(file_completer.clone())
-            .with_validator(move |input: &str| {
-                let trimmed = input.trim();
-                if trimmed.is_empty() {
-                    Ok(Validation::Valid) // Empty is valid - means finish
-                } else if trimmed.ends_with('/') {
-                    Ok(Validation::Invalid(
-                        "Cannot select a directory. Please select a file.".into(),
-                    ))
-                } else {
-                    let path = validator_dir.join(trimmed);
-                    if path.exists() && path.is_dir() {
-                        Ok(Validation::Invalid(
-                            "Path must be a file, not a directory".into(),
-                        ))
-                    } else {
-                        Ok(Validation::Valid)
-                    }
-                }
-            })
-            .prompt()
-            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
-
-        let trimmed_input = input.trim();
-        if trimmed_input.is_empty() {
-            break; // User pressed Enter without input, finish
-        }
-
-        let file_path = PathBuf::from(trimmed_input);
-
-        // Suggest a default name based on the filename
-        let suggested_name = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(trimmed_input);
-
-        // Prompt for the name with the suggested default
-        let name_prompt = format!(
-            "📝 Enter name for this file (default: '{}'):",
-            suggested_name
-        );
-        let name_input = Text::new(&name_prompt)
-            .with_default(suggested_name)
-            .prompt()
-            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
-
-        let final_name = if name_input.trim().is_empty() {
-            suggested_name.to_string()
-        } else {
-            name_input.trim().to_string()
-        };
-
-        // Prompt for optional notes (supports \n for line breaks)
-        let notes_input = Text::new(
-            "📝 Enter optional notes for this file (use \\n for line breaks, Enter to finish):",
-        )
-        .prompt()
-        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
-
-        let final_notes = if notes_input.trim().is_empty() {
-            None
-        } else {
-            Some(notes_input.trim().to_string())
-        };
-
-        let relevant_file = RelevantFile {
-            name: final_name,
-            path: file_path.clone(),
-            notes: final_notes,
-        };
-
-        // Avoid duplicates (check by path)
-        if !relevant_files.iter().any(|f| f.path == file_path) {
-            relevant_files.push(relevant_file);
-        }
-    }
-
-    Ok(relevant_files)
-}
-
 /// Select an issue from a milestone by title with autocomplete
 pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
     #[derive(Clone)]
@@ -926,38 +760,6 @@ pub fn prompt_note() -> Result<Option<String>> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_prompt_checklist() {
-        use crate::configuration::Checklist;
-
-        let mut config = Configuration::default();
-        config.checklists.insert(
-            "Test Checklist".to_string(),
-            Checklist::new(
-                "Test Checklist".to_string(),
-                None,
-                "- [ ] Test item".to_string(),
-            ),
-        );
-        config.checklists.insert(
-            "Another Checklist".to_string(),
-            Checklist::new(
-                "Another Checklist".to_string(),
-                None,
-                "- [ ] Another item".to_string(),
-            ),
-        );
-
-        // This test just verifies the function doesn't panic with valid configuration
-        // Actual interactive testing would require manual verification
-        assert!(config.checklists.len() == 3); // Including the default "Custom" checklist
-    }
-}
-
 /// Interactive milestone selection for record generation
 pub fn prompt_milestone_record(
     milestones: &[Milestone],
@@ -1256,4 +1058,353 @@ pub fn prompt_context_files(current_dir: &PathBuf) -> Result<Vec<QCContext>> {
     }
 
     Ok(context_files)
+}
+
+/// Asks if user wants to add relevant files
+pub fn prompt_want_relevant_files() -> Result<bool> {
+    Confirm::new("Do you want to add any relevant files?")
+        .with_default(false)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))
+}
+
+/// File selector for relevant files with issue indicators
+/// Shows files with their related issue numbers if they exist
+pub fn prompt_relevant_file_path(current_dir: &PathBuf, all_issues: &[Issue]) -> Result<PathBuf> {
+    // Build a map of file paths to their issue numbers
+    let file_to_issues: HashMap<String, Vec<u64>> = {
+        let mut map: HashMap<String, Vec<u64>> = HashMap::new();
+        for issue in all_issues {
+            map.entry(issue.title.clone())
+                .or_default()
+                .push(issue.number);
+        }
+        map
+    };
+
+    #[derive(Clone)]
+    struct RelevantFileCompleter {
+        current_dir: PathBuf,
+        file_to_issues: HashMap<String, Vec<u64>>,
+    }
+
+    impl RelevantFileCompleter {
+        fn format_file_with_issues(&self, relative_path: &str) -> String {
+            if let Some(issue_numbers) = self.file_to_issues.get(relative_path) {
+                if issue_numbers.len() <= 3 {
+                    let issues_str = issue_numbers
+                        .iter()
+                        .map(|n| format!("#{}", n))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{} [{}]", relative_path, issues_str)
+                } else {
+                    let first_three = issue_numbers[..3]
+                        .iter()
+                        .map(|n| format!("#{}", n))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "{} [{} +{} more]",
+                        relative_path,
+                        first_three,
+                        issue_numbers.len() - 3
+                    )
+                }
+            } else {
+                relative_path.to_string()
+            }
+        }
+    }
+
+    impl Autocomplete for RelevantFileCompleter {
+        fn get_suggestions(
+            &mut self,
+            input: &str,
+        ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let mut suggestions = Vec::new();
+
+            let (base_path, search_term) = if input.contains('/') {
+                let mut parts = input.rsplitn(2, '/');
+                let filename = parts.next().unwrap_or("");
+                let dir_path = parts.next().unwrap_or("");
+                (self.current_dir.join(dir_path), filename)
+            } else {
+                (self.current_dir.clone(), input)
+            };
+
+            if let Ok(entries) = fs::read_dir(&base_path) {
+                let mut files = Vec::new();
+                let mut dirs = Vec::new();
+
+                for entry in entries.flatten() {
+                    if let Ok(name) = entry.file_name().into_string() {
+                        // Skip hidden files/directories
+                        if name.starts_with('.') {
+                            continue;
+                        }
+
+                        if name.to_lowercase().starts_with(&search_term.to_lowercase()) {
+                            let relative_path = if input.contains('/') {
+                                let dir_part = input.rsplitn(2, '/').nth(1).unwrap_or("");
+                                format!("{}/{}", dir_part, name)
+                            } else {
+                                name.clone()
+                            };
+
+                            if entry.path().is_file() {
+                                // Format file with issue indicators
+                                files.push(self.format_file_with_issues(&relative_path));
+                            } else if entry.path().is_dir() {
+                                // Add trailing slash to indicate directory
+                                dirs.push(format!("{}/", relative_path));
+                            }
+                        }
+                    }
+                }
+
+                // Sort directories and files separately, then combine
+                dirs.sort();
+                files.sort();
+                suggestions.extend(dirs);
+                suggestions.extend(files);
+            }
+
+            Ok(suggestions)
+        }
+
+        fn get_completion(
+            &mut self,
+            _input: &str,
+            highlighted_suggestion: Option<String>,
+        ) -> std::result::Result<inquire::autocompletion::Replacement, CustomUserError> {
+            Ok(match highlighted_suggestion {
+                Some(suggestion) => {
+                    // Strip issue indicators from completion
+                    // Format is "path [#1, #2]" or "path [#1, #2 +N more]"
+                    let clean_path = if let Some(bracket_pos) = suggestion.find(" [") {
+                        suggestion[..bracket_pos].to_string()
+                    } else {
+                        suggestion
+                    };
+                    inquire::autocompletion::Replacement::Some(clean_path)
+                }
+                None => inquire::autocompletion::Replacement::None,
+            })
+        }
+    }
+
+    let file_completer = RelevantFileCompleter {
+        current_dir: current_dir.clone(),
+        file_to_issues,
+    };
+
+    let validator_dir = current_dir.clone();
+    let file_path = Text::new("📁 Select a relevant file:")
+        .with_autocomplete(file_completer)
+        .with_validator(move |input: &str| {
+            // Strip issue indicators if present
+            let trimmed = if let Some(bracket_pos) = input.find(" [") {
+                input[..bracket_pos].trim()
+            } else {
+                input.trim()
+            };
+
+            if trimmed.is_empty() {
+                Ok(Validation::Invalid("File path cannot be empty".into()))
+            } else if trimmed.ends_with('/') {
+                Ok(Validation::Invalid(
+                    "Cannot select a directory. Please select a file.".into(),
+                ))
+            } else {
+                let path = validator_dir.join(trimmed);
+                if path.exists() && path.is_dir() {
+                    Ok(Validation::Invalid(
+                        "Path must be a file, not a directory".into(),
+                    ))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            }
+        })
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+    // Strip issue indicators if present and return clean path
+    let clean_path = if let Some(bracket_pos) = file_path.find(" [") {
+        file_path[..bracket_pos].trim().to_string()
+    } else {
+        file_path.trim().to_string()
+    };
+
+    Ok(PathBuf::from(clean_path))
+}
+
+/// Select issue or File option for a given file path
+/// Returns Some(issue) if issue selected, None if File selected
+pub fn prompt_relevant_file_source<'a>(
+    file_path: &PathBuf,
+    matching_issues: &'a [&Issue],
+    current_milestone_number: u64,
+) -> Result<Option<&'a Issue>> {
+    // Sort issues: current milestone first, then by issue number descending
+    let mut sorted_issues: Vec<&Issue> = matching_issues.to_vec();
+    sorted_issues.sort_by(|a, b| {
+        let a_is_current = a
+            .milestone
+            .as_ref()
+            .map(|m| m.number == current_milestone_number as i64)
+            .unwrap_or(false);
+        let b_is_current = b
+            .milestone
+            .as_ref()
+            .map(|m| m.number == current_milestone_number as i64)
+            .unwrap_or(false);
+
+        match (a_is_current, b_is_current) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => b.number.cmp(&a.number), // Descending by issue number
+        }
+    });
+
+    // Build options list - File option first, then issues
+    let mut options: Vec<String> = vec!["📄 File (not linked to an issue)".to_string()];
+
+    let issue_options: Vec<String> = sorted_issues
+        .iter()
+        .map(|issue| {
+            let milestone_name = issue
+                .milestone
+                .as_ref()
+                .map(|m| m.title.clone())
+                .unwrap_or_else(|| "No milestone".to_string());
+            format!("🔗 #{} ({})", issue.number, milestone_name)
+        })
+        .collect();
+    options.extend(issue_options);
+
+    let selection = Select::new(
+        &format!("Select the source for '{}':", file_path.display()),
+        options,
+    )
+    .prompt()
+    .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    // Check if user selected File option
+    if selection.starts_with("📄 ") {
+        return Ok(None);
+    }
+
+    // Extract issue number from selection (format: "🔗 #123 (Milestone Name)")
+    let issue_number_str = selection
+        .trim_start_matches("🔗 ")
+        .trim_start_matches('#')
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+
+    if let Ok(issue_number) = issue_number_str.parse::<u64>() {
+        if let Some(issue) = sorted_issues.iter().find(|i| i.number == issue_number) {
+            return Ok(Some(*issue));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Select relevant file class type (GatingQC, PreviousQC, RelevantQC)
+pub fn prompt_relevant_file_class() -> Result<RelevantFileClassType> {
+    let options = vec![
+        "🚦 Gating QC - This issue must be approved before the current issue".to_string(),
+        "📜 Previous QC - A previous version of the QC for this file".to_string(),
+        "🔗 Relevant QC - Related QC that provides context".to_string(),
+    ];
+
+    let selection = Select::new("Select the relationship type:", options)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
+
+    if selection.starts_with("🚦") {
+        Ok(RelevantFileClassType::GatingQC)
+    } else if selection.starts_with("📜") {
+        Ok(RelevantFileClassType::PreviousQC)
+    } else {
+        Ok(RelevantFileClassType::RelevantQC)
+    }
+}
+
+/// Prompt for description (optional for issues, required for files)
+pub fn prompt_relevant_description(required: bool) -> Result<Option<String>> {
+    let prompt_text = if required {
+        "📝 Provide a justification for this file:"
+    } else {
+        "📝 Add a description? (optional, press Enter to skip):"
+    };
+
+    if required {
+        let input = Text::new(prompt_text)
+            .with_validator(|input: &str| {
+                if input.trim().is_empty() {
+                    Ok(Validation::Invalid("Justification cannot be empty".into()))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        Ok(Some(input.trim().to_string()))
+    } else {
+        let input = Text::new(prompt_text)
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(trimmed.to_string()))
+        }
+    }
+}
+
+/// Asks if user wants to add another relevant file
+pub fn prompt_add_another_relevant_file() -> Result<bool> {
+    Confirm::new("Add another relevant file?")
+        .with_default(false)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prompt_checklist() {
+        use crate::configuration::Checklist;
+
+        let mut config = Configuration::default();
+        config.checklists.insert(
+            "Test Checklist".to_string(),
+            Checklist::new(
+                "Test Checklist".to_string(),
+                None,
+                "- [ ] Test item".to_string(),
+            ),
+        );
+        config.checklists.insert(
+            "Another Checklist".to_string(),
+            Checklist::new(
+                "Another Checklist".to_string(),
+                None,
+                "- [ ] Another item".to_string(),
+            ),
+        );
+
+        // This test just verifies the function doesn't panic with valid configuration
+        // Actual interactive testing would require manual verification
+        assert!(config.checklists.len() == 3); // Including the default "Custom" checklist
+    }
 }

@@ -24,10 +24,15 @@ use mockall::automock;
 pub trait GitHubReader {
     fn get_milestones(&self)
     -> impl Future<Output = Result<Vec<Milestone>, GitHubApiError>> + Send;
-    fn get_milestone_issues(
+    fn get_issues(
         &self,
-        milestone: &Milestone,
+        milestone: Option<u64>,
     ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
+    /// Fetch a single issue by its number
+    fn get_issue(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Issue, GitHubApiError>> + Send;
     fn get_assignees(&self) -> impl Future<Output = Result<Vec<String>, GitHubApiError>> + Send;
     fn get_user_details(
         &self,
@@ -42,6 +47,19 @@ pub trait GitHubReader {
         &self,
         issue: &Issue,
     ) -> impl Future<Output = Result<Vec<serde_json::Value>, GitHubApiError>> + Send;
+
+    /// Get issues that are blocked by the given issue
+    ///
+    /// Uses GitHub's issue dependencies API. This API may not be available on all
+    /// GitHub deployments (especially GHE instances).
+    ///
+    /// Returns:
+    /// - `Ok(issues)` - List of issues blocked by this issue
+    /// - `Err(GitHubApiError)` - API not available or other error
+    fn get_blocked_issues(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
 }
 
 impl GitHubReader for GitInfo {
@@ -70,43 +88,92 @@ impl GitHubReader for GitInfo {
         }
     }
 
-    fn get_milestone_issues(
+    fn get_issues(
         &self,
-        milestone: &Milestone,
-    ) -> impl std::future::Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
+        milestone: Option<u64>,
+    ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        let milestone_id = milestone.number as u64;
         let base_url = self.base_url.clone();
         let auth_token = self.auth_token.clone();
 
         async move {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
-            log::debug!(
-                "Fetching issues for milestone {} in {}/{}",
-                milestone_id,
-                owner,
-                repo
-            );
-            let issues = octocrab
+
+            if let Some(id) = milestone {
+                log::debug!("Fetching issues for milestone {} in {}/{}", id, owner, repo);
+            } else {
+                log::debug!("Fetching issues for {}/{}", owner, repo);
+            }
+
+            let mut all_issues = Vec::new();
+            let mut page = 1u32;
+            let labels = vec!["ghqc".to_string()];
+            let issues_handler = octocrab.issues(&owner, &repo);
+
+            loop {
+                let mut builder = issues_handler
+                    .list()
+                    .state(octocrab::params::State::All)
+                    .labels(&labels)
+                    .per_page(100)
+                    .page(page);
+
+                if let Some(id) = milestone {
+                    builder = builder.milestone(id);
+                }
+
+                let issues = builder.send().await.map_err(GitHubApiError::APIError)?;
+
+                if issues.items.is_empty() {
+                    break;
+                }
+
+                log::debug!("Fetched {} issues on page {}", issues.items.len(), page);
+                all_issues.extend(issues.items);
+                page += 1;
+
+                if page > 100 {
+                    log::warn!("Reached maximum page limit (100) for issues");
+                    break;
+                }
+            }
+
+            log::debug!("Successfully fetched {} total issues", all_issues.len());
+
+            Ok(all_issues)
+        }
+    }
+
+    fn get_issue(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Issue, GitHubApiError>> + Send {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
+
+        async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
+
+            log::debug!("Fetching issue #{} for {}/{}", issue_number, owner, repo);
+
+            let issue = octocrab
                 .issues(&owner, &repo)
-                .list()
-                .milestone(milestone_id)
-                .state(octocrab::params::State::All)
-                .labels(&[String::from("ghqc")])
-                .send()
+                .get(issue_number)
                 .await
-                .map(|issues| issues.items)
                 .map_err(GitHubApiError::APIError)?;
 
             log::debug!(
-                "Successfully fetched {} issues for milestone {}",
-                issues.len(),
-                milestone_id
+                "Successfully fetched issue #{} (id: {:?})",
+                issue_number,
+                issue.id
             );
 
-            Ok(issues)
+            Ok(issue)
         }
     }
 
@@ -436,6 +503,97 @@ impl GitHubReader for GitInfo {
             );
 
             Ok(all_events)
+        }
+    }
+
+    fn get_blocked_issues(
+        &self,
+        issue_number: u64,
+    ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
+
+        async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
+
+            log::debug!(
+                "Fetching blocked issues for issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
+            );
+
+            // Use the dependencies/blocking API endpoint
+            // This returns issues that are blocked by (depend on) the given issue
+            // Note: This API may not be available on all GitHub deployments (especially GHE)
+            let per_page = 100;
+            let mut page = 1u32;
+            let mut all_blocked_issues: Vec<Issue> = Vec::new();
+
+            loop {
+                let url = format!(
+                    "/repos/{}/{}/issues/{}/dependencies/blocking?per_page={}&page={}",
+                    &owner, &repo, issue_number, per_page, page
+                );
+
+                let response: Result<Vec<Issue>, _> = octocrab.get(&url, None::<&()>).await;
+
+                match response {
+                    Ok(issues) => {
+                        if issues.is_empty() {
+                            break; // No more pages
+                        }
+
+                        log::debug!(
+                            "Fetched {} blocked issues on page {} for issue #{}",
+                            issues.len(),
+                            page,
+                            issue_number
+                        );
+                        all_blocked_issues.extend(issues);
+                        page += 1;
+
+                        // Safety check to prevent infinite loops
+                        if page > 100 {
+                            log::warn!(
+                                "Reached maximum page limit (100) for blocked issues of #{}",
+                                issue_number
+                            );
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        // If this is the first page, propagate the error
+                        // (likely API not available)
+                        if page == 1 {
+                            log::debug!(
+                                "Failed to fetch blocked issues for #{}: {} (API may not be available)",
+                                issue_number,
+                                e
+                            );
+                            return Err(GitHubApiError::APIError(e));
+                        }
+                        // If we already have some results, log warning and return what we have
+                        log::warn!(
+                            "Error fetching page {} of blocked issues for #{}: {}",
+                            page,
+                            issue_number,
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
+
+            log::debug!(
+                "Found {} total issues blocked by issue #{}",
+                all_blocked_issues.len(),
+                issue_number
+            );
+            Ok(all_blocked_issues)
         }
     }
 }

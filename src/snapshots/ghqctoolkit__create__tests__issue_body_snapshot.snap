@@ -1,5 +1,5 @@
 ---
-source: src/issues.rs
+source: src/create.rs
 expression: body
 ---
 ## Metadata
@@ -8,6 +8,20 @@ expression: body
 * author: John Doe (john@example.com)
 * collaborators: Jane Smith (jane@example.com)
 * [file contents at initial qc commit](https://github.com/owner/repo/blob/abc123d/src/example.rs)
+
+## Relevant Files
+
+### Previous QC
+- [previous.R](https://github.com/owner/repo/issues/1) - This file has been previously QCed
+
+### Gating QC
+- [gating.R](https://github.com/owner/repo/issues/2) - This file gates the approval of this QC
+
+### Relevant QC
+- [related.R](https://github.com/owner/repo/issues/3)
+
+### Relevant File
+- **file.R** - A required justification
 
 # Code Review Checklist
 

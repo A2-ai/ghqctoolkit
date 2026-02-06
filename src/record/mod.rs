@@ -179,7 +179,7 @@ pub async fn fetch_milestone_issues(
 
     for milestone in milestones {
         let issues = git_info
-            .get_milestone_issues(milestone)
+            .get_issues(Some(milestone.number as u64))
             .await
             .map_err(RecordError::GitHubApi)?;
         if issues.is_empty() {

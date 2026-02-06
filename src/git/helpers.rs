@@ -58,6 +58,7 @@ pub trait GitHelpers {
         current_commit: &ObjectId,
         previous_commit: &ObjectId,
     ) -> String;
+    fn issue_url(&self, issue_number: u64) -> String;
 }
 
 use crate::git::GitInfo;
@@ -79,6 +80,13 @@ impl GitHelpers for GitInfo {
         format!(
             "{}/{}/{}/compare/{}..{}",
             self.base_url, self.owner, self.repo, previous_commit, current_commit,
+        )
+    }
+
+    fn issue_url(&self, issue_number: u64) -> String {
+        format!(
+            "{}/{}/{}/issues/{issue_number}",
+            self.base_url, self.owner, self.repo
         )
     }
 }

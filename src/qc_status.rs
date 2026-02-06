@@ -2,9 +2,15 @@ use gix::ObjectId;
 use octocrab::models::issues::Issue;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use crate::issue::{IssueError, IssueThread};
+use crate::cache::DiskCache;
+use crate::git::{GitHubApiError, GitHubReader};
+use crate::issue::{BlockingQC, IssueError, IssueThread};
+use crate::{GitCommitAnalysis, GitFileOps};
 
 static CHECKLIST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^\s*-\s*\[([xX\s])\]").expect("Failed to compile checklist regex")
@@ -91,6 +97,27 @@ impl QCStatus {
             }
         };
 
+        Ok(status)
+    }
+
+    /// Returns true if this status represents an approved issue
+    /// (either pure Approved or ChangesAfterApproval)
+    pub fn is_approved(&self) -> bool {
+        matches!(self, QCStatus::Approved | QCStatus::ChangesAfterApproval(_))
+    }
+
+    pub async fn from_blocking_qc(
+        blocking_qc: &BlockingQC,
+        cache: Option<&DiskCache>,
+        git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
+    ) -> Result<Self, QCStatusError> {
+        // Fetch the issue
+        let issue = git_info.get_issue(blocking_qc.issue_number).await?;
+
+        // Get comments and build IssueThread - but we only need approval status
+        // which can be determined from the comments directly
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
+        let status = QCStatus::determine_status(&issue_thread)?;
         Ok(status)
     }
 }
@@ -281,16 +308,168 @@ fn analyze_checklist_in_text(text: &str) -> ChecklistSummary {
     ChecklistSummary::new(completed, total)
 }
 
+/// Status of blocking QC issues for a given issue
+///
+/// Contains three HashMaps categorizing blocking QCs by their status:
+/// - `approved`: Issue numbers and file names of approved blocking QCs
+/// - `not_approved`: Issue numbers, file names, and status descriptions of unapproved blocking QCs
+/// - `errors`: Issue numbers and errors encountered while fetching status
+#[derive(Debug, Clone, Default)]
+pub struct BlockingQCStatus {
+    /// Blocking QC issues that are approved
+    pub approved: HashMap<u64, PathBuf>,
+    /// Blocking QC issues that are not approved (issue_number -> (file_name, status_description))
+    pub not_approved: HashMap<u64, (PathBuf, QCStatus)>,
+    /// Blocking QC issues where status could not be determined
+    pub errors: HashMap<u64, String>,
+}
+
+impl BlockingQCStatus {
+    /// Check if all blocking QCs are approved
+    pub fn all_approved(&self) -> bool {
+        self.not_approved.is_empty() && self.errors.is_empty()
+    }
+
+    /// Check if there are any errors
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    /// Total number of blocking QCs
+    pub fn total(&self) -> usize {
+        self.approved.len() + self.not_approved.len() + self.errors.len()
+    }
+
+    /// Number of approved blocking QCs
+    pub fn approved_count(&self) -> usize {
+        self.approved.len()
+    }
+
+    /// Number of errors
+    pub fn error_count(&self) -> usize {
+        self.errors.len()
+    }
+
+    /// Format as a summary string for milestone status table
+    /// Returns "-" if no blocking QCs, otherwise "approved/total (percent%)" with optional error suffix
+    pub fn as_summary_string(&self) -> String {
+        let total = self.total();
+        if total == 0 {
+            return "-".to_string();
+        }
+
+        let approved = self.approved_count();
+        let percent = (approved as f64 / total as f64) * 100.0;
+        let error_suffix = if self.has_errors() {
+            format!(" (+{} err)", self.error_count())
+        } else {
+            String::new()
+        };
+
+        format!("{}/{} ({:.1}%){}", approved, total, percent, error_suffix)
+    }
+}
+
+impl fmt::Display for BlockingQCStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.total() == 0 {
+            return write!(f, "No blocking QCs");
+        }
+
+        writeln!(f, "Blocking QCs:")?;
+
+        for (issue_num, file_name) in &self.approved {
+            writeln!(
+                f,
+                "  ✅ #{} - {} (Approved)",
+                issue_num,
+                file_name.display()
+            )?;
+        }
+
+        for (issue_num, (file_name, status)) in &self.not_approved {
+            writeln!(
+                f,
+                "  ❌ #{} - {} ({})",
+                issue_num,
+                file_name.display(),
+                status
+            )?;
+        }
+
+        for (issue_num, error) in &self.errors {
+            writeln!(f, "  ⚠️ #{} - Error: {}", issue_num, error)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Get the approval status for a list of blocking QCs.
+///
+/// This function works directly with a slice of `BlockingQC` without requiring an `IssueThread`,
+/// which allows it to be used when IssueThread construction might fail (e.g., missing metadata).
+pub async fn get_blocking_qc_status(
+    blocking_qcs: &[BlockingQC],
+    git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
+    cache: Option<&DiskCache>,
+) -> BlockingQCStatus {
+    let mut status = BlockingQCStatus::default();
+
+    if blocking_qcs.is_empty() {
+        return status;
+    }
+
+    let blocking_qc_futures = blocking_qcs
+        .iter()
+        .map(|qc| async move {
+            log::debug!(
+                "Getting status for #{} - {}",
+                qc.issue_number,
+                qc.file_name.display()
+            );
+            QCStatus::from_blocking_qc(qc, cache, git_info).await
+        })
+        .collect::<Vec<_>>();
+    let results = futures::future::join_all(blocking_qc_futures).await;
+
+    for (result, blocking_qc) in results.into_iter().zip(blocking_qcs) {
+        match result {
+            Ok(s) => {
+                if s.is_approved() {
+                    status
+                        .approved
+                        .insert(blocking_qc.issue_number, blocking_qc.file_name.clone());
+                } else {
+                    status
+                        .not_approved
+                        .insert(blocking_qc.issue_number, (blocking_qc.file_name.clone(), s));
+                }
+            }
+            Err(e) => {
+                status
+                    .errors
+                    .insert(blocking_qc.issue_number, e.to_string());
+            }
+        }
+    }
+
+    status
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum QCStatusError {
     #[error("Failed to determine commits for issue due to: {0}")]
     IssueError(#[from] IssueError),
+    #[error(transparent)]
+    ApiError(#[from] GitHubApiError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use octocrab::models::issues::Issue;
+    use std::str::FromStr;
 
     #[test]
     fn test_analyze_complex_issue_checklist() {
@@ -448,6 +627,7 @@ mod tests {
                 open: issue_open,
                 commits,
                 milestone: "milestone".to_string(),
+                blocking_qcs: vec![],
             };
 
             let status = QCStatus::determine_status(&issue_thread).unwrap();
@@ -467,5 +647,101 @@ mod tests {
                 scenario, expected_status, actual_status
             );
         }
+    }
+
+    // Tests for BlockingQCStatus
+
+    #[test]
+    fn test_blocking_qc_status_all_approved() {
+        let mut status = BlockingQCStatus::default();
+        status.approved.insert(1, PathBuf::from("file1.R"));
+        status.approved.insert(2, PathBuf::from("file2.R"));
+
+        assert!(status.all_approved());
+        assert!(!status.has_errors());
+        assert_eq!(status.total(), 2);
+        assert_eq!(status.approved_count(), 2);
+        assert_eq!(status.as_summary_string(), "2/2 (100.0%)");
+    }
+
+    #[test]
+    fn test_blocking_qc_status_mixed() {
+        let mut status = BlockingQCStatus::default();
+        status.approved.insert(1, PathBuf::from("approved.R"));
+        status
+            .not_approved
+            .insert(2, (PathBuf::from("pending.R"), QCStatus::AwaitingReview));
+
+        assert!(!status.all_approved());
+        assert!(!status.has_errors());
+        assert_eq!(status.total(), 2);
+        assert_eq!(status.approved_count(), 1);
+        assert_eq!(status.as_summary_string(), "1/2 (50.0%)");
+    }
+
+    #[test]
+    fn test_blocking_qc_status_with_errors() {
+        let mut status = BlockingQCStatus::default();
+        status.approved.insert(1, PathBuf::from("file1.R"));
+        status
+            .not_approved
+            .insert(2, (PathBuf::from("file2.R"), QCStatus::InProgress));
+        status.errors.insert(3, "404 Not Found".to_string());
+
+        assert!(!status.all_approved());
+        assert!(status.has_errors());
+        assert_eq!(status.total(), 3);
+        assert_eq!(status.approved_count(), 1);
+        assert_eq!(status.error_count(), 1);
+        assert_eq!(status.as_summary_string(), "1/3 (33.3%) (+1 err)");
+    }
+
+    #[test]
+    fn test_blocking_qc_status_empty() {
+        let status = BlockingQCStatus::default();
+        assert!(status.all_approved()); // No blocking QCs means all are approved
+        assert!(!status.has_errors());
+        assert_eq!(status.total(), 0);
+        assert_eq!(status.as_summary_string(), "-");
+    }
+
+    #[test]
+    fn test_blocking_qc_status_display() {
+        let mut status = BlockingQCStatus::default();
+        status.approved.insert(1, PathBuf::from("approved.R"));
+        status
+            .not_approved
+            .insert(2, (PathBuf::from("pending.R"), QCStatus::AwaitingReview));
+        status.errors.insert(3, "API error".to_string());
+
+        let display = format!("{}", status);
+        assert!(display.contains("Blocking QCs:"));
+        assert!(display.contains("#1"));
+        assert!(display.contains("approved.R"));
+        assert!(display.contains("#2"));
+        assert!(display.contains("pending.R"));
+        assert!(display.contains("#3"));
+        assert!(display.contains("API error"));
+    }
+
+    #[test]
+    fn test_qc_status_is_approved() {
+        assert!(QCStatus::Approved.is_approved());
+        assert!(
+            QCStatus::ChangesAfterApproval(
+                ObjectId::from_str("0000000000000000000000000000000000000001").unwrap()
+            )
+            .is_approved()
+        );
+        assert!(!QCStatus::AwaitingReview.is_approved());
+        assert!(!QCStatus::InProgress.is_approved());
+        assert!(!QCStatus::ApprovalRequired.is_approved());
+        assert!(!QCStatus::ChangeRequested.is_approved());
+        assert!(
+            !QCStatus::ChangesToComment(
+                ObjectId::from_str("0000000000000000000000000000000000000001").unwrap()
+            )
+            .is_approved()
+        );
     }
 }
