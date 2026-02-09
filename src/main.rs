@@ -536,6 +536,7 @@ async fn main() -> Result<()> {
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
                             let git_status = git_info.status()?;
+                            let dirty_files = git_info.dirty()?;
                             let qc_status = QCStatus::determine_status(&issue_thread)?;
                             let file_commits = issue_thread.file_commits();
                             let blocking_qc_status = get_blocking_qc_status(
@@ -550,6 +551,7 @@ async fn main() -> Result<()> {
                                     &issue_thread,
                                     &git_status,
                                     &qc_status,
+                                    &dirty_files,
                                     &file_commits,
                                     &checklist_summaries,
                                     &blocking_qc_status

@@ -479,11 +479,26 @@ pub fn configuration_status(
 
     let git_str = if let Some(git_info) = git_info {
         format!(
-            "\n📦 git repository: {}/{}{}",
+            "\n📦 git repository: {}/{}{}{}",
             git_info.owner(),
             git_info.repo(),
             if let Ok(status) = git_info.status() {
-                format!("\n{}", status.to_string())
+                format!("\n{}", status)
+            } else {
+                String::new()
+            },
+            if let Ok(dirty_files) = git_info.dirty()
+                && !dirty_files.is_empty()
+            {
+                format!(
+                    "\n⚠️ {} files with uncommitted changes:\n  - {}",
+                    dirty_files.len(),
+                    dirty_files
+                        .iter()
+                        .map(|p| format!("{}", p.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n  - ")
+                )
             } else {
                 String::new()
             }
@@ -761,6 +776,7 @@ Second Checklist:
             owner: String,
             repo: String,
             status: crate::git::GitStatus,
+            dirty_files: Vec<PathBuf>,
         }
 
         impl crate::git::GitRepository for MockGitInfo {
@@ -785,6 +801,9 @@ Second Checklist:
             fn status(&self) -> Result<crate::git::GitStatus, crate::git::GitStatusError> {
                 Ok(self.status.clone())
             }
+            fn dirty(&self) -> Result<Vec<PathBuf>, crate::GitStatusError> {
+                Ok(self.dirty_files.clone())
+            }
         }
 
         // Load the custom configuration
@@ -797,6 +816,7 @@ Second Checklist:
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
             status: crate::git::GitStatus::Clean,
+            dirty_files: Vec::new(),
         };
 
         let result_with_git = configuration_status(&configuration, &Some(git_info));
@@ -810,10 +830,8 @@ Second Checklist:
         let git_info_dirty = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::GitStatus::Dirty(vec![
-                PathBuf::from("src/main.rs"),
-                PathBuf::from("README.md"),
-            ]),
+            status: crate::git::GitStatus::Clean,
+            dirty_files: vec![PathBuf::from("src/main.rs"), PathBuf::from("README.md")],
         };
 
         let result_dirty = configuration_status(&configuration, &Some(git_info_dirty));

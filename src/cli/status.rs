@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Result, bail};
 use gix::ObjectId;
 use octocrab::models::Milestone;
@@ -40,6 +42,7 @@ pub async fn interactive_status(
 
     // Get git status for the file
     let git_status = git_info.status()?;
+    let dirty_files = git_info.dirty()?;
 
     // Determine QC status
     let qc_status = QCStatus::determine_status(&issue_thread)?;
@@ -53,6 +56,7 @@ pub async fn interactive_status(
             &issue_thread,
             &git_status,
             &qc_status,
+            &dirty_files,
             &file_commits,
             &checklist_summary,
             &blocking_qc_status,
@@ -66,6 +70,7 @@ pub fn single_issue_status(
     issue_thread: &IssueThread,
     git_status: &GitStatus,
     qc_status: &QCStatus,
+    dirty_files: &[PathBuf],
     file_commits: &[&ObjectId],
     checklist_summaries: &[(String, ChecklistSummary)],
     blocking_qc_status: &BlockingQCStatus,
@@ -93,33 +98,35 @@ pub fn single_issue_status(
             commit.to_string()[..7].to_string()
         ),
     };
+    let is_dirty = dirty_files.contains(&issue_thread.file);
+
     let git_str = match git_status {
         GitStatus::Clean => {
             log::debug!("Repository git status: clean");
-            "File is up to date!".to_string()
-        }
-        GitStatus::Dirty(files) => {
-            log::debug!("Repository git status: dirty");
-            if files.contains(&issue_thread.file) {
-                "File has local, uncommitted changes".to_string()
+            if is_dirty {
+                "File has local, uncommitted changes"
             } else {
-                "File is up to date!".to_string()
+                "File is up to date!"
             }
         }
         GitStatus::Ahead(commits) => {
             log::debug!("Repository git status: ahead");
-            if file_commits.iter().any(|c| commits.contains(c)) {
-                "File has local, committed changes".to_string()
-            } else {
-                "File is up to date!".to_string()
+            match (file_commits.iter().any(|c| commits.contains(c)), is_dirty) {
+                (true, true) => "File has local, committed changes and uncommitted changes",
+                (true, false) => "File has local, committed changes",
+                (false, true) => "File has uncommitted changes",
+                (false, false) => "File is up to date!",
             }
         }
         GitStatus::Behind(commits) => {
             log::debug!("Repository git status: behind");
-            if file_commits.iter().any(|c| commits.contains(c)) {
-                "File has remote changes that have not been pulled locally".to_string()
-            } else {
-                "File is up to date!".to_string()
+            match (file_commits.iter().any(|c| commits.contains(c)), is_dirty) {
+                (true, true) => {
+                    "File has remote changes that have not been pulled locally and uncommitted changes. Stash the changes and pull"
+                }
+                (true, false) => "File has remote changes that have not been pulled locally",
+                (false, true) => "File has uncommitted changes",
+                (false, false) => "File is up to date!",
             }
         }
         GitStatus::Diverged { ahead, behind } => {
@@ -127,16 +134,21 @@ pub fn single_issue_status(
             let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
             let is_behind = file_commits.iter().any(|c| behind.contains(c));
 
-            match (is_ahead, is_behind) {
-                (true, true) => {
+            match (is_ahead, is_behind, is_dirty) {
+                (true, true, true) => {
+                    "File has diverged and has local, committed and uncommitted changes and remote, unpulled changes"
+                }
+                (true, true, false) => {
                     "File has diverged and has local, committed and remote, unpulled changes"
-                        .to_string()
                 }
-                (true, false) => "File has local, committed changes".to_string(),
-                (false, true) => {
-                    "File has remote changes that have not been pulled locally".to_string()
+                (true, false, true) => "File has local, committed changes and uncommitted changes",
+                (true, false, false) => "File has local, committed changes",
+                (false, true, true) => {
+                    "File has remote changes that have not been pulled locally and uncommitted changes. Stash the changes and pull"
                 }
-                (false, false) => "File is up to date!".to_string(),
+                (false, true, false) => "File has remote changes that have not been pulled locally",
+                (false, false, true) => "File has uncommitted changes",
+                (false, false, false) => "File is up to date!",
             }
         }
     };
@@ -275,12 +287,18 @@ async fn get_milestone_status_rows(
 
                 // Get git status
                 let git_status = git_info.status().unwrap_or(GitStatus::Clean);
+                let dirty_files = git_info.dirty().unwrap_or_default();
 
                 // Determine QC status
                 if let Ok(qc_status) = QCStatus::determine_status(&issue_thread) {
                     let checklist_summaries = analyze_issue_checklists(&issue);
                     let checklist_summary =
                         ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
+
+                    let mut git_status_str = git_status.format_for_file(&file_commits);
+                    if dirty_files.contains(&issue_thread.file) {
+                        git_status_str.push_str(" (file has uncommitted local changes)");
+                    }
 
                     let row = MilestoneStatusRow {
                         file: issue_thread.file.display().to_string(),
@@ -292,7 +310,7 @@ async fn get_milestone_status_rows(
                             "closed".to_string()
                         },
                         qc_status: qc_status.to_string(),
-                        git_status: git_status.format_for_file(&issue_thread.file, &file_commits),
+                        git_status: git_status_str,
                         checklist_summary,
                         blocking_qc_status: get_blocking_qc_status(
                             &issue_thread.blocking_qcs,

@@ -1,17 +1,12 @@
-use std::{
-    fmt,
-    path::{Path, PathBuf},
-};
+use std::{fmt, path::PathBuf};
 
+use crate::GitInfo;
 use gix::ObjectId;
 #[cfg(test)]
 use mockall::automock;
 
-use crate::GitInfo;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum GitStatus {
-    Dirty(Vec<PathBuf>),   // local, uncommitted changes - list of dirty files
     Clean,                 // up to date with remote
     Behind(Vec<ObjectId>), // remote commits not local - count of commits behind
     Ahead(Vec<ObjectId>),  // local commits not remote - count of commits ahead
@@ -24,15 +19,6 @@ pub enum GitStatus {
 impl fmt::Display for GitStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Dirty(files) => write!(
-                f,
-                "Repository has files with uncommitted, local changes: \n\t- {}",
-                files
-                    .iter()
-                    .map(|x| x.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join("\n\t- ")
-            ),
             Self::Clean => write!(f, "Repository is up to date!"),
             Self::Behind(commits) => write!(f, "Repository is behind by {} commits", commits.len()),
             Self::Ahead(commits) => write!(f, "Repository is ahead by {} commits", commits.len()),
@@ -48,20 +34,9 @@ impl fmt::Display for GitStatus {
 
 impl GitStatus {
     /// Format git status for a specific file and issue thread
-    pub fn format_for_file(
-        &self,
-        issue_file: impl AsRef<Path>,
-        file_commits: &[&ObjectId],
-    ) -> String {
+    pub fn format_for_file(&self, file_commits: &[&ObjectId]) -> String {
         match self {
             GitStatus::Clean => "Up to date".to_string(),
-            GitStatus::Dirty(files) => {
-                if files.contains(&issue_file.as_ref().to_path_buf()) {
-                    "Local changes".to_string()
-                } else {
-                    "Up to date".to_string()
-                }
-            }
             GitStatus::Ahead(commits) => {
                 if file_commits.iter().any(|c| commits.contains(c)) {
                     "Local commits".to_string()
@@ -117,31 +92,13 @@ pub enum GitStatusError {
 pub trait GitStatusOps {
     /// Get overall repository status
     fn status(&self) -> Result<GitStatus, GitStatusError>;
+    fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError>;
 }
 
 impl GitStatusOps for GitInfo {
     fn status(&self) -> Result<GitStatus, GitStatusError> {
         log::debug!("Getting git repository status");
         let repo = self.repository()?;
-
-        // Check for uncommitted changes (dirty working tree)
-        let status_platform = repo
-            .status(gix::progress::Discard)
-            .map_err(GitStatusError::StatusError)?;
-
-        let mut dirty_files = Vec::new();
-        for entry in status_platform
-            .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
-            .map_err(GitStatusError::StatusIterError)?
-        {
-            let entry = entry.map_err(GitStatusError::StatusEntryError)?;
-            dirty_files.push(PathBuf::from(entry.rela_path().to_string()));
-        }
-
-        if !dirty_files.is_empty() {
-            log::debug!("Repository has {} uncommitted changes", dirty_files.len());
-            return Ok(GitStatus::Dirty(dirty_files));
-        }
 
         // Get current branch and its upstream tracking branch
         let head = repo.head().map_err(GitStatusError::HeadError)?;
@@ -254,5 +211,26 @@ impl GitStatusOps for GitInfo {
                 Ok(GitStatus::Clean)
             }
         }
+    }
+
+    fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError> {
+        let repo = self.repository()?;
+
+        // Check for uncommitted changes (dirty working tree)
+        let status_platform = repo
+            .status(gix::progress::Discard)
+            .map_err(GitStatusError::StatusError)?;
+
+        let mut dirty_files = Vec::new();
+        for entry in status_platform
+            .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
+            .map_err(GitStatusError::StatusIterError)?
+        {
+            let entry = entry.map_err(GitStatusError::StatusEntryError)?;
+            dirty_files.push(PathBuf::from(entry.rela_path().to_string()));
+        }
+
+        log::debug!("Repository has {} uncommitted changes", dirty_files.len());
+        Ok(dirty_files)
     }
 }

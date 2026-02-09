@@ -205,6 +205,7 @@ pub async fn get_milestone_issue_information(
     let staging_dir = staging_dir.as_ref();
     let repo_users = get_repo_users(cache, git_info).await?;
     let git_status = git_info.status()?;
+    let dirty_files = git_info.dirty()?;
 
     let mut res = HashMap::new();
     for (milestone_name, issues) in milestone_issues {
@@ -214,12 +215,14 @@ pub async fn get_milestone_issue_information(
             .map(|issue| {
                 let repo_users_clone = repo_users.clone();
                 let git_status_clone = git_status.clone();
+                let dirty_files_clone = dirty_files.clone();
                 async move {
                     create_issue_information(
                         issue,
                         milestone_name,
                         &repo_users_clone,
                         &git_status_clone,
+                        &dirty_files_clone,
                         cache,
                         git_info,
                         http_downloader,
@@ -267,6 +270,7 @@ pub async fn create_issue_information(
     milestone_name: &str,
     repo_users: &[RepoUser],
     git_status: &GitStatus,
+    dirty_files: &[PathBuf],
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     http_downloader: &impl images::HttpDownloader,
@@ -324,7 +328,10 @@ pub async fn create_issue_information(
 
     // Git Status for this specific file
     let file_commits = issue_thread.file_commits();
-    let git_status_str = git_status.format_for_file(&issue_thread.file, &file_commits);
+    let mut git_status_str = git_status.format_for_file(&file_commits);
+    if dirty_files.contains(&issue_thread.file) {
+        git_status_str.push_str(" (file has uncommitted local changes)");
+    }
 
     // Created by (with name lookup)
     let created_by = repo_users
