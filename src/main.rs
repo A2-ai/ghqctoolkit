@@ -58,6 +58,13 @@ enum Commands {
         #[command(subcommand)]
         configuration_command: ConfigurationCommands,
     },
+    #[cfg(feature = "api")]
+    /// Start the API server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "3103")]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -972,6 +979,26 @@ async fn main() -> Result<()> {
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
+        #[cfg(feature = "api")]
+        Commands::Serve { port } => {
+            use ghqctoolkit::api::{create_router, AppState};
+
+            let config_dir = determine_config_dir(cli.config_dir, &env)?;
+            let mut configuration = Configuration::from_path(&config_dir);
+            configuration.load_checklists();
+
+            let git_info = GitInfo::from_path(&cli.directory, &env)?;
+            let disk_cache = DiskCache::from_git_info(&git_info).ok();
+
+            let state = AppState::new(git_info, configuration, disk_cache);
+            let app = create_router(state);
+
+            let addr = format!("0.0.0.0:{}", port);
+            println!("Starting API server on http://{}", addr);
+
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            axum::serve(listener, app).await?;
+        }
     }
 
     Ok(())

@@ -17,6 +17,9 @@ pub mod utils;
 #[cfg(feature = "cli")]
 pub mod cli;
 
+#[cfg(feature = "api")]
+pub mod api;
+
 pub use approve::{
     ApprovalError, ApprovalResult, BlockingQCCheckResult, ImpactNode, ImpactedIssues, QCApprove,
     QCUnapprove, UnapprovalResult, approve_with_validation, get_unapproved_blocking_qcs,

@@ -50,7 +50,7 @@ impl ConfigurationOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checklist {
     pub name: String,
-    note: Option<String>,
+    pub note: Option<String>,
     pub content: String,
 }
 

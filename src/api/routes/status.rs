@@ -1,0 +1,24 @@
+//! Supporting data endpoints.
+
+use crate::api::error::ApiError;
+use crate::api::state::AppState;
+use crate::api::types::Assignee;
+use crate::get_repo_users;
+use axum::{Json, extract::State};
+
+/// GET /api/assignees
+pub async fn list_assignees(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Assignee>>, ApiError> {
+    let users = get_repo_users(state.disk_cache.as_deref(), state.git_info()).await?;
+
+    let response: Vec<Assignee> = users
+        .into_iter()
+        .map(|u| Assignee {
+            login: u.login,
+            name: u.name,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
