@@ -1,24 +1,29 @@
 //! API error types and HTTP status code mapping.
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 
 /// API error type with automatic HTTP status code mapping.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     /// Resource not found (404)
+    #[error("Resource not found: {0}")]
     NotFound(String),
     /// Validation error (400)
+    #[error("Validation Error: {0}")]
     BadRequest(String),
     /// Conflict error, e.g., blocking QCs not approved (409)
+    #[error("Request caused conflict: {0}")]
     Conflict(String),
     /// GitHub API error (502)
+    #[error("GitHub API Error: {0}")]
     GitHubApi(String),
     /// Internal server error (500)
+    #[error("{0}")]
     Internal(String),
 }
 
@@ -73,5 +78,11 @@ impl From<crate::ApprovalError> for ApiError {
             }
             _ => ApiError::Internal(err.to_string()),
         }
+    }
+}
+
+impl From<crate::GitRepositoryError> for ApiError {
+    fn from(err: crate::GitRepositoryError) -> Self {
+        ApiError::Internal(err.to_string())
     }
 }

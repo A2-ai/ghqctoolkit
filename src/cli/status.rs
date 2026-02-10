@@ -34,7 +34,7 @@ pub async fn interactive_status(
 
     // Select issue by title
     let issue = prompt_issue(&issues)?;
-    let checklist_summary = analyze_issue_checklists(&issue);
+    let checklist_summary = analyze_issue_checklists(issue.body.as_deref());
 
     // Create IssueThread from the selected issue
     let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
@@ -291,7 +291,7 @@ async fn get_milestone_status_rows(
 
                 // Determine QC status
                 if let Ok(qc_status) = QCStatus::determine_status(&issue_thread) {
-                    let checklist_summaries = analyze_issue_checklists(&issue);
+                    let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
                     let checklist_summary =
                         ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
 

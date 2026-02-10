@@ -322,7 +322,7 @@ pub async fn create_issue_information(
     let qc_status = QCStatus::determine_status(&issue_thread)?.to_string();
 
     // Checklist Summary
-    let checklist_summaries = analyze_issue_checklists(issue);
+    let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
     let checklist_summary =
         ChecklistSummary::sum(checklist_summaries.iter().map(|c| &c.1)).to_string();
 

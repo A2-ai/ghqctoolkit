@@ -1,10 +1,11 @@
 //! API response types.
 
 use chrono::{DateTime, Utc};
+
 use octocrab::models::IssueState;
 use serde::Serialize;
 
-use crate::api::ApiError;
+use crate::IssueThread;
 
 /// Health check response.
 #[derive(Debug, Serialize)]
@@ -88,6 +89,19 @@ pub struct QCStatus {
     pub latest_commit: String,
 }
 
+impl From<&IssueThread> for QCStatus {
+    fn from(issue: &IssueThread) -> Self {
+        let status = crate::QCStatus::determine_status(issue);
+        Self {
+            status_detail: status.to_string(),
+            status: status.into(),
+            approved_commit: issue.approved_commit().map(|c| c.hash.to_string()),
+            initial_commit: issue.initial_commit().to_string(),
+            latest_commit: issue.latest_commit().hash.to_string(),
+        }
+    }
+}
+
 /// QC status enum values.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +113,20 @@ pub enum QCStatusEnum {
     InProgress,
     ApprovalRequired,
     ChangesToComment,
+}
+
+impl From<crate::QCStatus> for QCStatusEnum {
+    fn from(value: crate::QCStatus) -> Self {
+        match value {
+            crate::QCStatus::Approved => QCStatusEnum::Approved,
+            crate::QCStatus::ChangesAfterApproval(_) => QCStatusEnum::ChangesAfterApproval,
+            crate::QCStatus::AwaitingReview => QCStatusEnum::AwaitingReview,
+            crate::QCStatus::ChangeRequested => QCStatusEnum::ChangeRequested,
+            crate::QCStatus::InProgress => QCStatusEnum::InProgress,
+            crate::QCStatus::ApprovalRequired => QCStatusEnum::ApprovalRequired,
+            crate::QCStatus::ChangesToComment(_) => QCStatusEnum::ChangesToComment,
+        }
+    }
 }
 
 /// Git status information.
@@ -147,6 +175,17 @@ pub struct ChecklistSummary {
     pub percentage: f32,
 }
 
+impl From<Vec<(String, crate::ChecklistSummary)>> for ChecklistSummary {
+    fn from(checklists: Vec<(String, crate::ChecklistSummary)>) -> Self {
+        let sum = crate::ChecklistSummary::sum(checklists.iter().map(|(_, c)| c));
+        Self {
+            completed: sum.completed as u32,
+            total: sum.total as u32,
+            percentage: (sum.completed / sum.total) as f32,
+        }
+    }
+}
+
 /// Blocking QC item (approved).
 #[derive(Debug, Serialize)]
 pub struct BlockingQCItem {
@@ -170,7 +209,7 @@ pub struct BlockingQCError {
 }
 
 /// Blocking QC status summary.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 pub struct BlockingQCStatus {
     pub total: u32,
     pub approved_count: u32,

@@ -47,7 +47,7 @@ impl fmt::Display for CommitStatus {
 }
 
 /// Relationship type for blocking QC issues
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum BlockingRelationship {
     /// A QC that was done previously on this file or a closely related one
     PreviousQC,
@@ -69,7 +69,7 @@ impl fmt::Display for BlockingRelationship {
 }
 
 /// A blocking QC issue parsed from the issue body
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlockingQC {
     /// The issue number of the blocking QC
     pub issue_number: u64,

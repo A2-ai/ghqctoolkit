@@ -11,11 +11,11 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub struct AppState {
     /// Git repository and GitHub API access.
-    pub git_info: Arc<GitInfo>,
+    git_info: Arc<GitInfo>,
     /// Configuration loaded at startup.
     pub configuration: Arc<Configuration>,
     /// Disk-based cache for GitHub API responses.
-    pub disk_cache: Option<Arc<DiskCache>>,
+    disk_cache: Option<Arc<DiskCache>>,
     /// In-memory cache for issue status responses.
     pub status_cache: Arc<RwLock<StatusCache>>,
 }
@@ -37,5 +37,9 @@ impl AppState {
 
     pub fn git_info(&self) -> &GitInfo {
         &self.git_info
+    }
+
+    pub fn disk_cache(&self) -> Option<&DiskCache> {
+        self.disk_cache.as_ref().map(|d| &**d)
     }
 }

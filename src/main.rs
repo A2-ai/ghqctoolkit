@@ -539,7 +539,8 @@ async fn main() -> Result<()> {
                         (Some(milestone), Some(file)) => {
                             let issue =
                                 find_issue(&milestone, &file, &milestones, &git_info).await?;
-                            let checklist_summaries = analyze_issue_checklists(&issue);
+                            let checklist_summaries =
+                                analyze_issue_checklists(issue.body.as_deref());
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
                             let git_status = git_info.status()?;
@@ -981,7 +982,7 @@ async fn main() -> Result<()> {
         },
         #[cfg(feature = "api")]
         Commands::Serve { port } => {
-            use ghqctoolkit::api::{create_router, AppState};
+            use ghqctoolkit::api::{AppState, create_router};
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
             let mut configuration = Configuration::from_path(&config_dir);
