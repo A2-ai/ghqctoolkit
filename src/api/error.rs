@@ -22,6 +22,9 @@ pub enum ApiError {
     /// GitHub API error (502)
     #[error("GitHub API Error: {0}")]
     GitHubApi(String),
+    /// Not implemented (501)
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
     /// Internal server error (500)
     #[error("{0}")]
     Internal(String),
@@ -39,6 +42,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             ApiError::GitHubApi(msg) => (StatusCode::BAD_GATEWAY, msg),
+            ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
@@ -83,6 +87,12 @@ impl From<crate::ApprovalError> for ApiError {
 
 impl From<crate::GitRepositoryError> for ApiError {
     fn from(err: crate::GitRepositoryError) -> Self {
+        ApiError::Internal(err.to_string())
+    }
+}
+
+impl From<crate::GitStatusError> for ApiError {
+    fn from(err: crate::GitStatusError) -> Self {
         ApiError::Internal(err.to_string())
     }
 }

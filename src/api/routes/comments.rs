@@ -12,7 +12,7 @@ use crate::api::types::{
 };
 use crate::{
     BlockingQC, GitHubReader, GitHubWriter, GitRepository, IssueThread, QCApprove, QCComment,
-    QCReview, parse_blocking_qcs,
+    QCReview, QCUnapprove, parse_blocking_qcs,
 };
 use axum::{
     Json,
@@ -48,8 +48,12 @@ pub async fn create_comment(
     };
 
     let comment_url = state.git_info().post_comment(&comment).await?;
-    if let Ok(head_commit) = state.git_info().commit() {
-        let key = CacheKey::from_issue(&comment.issue, head_commit);
+    if let (Ok(head_commit), Ok(branch)) = (state.git_info().commit(), state.git_info().branch()) {
+        let key = CacheKey {
+            issue_updated_at: comment.issue.updated_at.clone(),
+            branch,
+            head_commit,
+        };
 
         state.status_cache.blocking_write().update(
             key,
@@ -58,7 +62,11 @@ pub async fn create_comment(
             UpdateAction::Notification,
         );
     } else {
-        log::error!("Failed to determine HEAD commit. Skipping cache update");
+        log::error!("Failed to determine HEAD commit and/or branch. Removing cache entry");
+        state
+            .status_cache
+            .blocking_write()
+            .remove(comment.issue.number);
     }
 
     Ok((
@@ -109,8 +117,12 @@ pub async fn approve_issue(
     let approval_url = state.git_info().post_comment(&approval).await?;
     state.git_info().close_issue(issue.number).await?;
 
-    if let Ok(head_commit) = state.git_info().commit() {
-        let key = CacheKey::from_issue(&approval.issue, head_commit);
+    if let (Ok(head_commit), Ok(branch)) = (state.git_info().commit(), state.git_info().branch()) {
+        let key = CacheKey {
+            issue_updated_at: approval.issue.updated_at.clone(),
+            branch,
+            head_commit,
+        };
 
         state.status_cache.blocking_write().update(
             key,
@@ -119,7 +131,11 @@ pub async fn approve_issue(
             UpdateAction::Approve,
         );
     } else {
-        log::error!("Failed to determine HEAD commit. Skipping cache update");
+        log::error!("Failed to determine HEAD commit and/or branch. Removing cache entry");
+        state
+            .status_cache
+            .blocking_write()
+            .remove(approval.issue.number);
     }
 
     Ok(Json(ApprovalResponse {
@@ -147,13 +163,34 @@ pub async fn unapprove_issue(
     Path(number): Path<u64>,
     Json(request): Json<UnapproveRequest>,
 ) -> Result<Json<UnapprovalResponse>, ApiError> {
-    // TODO: Implement unapproval
-    // This will involve:
-    // 1. Creating QCUnapprove
-    // 2. Posting unapproval comment and reopening issue
-    // 3. Determining impacted issues
-    // 4. Updating cache
-    todo!("Implement unapprove_issue")
+    let issue = state.git_info().get_issue(number).await?;
+    let unapprove = QCUnapprove {
+        issue,
+        reason: request.reason,
+    };
+
+    let unapproval_url = state.git_info().post_comment(&unapprove).await?;
+
+    if let (Ok(head_commit), Ok(branch)) = (state.git_info().commit(), state.git_info().branch()) {
+        let key = CacheKey {
+            issue_updated_at: unapprove.issue.updated_at.clone(),
+            branch,
+            head_commit,
+        };
+
+        state
+            .status_cache
+            .blocking_write()
+            .unapproval(key, &unapprove.issue);
+    } else {
+        log::error!("Failed to determine HEAD commit and/or branch. Removing cache entry");
+        state
+            .status_cache
+            .blocking_write()
+            .remove(unapprove.issue.number);
+    }
+
+    Ok(Json(UnapprovalResponse { unapproval_url }))
 }
 
 /// POST /api/issues/{number}/review
@@ -177,8 +214,12 @@ pub async fn review_issue(
 
     let comment_url = state.git_info().post_comment(&review).await?;
 
-    if let Ok(head_commit) = state.git_info().commit() {
-        let key = CacheKey::from_issue(&review.issue, head_commit);
+    if let (Ok(head_commit), Ok(branch)) = (state.git_info().commit(), state.git_info().branch()) {
+        let key = CacheKey {
+            issue_updated_at: review.issue.updated_at.clone(),
+            branch,
+            head_commit,
+        };
 
         state.status_cache.blocking_write().update(
             key,
@@ -187,7 +228,11 @@ pub async fn review_issue(
             UpdateAction::Review,
         );
     } else {
-        log::error!("Failed to determine HEAD commit. Skipping cache update");
+        log::error!("Failed to determine HEAD commit and/or branch. Removing cache entry");
+        state
+            .status_cache
+            .blocking_write()
+            .remove(review.issue.number);
     }
 
     Ok((
@@ -202,7 +247,7 @@ fn parse_str_as_commit(commit: &str) -> Result<ObjectId, ApiError> {
         .map_err(|e: gix::hash::decode::Error| ApiError::BadRequest(e.to_string()))
 }
 
-async fn get_blocking_qc_status_with_cache(
+pub(crate) async fn get_blocking_qc_status_with_cache(
     blocking_qcs: &[BlockingQC],
     state: &AppState,
 ) -> BlockingQCStatus {
@@ -239,7 +284,7 @@ async fn get_blocking_qc_status_with_cache(
             Ok(issue) => {
                 let key = cache_key(issue.updated_at);
                 if let Some(entry) = state.status_cache.blocking_read().get(issue.number, &key) {
-                    known_status.insert(blocking_qc, entry.status().clone());
+                    known_status.insert(blocking_qc, entry.qc_status.clone());
                 } else {
                     status_to_fetch.push(blocking_qc);
                 }
@@ -271,10 +316,7 @@ async fn get_blocking_qc_status_with_cache(
                 known_status.insert(blocking_qc, status.clone());
 
                 let key = cache_key(issue.updated_at);
-                let entry = CacheEntry::Partial {
-                    qc_status: status,
-                    file_name: issue.title,
-                };
+                let entry = CacheEntry::new(&issue, &issue_thread);
                 state
                     .status_cache
                     .blocking_write()

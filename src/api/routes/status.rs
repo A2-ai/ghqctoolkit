@@ -10,7 +10,7 @@ use axum::{Json, extract::State};
 pub async fn list_assignees(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Assignee>>, ApiError> {
-    let users = get_repo_users(state.disk_cache.as_deref(), state.git_info()).await?;
+    let users = get_repo_users(state.disk_cache(), state.git_info()).await?;
 
     let response: Vec<Assignee> = users
         .into_iter()

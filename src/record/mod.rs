@@ -319,7 +319,7 @@ pub async fn create_issue_information(
     let open = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status
-    let qc_status = QCStatus::determine_status(&issue_thread)?.to_string();
+    let qc_status = QCStatus::determine_status(&issue_thread).to_string();
 
     // Checklist Summary
     let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());

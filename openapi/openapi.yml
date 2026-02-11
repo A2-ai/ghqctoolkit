@@ -274,6 +274,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/CommentResponse'
 
+  /issues/{number}/blocked:
+    get:
+      summary: Get issues blocked by this issue
+      description: Returns a flat list of issues that depend on this issue (via gating_qc or previous_qc) along with their current status.
+      operationId: getBlockedIssues
+      tags: [issues]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of blocked issues with status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BlockedIssueStatus'
+        '404':
+          description: Issue not found
+        '501':
+          description: Blocking dependencies API not available on this GitHub server
+
   /assignees:
     get:
       summary: List repository assignees
@@ -398,12 +424,12 @@ components:
           $ref: '#/components/schemas/Issue'
         qc_status:
           $ref: '#/components/schemas/QCStatus'
-        git_status:
-          $ref: '#/components/schemas/GitStatus'
-        dirty_files:
-          type: array
-          items:
-            type: string
+        dirty:
+          type: boolean
+          description: Whether the file for this issue has uncommitted changes
+        branch:
+          type: string
+          description: The git branch this issue was created on
         commits:
           type: array
           items:
@@ -670,49 +696,14 @@ components:
       properties:
         unapproval_url:
           type: string
-        impacted_issues:
-          $ref: '#/components/schemas/ImpactedIssues'
-
-    ImpactedIssues:
-      oneOf:
-        - type: object
-          properties:
-            type:
-              type: string
-              enum: [none]
-        - type: object
-          properties:
-            type:
-              type: string
-              enum: [api_unavailable]
-        - type: object
-          properties:
-            type:
-              type: string
-              enum: [some]
-            nodes:
-              type: array
-              items:
-                $ref: '#/components/schemas/ImpactNode'
-
-    ImpactNode:
+    BlockedIssueStatus:
       type: object
+      required: [issue, qc_status]
       properties:
-        issue_number:
-          type: integer
-        file_name:
-          type: string
-        milestone:
-          type: string
-        relationship:
-          type: string
-        children:
-          type: array
-          items:
-            $ref: '#/components/schemas/ImpactNode'
-        fetch_error:
-          type: string
-          nullable: true
+        issue:
+          $ref: '#/components/schemas/Issue'
+        qc_status:
+          $ref: '#/components/schemas/QCStatus'
 
     ReviewRequest:
       type: object
@@ -798,4 +789,3 @@ components:
           type: string
         record_path:
           type: string
-

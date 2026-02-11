@@ -1,11 +1,13 @@
 //! API response types.
 
+use std::path::PathBuf;
+
 use chrono::{DateTime, Utc};
 
 use octocrab::models::IssueState;
 use serde::Serialize;
 
-use crate::IssueThread;
+use crate::{IssueThread, api::cache::CacheEntry};
 
 /// Health check response.
 #[derive(Debug, Serialize)]
@@ -69,7 +71,7 @@ impl From<octocrab::models::issues::Issue> for Issue {
             labels: issue
                 .labels
                 .iter()
-                .filter_map(|l| l.description.clone())
+                .map(|l| l.name.clone())
                 .collect(),
             milestone: issue.milestone.map(|m| m.title),
             created_at: issue.created_at,
@@ -157,6 +159,17 @@ pub struct IssueCommit {
     pub file_changed: bool,
 }
 
+impl From<&crate::IssueCommit> for IssueCommit {
+    fn from(commit: &crate::IssueCommit) -> Self {
+        Self {
+            hash: commit.hash.to_string(),
+            message: commit.message.to_string(),
+            statuses: commit.statuses.iter().map(CommitStatusEnum::from).collect(),
+            file_changed: commit.file_changed,
+        }
+    }
+}
+
 /// Commit status enum values.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -165,6 +178,17 @@ pub enum CommitStatusEnum {
     Notification,
     Approved,
     Reviewed,
+}
+
+impl From<&crate::CommitStatus> for CommitStatusEnum {
+    fn from(status: &crate::CommitStatus) -> Self {
+        match status {
+            crate::CommitStatus::Initial => CommitStatusEnum::Initial,
+            crate::CommitStatus::Notification => CommitStatusEnum::Notification,
+            crate::CommitStatus::Approved => CommitStatusEnum::Approved,
+            crate::CommitStatus::Reviewed => CommitStatusEnum::Reviewed,
+        }
+    }
 }
 
 /// Checklist completion summary.
@@ -202,7 +226,7 @@ pub struct BlockingQCItemWithStatus {
 }
 
 /// Blocking QC error.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BlockingQCError {
     pub issue_number: u64,
     pub error: String,
@@ -224,11 +248,32 @@ pub struct BlockingQCStatus {
 pub struct IssueStatusResponse {
     pub issue: Issue,
     pub qc_status: QCStatus,
-    pub git_status: GitStatus,
-    pub dirty_files: Vec<String>,
+    pub dirty: bool,
+    pub branch: String,
     pub commits: Vec<IssueCommit>,
     pub checklist_summary: ChecklistSummary,
     pub blocking_qc_status: BlockingQCStatus,
+}
+
+impl IssueStatusResponse {
+    pub fn from_cache_entry(entry: CacheEntry, dirty_files: &[PathBuf]) -> Self {
+        Self {
+            dirty: dirty_files.contains(&PathBuf::from(&entry.issue.title)),
+            issue: entry.issue,
+            qc_status: entry.qc_status,
+            branch: entry.branch,
+            commits: entry.commits,
+            checklist_summary: entry.checklist_summary,
+            blocking_qc_status: BlockingQCStatus::default(),
+        }
+    }
+}
+
+/// Blocked issue with status.
+#[derive(Debug, Serialize)]
+pub struct BlockedIssueStatus {
+    pub issue: Issue,
+    pub qc_status: QCStatus,
 }
 
 /// Response for issue creation.
@@ -254,31 +299,10 @@ pub struct ApprovalResponse {
     pub skipped_errors: Vec<BlockingQCError>,
 }
 
-/// Impact node for unapproval cascade.
-#[derive(Debug, Serialize)]
-pub struct ImpactNode {
-    pub issue_number: u64,
-    pub file_name: String,
-    pub milestone: String,
-    pub relationship: String,
-    pub children: Vec<ImpactNode>,
-    pub fetch_error: Option<String>,
-}
-
-/// Impacted issues from unapproval.
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ImpactedIssues {
-    None,
-    ApiUnavailable,
-    Some { nodes: Vec<ImpactNode> },
-}
-
 /// Response for issue unapproval.
 #[derive(Debug, Serialize)]
 pub struct UnapprovalResponse {
     pub unapproval_url: String,
-    pub impacted_issues: ImpactedIssues,
 }
 
 /// Repository assignee.

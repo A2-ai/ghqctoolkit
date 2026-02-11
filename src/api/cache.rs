@@ -1,9 +1,9 @@
 //! In-memory cache for issue status responses.
 
 use crate::{
-    analyze_issue_checklists,
+    IssueThread, analyze_issue_checklists,
     api::types::{ChecklistSummary, CommitStatusEnum, Issue, IssueCommit, QCStatus, QCStatusEnum},
-    parse_branch_from_body,
+    parse_blocking_qcs,
 };
 use chrono::{DateTime, Utc};
 use octocrab::models::issues::Issue as octoIssue;
@@ -17,44 +17,39 @@ pub struct CacheKey {
     pub head_commit: String,
 }
 
-impl CacheKey {
-    pub fn from_issue(issue: &octoIssue, head_commit: String) -> Self {
-        Self {
-            issue_updated_at: issue.updated_at.clone(),
-            branch: issue
-                .body
-                .as_deref()
-                .and_then(parse_branch_from_body)
-                .unwrap_or("unknown".to_string()),
-            head_commit,
-        }
-    }
-}
-
-/// Cache entry variants.
+/// Status cache entries
 #[derive(Debug, Clone)]
-pub enum CacheEntry {
-    /// Full status data - created when issue is requested for its status.
-    Complete {
-        issue: Issue,
-        qc_status: QCStatus,
-        commits: Vec<IssueCommit>,
-        checklist_summary: ChecklistSummary,
-        blocking_qc_numbers: Vec<u64>,
-    },
-    /// Minimal data - created when issue is fetched as a blocking QC.
-    Partial {
-        qc_status: QCStatus,
-        file_name: String,
-    },
+pub struct CacheEntry {
+    pub issue: Issue,
+    pub qc_status: QCStatus,
+    pub branch: String,
+    pub commits: Vec<IssueCommit>,
+    pub checklist_summary: ChecklistSummary,
+    pub blocking_qc_numbers: Vec<u64>,
 }
 
 impl CacheEntry {
-    pub(crate) fn status(&self) -> &QCStatus {
-        match self {
-            CacheEntry::Complete { qc_status, .. } | CacheEntry::Partial { qc_status, .. } => {
-                qc_status
-            }
+    pub fn new(issue: &octoIssue, issue_thread: &IssueThread) -> Self {
+        Self {
+            issue: issue.clone().into(),
+            qc_status: issue_thread.into(),
+            branch: issue
+                .body
+                .as_deref()
+                .and_then(crate::parse_branch_from_body)
+                .unwrap_or("unknown".to_string()),
+            commits: issue_thread.commits.iter().map(IssueCommit::from).collect(),
+            checklist_summary: analyze_issue_checklists(issue.body.as_deref()).into(),
+            blocking_qc_numbers: issue
+                .body
+                .as_deref()
+                .map(|body| {
+                    parse_blocking_qcs(body)
+                        .iter()
+                        .map(|b| b.issue_number)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -87,6 +82,10 @@ impl StatusCache {
         self.entries.insert(issue_number, (key, entry));
     }
 
+    pub fn remove(&mut self, issue_number: u64) {
+        self.entries.remove(&issue_number);
+    }
+
     pub fn update(
         &mut self,
         key: CacheKey,
@@ -98,29 +97,11 @@ impl StatusCache {
         update_issue.updated_at = key.issue_updated_at;
         if let Some((cache_key, cache_entry)) = self.entries.get_mut(&update_issue.number) {
             *cache_key = key;
-            match cache_entry {
-                CacheEntry::Complete {
-                    issue,
-                    qc_status,
-                    commits,
-                    checklist_summary,
-                    ..
-                } => {
-                    *issue = update_issue.clone().into();
-                    let is_latest_commit = action.update_commits(commits, current_commit);
-                    action.update_status_for_complete_entry(
-                        qc_status,
-                        is_latest_commit,
-                        current_commit,
-                    );
-                    let checklist_summaries =
-                        analyze_issue_checklists(update_issue.body.as_deref());
-                    *checklist_summary = checklist_summaries.into();
-                }
-                CacheEntry::Partial { qc_status, .. } => {
-                    action.update_status_for_partial_entry(qc_status, current_commit);
-                }
-            }
+            cache_entry.issue = update_issue.clone().into();
+            let is_latest_commit = action.update_commits(&mut cache_entry.commits, current_commit);
+            action.update_status(&mut cache_entry.qc_status, is_latest_commit, current_commit);
+            let checklist_summaries = analyze_issue_checklists(update_issue.body.as_deref());
+            cache_entry.checklist_summary = checklist_summaries.into();
         }
     }
 
@@ -129,50 +110,34 @@ impl StatusCache {
         update_issue.updated_at = key.issue_updated_at;
         if let Some((cache_key, cache_entry)) = self.entries.get_mut(&update_issue.number) {
             *cache_key = key;
-            match cache_entry {
-                CacheEntry::Complete {
-                    issue,
-                    qc_status,
-                    commits,
-                    checklist_summary,
-                    ..
-                } => {
-                    *issue = update_issue.clone().into();
-                    match qc_status.status {
-                        QCStatusEnum::Approved => qc_status.status = QCStatusEnum::ChangeRequested,
-                        QCStatusEnum::ChangesAfterApproval => {
-                            qc_status.status = QCStatusEnum::ChangesToComment
-                        }
-                        _ => (),
-                    };
-                    // Convert Approved commit statuses to Notification
-                    for commit in commits.iter_mut() {
-                        if let Some(pos) = commit
-                            .statuses
-                            .iter()
-                            .position(|s| *s == CommitStatusEnum::Approved)
-                        {
-                            if !commit.statuses.contains(&CommitStatusEnum::Notification) {
-                                commit.statuses[pos] = CommitStatusEnum::Notification;
-                            } else {
-                                commit.statuses.remove(pos);
-                            }
-                        }
-                    }
 
-                    *checklist_summary =
-                        analyze_issue_checklists(update_issue.body.as_deref()).into();
+            cache_entry.issue = update_issue.clone().into();
+            match cache_entry.qc_status.status {
+                QCStatusEnum::Approved => {
+                    cache_entry.qc_status.status = QCStatusEnum::ChangeRequested
                 }
-                CacheEntry::Partial { qc_status, .. } => {
-                    match qc_status.status {
-                        QCStatusEnum::Approved => qc_status.status = QCStatusEnum::ChangeRequested,
-                        QCStatusEnum::ChangesAfterApproval => {
-                            qc_status.status = QCStatusEnum::ChangesToComment
-                        }
-                        _ => (),
-                    };
+                QCStatusEnum::ChangesAfterApproval => {
+                    cache_entry.qc_status.status = QCStatusEnum::ChangesToComment
+                }
+                _ => (),
+            };
+            // Convert Approved commit statuses to Notification
+            for commit in cache_entry.commits.iter_mut() {
+                if let Some(pos) = commit
+                    .statuses
+                    .iter()
+                    .position(|s| *s == CommitStatusEnum::Approved)
+                {
+                    if !commit.statuses.contains(&CommitStatusEnum::Notification) {
+                        commit.statuses[pos] = CommitStatusEnum::Notification;
+                    } else {
+                        commit.statuses.remove(pos);
+                    }
                 }
             }
+
+            cache_entry.checklist_summary =
+                analyze_issue_checklists(update_issue.body.as_deref()).into();
         }
     }
 }
@@ -216,7 +181,7 @@ impl UpdateAction {
         }
     }
 
-    fn update_status_for_complete_entry(
+    fn update_status(
         &self,
         qc_status: &mut QCStatus,
         is_latest_commit: bool,
@@ -258,44 +223,6 @@ impl UpdateAction {
                     qc_status.status = QCStatusEnum::ChangesAfterApproval;
                     qc_status.status_detail = "Approved; subsequent file changes".to_string();
                 }
-            }
-        }
-    }
-
-    fn update_status_for_partial_entry(&self, qc_status: &mut QCStatus, current_commit: &str) {
-        // Assuming current_commit is latest
-        match self {
-            UpdateAction::Notification => {
-                if qc_status.status == QCStatusEnum::Approved {
-                    if qc_status.approved_commit.as_deref() != Some(current_commit) {
-                        qc_status.status = QCStatusEnum::ChangesAfterApproval;
-                        qc_status.status_detail = "Approved; subsequent file changes".to_string();
-                        qc_status.latest_commit = current_commit.to_string();
-                    }
-                } else {
-                    qc_status.status = QCStatusEnum::AwaitingReview;
-                    qc_status.status_detail = "Awaiting review".to_string();
-                    qc_status.latest_commit = current_commit.to_string();
-                }
-            }
-            UpdateAction::Review => {
-                if qc_status.status == QCStatusEnum::Approved {
-                    if qc_status.approved_commit.as_deref() != Some(current_commit) {
-                        qc_status.status = QCStatusEnum::ChangesAfterApproval;
-                        qc_status.status_detail = "Approved; subsequent file changes".to_string();
-                        qc_status.latest_commit = current_commit.to_string();
-                    }
-                } else {
-                    qc_status.status = QCStatusEnum::ChangeRequested;
-                    qc_status.status_detail = "Change Requested".to_string();
-                    qc_status.latest_commit = current_commit.to_string()
-                }
-            }
-            UpdateAction::Approve => {
-                qc_status.status = QCStatusEnum::Approved;
-                qc_status.status_detail = "Approved".to_string();
-                qc_status.approved_commit = Some(current_commit.to_string());
-                qc_status.latest_commit = current_commit.to_string();
             }
         }
     }

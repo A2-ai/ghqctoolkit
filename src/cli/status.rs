@@ -45,7 +45,7 @@ pub async fn interactive_status(
     let dirty_files = git_info.dirty()?;
 
     // Determine QC status
-    let qc_status = QCStatus::determine_status(&issue_thread)?;
+    let qc_status = QCStatus::determine_status(&issue_thread);
     let blocking_qc_status =
         get_blocking_qc_status(&issue_thread.blocking_qcs, git_info, cache).await;
 
@@ -290,37 +290,36 @@ async fn get_milestone_status_rows(
                 let dirty_files = git_info.dirty().unwrap_or_default();
 
                 // Determine QC status
-                if let Ok(qc_status) = QCStatus::determine_status(&issue_thread) {
-                    let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
-                    let checklist_summary =
-                        ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
+                let qc_status = QCStatus::determine_status(&issue_thread);
+                let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
+                let checklist_summary =
+                    ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
 
-                    let mut git_status_str = git_status.format_for_file(&file_commits);
-                    if dirty_files.contains(&issue_thread.file) {
-                        git_status_str.push_str(" (file has uncommitted local changes)");
-                    }
-
-                    let row = MilestoneStatusRow {
-                        file: issue_thread.file.display().to_string(),
-                        milestone: milestone.title.clone(),
-                        branch: issue_thread.branch.clone(),
-                        issue_state: if issue_thread.open {
-                            "open".to_string()
-                        } else {
-                            "closed".to_string()
-                        },
-                        qc_status: qc_status.to_string(),
-                        git_status: git_status_str,
-                        checklist_summary,
-                        blocking_qc_status: get_blocking_qc_status(
-                            &issue_thread.blocking_qcs,
-                            git_info,
-                            cache,
-                        )
-                        .await,
-                    };
-                    rows.push(row);
+                let mut git_status_str = git_status.format_for_file(&file_commits);
+                if dirty_files.contains(&issue_thread.file) {
+                    git_status_str.push_str(" (file has uncommitted local changes)");
                 }
+
+                let row = MilestoneStatusRow {
+                    file: issue_thread.file.display().to_string(),
+                    milestone: milestone.title.clone(),
+                    branch: issue_thread.branch.clone(),
+                    issue_state: if issue_thread.open {
+                        "open".to_string()
+                    } else {
+                        "closed".to_string()
+                    },
+                    qc_status: qc_status.to_string(),
+                    git_status: git_status_str,
+                    checklist_summary,
+                    blocking_qc_status: get_blocking_qc_status(
+                        &issue_thread.blocking_qcs,
+                        git_info,
+                        cache,
+                    )
+                    .await,
+                };
+                rows.push(row);
             }
         }
     }

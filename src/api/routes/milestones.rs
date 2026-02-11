@@ -14,7 +14,7 @@ use axum::{
 pub async fn list_milestones(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Milestone>>, ApiError> {
-    let milestones = state.git_info.get_milestones().await?;
+    let milestones = state.git_info().get_milestones().await?;
 
     let response: Vec<Milestone> = milestones.into_iter().map(Milestone::from).collect();
 
@@ -27,7 +27,7 @@ pub async fn create_milestone(
     Json(request): Json<CreateMilestoneRequest>,
 ) -> Result<(StatusCode, Json<Milestone>), ApiError> {
     let milestone = state
-        .git_info
+        .git_info()
         .create_milestone(&request.name, &request.description)
         .await
         .map(Milestone::from)?;
@@ -40,7 +40,7 @@ pub async fn list_milestone_issues(
     State(state): State<AppState>,
     Path(number): Path<u64>,
 ) -> Result<Json<Vec<Issue>>, ApiError> {
-    let issues = state.git_info.get_issues(Some(number)).await?;
+    let issues = state.git_info().get_issues(Some(number)).await?;
 
     let response: Vec<Issue> = issues.into_iter().map(Issue::from).collect();
 

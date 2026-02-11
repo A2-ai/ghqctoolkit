@@ -3,8 +3,8 @@
 use crate::api::routes::{comments, configuration, health, issues, milestones, status};
 use crate::api::state::AppState;
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -30,9 +30,19 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/issues", post(issues::create_issue))
         .route("/api/issues/status", get(issues::batch_get_issue_status))
         .route("/api/issues/{number}", get(issues::get_issue))
+        .route(
+            "/api/issues/{number}/blocked",
+            get(issues::get_blocked_issues),
+        )
         // Comments & Actions
-        .route("/api/issues/{number}/comment", post(comments::create_comment))
-        .route("/api/issues/{number}/approve", post(comments::approve_issue))
+        .route(
+            "/api/issues/{number}/comment",
+            post(comments::create_comment),
+        )
+        .route(
+            "/api/issues/{number}/approve",
+            post(comments::approve_issue),
+        )
         .route(
             "/api/issues/{number}/unapprove",
             post(comments::unapprove_issue),
