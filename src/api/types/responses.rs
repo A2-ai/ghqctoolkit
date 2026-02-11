@@ -17,7 +17,7 @@ pub struct HealthResponse {
 }
 
 /// Milestone information.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Milestone {
     pub number: u64,
     pub title: String,
@@ -137,7 +137,7 @@ pub struct GitStatus {
 }
 
 /// Git status enum values.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitStatusEnum {
     Clean,
@@ -147,7 +147,7 @@ pub enum GitStatusEnum {
 }
 
 /// Commit information for an issue.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueCommit {
     pub hash: String,
     pub message: String,
@@ -167,7 +167,7 @@ impl From<&crate::IssueCommit> for IssueCommit {
 }
 
 /// Commit status enum values.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CommitStatusEnum {
     Initial,
@@ -313,7 +313,7 @@ pub struct Assignee {
 }
 
 /// Full checklist with content.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Checklist {
     pub name: String,
     pub content: String,
@@ -337,14 +337,14 @@ impl From<crate::Checklist> for Checklist {
 }
 
 /// Checklist summary information (name and item count).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ChecklistInfo {
     pub name: String,
     pub item_count: u32,
 }
 
 /// Git repository configuration status.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigGitRepository {
     pub owner: String,
     pub repo: String,
@@ -353,7 +353,7 @@ pub struct ConfigGitRepository {
 }
 
 /// Configuration options.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigurationOptions {
     pub prepended_checklist_note: Option<String>,
     pub checklist_display_name: String,
@@ -364,7 +364,7 @@ pub struct ConfigurationOptions {
 }
 
 /// Configuration status response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigurationStatusResponse {
     pub directory: String,
     pub git_repository: Option<ConfigGitRepository>,
