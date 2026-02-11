@@ -5,7 +5,7 @@ use octocrab::models::issues::Issue;
 use tokio::sync::RwLockReadGuard;
 
 use crate::{
-    GitHubReader, GitRepository, IssueError, IssueThread,
+    GitHubReader, GitProvider, GitRepository, IssueError, IssueThread,
     api::{
         AppState,
         cache::{CacheEntry, CacheKey, StatusCache},
@@ -92,7 +92,7 @@ pub(crate) struct CreatedThreads {
 }
 
 impl CreatedThreads {
-    pub(crate) async fn create_threads(issues: &[Issue], app_state: &AppState) -> Self {
+    pub(crate) async fn create_threads<G: GitProvider>(issues: &[Issue], app_state: &AppState<G>) -> Self {
         let git_info = app_state.git_info();
         let cache = app_state.disk_cache();
         let thread_futures = issues
@@ -101,6 +101,7 @@ impl CreatedThreads {
             .collect::<Vec<_>>();
         let thread_results = futures::future::join_all(thread_futures).await;
         let mut created = CreatedThreads::default();
+        let mut cache_write = app_state.status_cache.write().await;
 
         for (result, issue) in thread_results.into_iter().zip(issues) {
             match result {
@@ -109,10 +110,7 @@ impl CreatedThreads {
                     let key = cache_key_or_default(git_info, issue.updated_at.clone());
 
                     created.entries.insert(issue.number, entry.clone());
-                    app_state
-                        .status_cache
-                        .blocking_write()
-                        .insert(issue.number, key, entry);
+                    cache_write.insert(issue.number, key, entry);
                 }
                 Err(e) => {
                     created.thread_errors.insert(issue.number, e);

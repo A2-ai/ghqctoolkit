@@ -1,8 +1,10 @@
 //! Issue endpoints.
 
 use std::collections::HashMap;
+use std::fs;
 
-use crate::api::cache::{CacheEntry, CacheKey};
+use crate::GitProvider;
+use crate::api::cache::CacheKey;
 use crate::api::error::ApiError;
 use crate::api::fetch_helpers::{CreatedThreads, FetchedIssues, format_error_list};
 use crate::api::state::AppState;
@@ -11,13 +13,11 @@ use crate::api::types::{
     BlockingQCStatus, CreateIssueRequest, CreateIssueResponse, Issue, IssueStatusResponse,
     QCStatusEnum,
 };
-use crate::{GitHubReader, GitRepository, GitStatusOps, IssueError, IssueThread};
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -27,8 +27,8 @@ pub struct IssueStatusQuery {
 }
 
 /// POST /api/issues
-pub async fn create_issue(
-    State(state): State<AppState>,
+pub async fn create_issue<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Json(request): Json<CreateIssueRequest>,
 ) -> Result<(StatusCode, Json<CreateIssueResponse>), ApiError> {
     // TODO: Implement issue creation logic
@@ -40,8 +40,8 @@ pub async fn create_issue(
 }
 
 /// GET /api/issues/status?issues=1,2,3
-pub async fn batch_get_issue_status(
-    State(state): State<AppState>,
+pub async fn batch_get_issue_status<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Query(query): Query<IssueStatusQuery>,
 ) -> Result<Json<Vec<IssueStatusResponse>>, ApiError> {
     // Parse comma-separated issue numbers
@@ -59,12 +59,9 @@ pub async fn batch_get_issue_status(
 
     let dirty = state.git_info().dirty()?;
 
-    let mut fetched_issues = FetchedIssues::fetch_issues(
-        &issue_numbers,
-        state.git_info(),
-        &state.status_cache.blocking_read(),
-    )
-    .await;
+    let cache_read = state.status_cache.read().await;
+    let mut fetched_issues =
+        FetchedIssues::fetch_issues(&issue_numbers, state.git_info(), &cache_read).await;
 
     if !fetched_issues.errors.is_empty() {
         return Err(ApiError::GitHubApi(format!(
@@ -74,7 +71,7 @@ pub async fn batch_get_issue_status(
     }
 
     fetched_issues
-        .fetch_blocking_qcs(state.git_info(), &state.status_cache.blocking_read())
+        .fetch_blocking_qcs(state.git_info(), &cache_read)
         .await;
 
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, &state).await;
@@ -168,8 +165,8 @@ fn determine_blocking_qc_status(
 }
 
 /// GET /api/issues/{number}
-pub async fn get_issue(
-    State(state): State<AppState>,
+pub async fn get_issue<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Path(number): Path<u64>,
 ) -> Result<Json<Issue>, ApiError> {
     let issue = state
@@ -183,8 +180,8 @@ pub async fn get_issue(
 }
 
 /// GET /api/issues/{number}/blocked
-pub async fn get_blocked_issues(
-    State(state): State<AppState>,
+pub async fn get_blocked_issues<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Path(number): Path<u64>,
 ) -> Result<Json<Vec<BlockedIssueStatus>>, ApiError> {
     let git_info = state.git_info();
@@ -193,15 +190,20 @@ pub async fn get_blocked_issues(
 
     let mut blocked_statuses = Vec::new();
     let mut need_to_fetch = Vec::new();
-    for issue in blocking_issues {
-        let key = CacheKey::build(git_info, issue.updated_at.clone())?;
-        if let Some(entry) = state.status_cache.blocking_read().get(issue.number, &key) {
-            blocked_statuses.push(BlockedIssueStatus {
-                issue: issue.into(),
-                qc_status: entry.qc_status.clone(),
-            });
-        } else {
-            need_to_fetch.push(issue);
+
+    // need to drop read lock when done
+    {
+        let cache_read = state.status_cache.read().await;
+        for issue in blocking_issues {
+            let key = CacheKey::build(git_info, issue.updated_at.clone())?;
+            if let Some(entry) = cache_read.get(issue.number, &key) {
+                blocked_statuses.push(BlockedIssueStatus {
+                    issue: issue.into(),
+                    qc_status: entry.qc_status.clone(),
+                });
+            } else {
+                need_to_fetch.push(issue);
+            }
         }
     }
 

@@ -795,6 +795,10 @@ Second Checklist:
             fn repo(&self) -> &str {
                 &self.repo
             }
+
+            fn path(&self) -> &std::path::Path {
+                std::path::Path::new(".")
+            }
         }
 
         impl crate::git::GitStatusOps for MockGitInfo {

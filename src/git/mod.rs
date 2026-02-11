@@ -7,6 +7,7 @@ mod auth;
 mod commit_analysis;
 mod file_ops;
 mod helpers;
+mod provider;
 mod repository;
 mod status;
 
@@ -21,6 +22,7 @@ pub use file_ops::{
 #[cfg(test)]
 pub use file_ops::MockGitFileOps;
 pub use helpers::GitHelpers;
+pub use provider::GitProvider;
 pub use repository::{GitRepository, GitRepositoryError};
 pub use status::{GitStatus, GitStatusError, GitStatusOps};
 

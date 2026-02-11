@@ -12,7 +12,7 @@ use crate::api::types::{
     QCStatusEnum, ReviewRequest, UnapprovalResponse, UnapproveRequest,
 };
 use crate::{
-    GitHubReader, GitHubWriter, QCApprove, QCComment, QCReview, QCUnapprove, parse_blocking_qcs,
+    GitHubReader, GitHubWriter, GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, parse_blocking_qcs,
 };
 use axum::{
     Json,
@@ -22,8 +22,8 @@ use axum::{
 use gix::ObjectId;
 
 /// POST /api/issues/{number}/comment
-pub async fn create_comment(
-    State(state): State<AppState>,
+pub async fn create_comment<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Path(number): Path<u64>,
     Json(request): Json<CreateCommentRequest>,
 ) -> Result<(StatusCode, Json<CommentResponse>), ApiError> {
@@ -60,8 +60,8 @@ pub async fn create_comment(
 }
 
 /// POST /api/issues/{number}/approve
-pub async fn approve_issue(
-    State(state): State<AppState>,
+pub async fn approve_issue<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Path(number): Path<u64>,
     Query(query): Query<ApproveQuery>,
     Json(request): Json<ApproveRequest>,
@@ -133,8 +133,8 @@ pub async fn approve_issue(
 }
 
 /// POST /api/issues/{number}/unapprove
-pub async fn unapprove_issue(
-    State(state): State<AppState>,
+pub async fn unapprove_issue<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Path(number): Path<u64>,
     Json(request): Json<UnapproveRequest>,
 ) -> Result<Json<UnapprovalResponse>, ApiError> {
@@ -152,8 +152,8 @@ pub async fn unapprove_issue(
 }
 
 /// POST /api/issues/{number}/review
-pub async fn review_issue(
-    State(state): State<AppState>,
+pub async fn review_issue<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Path(number): Path<u64>,
     Json(request): Json<ReviewRequest>,
 ) -> Result<(StatusCode, Json<CommentResponse>), ApiError> {
@@ -167,7 +167,7 @@ pub async fn review_issue(
         commit,
         note: request.note,
         no_diff: !request.include_diff,
-        working_dir: state.git_info().repository_path.clone(),
+        working_dir: state.git_info().path().to_path_buf(),
     };
 
     let comment_url = state.git_info().post_comment(&review).await?;
@@ -191,9 +191,9 @@ fn parse_str_as_commit(commit: &str) -> Result<ObjectId, ApiError> {
         .map_err(|e: gix::hash::decode::Error| ApiError::BadRequest(e.to_string()))
 }
 
-pub(crate) async fn get_blocking_qc_status_with_cache(
+pub(crate) async fn get_blocking_qc_status_with_cache<G: GitProvider>(
     blocking_qcs: &[u64],
-    state: &AppState,
+    state: &AppState<G>,
 ) -> BlockingQCStatus {
     let mut status = BlockingQCStatus::default();
     if blocking_qcs.is_empty() {

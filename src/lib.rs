@@ -38,10 +38,10 @@ pub use configuration::{
 };
 pub use create::QCIssue;
 pub use git::{
-    AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitCommit, GitCommitAnalysis,
-    GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
-    GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
-    GitStatusError, GitStatusOps, RepoUser, find_file_commits,
+    AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitComment, GitCommit,
+    GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
+    GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError, GitProvider, GitRepository,
+    GitRepositoryError, GitStatus, GitStatusError, GitStatusOps, RepoUser, find_file_commits,
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,

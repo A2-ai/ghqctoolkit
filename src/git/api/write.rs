@@ -23,7 +23,7 @@ pub trait GitHubWriter {
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
 
     // Unified comment posting system
-    fn post_comment<T: CommentBody + 'static>(
+    fn post_comment<T: CommentBody + Sync + 'static>(
         &self,
         comment: &T,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
@@ -145,7 +145,7 @@ impl GitHubWriter for GitInfo {
         }
     }
 
-    fn post_comment<T: CommentBody>(
+    fn post_comment<T: CommentBody + Sync + 'static>(
         &self,
         comment: &T,
     ) -> impl Future<Output = Result<String, GitHubApiError>> + Send {

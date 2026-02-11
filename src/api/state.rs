@@ -1,17 +1,18 @@
 //! Application state for the API server.
 
-use crate::Configuration;
-use crate::DiskCache;
-use crate::GitInfo;
 use crate::api::cache::StatusCache;
+use crate::{Configuration, DiskCache, GitProvider};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Application state shared across all request handlers.
+///
+/// Generic over the git provider to allow both production (GitInfo)
+/// and test (MockGitInfo) implementations.
 #[derive(Clone)]
-pub struct AppState {
+pub struct AppState<G: GitProvider> {
     /// Git repository and GitHub API access.
-    git_info: Arc<GitInfo>,
+    git_info: Arc<G>,
     /// Configuration loaded at startup.
     pub configuration: Arc<Configuration>,
     /// Disk-based cache for GitHub API responses.
@@ -20,10 +21,10 @@ pub struct AppState {
     pub status_cache: Arc<RwLock<StatusCache>>,
 }
 
-impl AppState {
+impl<G: GitProvider> AppState<G> {
     /// Create a new AppState with the given configuration.
     pub fn new(
-        git_info: GitInfo,
+        git_info: G,
         configuration: Configuration,
         disk_cache: Option<DiskCache>,
     ) -> Self {
@@ -35,7 +36,7 @@ impl AppState {
         }
     }
 
-    pub fn git_info(&self) -> &GitInfo {
+    pub fn git_info(&self) -> &G {
         &self.git_info
     }
 

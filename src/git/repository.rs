@@ -1,6 +1,7 @@
 use crate::GitInfo;
 #[cfg(test)]
 use mockall::automock;
+use std::path::Path;
 
 #[derive(thiserror::Error, Debug)]
 pub enum GitRepositoryError {
@@ -28,6 +29,9 @@ pub trait GitRepository {
 
     /// Get the repository name
     fn repo(&self) -> &str;
+
+    /// Get the repository path on the filesystem
+    fn path(&self) -> &Path;
 }
 
 impl GitRepository for GitInfo {
@@ -98,5 +102,9 @@ impl GitRepository for GitInfo {
 
     fn repo(&self) -> &str {
         &self.repo
+    }
+
+    fn path(&self) -> &Path {
+        &self.repository_path
     }
 }

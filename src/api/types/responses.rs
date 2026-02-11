@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 
 use octocrab::models::IssueState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{IssueThread, api::cache::CacheEntry};
 
@@ -41,7 +41,7 @@ impl From<octocrab::models::Milestone> for Milestone {
 }
 
 /// Issue information.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub number: u64,
     pub title: String,
@@ -68,11 +68,7 @@ impl From<octocrab::models::issues::Issue> for Issue {
             .to_string(),
             html_url: issue.html_url.to_string(),
             assignees: issue.assignees.iter().map(|a| a.login.clone()).collect(),
-            labels: issue
-                .labels
-                .iter()
-                .map(|l| l.name.clone())
-                .collect(),
+            labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
             milestone: issue.milestone.map(|m| m.title),
             created_at: issue.created_at,
             updated_at: issue.updated_at,
@@ -82,7 +78,7 @@ impl From<octocrab::models::issues::Issue> for Issue {
 }
 
 /// QC status information.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QCStatus {
     pub status: QCStatusEnum,
     pub status_detail: String,
@@ -105,7 +101,7 @@ impl From<&IssueThread> for QCStatus {
 }
 
 /// QC status enum values.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum QCStatusEnum {
     Approved,
@@ -205,7 +201,11 @@ impl From<Vec<(String, crate::ChecklistSummary)>> for ChecklistSummary {
         Self {
             completed: sum.completed as u32,
             total: sum.total as u32,
-            percentage: (sum.completed / sum.total) as f32,
+            percentage: if sum.total == 0 {
+                0.0
+            } else {
+                (sum.completed / sum.total) as f32
+            },
         }
     }
 }
@@ -270,7 +270,7 @@ impl IssueStatusResponse {
 }
 
 /// Blocked issue with status.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BlockedIssueStatus {
     pub issue: Issue,
     pub qc_status: QCStatus,

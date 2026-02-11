@@ -5,11 +5,12 @@ use crate::api::state::AppState;
 use crate::api::types::{
     Checklist, ChecklistInfo, ConfigurationOptions, ConfigurationStatusResponse,
 };
+use crate::GitProvider;
 use axum::{extract::State, Json};
 
 /// GET /api/configuration/checklists
-pub async fn list_checklists(
-    State(state): State<AppState>,
+pub async fn list_checklists<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
 ) -> Result<Json<Vec<Checklist>>, ApiError> {
     let response: Vec<Checklist> = state
         .configuration
@@ -23,8 +24,8 @@ pub async fn list_checklists(
 }
 
 /// GET /api/configuration/status
-pub async fn get_configuration_status(
-    State(state): State<AppState>,
+pub async fn get_configuration_status<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
 ) -> Result<Json<ConfigurationStatusResponse>, ApiError> {
     let config = &state.configuration;
     let options = &config.options;

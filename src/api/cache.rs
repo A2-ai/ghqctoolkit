@@ -26,7 +26,7 @@ impl CacheKey {
         issue_updated_at: DateTime<Utc>,
     ) -> Result<Self, ApiError> {
         match (git_info.branch(), git_info.commit()) {
-            ((Ok(branch), Ok(head_commit))) => Ok(Self {
+            (Ok(branch), Ok(head_commit)) => Ok(Self {
                 issue_updated_at,
                 branch,
                 head_commit,
@@ -261,8 +261,8 @@ impl UpdateAction {
     }
 }
 
-pub fn update_cache_after_comment(
-    state: &AppState,
+pub fn update_cache_after_comment<G: crate::GitProvider>(
+    state: &AppState<G>,
     issue: &octoIssue,
     commit: &str,
     action: UpdateAction,
@@ -279,7 +279,7 @@ pub fn update_cache_after_comment(
     }
 }
 
-pub fn update_cache_after_unapproval(state: &AppState, issue: &octoIssue) {
+pub fn update_cache_after_unapproval<G: crate::GitProvider>(state: &AppState<G>, issue: &octoIssue) {
     match CacheKey::build(state.git_info(), issue.updated_at.clone()) {
         Ok(key) => state.status_cache.blocking_write().unapproval(key, issue),
         Err(e) => {

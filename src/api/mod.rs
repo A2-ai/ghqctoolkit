@@ -11,6 +11,9 @@ mod server;
 mod state;
 mod types;
 
+#[cfg(test)]
+mod tests;
+
 pub use error::ApiError;
 pub use server::create_router;
 pub use state::AppState;

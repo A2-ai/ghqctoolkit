@@ -3,7 +3,7 @@
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{CreateMilestoneRequest, Issue, Milestone};
-use crate::{GitHubReader, GitHubWriter};
+use crate::GitProvider;
 use axum::{
     Json,
     extract::{Path, State},
@@ -11,8 +11,8 @@ use axum::{
 };
 
 /// GET /api/milestones
-pub async fn list_milestones(
-    State(state): State<AppState>,
+pub async fn list_milestones<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
 ) -> Result<Json<Vec<Milestone>>, ApiError> {
     let milestones = state.git_info().get_milestones().await?;
 
@@ -22,8 +22,8 @@ pub async fn list_milestones(
 }
 
 /// POST /api/milestones
-pub async fn create_milestone(
-    State(state): State<AppState>,
+pub async fn create_milestone<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Json(request): Json<CreateMilestoneRequest>,
 ) -> Result<(StatusCode, Json<Milestone>), ApiError> {
     let milestone = state
@@ -36,8 +36,8 @@ pub async fn create_milestone(
 }
 
 /// GET /api/milestones/{number}/issues
-pub async fn list_milestone_issues(
-    State(state): State<AppState>,
+pub async fn list_milestone_issues<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
     Path(number): Path<u64>,
 ) -> Result<Json<Vec<Issue>>, ApiError> {
     let issues = state.git_info().get_issues(Some(number)).await?;

@@ -1,5 +1,6 @@
 //! Axum server setup and router assembly.
 
+use crate::GitProvider;
 use crate::api::routes::{comments, configuration, health, issues, milestones, status};
 use crate::api::state::AppState;
 use axum::{
@@ -10,7 +11,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 /// Create the API router with all routes.
-pub fn create_router(state: AppState) -> Router {
+pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -20,11 +21,11 @@ pub fn create_router(state: AppState) -> Router {
         // Health
         .route("/api/health", get(health::health_check))
         // Milestones
-        .route("/api/milestones", get(milestones::list_milestones))
-        .route("/api/milestones", post(milestones::create_milestone))
+        .route("/api/milestones", get(milestones::list_milestones::<G>))
+        .route("/api/milestones", post(milestones::create_milestone::<G>))
         .route(
             "/api/milestones/{number}/issues",
-            get(milestones::list_milestone_issues),
+            get(milestones::list_milestone_issues::<G>),
         )
         // Issues
         .route("/api/issues", post(issues::create_issue))
