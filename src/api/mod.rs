@@ -5,6 +5,7 @@
 
 mod cache;
 mod error;
+mod fetch_helpers;
 mod routes;
 mod server;
 mod state;

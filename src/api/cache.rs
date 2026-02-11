@@ -1,8 +1,11 @@
 //! In-memory cache for issue status responses.
 
 use crate::{
-    IssueThread, analyze_issue_checklists,
-    api::types::{ChecklistSummary, CommitStatusEnum, Issue, IssueCommit, QCStatus, QCStatusEnum},
+    GitRepository, IssueThread, analyze_issue_checklists,
+    api::{
+        ApiError, AppState,
+        types::{ChecklistSummary, CommitStatusEnum, Issue, IssueCommit, QCStatus, QCStatusEnum},
+    },
     parse_blocking_qcs,
 };
 use chrono::{DateTime, Utc};
@@ -15,6 +18,30 @@ pub struct CacheKey {
     pub issue_updated_at: DateTime<Utc>,
     pub branch: String,
     pub head_commit: String,
+}
+
+impl CacheKey {
+    pub fn build(
+        git_info: &impl GitRepository,
+        issue_updated_at: DateTime<Utc>,
+    ) -> Result<Self, ApiError> {
+        match (git_info.branch(), git_info.commit()) {
+            ((Ok(branch), Ok(head_commit))) => Ok(Self {
+                issue_updated_at,
+                branch,
+                head_commit,
+            }),
+            (Err(e), Ok(_)) => Err(ApiError::Internal(format!(
+                "Failed to determine branch: {e}"
+            ))),
+            (Ok(_), Err(e)) => Err(ApiError::Internal(format!(
+                "Failed to determine HEAD commit: {e}"
+            ))),
+            (Err(b), Err(c)) => Err(ApiError::Internal(format!(
+                "Failed to determine HEAD commit: {c} and branch: {b}"
+            ))),
+        }
+    }
 }
 
 /// Status cache entries
@@ -142,6 +169,12 @@ impl StatusCache {
     }
 }
 
+impl Default for StatusCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub enum UpdateAction {
     Notification,
     Review,
@@ -228,8 +261,30 @@ impl UpdateAction {
     }
 }
 
-impl Default for StatusCache {
-    fn default() -> Self {
-        Self::new()
+pub fn update_cache_after_comment(
+    state: &AppState,
+    issue: &octoIssue,
+    commit: &str,
+    action: UpdateAction,
+) {
+    match CacheKey::build(state.git_info(), issue.updated_at.clone()) {
+        Ok(key) => state
+            .status_cache
+            .blocking_write()
+            .update(key, issue, commit, action),
+        Err(e) => {
+            log::error!("{e}. Removing cache entry");
+            state.status_cache.blocking_write().remove(issue.number);
+        }
+    }
+}
+
+pub fn update_cache_after_unapproval(state: &AppState, issue: &octoIssue) {
+    match CacheKey::build(state.git_info(), issue.updated_at.clone()) {
+        Ok(key) => state.status_cache.blocking_write().unapproval(key, issue),
+        Err(e) => {
+            log::error!("{e}. Removing cache entry");
+            state.status_cache.blocking_write().remove(issue.number);
+        }
     }
 }
