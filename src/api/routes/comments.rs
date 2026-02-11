@@ -204,9 +204,10 @@ pub(crate) async fn get_blocking_qc_status_with_cache<G: GitProvider>(
 
     let git_info = state.git_info();
 
-    let mut fetched_issues =
-        FetchedIssues::fetch_issues(blocking_qcs, git_info, &state.status_cache.blocking_read())
-            .await;
+    let mut fetched_issues = {
+        let cache_read = state.status_cache.read().await;
+        FetchedIssues::fetch_issues(blocking_qcs, git_info, &cache_read).await
+    };
 
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, state).await;
     fetched_issues
@@ -260,4 +261,311 @@ pub(crate) async fn get_blocking_qc_status_with_cache<G: GitProvider>(
     };
 
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::cache::{CacheEntry, CacheKey};
+    use crate::api::state::AppState;
+    use crate::api::tests::helpers::{MockGitInfo, load_test_issue};
+    use crate::api::types::{ChecklistSummary, Issue, QCStatus};
+    use crate::Configuration;
+
+    #[tokio::test]
+    async fn test_get_blocking_qc_status_empty() {
+        let mock = MockGitInfo::builder().build();
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None);
+
+        let status = get_blocking_qc_status_with_cache(&[], &state).await;
+
+        assert_eq!(status.total, 0);
+        assert_eq!(status.approved_count, 0);
+        assert_eq!(status.summary, "No blocking QCs");
+        assert!(status.approved.is_empty());
+        assert!(status.not_approved.is_empty());
+        assert!(status.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_blocking_qc_status_all_approved() {
+        let test_issue = load_test_issue("test_file_issue");
+        let mock = MockGitInfo::builder()
+            .with_issue(1, test_issue.clone())
+            .with_branch("main")
+            .with_commit("abc123")
+            .build();
+
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None);
+
+        // Pre-populate cache with approved status
+        let key = CacheKey {
+            issue_updated_at: test_issue.updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: test_issue.title.clone(),
+                state: "closed".to_string(),
+                html_url: test_issue.html_url.to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: test_issue.created_at,
+                updated_at: test_issue.updated_at,
+                closed_at: Some(test_issue.updated_at),
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::Approved,
+                status_detail: "Approved".to_string(),
+                approved_commit: Some("abc123".to_string()),
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 1,
+                total: 1,
+                percentage: 1.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+        state.status_cache.write().await.insert(1, key, entry);
+
+        let status = get_blocking_qc_status_with_cache(&[1], &state).await;
+
+        assert_eq!(status.total, 1);
+        assert_eq!(status.approved_count, 1);
+        assert_eq!(status.summary, "All blocking QCs approved");
+        assert_eq!(status.approved.len(), 1);
+        assert_eq!(status.approved[0].issue_number, 1);
+        assert!(status.not_approved.is_empty());
+        assert!(status.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_blocking_qc_status_changes_after_approval_counts_as_approved() {
+        let test_issue = load_test_issue("test_file_issue");
+        let mock = MockGitInfo::builder()
+            .with_issue(1, test_issue.clone())
+            .with_branch("main")
+            .with_commit("abc123")
+            .build();
+
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None);
+
+        // Pre-populate cache with ChangesAfterApproval status
+        let key = CacheKey {
+            issue_updated_at: test_issue.updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: test_issue.title.clone(),
+                state: "open".to_string(),
+                html_url: test_issue.html_url.to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: test_issue.created_at,
+                updated_at: test_issue.updated_at,
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::ChangesAfterApproval,
+                status_detail: "Approved; subsequent file changes".to_string(),
+                approved_commit: Some("abc123".to_string()),
+                initial_commit: "abc123".to_string(),
+                latest_commit: "def456".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 1,
+                total: 1,
+                percentage: 1.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+        state.status_cache.write().await.insert(1, key, entry);
+
+        let status = get_blocking_qc_status_with_cache(&[1], &state).await;
+
+        assert_eq!(status.total, 1);
+        assert_eq!(status.approved_count, 1);
+        assert_eq!(status.summary, "All blocking QCs approved");
+        assert_eq!(status.approved.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_blocking_qc_status_not_approved() {
+        let test_issue = load_test_issue("test_file_issue");
+        let mock = MockGitInfo::builder()
+            .with_issue(1, test_issue.clone())
+            .with_branch("main")
+            .with_commit("abc123")
+            .build();
+
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None);
+
+        // Pre-populate cache with InProgress status
+        let key = CacheKey {
+            issue_updated_at: test_issue.updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: test_issue.title.clone(),
+                state: "open".to_string(),
+                html_url: test_issue.html_url.to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: test_issue.created_at,
+                updated_at: test_issue.updated_at,
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::InProgress,
+                status_detail: "In Progress".to_string(),
+                approved_commit: None,
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 1,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+        state.status_cache.write().await.insert(1, key, entry);
+
+        let status = get_blocking_qc_status_with_cache(&[1], &state).await;
+
+        assert_eq!(status.total, 1);
+        assert_eq!(status.approved_count, 0);
+        assert_eq!(status.summary, "0/1 blocking QCs are approved");
+        assert!(status.approved.is_empty());
+        assert_eq!(status.not_approved.len(), 1);
+        assert_eq!(status.not_approved[0].issue_number, 1);
+        assert_eq!(status.not_approved[0].status, "In Progress");
+        assert!(status.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_blocking_qc_status_mixed() {
+        let test_issue1 = load_test_issue("test_file_issue");
+        let test_issue2 = load_test_issue("config_file_issue");
+        let mock = MockGitInfo::builder()
+            .with_issue(1, test_issue1.clone())
+            .with_issue(2, test_issue2.clone())
+            .with_branch("main")
+            .with_commit("abc123")
+            .build();
+
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None);
+
+        // Pre-populate cache with mixed statuses
+        let key1 = CacheKey {
+            issue_updated_at: test_issue1.updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry1 = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: test_issue1.title.clone(),
+                state: "closed".to_string(),
+                html_url: test_issue1.html_url.to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: test_issue1.created_at,
+                updated_at: test_issue1.updated_at,
+                closed_at: Some(test_issue1.updated_at),
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::Approved,
+                status_detail: "Approved".to_string(),
+                approved_commit: Some("abc123".to_string()),
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 1,
+                total: 1,
+                percentage: 1.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+
+        let key2 = CacheKey {
+            issue_updated_at: test_issue2.updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry2 = CacheEntry {
+            issue: Issue {
+                number: 2,
+                title: test_issue2.title.clone(),
+                state: "open".to_string(),
+                html_url: test_issue2.html_url.to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: test_issue2.created_at,
+                updated_at: test_issue2.updated_at,
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::AwaitingReview,
+                status_detail: "Awaiting review".to_string(),
+                approved_commit: None,
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 1,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+
+        {
+            let mut cache = state.status_cache.write().await;
+            cache.insert(1, key1, entry1);
+            cache.insert(2, key2, entry2);
+        }
+
+        let status = get_blocking_qc_status_with_cache(&[1, 2], &state).await;
+
+        assert_eq!(status.total, 2);
+        assert_eq!(status.approved_count, 1);
+        assert_eq!(status.summary, "1/2 blocking QCs are approved");
+        assert_eq!(status.approved.len(), 1);
+        assert_eq!(status.approved[0].issue_number, 1);
+        assert_eq!(status.not_approved.len(), 1);
+        assert_eq!(status.not_approved[0].issue_number, 2);
+        assert!(status.errors.is_empty());
+    }
 }

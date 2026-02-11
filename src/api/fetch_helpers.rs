@@ -140,3 +140,244 @@ pub(crate) fn cache_key_or_default(
         head_commit: "unknown".to_string(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::tests::helpers::MockGitInfo;
+    use crate::git::GitRepositoryError;
+
+    #[test]
+    fn test_format_error_list_empty() {
+        let errors: HashMap<u64, String> = HashMap::new();
+        let result = format_error_list(&errors);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_format_error_list_single() {
+        let mut errors = HashMap::new();
+        errors.insert(1, "Not found".to_string());
+        let result = format_error_list(&errors);
+        assert_eq!(result, "#1: Not found");
+    }
+
+    #[test]
+    fn test_format_error_list_multiple() {
+        let mut errors = HashMap::new();
+        errors.insert(1, "Not found".to_string());
+        errors.insert(2, "Access denied".to_string());
+        let result = format_error_list(&errors);
+        // Order is not guaranteed, but both should be present
+        assert!(result.contains("#1: Not found"));
+        assert!(result.contains("#2: Access denied"));
+    }
+
+    #[test]
+    fn test_cache_key_or_default_success() {
+        let mock = MockGitInfo::builder()
+            .with_branch("main")
+            .with_commit("abc123")
+            .build();
+        let updated_at = Utc::now();
+
+        let key = cache_key_or_default(&mock, updated_at);
+
+        assert_eq!(key.branch, "main");
+        assert_eq!(key.head_commit, "abc123");
+        assert_eq!(key.issue_updated_at, updated_at);
+    }
+
+    struct MockGitRepoError;
+
+    impl GitRepository for MockGitRepoError {
+        fn branch(&self) -> Result<String, GitRepositoryError> {
+            Err(GitRepositoryError::DetachedHead)
+        }
+
+        fn commit(&self) -> Result<String, GitRepositoryError> {
+            Err(GitRepositoryError::DetachedHead)
+        }
+
+        fn owner(&self) -> &str {
+            "test"
+        }
+
+        fn repo(&self) -> &str {
+            "test"
+        }
+
+        fn path(&self) -> &std::path::Path {
+            std::path::Path::new("/test")
+        }
+    }
+
+    #[test]
+    fn test_cache_key_or_default_fallback() {
+        let mock = MockGitRepoError;
+        let updated_at = Utc::now();
+
+        let key = cache_key_or_default(&mock, updated_at);
+
+        assert_eq!(key.branch, "unknown");
+        assert_eq!(key.head_commit, "unknown");
+        assert_eq!(key.issue_updated_at, updated_at);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_issues_all_cached() {
+        use crate::api::cache::StatusCache;
+
+        let mock = MockGitInfo::builder().build();
+        let cache = StatusCache::new();
+        let cache_read = tokio::sync::RwLock::new(cache);
+        let cache_guard = cache_read.read().await;
+
+        let fetched = FetchedIssues::fetch_issues(&[1, 2], &mock, &cache_guard).await;
+
+        // MockGitInfo returns NotFound by default, so all should be errors
+        assert_eq!(fetched.issues.len(), 0);
+        assert_eq!(fetched.cached_entries.len(), 0);
+        assert_eq!(fetched.errors.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_issues_with_issue_data() {
+        use crate::api::cache::StatusCache;
+        use crate::api::tests::helpers::load_test_issue;
+
+        let test_issue = load_test_issue("test_file_issue");
+        let mock = MockGitInfo::builder().with_issue(1, test_issue).build();
+
+        let cache = StatusCache::new();
+        let cache_read = tokio::sync::RwLock::new(cache);
+        let cache_guard = cache_read.read().await;
+
+        let fetched = FetchedIssues::fetch_issues(&[1], &mock, &cache_guard).await;
+
+        // Issue 1 should be fetched since not in cache
+        assert_eq!(fetched.issues.len(), 1);
+        assert_eq!(fetched.issues[0].number, 1);
+        assert_eq!(fetched.cached_entries.len(), 0);
+        assert_eq!(fetched.errors.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_issues_with_cache_hit() {
+        use crate::api::cache::{CacheEntry, StatusCache};
+        use crate::api::tests::helpers::load_test_issue;
+        use crate::api::types::{ChecklistSummary, Issue, QCStatus, QCStatusEnum};
+
+        let test_issue = load_test_issue("test_file_issue");
+        let mock = MockGitInfo::builder().with_issue(1, test_issue.clone()).build();
+
+        let mut cache = StatusCache::new();
+        let key = CacheKey {
+            issue_updated_at: test_issue.updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: test_issue.title.clone(),
+                state: "open".to_string(),
+                html_url: test_issue.html_url.to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: test_issue.created_at,
+                updated_at: test_issue.updated_at,
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::InProgress,
+                status_detail: "In Progress".to_string(),
+                approved_commit: None,
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 0,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+        cache.insert(1, key, entry);
+
+        let cache_read = tokio::sync::RwLock::new(cache);
+        let cache_guard = cache_read.read().await;
+
+        let fetched = FetchedIssues::fetch_issues(&[1], &mock, &cache_guard).await;
+
+        // Issue 1 should be in cache, not fetched
+        assert_eq!(fetched.issues.len(), 0);
+        assert_eq!(fetched.cached_entries.len(), 1);
+        assert_eq!(fetched.errors.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_issues_mixed() {
+        use crate::api::cache::{CacheEntry, StatusCache};
+        use crate::api::tests::helpers::load_test_issue;
+        use crate::api::types::{ChecklistSummary, Issue, QCStatus, QCStatusEnum};
+
+        let test_issue1 = load_test_issue("test_file_issue");
+        let test_issue2 = load_test_issue("config_file_issue");
+        let mock = MockGitInfo::builder()
+            .with_issue(1, test_issue1.clone())
+            .with_issue(2, test_issue2.clone())
+            .build();
+
+        let mut cache = StatusCache::new();
+        let key = CacheKey {
+            issue_updated_at: test_issue1.updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: test_issue1.title.clone(),
+                state: "open".to_string(),
+                html_url: test_issue1.html_url.to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: test_issue1.created_at,
+                updated_at: test_issue1.updated_at,
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::InProgress,
+                status_detail: "In Progress".to_string(),
+                approved_commit: None,
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 0,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+        cache.insert(1, key, entry);
+
+        let cache_read = tokio::sync::RwLock::new(cache);
+        let cache_guard = cache_read.read().await;
+
+        let fetched = FetchedIssues::fetch_issues(&[1, 2], &mock, &cache_guard).await;
+
+        // Issue 1 in cache, issue 2 fetched
+        assert_eq!(fetched.issues.len(), 1);
+        assert_eq!(fetched.issues[0].number, 2);
+        assert_eq!(fetched.cached_entries.len(), 1);
+        assert_eq!(fetched.errors.len(), 0);
+    }
+}

@@ -288,3 +288,566 @@ pub fn update_cache_after_unapproval<G: crate::GitProvider>(state: &AppState<G>,
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::GitRepositoryError;
+
+    struct MockGitRepository {
+        branch: Option<String>,
+        commit: Option<String>,
+        branch_error: bool,
+        commit_error: bool,
+    }
+
+    impl GitRepository for MockGitRepository {
+        fn branch(&self) -> Result<String, GitRepositoryError> {
+            if self.branch_error {
+                Err(GitRepositoryError::DetachedHead)
+            } else {
+                Ok(self.branch.clone().unwrap_or_else(|| "main".to_string()))
+            }
+        }
+
+        fn commit(&self) -> Result<String, GitRepositoryError> {
+            if self.commit_error {
+                Err(GitRepositoryError::DetachedHead)
+            } else {
+                Ok(self.commit.clone().unwrap_or_else(|| "abc123".to_string()))
+            }
+        }
+
+        fn owner(&self) -> &str {
+            "test-owner"
+        }
+
+        fn repo(&self) -> &str {
+            "test-repo"
+        }
+
+        fn path(&self) -> &std::path::Path {
+            std::path::Path::new("/test")
+        }
+    }
+
+    #[test]
+    fn test_cache_key_build_success() {
+        let mock = MockGitRepository {
+            branch: Some("main".to_string()),
+            commit: Some("abc123".to_string()),
+            branch_error: false,
+            commit_error: false,
+        };
+        let updated_at = Utc::now();
+
+        let key = CacheKey::build(&mock, updated_at).unwrap();
+
+        assert_eq!(key.branch, "main");
+        assert_eq!(key.head_commit, "abc123");
+        assert_eq!(key.issue_updated_at, updated_at);
+    }
+
+    #[test]
+    fn test_cache_key_build_branch_error() {
+        let mock = MockGitRepository {
+            branch: None,
+            commit: Some("abc123".to_string()),
+            branch_error: true,
+            commit_error: false,
+        };
+        let updated_at = Utc::now();
+
+        let result = CacheKey::build(&mock, updated_at);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("branch"));
+    }
+
+    #[test]
+    fn test_cache_key_build_commit_error() {
+        let mock = MockGitRepository {
+            branch: Some("main".to_string()),
+            commit: None,
+            branch_error: false,
+            commit_error: true,
+        };
+        let updated_at = Utc::now();
+
+        let result = CacheKey::build(&mock, updated_at);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("HEAD commit"));
+    }
+
+    #[test]
+    fn test_cache_key_build_both_errors() {
+        let mock = MockGitRepository {
+            branch: None,
+            commit: None,
+            branch_error: true,
+            commit_error: true,
+        };
+        let updated_at = Utc::now();
+
+        let result = CacheKey::build(&mock, updated_at);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("HEAD commit"));
+        assert!(error.contains("branch"));
+    }
+
+    #[test]
+    fn test_status_cache_get_hit() {
+        let mut cache = StatusCache::new();
+        let key = CacheKey {
+            issue_updated_at: Utc::now(),
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: "test".to_string(),
+                state: "open".to_string(),
+                html_url: "https://github.com/test/test/issues/1".to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::InProgress,
+                status_detail: "In Progress".to_string(),
+                approved_commit: None,
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 0,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+
+        cache.insert(1, key.clone(), entry.clone());
+        let result = cache.get(1, &key);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().issue.number, 1);
+    }
+
+    #[test]
+    fn test_status_cache_get_miss_wrong_key() {
+        let mut cache = StatusCache::new();
+        let key1 = CacheKey {
+            issue_updated_at: Utc::now(),
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let key2 = CacheKey {
+            issue_updated_at: Utc::now(),
+            branch: "main".to_string(),
+            head_commit: "def456".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: "test".to_string(),
+                state: "open".to_string(),
+                html_url: "https://github.com/test/test/issues/1".to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::InProgress,
+                status_detail: "In Progress".to_string(),
+                approved_commit: None,
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 0,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+
+        cache.insert(1, key1, entry);
+        let result = cache.get(1, &key2);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_status_cache_get_miss_no_entry() {
+        let cache = StatusCache::new();
+        let key = CacheKey {
+            issue_updated_at: Utc::now(),
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+
+        let result = cache.get(1, &key);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_status_cache_insert_and_remove() {
+        let mut cache = StatusCache::new();
+        let key = CacheKey {
+            issue_updated_at: Utc::now(),
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: "test".to_string(),
+                state: "open".to_string(),
+                html_url: "https://github.com/test/test/issues/1".to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                closed_at: None,
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::InProgress,
+                status_detail: "In Progress".to_string(),
+                approved_commit: None,
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 0,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+
+        cache.insert(1, key.clone(), entry);
+        assert!(cache.get(1, &key).is_some());
+
+        cache.remove(1);
+        assert!(cache.get(1, &key).is_none());
+    }
+
+    #[test]
+    fn test_update_action_update_commits_new_commit() {
+        let mut commits = vec![IssueCommit {
+            hash: "abc123".to_string(),
+            message: "Old commit".to_string(),
+            statuses: vec![CommitStatusEnum::Initial],
+            file_changed: true,
+        }];
+
+        let is_latest = UpdateAction::Notification.update_commits(&mut commits, "def456");
+
+        assert!(is_latest);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].hash, "def456");
+        assert_eq!(commits[0].message, "New commit");
+        assert!(commits[0].statuses.contains(&CommitStatusEnum::Notification));
+    }
+
+    #[test]
+    fn test_update_action_update_commits_existing_commit() {
+        let mut commits = vec![
+            IssueCommit {
+                hash: "def456".to_string(),
+                message: "Latest commit".to_string(),
+                statuses: vec![CommitStatusEnum::Initial],
+                file_changed: true,
+            },
+            IssueCommit {
+                hash: "abc123".to_string(),
+                message: "Old commit".to_string(),
+                statuses: vec![CommitStatusEnum::Initial],
+                file_changed: true,
+            },
+        ];
+
+        let is_latest = UpdateAction::Review.update_commits(&mut commits, "def456");
+
+        assert!(is_latest);
+        assert_eq!(commits.len(), 2);
+        assert!(commits[0].statuses.contains(&CommitStatusEnum::Reviewed));
+    }
+
+    #[test]
+    fn test_update_action_update_commits_not_latest() {
+        let mut commits = vec![
+            IssueCommit {
+                hash: "def456".to_string(),
+                message: "Latest commit".to_string(),
+                statuses: vec![CommitStatusEnum::Initial],
+                file_changed: true,
+            },
+            IssueCommit {
+                hash: "abc123".to_string(),
+                message: "Old commit".to_string(),
+                statuses: vec![CommitStatusEnum::Initial],
+                file_changed: true,
+            },
+        ];
+
+        let is_latest = UpdateAction::Review.update_commits(&mut commits, "abc123");
+
+        assert!(!is_latest);
+        assert_eq!(commits.len(), 2);
+        assert!(commits[1].statuses.contains(&CommitStatusEnum::Reviewed));
+    }
+
+    #[test]
+    fn test_update_action_notification_on_approved() {
+        let mut qc_status = QCStatus {
+            status: QCStatusEnum::Approved,
+            status_detail: "Approved".to_string(),
+            approved_commit: Some("abc123".to_string()),
+            initial_commit: "abc123".to_string(),
+            latest_commit: "abc123".to_string(),
+        };
+
+        UpdateAction::Notification.update_status(&mut qc_status, true, "def456");
+
+        assert_eq!(qc_status.status, QCStatusEnum::ChangesAfterApproval);
+        assert_eq!(qc_status.latest_commit, "def456");
+    }
+
+    #[test]
+    fn test_update_action_notification_on_in_progress() {
+        let mut qc_status = QCStatus {
+            status: QCStatusEnum::InProgress,
+            status_detail: "In Progress".to_string(),
+            approved_commit: None,
+            initial_commit: "abc123".to_string(),
+            latest_commit: "abc123".to_string(),
+        };
+
+        UpdateAction::Notification.update_status(&mut qc_status, true, "def456");
+
+        assert_eq!(qc_status.status, QCStatusEnum::AwaitingReview);
+        assert_eq!(qc_status.latest_commit, "def456");
+    }
+
+    #[test]
+    fn test_update_action_approve_latest() {
+        let mut qc_status = QCStatus {
+            status: QCStatusEnum::AwaitingReview,
+            status_detail: "Awaiting review".to_string(),
+            approved_commit: None,
+            initial_commit: "abc123".to_string(),
+            latest_commit: "abc123".to_string(),
+        };
+
+        UpdateAction::Approve.update_status(&mut qc_status, true, "abc123");
+
+        assert_eq!(qc_status.status, QCStatusEnum::Approved);
+        assert_eq!(qc_status.latest_commit, "abc123");
+    }
+
+    #[test]
+    fn test_update_action_approve_not_latest() {
+        let mut qc_status = QCStatus {
+            status: QCStatusEnum::AwaitingReview,
+            status_detail: "Awaiting review".to_string(),
+            approved_commit: None,
+            initial_commit: "abc123".to_string(),
+            latest_commit: "def456".to_string(),
+        };
+
+        UpdateAction::Approve.update_status(&mut qc_status, false, "abc123");
+
+        assert_eq!(qc_status.status, QCStatusEnum::ChangesAfterApproval);
+    }
+
+    // Helper function to create a minimal octocrab Issue for testing
+    fn create_test_octocrab_issue(number: u64, updated_at: DateTime<Utc>) -> octocrab::models::issues::Issue {
+        // Use serde to deserialize from minimal JSON
+        let json = serde_json::json!({
+            "id": number,
+            "node_id": format!("node{}", number),
+            "number": number,
+            "title": "test issue",
+            "user": {
+                "login": "test-user",
+                "id": 1,
+                "node_id": "user1",
+                "avatar_url": "https://github.com/avatar.png",
+                "gravatar_id": "gravatar123",
+                "url": "https://api.github.com/users/test-user",
+                "html_url": "https://github.com/test-user",
+                "followers_url": "https://api.github.com/users/test-user/followers",
+                "following_url": "https://api.github.com/users/test-user/following{/other_user}",
+                "gists_url": "https://api.github.com/users/test-user/gists{/gist_id}",
+                "starred_url": "https://api.github.com/users/test-user/starred{/owner}{/repo}",
+                "subscriptions_url": "https://api.github.com/users/test-user/subscriptions",
+                "organizations_url": "https://api.github.com/users/test-user/orgs",
+                "repos_url": "https://api.github.com/users/test-user/repos",
+                "events_url": "https://api.github.com/users/test-user/events{/privacy}",
+                "received_events_url": "https://api.github.com/users/test-user/received_events",
+                "type": "User",
+                "site_admin": false
+            },
+            "labels": [],
+            "state": "open",
+            "locked": false,
+            "assignees": [],
+            "comments": 0,
+            "created_at": updated_at,
+            "updated_at": updated_at,
+            "html_url": format!("https://github.com/test/test/issues/{}", number),
+            "labels_url": format!("https://api.github.com/repos/test/test/issues/{}/labels{{/name}}", number),
+            "comments_url": format!("https://api.github.com/repos/test/test/issues/{}/comments", number),
+            "events_url": format!("https://api.github.com/repos/test/test/issues/{}/events", number),
+            "repository_url": "https://api.github.com/repos/test/test",
+            "url": format!("https://api.github.com/repos/test/test/issues/{}", number),
+            "author_association": "OWNER"
+        });
+        serde_json::from_value(json).expect("Failed to create test issue")
+    }
+
+    #[test]
+    fn test_status_cache_unapproval_from_approved() {
+        let mut cache = StatusCache::new();
+        let updated_at = Utc::now();
+        let key = CacheKey {
+            issue_updated_at: updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: "test".to_string(),
+                state: "closed".to_string(),
+                html_url: "https://github.com/test/test/issues/1".to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: updated_at,
+                updated_at,
+                closed_at: Some(updated_at),
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::Approved,
+                status_detail: "Approved".to_string(),
+                approved_commit: Some("abc123".to_string()),
+                initial_commit: "abc123".to_string(),
+                latest_commit: "abc123".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![IssueCommit {
+                hash: "abc123".to_string(),
+                message: "Test commit".to_string(),
+                statuses: vec![CommitStatusEnum::Approved],
+                file_changed: true,
+            }],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 0,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+
+        cache.insert(1, key.clone(), entry);
+
+        let issue = create_test_octocrab_issue(1, updated_at);
+        cache.unapproval(key.clone(), &issue);
+
+        let cached = cache.get(1, &key).unwrap();
+        assert_eq!(cached.qc_status.status, QCStatusEnum::ChangeRequested);
+        assert_eq!(
+            cached.commits[0].statuses,
+            vec![CommitStatusEnum::Notification]
+        );
+    }
+
+    #[test]
+    fn test_status_cache_unapproval_from_changes_after_approval() {
+        let mut cache = StatusCache::new();
+        let updated_at = Utc::now();
+        let key = CacheKey {
+            issue_updated_at: updated_at,
+            branch: "main".to_string(),
+            head_commit: "abc123".to_string(),
+        };
+        let entry = CacheEntry {
+            issue: Issue {
+                number: 1,
+                title: "test".to_string(),
+                state: "closed".to_string(),
+                html_url: "https://github.com/test/test/issues/1".to_string(),
+                assignees: vec![],
+                labels: vec![],
+                milestone: None,
+                created_at: updated_at,
+                updated_at,
+                closed_at: Some(updated_at),
+            },
+            qc_status: QCStatus {
+                status: QCStatusEnum::ChangesAfterApproval,
+                status_detail: "Changes after approval".to_string(),
+                approved_commit: Some("abc123".to_string()),
+                initial_commit: "abc123".to_string(),
+                latest_commit: "def456".to_string(),
+            },
+            branch: "main".to_string(),
+            commits: vec![
+                IssueCommit {
+                    hash: "def456".to_string(),
+                    message: "New commit".to_string(),
+                    statuses: vec![CommitStatusEnum::Notification],
+                    file_changed: true,
+                },
+                IssueCommit {
+                    hash: "abc123".to_string(),
+                    message: "Test commit".to_string(),
+                    statuses: vec![CommitStatusEnum::Approved],
+                    file_changed: true,
+                },
+            ],
+            checklist_summary: ChecklistSummary {
+                completed: 0,
+                total: 0,
+                percentage: 0.0,
+            },
+            blocking_qc_numbers: vec![],
+        };
+
+        cache.insert(1, key.clone(), entry);
+
+        let issue = create_test_octocrab_issue(1, updated_at);
+        cache.unapproval(key.clone(), &issue);
+
+        let cached = cache.get(1, &key).unwrap();
+        assert_eq!(cached.qc_status.status, QCStatusEnum::ChangesToComment);
+        // Approved status should be converted to Notification
+        assert!(cached.commits[1]
+            .statuses
+            .contains(&CommitStatusEnum::Notification));
+        assert!(!cached.commits[1]
+            .statuses
+            .contains(&CommitStatusEnum::Approved));
+    }
+}
