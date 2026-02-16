@@ -1,0 +1,23 @@
+name: "GET /api/assignees - success with users"
+description: "Retrieve repository assignees with login and name"
+
+fixtures:
+  users:
+    - repository_users.json
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/assignees"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      min_length: 2
+      item_fields:
+        - login
+        - name

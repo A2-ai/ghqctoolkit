@@ -204,13 +204,23 @@ impl<'a> ResponseAsserter<'a> {
             ));
         }
 
-        // For arrays, check min_length and item_fields
+        // For arrays, check min_length, exact_length, item_fields, and first_item
         if let Value::Array(arr) = actual {
             if let Some(min_len) = schema.min_length {
                 if arr.len() < min_len {
                     errors.push(format!(
                         "Array too short: expected at least {} items, got {}",
                         min_len,
+                        arr.len()
+                    ));
+                }
+            }
+
+            if let Some(exact_len) = schema.exact_length {
+                if arr.len() != exact_len {
+                    errors.push(format!(
+                        "Array length mismatch: expected exactly {} items, got {}",
+                        exact_len,
                         arr.len()
                     ));
                 }
@@ -234,6 +244,31 @@ impl<'a> ResponseAsserter<'a> {
                             idx
                         ));
                     }
+                }
+            }
+
+            // Check first_item field values if specified
+            if let Some(first_item_expected) = &schema.first_item {
+                if arr.is_empty() {
+                    errors.push("Cannot validate first_item: array is empty".to_string());
+                } else if let Value::Object(first_obj) = &arr[0] {
+                    for (key, expected_value) in first_item_expected {
+                        match first_obj.get(key) {
+                            Some(actual_value) => {
+                                if actual_value != expected_value {
+                                    errors.push(format!(
+                                        "First item field '{}': expected {}, got {}",
+                                        key,
+                                        serde_json::to_string(expected_value).unwrap_or_default(),
+                                        serde_json::to_string(actual_value).unwrap_or_default()
+                                    ));
+                                }
+                            }
+                            None => errors.push(format!("First item missing field: '{}'", key)),
+                        }
+                    }
+                } else {
+                    errors.push("First array item is not an object (cannot check fields)".to_string());
                 }
             }
         }

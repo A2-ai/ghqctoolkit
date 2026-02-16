@@ -180,9 +180,15 @@ pub struct SchemaAssertion {
     /// For arrays: minimum length
     #[serde(default)]
     pub min_length: Option<usize>,
+    /// For arrays: exact length (optional)
+    #[serde(default)]
+    pub exact_length: Option<usize>,
     /// For arrays/objects: required field names
     #[serde(default)]
     pub item_fields: Vec<String>,
+    /// For arrays: expected field values in first item
+    #[serde(default)]
+    pub first_item: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Schema type enum

@@ -21,6 +21,16 @@ impl MockBuilder {
             builder = builder.with_issue(*number, issue.clone());
         }
 
+        // Add all milestones
+        for (_number, milestone) in &fixtures.milestones {
+            builder = builder.with_milestone(milestone.clone());
+        }
+
+        // Add users (for assignees endpoint)
+        if !fixtures.users.is_empty() {
+            builder = builder.with_users(fixtures.users.clone());
+        }
+
         // Add blocking relationships
         for blocking in &fixtures.blocking {
             let blocked_issues: Vec<_> = blocking

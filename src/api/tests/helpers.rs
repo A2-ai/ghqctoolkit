@@ -25,6 +25,8 @@ pub struct MockGitInfo {
     // Mock data storage
     issues: Arc<Mutex<HashMap<u64, Issue>>>,
     blocked_issues: Arc<Mutex<HashMap<u64, Vec<Issue>>>>,
+    milestones: Arc<Mutex<Vec<octocrab::models::Milestone>>>,
+    users: Arc<Mutex<Vec<crate::RepoUser>>>,
 
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
@@ -48,6 +50,8 @@ pub struct MockGitInfoBuilder {
     branch: String,
     issues: HashMap<u64, Issue>,
     blocked_issues: HashMap<u64, Vec<Issue>>,
+    milestones: Vec<octocrab::models::Milestone>,
+    users: Vec<crate::RepoUser>,
     dirty_files: Vec<PathBuf>,
 }
 
@@ -60,6 +64,8 @@ impl MockGitInfoBuilder {
             branch: "main".to_string(),
             issues: HashMap::new(),
             blocked_issues: HashMap::new(),
+            milestones: Vec::new(),
+            users: Vec::new(),
             dirty_files: Vec::new(),
         }
     }
@@ -94,6 +100,16 @@ impl MockGitInfoBuilder {
         self
     }
 
+    pub fn with_milestone(mut self, milestone: octocrab::models::Milestone) -> Self {
+        self.milestones.push(milestone);
+        self
+    }
+
+    pub fn with_users(mut self, users: Vec<crate::RepoUser>) -> Self {
+        self.users = users;
+        self
+    }
+
     pub fn with_dirty_file(mut self, file: impl Into<PathBuf>) -> Self {
         self.dirty_files.push(file.into());
         self
@@ -107,6 +123,8 @@ impl MockGitInfoBuilder {
             current_branch: self.branch,
             issues: Arc::new(Mutex::new(self.issues)),
             blocked_issues: Arc::new(Mutex::new(self.blocked_issues)),
+            milestones: Arc::new(Mutex::new(self.milestones)),
+            users: Arc::new(Mutex::new(self.users)),
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
             calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -248,11 +266,26 @@ impl GitCommitAnalysis for MockGitInfo {
 
 impl GitHubReader for MockGitInfo {
     async fn get_milestones(&self) -> Result<Vec<octocrab::models::Milestone>, GitHubApiError> {
-        Ok(vec![])
+        Ok(self.milestones.lock().unwrap().clone())
     }
 
-    async fn get_issues(&self, _milestone: Option<u64>) -> Result<Vec<Issue>, GitHubApiError> {
-        Ok(vec![])
+    async fn get_issues(&self, milestone: Option<u64>) -> Result<Vec<Issue>, GitHubApiError> {
+        let issues = self.issues.lock().unwrap();
+        if let Some(milestone_number) = milestone {
+            Ok(issues
+                .values()
+                .filter(|issue| {
+                    issue
+                        .milestone
+                        .as_ref()
+                        .map(|m| m.number == milestone_number as i64)
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect())
+        } else {
+            Ok(issues.values().cloned().collect())
+        }
     }
 
     async fn get_issue(&self, issue_number: u64) -> Result<Issue, GitHubApiError> {
@@ -281,14 +314,29 @@ impl GitHubReader for MockGitInfo {
     }
 
     async fn get_assignees(&self) -> Result<Vec<String>, GitHubApiError> {
-        Ok(vec![])
+        Ok(self
+            .users
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|u| u.login.clone())
+            .collect())
     }
 
     async fn get_user_details(&self, username: &str) -> Result<crate::RepoUser, GitHubApiError> {
-        Ok(crate::RepoUser {
-            login: username.to_string(),
-            name: Some("Test User".to_string()),
-        })
+        // Look up the user from stored fixtures
+        // On miss, return Ok with name: None (matches production behavior)
+        Ok(self
+            .users
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|u| u.login == username)
+            .cloned()
+            .unwrap_or_else(|| crate::RepoUser {
+                login: username.to_string(),
+                name: None,
+            }))
     }
 
     async fn get_labels(&self) -> Result<Vec<String>, GitHubApiError> {

@@ -1,0 +1,22 @@
+name: "GET /api/milestones/{number}/issues - empty milestone"
+description: "Milestone 999 does not exist - should return empty array"
+
+fixtures:
+  issues:
+    - test_file_issue.json        # Issue #1, Milestone 1
+    - config_file_issue.json      # Issue #2, Milestone 2
+  milestones:
+    - v1.0.json                   # Milestone 1
+    - v2.0.json                   # Milestone 2
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/milestones/999/issues"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value: []

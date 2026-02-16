@@ -1,0 +1,33 @@
+name: "GET /api/milestones/{number}/issues - milestone 2 filtering"
+description: "Retrieve issues for milestone 2 - should return only issue #2"
+
+fixtures:
+  issues:
+    - test_file_issue.json        # Issue #1, Milestone 1
+    - config_file_issue.json      # Issue #2, Milestone 2
+  milestones:
+    - v1.0.json                   # Milestone 1
+    - v2.0.json                   # Milestone 2
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/milestones/2/issues"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 1
+      item_fields:
+        - number
+        - title
+        - state
+        - milestone
+      first_item:
+        number: 2
+        title: "src/config.rs"
+        milestone: "v2.0"
