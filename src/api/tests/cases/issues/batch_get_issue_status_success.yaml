@@ -1,0 +1,36 @@
+name: "GET /api/issues/status - batch retrieve multiple issues"
+description: "Retrieve status for multiple issues in a single request"
+
+fixtures:
+  issues:
+    - test_file_issue.json    # Issue #1
+    - config_file_issue.json  # Issue #2
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: GET
+  path: "/api/issues/status"
+  query:
+    issues: "1,2"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 2
+      item_fields:
+        - issue
+        - qc_status
+        - dirty
+        - branch
+        - commits
+        - checklist_summary
+        - blocking_qc_status
+      first_item:
+        dirty: false
+        branch: "main"

@@ -419,3 +419,11 @@ pub fn load_test_issue(name: &str) -> Issue {
 
     serde_json::from_str(&json).expect("Failed to parse test fixture")
 }
+
+/// Helper to load test milestone fixtures from JSON
+pub fn load_test_milestone(name: &str) -> octocrab::models::Milestone {
+    let json = std::fs::read_to_string(format!("src/tests/github_api/milestones/{}.json", name))
+        .expect("Failed to load milestone fixture");
+
+    serde_json::from_str(&json).expect("Failed to parse milestone fixture")
+}

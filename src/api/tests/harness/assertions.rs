@@ -255,13 +255,9 @@ impl<'a> ResponseAsserter<'a> {
                     for (key, expected_value) in first_item_expected {
                         match first_obj.get(key) {
                             Some(actual_value) => {
-                                if actual_value != expected_value {
-                                    errors.push(format!(
-                                        "First item field '{}': expected {}, got {}",
-                                        key,
-                                        serde_json::to_string(expected_value).unwrap_or_default(),
-                                        serde_json::to_string(actual_value).unwrap_or_default()
-                                    ));
+                                // Support nested object validation
+                                if let Err(e) = self.validate_value_match(actual_value, expected_value, key) {
+                                    errors.push(format!("First item field '{}': {}", key, e));
                                 }
                             }
                             None => errors.push(format!("First item missing field: '{}'", key)),
@@ -289,6 +285,59 @@ impl<'a> ResponseAsserter<'a> {
                 "Schema validation failed:\n  {}",
                 errors.join("\n  ")
             ))
+        }
+    }
+
+    /// Validate that actual_value matches expected_value
+    /// Supports partial matching for nested objects
+    fn validate_value_match(&self, actual: &Value, expected: &Value, field_path: &str) -> Result<(), String> {
+        match (actual, expected) {
+            // Both are objects: validate that expected fields exist and match in actual
+            (Value::Object(actual_obj), Value::Object(expected_obj)) => {
+                let mut errors = Vec::new();
+                for (key, expected_val) in expected_obj {
+                    match actual_obj.get(key) {
+                        Some(actual_val) => {
+                            let nested_path = format!("{}.{}", field_path, key);
+                            if let Err(e) = self.validate_value_match(actual_val, expected_val, &nested_path) {
+                                errors.push(e);
+                            }
+                        }
+                        None => {
+                            errors.push(format!("missing nested field '{}.{}'", field_path, key));
+                        }
+                    }
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors.join(", "))
+                }
+            }
+            // Both are arrays: validate array equality
+            (Value::Array(actual_arr), Value::Array(expected_arr)) => {
+                if actual_arr == expected_arr {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "array mismatch: expected {}, got {}",
+                        serde_json::to_string(expected).unwrap_or_default(),
+                        serde_json::to_string(actual).unwrap_or_default()
+                    ))
+                }
+            }
+            // Scalar values: exact equality
+            _ => {
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected {}, got {}",
+                        serde_json::to_string(expected).unwrap_or_default(),
+                        serde_json::to_string(actual).unwrap_or_default()
+                    ))
+                }
+            }
         }
     }
 }

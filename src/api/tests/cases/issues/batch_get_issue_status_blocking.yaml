@@ -1,0 +1,33 @@
+name: "GET /api/issues/status - with blocking QCs"
+description: "Verify blocking_qc_status is populated by parsing issue body for blocking dependencies"
+
+fixtures:
+  issues:
+    - test_file_issue.json       # Issue #1 (blocking)
+    - issue_with_blocking.json   # Issue #2 (has Gating QC: #1 in body)
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: GET
+  path: "/api/issues/status"
+  query:
+    issues: "2"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 1
+      item_fields:
+        - issue
+        - blocking_qc_status
+      first_item:
+        issue:
+          number: 2
+        blocking_qc_status:
+          total: 1

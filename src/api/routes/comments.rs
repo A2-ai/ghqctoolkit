@@ -51,7 +51,8 @@ pub async fn create_comment<G: GitProvider + 'static>(
         &comment.issue,
         &current_commit.to_string(),
         UpdateAction::Notification,
-    );
+    )
+    .await;
 
     Ok((
         StatusCode::from_u16(200).unwrap(),
@@ -111,7 +112,8 @@ pub async fn approve_issue<G: GitProvider + 'static>(
         &approval.issue,
         &commit.to_string(),
         UpdateAction::Approve,
-    );
+    )
+    .await;
 
     Ok(Json(ApprovalResponse {
         approval_url,
@@ -146,7 +148,7 @@ pub async fn unapprove_issue<G: GitProvider + 'static>(
 
     let unapproval_url = state.git_info().post_comment(&unapprove).await?;
 
-    update_cache_after_unapproval(&state, &unapprove.issue);
+    update_cache_after_unapproval(&state, &unapprove.issue).await;
 
     Ok(Json(UnapprovalResponse { unapproval_url }))
 }
@@ -177,7 +179,8 @@ pub async fn review_issue<G: GitProvider + 'static>(
         &review.issue,
         &commit.to_string(),
         UpdateAction::Review,
-    );
+    )
+    .await;
 
     Ok((
         StatusCode::from_u16(200).unwrap(),

@@ -59,20 +59,24 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
 
     let dirty = state.git_info().dirty()?;
 
-    let cache_read = state.status_cache.read().await;
-    let mut fetched_issues =
-        FetchedIssues::fetch_issues(&issue_numbers, state.git_info(), &cache_read).await;
+    let mut fetched_issues = {
+        let cache_read = state.status_cache.read().await;
+        let mut fetched_issues =
+            FetchedIssues::fetch_issues(&issue_numbers, state.git_info(), &cache_read).await;
 
-    if !fetched_issues.errors.is_empty() {
-        return Err(ApiError::GitHubApi(format!(
-            "Failed to fetch all issues:\n  -{}",
-            format_error_list(&fetched_issues.errors)
-        )));
-    }
+        if !fetched_issues.errors.is_empty() {
+            return Err(ApiError::GitHubApi(format!(
+                "Failed to fetch all issues:\n  -{}",
+                format_error_list(&fetched_issues.errors)
+            )));
+        }
 
-    fetched_issues
-        .fetch_blocking_qcs(state.git_info(), &cache_read)
-        .await;
+        fetched_issues
+            .fetch_blocking_qcs(state.git_info(), &cache_read)
+            .await;
+
+        fetched_issues
+    }; // cache_read lock released here
 
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, &state).await;
 

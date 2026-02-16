@@ -1,0 +1,29 @@
+name: "GET /api/issues/status - single issue"
+description: "Retrieve status for a single issue"
+
+fixtures:
+  issues:
+    - test_file_issue.json
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: GET
+  path: "/api/issues/status"
+  query:
+    issues: "1"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 1
+      item_fields:
+        - issue
+        - qc_status
+        - dirty
+        - branch

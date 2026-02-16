@@ -101,22 +101,26 @@ impl CreatedThreads {
             .collect::<Vec<_>>();
         let thread_results = futures::future::join_all(thread_futures).await;
         let mut created = CreatedThreads::default();
-        let mut cache_write = app_state.status_cache.write().await;
 
-        for (result, issue) in thread_results.into_iter().zip(issues) {
-            match result {
-                Ok(issue_thread) => {
-                    let entry = CacheEntry::new(issue, &issue_thread);
-                    let key = cache_key_or_default(git_info, issue.updated_at.clone());
+        // Collect entries first, then acquire write lock once
+        {
+            let mut cache_write = app_state.status_cache.write().await;
 
-                    created.entries.insert(issue.number, entry.clone());
-                    cache_write.insert(issue.number, key, entry);
-                }
-                Err(e) => {
-                    created.thread_errors.insert(issue.number, e);
+            for (result, issue) in thread_results.into_iter().zip(issues) {
+                match result {
+                    Ok(issue_thread) => {
+                        let entry = CacheEntry::new(issue, &issue_thread);
+                        let key = cache_key_or_default(git_info, issue.updated_at.clone());
+
+                        created.entries.insert(issue.number, entry.clone());
+                        cache_write.insert(issue.number, key, entry);
+                    }
+                    Err(e) => {
+                        created.thread_errors.insert(issue.number, e);
+                    }
                 }
             }
-        }
+        } // cache_write lock released here
 
         created
     }

@@ -261,30 +261,35 @@ impl UpdateAction {
     }
 }
 
-pub fn update_cache_after_comment<G: crate::GitProvider>(
+pub async fn update_cache_after_comment<G: crate::GitProvider>(
     state: &AppState<G>,
     issue: &octoIssue,
     commit: &str,
     action: UpdateAction,
 ) {
     match CacheKey::build(state.git_info(), issue.updated_at.clone()) {
-        Ok(key) => state
-            .status_cache
-            .blocking_write()
-            .update(key, issue, commit, action),
+        Ok(key) => {
+            state
+                .status_cache
+                .write()
+                .await
+                .update(key, issue, commit, action);
+        }
         Err(e) => {
             log::error!("{e}. Removing cache entry");
-            state.status_cache.blocking_write().remove(issue.number);
+            state.status_cache.write().await.remove(issue.number);
         }
     }
 }
 
-pub fn update_cache_after_unapproval<G: crate::GitProvider>(state: &AppState<G>, issue: &octoIssue) {
+pub async fn update_cache_after_unapproval<G: crate::GitProvider>(state: &AppState<G>, issue: &octoIssue) {
     match CacheKey::build(state.git_info(), issue.updated_at.clone()) {
-        Ok(key) => state.status_cache.blocking_write().unapproval(key, issue),
+        Ok(key) => {
+            state.status_cache.write().await.unapproval(key, issue);
+        }
         Err(e) => {
             log::error!("{e}. Removing cache entry");
-            state.status_cache.blocking_write().remove(issue.number);
+            state.status_cache.write().await.remove(issue.number);
         }
     }
 }

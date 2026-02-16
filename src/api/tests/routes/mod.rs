@@ -1,8 +1,8 @@
 // Phase 1: Converted to YAML (removed)
-// mod issues_tests;
 // mod health_tests;
 
 // Phase 2: Partially converted to YAML
+mod issues_tests;      // KEEP - has cache behavior tests
 mod milestones_tests;  // KEEP - still has test_create_milestone (POST endpoint)
 // mod status_tests;    // REMOVE - fully converted to YAML
 
