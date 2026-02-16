@@ -1,0 +1,27 @@
+name: "GET /api/issues/{number}/blocked - success"
+description: "Retrieve issues blocked by a given issue"
+
+fixtures:
+  issues:
+    - test_file_issue.json
+    - config_file_issue.json
+  blocking:
+    - issue: 1
+      blocks: [2]
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/issues/1/blocked"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      min_length: 1
+      item_fields:
+        - issue
+        - qc_status

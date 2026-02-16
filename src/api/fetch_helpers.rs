@@ -74,7 +74,7 @@ impl FetchedIssues {
             .into_iter()
             .filter(|num| {
                 !self.cached_entries.contains_key(num)
-                    && self.issues.iter().find(|i| i.number != *num).is_some()
+                    && !self.issues.iter().any(|i| i.number == *num)
             })
             .collect::<Vec<_>>();
 

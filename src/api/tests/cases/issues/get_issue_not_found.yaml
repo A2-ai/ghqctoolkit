@@ -1,0 +1,14 @@
+name: "GET /api/issues/{number} - not found"
+description: "Return 502 when issue doesn't exist (GitHubApiError maps to ApiError::GitHubApi)"
+
+fixtures:
+  issues: []
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/issues/999"
+
+response:
+  status: 502  # Current API behavior: GitHubApiError -> 502 Bad Gateway

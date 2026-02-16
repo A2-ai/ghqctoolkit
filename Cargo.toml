@@ -66,6 +66,8 @@ api = [
 mockall = "0.12"
 insta = "1.34"
 toml = "0.8"
+anyhow = "1.0"
+urlencoding = "2.1"
 
 [[bin]]
 name = "ghqc"
