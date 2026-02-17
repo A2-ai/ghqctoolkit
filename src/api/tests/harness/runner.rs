@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{Method, Request};
 use serde_json::Value;
 use std::path::PathBuf;
 use tower::ServiceExt;
 
-use crate::api::{server::create_router, state::AppState};
-use crate::api::tests::helpers::{MockGitInfo, WriteCall};
 use crate::Configuration;
+use crate::api::tests::helpers::{MockGitInfo, WriteCall};
+use crate::api::{server::create_router, state::AppState};
 
 use super::{
     assertions::{ResponseAsserter, ValidationError},
@@ -151,8 +151,8 @@ impl TestRunner {
             // Set content-type header
             builder = builder.header("content-type", "application/json");
             // Serialize to JSON bytes
-            let body_bytes = serde_json::to_vec(body_value)
-                .context("Failed to serialize request body")?;
+            let body_bytes =
+                serde_json::to_vec(body_value).context("Failed to serialize request body")?;
             Body::from(body_bytes)
         } else {
             Body::empty()
@@ -179,21 +179,15 @@ fn validate_write_calls(
                     description: description.clone(),
                 }
             }
-            ExpectedWriteCall::PostComment { comment_type } => {
-                WriteCall::PostComment {
-                    comment_type: comment_type.clone(),
-                }
-            }
-            ExpectedWriteCall::CloseIssue { issue_number } => {
-                WriteCall::CloseIssue {
-                    issue_number: *issue_number,
-                }
-            }
-            ExpectedWriteCall::OpenIssue { issue_number } => {
-                WriteCall::OpenIssue {
-                    issue_number: *issue_number,
-                }
-            }
+            ExpectedWriteCall::PostComment { comment_type } => WriteCall::PostComment {
+                comment_type: comment_type.clone(),
+            },
+            ExpectedWriteCall::CloseIssue { issue_number } => WriteCall::CloseIssue {
+                issue_number: *issue_number,
+            },
+            ExpectedWriteCall::OpenIssue { issue_number } => WriteCall::OpenIssue {
+                issue_number: *issue_number,
+            },
         };
 
         if !actual_calls.contains(&write_call) {

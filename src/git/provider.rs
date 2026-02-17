@@ -1,7 +1,7 @@
 //! Git provider trait combining all git operations.
 
-use super::{GitCommitAnalysis, GitFileOps, GitHelpers, GitRepository, GitStatusOps};
 use super::api::{GitHubReader, GitHubWriter};
+use super::{GitCommitAnalysis, GitFileOps, GitHelpers, GitRepository, GitStatusOps};
 
 /// Super-trait combining all git/GitHub operations.
 ///
@@ -18,11 +18,11 @@ pub trait GitProvider:
     + Clone
     + Send
     + Sync
-{}
+{
+}
 
 // Blanket implementation: any type implementing all traits automatically implements GitProvider
-impl<T> GitProvider for T
-where
+impl<T> GitProvider for T where
     T: GitHubReader
         + GitHubWriter
         + GitHelpers
@@ -33,4 +33,5 @@ where
         + Clone
         + Send
         + Sync
-{}
+{
+}

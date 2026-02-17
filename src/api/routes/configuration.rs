@@ -1,12 +1,12 @@
 //! Configuration endpoints.
 
+use crate::GitProvider;
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{
     Checklist, ChecklistInfo, ConfigurationOptions, ConfigurationStatusResponse,
 };
-use crate::GitProvider;
-use axum::{extract::State, Json};
+use axum::{Json, extract::State};
 
 /// GET /api/configuration/checklists
 pub async fn list_checklists<G: GitProvider + 'static>(

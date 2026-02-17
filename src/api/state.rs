@@ -23,11 +23,7 @@ pub struct AppState<G: GitProvider> {
 
 impl<G: GitProvider> AppState<G> {
     /// Create a new AppState with the given configuration.
-    pub fn new(
-        git_info: G,
-        configuration: Configuration,
-        disk_cache: Option<DiskCache>,
-    ) -> Self {
+    pub fn new(git_info: G, configuration: Configuration, disk_cache: Option<DiskCache>) -> Self {
         Self {
             git_info: Arc::new(git_info),
             configuration: Arc::new(configuration),

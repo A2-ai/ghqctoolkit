@@ -1,9 +1,9 @@
 //! Milestone endpoints.
 
+use crate::GitProvider;
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{CreateMilestoneRequest, Issue, Milestone};
-use crate::GitProvider;
 use axum::{
     Json,
     extract::{Path, State},

@@ -282,7 +282,10 @@ pub async fn update_cache_after_comment<G: crate::GitProvider>(
     }
 }
 
-pub async fn update_cache_after_unapproval<G: crate::GitProvider>(state: &AppState<G>, issue: &octoIssue) {
+pub async fn update_cache_after_unapproval<G: crate::GitProvider>(
+    state: &AppState<G>,
+    issue: &octoIssue,
+) {
     match CacheKey::build(state.git_info(), issue.updated_at.clone()) {
         Ok(key) => {
             state.status_cache.write().await.unapproval(key, issue);
@@ -571,7 +574,11 @@ mod tests {
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].hash, "def456");
         assert_eq!(commits[0].message, "New commit");
-        assert!(commits[0].statuses.contains(&CommitStatusEnum::Notification));
+        assert!(
+            commits[0]
+                .statuses
+                .contains(&CommitStatusEnum::Notification)
+        );
     }
 
     #[test]
@@ -686,7 +693,10 @@ mod tests {
     }
 
     // Helper function to create a minimal octocrab Issue for testing
-    fn create_test_octocrab_issue(number: u64, updated_at: DateTime<Utc>) -> octocrab::models::issues::Issue {
+    fn create_test_octocrab_issue(
+        number: u64,
+        updated_at: DateTime<Utc>,
+    ) -> octocrab::models::issues::Issue {
         // Use serde to deserialize from minimal JSON
         let json = serde_json::json!({
             "id": number,
@@ -848,11 +858,15 @@ mod tests {
         let cached = cache.get(1, &key).unwrap();
         assert_eq!(cached.qc_status.status, QCStatusEnum::ChangesToComment);
         // Approved status should be converted to Notification
-        assert!(cached.commits[1]
-            .statuses
-            .contains(&CommitStatusEnum::Notification));
-        assert!(!cached.commits[1]
-            .statuses
-            .contains(&CommitStatusEnum::Approved));
+        assert!(
+            cached.commits[1]
+                .statuses
+                .contains(&CommitStatusEnum::Notification)
+        );
+        assert!(
+            !cached.commits[1]
+                .statuses
+                .contains(&CommitStatusEnum::Approved)
+        );
     }
 }

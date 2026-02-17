@@ -256,7 +256,9 @@ impl<'a> ResponseAsserter<'a> {
                         match first_obj.get(key) {
                             Some(actual_value) => {
                                 // Support nested object validation
-                                if let Err(e) = self.validate_value_match(actual_value, expected_value, key) {
+                                if let Err(e) =
+                                    self.validate_value_match(actual_value, expected_value, key)
+                                {
                                     errors.push(format!("First item field '{}': {}", key, e));
                                 }
                             }
@@ -264,7 +266,9 @@ impl<'a> ResponseAsserter<'a> {
                         }
                     }
                 } else {
-                    errors.push("First array item is not an object (cannot check fields)".to_string());
+                    errors.push(
+                        "First array item is not an object (cannot check fields)".to_string(),
+                    );
                 }
             }
         }
@@ -290,7 +294,12 @@ impl<'a> ResponseAsserter<'a> {
 
     /// Validate that actual_value matches expected_value
     /// Supports partial matching for nested objects
-    fn validate_value_match(&self, actual: &Value, expected: &Value, field_path: &str) -> Result<(), String> {
+    fn validate_value_match(
+        &self,
+        actual: &Value,
+        expected: &Value,
+        field_path: &str,
+    ) -> Result<(), String> {
         match (actual, expected) {
             // Both are objects: validate that expected fields exist and match in actual
             (Value::Object(actual_obj), Value::Object(expected_obj)) => {
@@ -299,7 +308,9 @@ impl<'a> ResponseAsserter<'a> {
                     match actual_obj.get(key) {
                         Some(actual_val) => {
                             let nested_path = format!("{}.{}", field_path, key);
-                            if let Err(e) = self.validate_value_match(actual_val, expected_val, &nested_path) {
+                            if let Err(e) =
+                                self.validate_value_match(actual_val, expected_val, &nested_path)
+                            {
                                 errors.push(e);
                             }
                         }

@@ -3,7 +3,7 @@
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::Assignee;
-use crate::{get_repo_users, GitProvider};
+use crate::{GitProvider, get_repo_users};
 use axum::{Json, extract::State};
 
 /// GET /api/assignees

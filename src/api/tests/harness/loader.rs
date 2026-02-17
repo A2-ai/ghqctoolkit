@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use octocrab::models::{issues::Issue, Milestone};
+use octocrab::models::{Milestone, issues::Issue};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -100,9 +100,8 @@ impl FixtureLoader {
         let path = self.base_path.join("milestones").join(filename);
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read milestone fixture: {}", path.display()))?;
-        let milestone: Milestone = serde_json::from_str(&content).with_context(|| {
-            format!("Failed to parse milestone fixture: {}", path.display())
-        })?;
+        let milestone: Milestone = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse milestone fixture: {}", path.display()))?;
 
         // Cache and return
         self.milestone_cache

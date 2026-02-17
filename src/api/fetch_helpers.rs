@@ -92,7 +92,10 @@ pub(crate) struct CreatedThreads {
 }
 
 impl CreatedThreads {
-    pub(crate) async fn create_threads<G: GitProvider>(issues: &[Issue], app_state: &AppState<G>) -> Self {
+    pub(crate) async fn create_threads<G: GitProvider>(
+        issues: &[Issue],
+        app_state: &AppState<G>,
+    ) -> Self {
         let git_info = app_state.git_info();
         let cache = app_state.disk_cache();
         let thread_futures = issues
@@ -273,7 +276,9 @@ mod tests {
         use crate::api::types::{ChecklistSummary, Issue, QCStatus, QCStatusEnum};
 
         let test_issue = load_test_issue("test_file_issue");
-        let mock = MockGitInfo::builder().with_issue(1, test_issue.clone()).build();
+        let mock = MockGitInfo::builder()
+            .with_issue(1, test_issue.clone())
+            .build();
 
         let mut cache = StatusCache::new();
         let key = CacheKey {
