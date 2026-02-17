@@ -1,0 +1,22 @@
+name: "GET /api/configuration/status"
+description: "Successfully fetch configuration repository status"
+
+fixtures:
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/configuration/status"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: object
+      item_fields:
+        - directory
+        - git_repository
+        - options
+        - checklists
