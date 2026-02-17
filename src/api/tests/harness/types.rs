@@ -19,6 +19,9 @@ pub struct TestCase {
     pub request: HttpRequest,
     /// Expected response
     pub response: ExpectedResponse,
+    /// Expected write operations to mock (optional)
+    #[serde(default)]
+    pub assert_write_calls: Vec<ExpectedWriteCall>,
 }
 
 /// Fixture references (files to load)
@@ -201,4 +204,24 @@ pub enum SchemaType {
     Number,
     Boolean,
     Null,
+}
+
+/// Expected write call assertion for mock validation
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum ExpectedWriteCall {
+    CreateMilestone {
+        name: String,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    PostComment {
+        comment_type: String,
+    },
+    CloseIssue {
+        issue_number: u64,
+    },
+    OpenIssue {
+        issue_number: u64,
+    },
 }

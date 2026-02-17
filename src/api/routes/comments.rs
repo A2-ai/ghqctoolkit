@@ -11,9 +11,7 @@ use crate::api::types::{
     BlockingQCItemWithStatus, BlockingQCStatus, CommentResponse, CreateCommentRequest,
     QCStatusEnum, ReviewRequest, UnapprovalResponse, UnapproveRequest,
 };
-use crate::{
-    GitHubReader, GitHubWriter, GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, parse_blocking_qcs,
-};
+use crate::{GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, parse_blocking_qcs};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -147,6 +145,7 @@ pub async fn unapprove_issue<G: GitProvider + 'static>(
     };
 
     let unapproval_url = state.git_info().post_comment(&unapprove).await?;
+    state.git_info().open_issue(number).await?;
 
     update_cache_after_unapproval(&state, &unapprove.issue).await;
 
@@ -269,11 +268,11 @@ pub(crate) async fn get_blocking_qc_status_with_cache<G: GitProvider>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Configuration;
     use crate::api::cache::{CacheEntry, CacheKey};
     use crate::api::state::AppState;
     use crate::api::tests::helpers::{MockGitInfo, load_test_issue};
     use crate::api::types::{ChecklistSummary, Issue, QCStatus};
-    use crate::Configuration;
 
     #[tokio::test]
     async fn test_get_blocking_qc_status_empty() {

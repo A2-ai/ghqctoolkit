@@ -1,0 +1,20 @@
+name: "POST /api/issues/{number}/approve - blocked by unapproved QC"
+description: "Fail to approve when gating QC is not approved"
+
+fixtures:
+  issues:
+    - test_file_issue.json      # Issue #1 - open (not approved)
+    - issue_with_blocking.json  # Issue #2 - has #1 as Gating QC
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/2/approve"
+  body:
+    commit: "456def789abc012345678901234567890123cdef"
+    note: "Attempting to approve"
+
+response:
+  status: 409
+  # Body is JSON but we don't validate it - just check status

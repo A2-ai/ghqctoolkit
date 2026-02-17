@@ -33,3 +33,7 @@ response:
         state: "open"
         open_issues: 0
         closed_issues: 0
+
+assert_write_calls:
+  - type: CreateMilestone
+    name: "v2.0"

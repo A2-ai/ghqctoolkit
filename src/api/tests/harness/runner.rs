@@ -6,13 +6,14 @@ use std::path::PathBuf;
 use tower::ServiceExt;
 
 use crate::api::{server::create_router, state::AppState};
+use crate::api::tests::helpers::{MockGitInfo, WriteCall};
 use crate::Configuration;
 
 use super::{
     assertions::{ResponseAsserter, ValidationError},
     loader::FixtureLoader,
     mock_builder::MockBuilder,
-    types::{HttpMethod, HttpRequest, TestCase},
+    types::{ExpectedWriteCall, HttpMethod, HttpRequest, TestCase},
 };
 
 /// Test runner that executes test cases
@@ -48,9 +49,9 @@ impl TestRunner {
         // Build MockGitInfo
         let mock = MockBuilder::build(&test_case.git_state, &fixtures);
 
-        // Create AppState and router
+        // Create AppState and router (clone mock to keep a reference for assertions)
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None);
+        let state = AppState::new(mock.clone(), config, None);
         let app = create_router(state);
 
         // Build HTTP request
@@ -88,11 +89,29 @@ impl TestRunner {
         let asserter = ResponseAsserter::new(&test_case.response);
         let validation = asserter.validate(status, body_json.as_ref());
 
+        // Validate write calls if specified
+        let write_call_validation = if !test_case.assert_write_calls.is_empty() {
+            validate_write_calls(&mock, &test_case.assert_write_calls)
+        } else {
+            Ok(())
+        };
+
+        // Combine validations
+        let combined_validation = match (validation, write_call_validation) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(e), Ok(())) => Err(e),
+            (Ok(()), Err(e)) => Err(e),
+            (Err(mut e1), Err(e2)) => {
+                e1.details.push(format!("Write call validation: {}", e2));
+                Err(e1)
+            }
+        };
+
         Ok(TestResult {
             name: test_case.name,
-            passed: validation.is_ok(),
+            passed: combined_validation.is_ok(),
             status_code: status.as_u16(),
-            validation,
+            validation: combined_validation,
         })
     }
 
@@ -140,5 +159,54 @@ impl TestRunner {
         };
 
         builder.body(body).context("Failed to build request")
+    }
+}
+
+/// Validate that expected write calls were made to the mock
+fn validate_write_calls(
+    mock: &MockGitInfo,
+    expected: &[ExpectedWriteCall],
+) -> Result<(), ValidationError> {
+    let actual_calls = mock.write_calls();
+    let mut errors = Vec::new();
+
+    // Convert expected calls to WriteCall for comparison
+    for expected_call in expected {
+        let write_call = match expected_call {
+            ExpectedWriteCall::CreateMilestone { name, description } => {
+                WriteCall::CreateMilestone {
+                    name: name.clone(),
+                    description: description.clone(),
+                }
+            }
+            ExpectedWriteCall::PostComment { comment_type } => {
+                WriteCall::PostComment {
+                    comment_type: comment_type.clone(),
+                }
+            }
+            ExpectedWriteCall::CloseIssue { issue_number } => {
+                WriteCall::CloseIssue {
+                    issue_number: *issue_number,
+                }
+            }
+            ExpectedWriteCall::OpenIssue { issue_number } => {
+                WriteCall::OpenIssue {
+                    issue_number: *issue_number,
+                }
+            }
+        };
+
+        if !actual_calls.contains(&write_call) {
+            errors.push(format!("Expected write call not found: {:?}", write_call));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ValidationError {
+            message: "Write call assertions failed".to_string(),
+            details: errors,
+        })
     }
 }

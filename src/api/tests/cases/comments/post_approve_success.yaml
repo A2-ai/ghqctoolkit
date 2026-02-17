@@ -1,0 +1,30 @@
+name: "POST /api/issues/{number}/approve - approve and close issue"
+description: "Successfully approve an issue and close it"
+
+fixtures:
+  issues:
+    - test_file_issue.json
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/1/approve"
+  body:
+    commit: "456def789abc012345678901234567890123cdef"
+    note: "Looks good!"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      approval_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"
+      skipped_unapproved: []
+      skipped_errors: []
+
+assert_write_calls:
+  - type: PostComment
+    comment_type: "ghqctoolkit::approve::QCApprove"
+  - type: CloseIssue
+    issue_number: 1

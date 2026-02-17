@@ -1,0 +1,27 @@
+name: "POST /api/issues/{number}/unapprove - unapprove and open issue"
+description: "Successfully unapprove an issue and re-open it"
+
+fixtures:
+  issues:
+    - test_file_issue.json
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/1/unapprove"
+  body:
+    reason: "Something is wrong"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      unapproval_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"
+
+assert_write_calls:
+  - type: PostComment
+    comment_type: "ghqctoolkit::approve::QCUnapprove"
+  - type: OpenIssue
+    issue_number: 1

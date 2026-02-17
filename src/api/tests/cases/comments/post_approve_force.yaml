@@ -1,0 +1,35 @@
+name: "POST /api/issues/{number}/approve - force approve despite blocking"
+description: "Successfully approve with force=true even when gating QC is not approved"
+
+fixtures:
+  issues:
+    - test_file_issue.json      # Issue #1 - open (not approved)
+    - issue_with_blocking.json  # Issue #2 - has #1 as Gating QC
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/2/approve"
+  query:
+    force: "true"
+  body:
+    commit: "456def789abc012345678901234567890123cdef"
+    note: "Force approving"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: object
+      item_fields:
+        - approval_url
+        - skipped_unapproved
+        - skipped_errors
+
+assert_write_calls:
+  - type: PostComment
+    comment_type: "ghqctoolkit::approve::QCApprove"
+  - type: CloseIssue
+    issue_number: 2

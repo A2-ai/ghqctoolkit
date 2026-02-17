@@ -16,10 +16,19 @@ use std::sync::{Arc, Mutex};
 /// Tracks write operation calls for test verification.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WriteCall {
-    CreateMilestone { name: String, description: Option<String> },
-    PostComment { comment_type: String },
-    CloseIssue { issue_number: u64 },
-    OpenIssue { issue_number: u64 },
+    CreateMilestone {
+        name: String,
+        description: Option<String>,
+    },
+    PostComment {
+        comment_type: String,
+    },
+    CloseIssue {
+        issue_number: u64,
+    },
+    OpenIssue {
+        issue_number: u64,
+    },
 }
 
 /// Mock implementation of all git traits for testing.
@@ -241,12 +250,10 @@ impl GitFileOps for MockGitInfo {
 
     fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
         // Return dummy authors for any file
-        Ok(vec![
-            GitAuthor {
-                name: "Test Author".to_string(),
-                email: "test@example.com".to_string(),
-            }
-        ])
+        Ok(vec![GitAuthor {
+            name: "Test Author".to_string(),
+            email: "test@example.com".to_string(),
+        }])
     }
 
     fn file_bytes_at_commit(
@@ -406,10 +413,13 @@ impl GitHubWriter for MockGitInfo {
         use chrono::Utc;
 
         // Track the call with parameters
-        self.write_calls.lock().unwrap().push(WriteCall::CreateMilestone {
-            name: name.to_string(),
-            description: desc.clone(),
-        });
+        self.write_calls
+            .lock()
+            .unwrap()
+            .push(WriteCall::CreateMilestone {
+                name: name.to_string(),
+                description: desc.clone(),
+            });
 
         // Generate milestone number based on existing milestones count + 1
         let milestone_number = {
@@ -440,11 +450,10 @@ impl GitHubWriter for MockGitInfo {
             "closed_at": null,
         });
 
-        serde_json::from_value(milestone_json)
-            .map_err(|e| {
-                eprintln!("Failed to create mock milestone: {}", e);
-                GitHubApiError::NoApi
-            })
+        serde_json::from_value(milestone_json).map_err(|e| {
+            eprintln!("Failed to create mock milestone: {}", e);
+            GitHubApiError::NoApi
+        })
     }
 
     async fn post_issue(&self, _issue: &crate::QCIssue) -> Result<String, GitHubApiError> {
@@ -453,17 +462,38 @@ impl GitHubWriter for MockGitInfo {
 
     async fn post_comment<T: CommentBody + Sync + 'static>(
         &self,
-        _comment: &T,
+        comment: &T,
     ) -> Result<String, GitHubApiError> {
-        Err(GitHubApiError::NoApi)
+        // Track the call
+        self.write_calls
+            .lock()
+            .unwrap()
+            .push(WriteCall::PostComment {
+                comment_type: std::any::type_name::<T>().to_string(),
+            });
+
+        // Return a mock comment URL
+        let issue_number = comment.issue().number;
+        Ok(format!(
+            "https://github.com/{}/{}/issues/{}#issuecomment-123",
+            self.owner, self.repo, issue_number
+        ))
     }
 
-    async fn close_issue(&self, _issue_number: u64) -> Result<(), GitHubApiError> {
-        Err(GitHubApiError::NoApi)
+    async fn close_issue(&self, issue_number: u64) -> Result<(), GitHubApiError> {
+        self.write_calls
+            .lock()
+            .unwrap()
+            .push(WriteCall::CloseIssue { issue_number });
+        Ok(())
     }
 
-    async fn open_issue(&self, _issue_number: u64) -> Result<(), GitHubApiError> {
-        Err(GitHubApiError::NoApi)
+    async fn open_issue(&self, issue_number: u64) -> Result<(), GitHubApiError> {
+        self.write_calls
+            .lock()
+            .unwrap()
+            .push(WriteCall::OpenIssue { issue_number });
+        Ok(())
     }
 
     async fn create_label(&self, _name: &str, _color: &str) -> Result<(), GitHubApiError> {

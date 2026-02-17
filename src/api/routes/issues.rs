@@ -1,8 +1,5 @@
 //! Issue endpoints.
 
-use std::collections::HashMap;
-use std::fs;
-
 use crate::GitProvider;
 use crate::api::cache::CacheKey;
 use crate::api::error::ApiError;
@@ -19,6 +16,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct IssueStatusQuery {

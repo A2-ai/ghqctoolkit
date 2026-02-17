@@ -1,0 +1,27 @@
+name: "POST /api/issues/{number}/comment - create a comment"
+description: "Successfully create a comment on an existing issue"
+
+fixtures:
+  issues:
+    - test_file_issue.json
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/1/comment"
+  body:
+    current_commit: "456def789abc012345678901234567890123cdef"
+    previous_commit: "123abc456def012345678901234567890123cdef"
+    note: "Hello"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      comment_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"
+
+assert_write_calls:
+  - type: PostComment
+    comment_type: "ghqctoolkit::comment::QCComment"
