@@ -14,29 +14,43 @@ fn load_test_config() -> Configuration {
 
 #[tokio::test]
 async fn test_create_milestone() {
+    use crate::api::tests::helpers::WriteCall;
+    use crate::api::types::Milestone;
+
     let mock = MockGitInfo::builder().build();
     let config = load_test_config();
-    let state = AppState::new(mock, config, None);
+    let state = AppState::new(mock.clone(), config, None);
     let app = create_router(state);
 
     let request_body = serde_json::json!({
-        "title": "Test Milestone",
+        "name": "Test Milestone",
         "description": "A test milestone"
     });
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/milestones")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
-                .unwrap(),
-        )
-        .await
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/milestones")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
         .unwrap();
 
-    // MockGitInfo returns NotImplemented error by default
-    // This is expected behavior for the mock
-    assert_ne!(response.status(), StatusCode::OK);
+    let response = app.oneshot(request).await.unwrap();
+
+    // Verify success response
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Verify response body structure
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let milestone: Milestone = serde_json::from_slice(&body).unwrap();
+    assert_eq!(milestone.title, "Test Milestone");
+    assert_eq!(milestone.description, Some("A test milestone".to_string()));
+    assert_eq!(milestone.number, 1);
+    assert_eq!(milestone.state, "open");
+
+    // Verify write call was tracked
+    let expected_call = WriteCall::CreateMilestone {
+        name: "Test Milestone".to_string(),
+        description: Some("A test milestone".to_string()),
+    };
+    assert!(mock.was_called(&expected_call), "create_milestone should have been called");
 }

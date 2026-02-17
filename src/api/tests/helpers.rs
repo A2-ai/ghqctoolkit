@@ -13,6 +13,15 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+/// Tracks write operation calls for test verification.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WriteCall {
+    CreateMilestone { name: String, description: Option<String> },
+    PostComment { comment_type: String },
+    CloseIssue { issue_number: u64 },
+    OpenIssue { issue_number: u64 },
+}
+
 /// Mock implementation of all git traits for testing.
 #[derive(Clone)]
 pub struct MockGitInfo {
@@ -33,12 +42,24 @@ pub struct MockGitInfo {
 
     // Call tracking (for assertions)
     calls: Arc<Mutex<Vec<String>>>,
+    write_calls: Arc<Mutex<Vec<WriteCall>>>,
 }
 
 impl MockGitInfo {
     /// Create a new mock with default values.
     pub fn builder() -> MockGitInfoBuilder {
         MockGitInfoBuilder::new()
+    }
+
+    /// Check if a specific write operation was called.
+    pub fn was_called(&self, expected: &WriteCall) -> bool {
+        let calls = self.write_calls.lock().unwrap();
+        calls.iter().any(|call| call == expected)
+    }
+
+    /// Get all write calls for inspection.
+    pub fn write_calls(&self) -> Vec<WriteCall> {
+        self.write_calls.lock().unwrap().clone()
     }
 }
 
@@ -127,6 +148,7 @@ impl MockGitInfoBuilder {
             users: Arc::new(Mutex::new(self.users)),
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
             calls: Arc::new(Mutex::new(Vec::new())),
+            write_calls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -378,10 +400,51 @@ impl GitHubReader for MockGitInfo {
 impl GitHubWriter for MockGitInfo {
     async fn create_milestone(
         &self,
-        _name: &str,
-        _desc: &Option<String>,
+        name: &str,
+        desc: &Option<String>,
     ) -> Result<octocrab::models::Milestone, GitHubApiError> {
-        Err(GitHubApiError::NoApi)
+        use chrono::Utc;
+
+        // Track the call with parameters
+        self.write_calls.lock().unwrap().push(WriteCall::CreateMilestone {
+            name: name.to_string(),
+            description: desc.clone(),
+        });
+
+        // Generate milestone number based on existing milestones count + 1
+        let milestone_number = {
+            let milestones = self.milestones.lock().unwrap();
+            milestones.len() as i64 + 1
+        };
+
+        // Construct milestone using JSON deserialization (octocrab types are #[non_exhaustive])
+        let milestone_json = serde_json::json!({
+            "url": format!("https://api.github.com/repos/{}/{}/milestones/{}",
+                          self.owner, self.repo, milestone_number),
+            "html_url": format!("https://github.com/{}/{}/milestone/{}",
+                               self.owner, self.repo, milestone_number),
+            "labels_url": format!("https://api.github.com/repos/{}/{}/milestones/{}/labels",
+                                 self.owner, self.repo, milestone_number),
+            "id": milestone_number * 1000,
+            "node_id": format!("MDk6TWlsZXN0b25l{}", milestone_number),
+            "number": milestone_number,
+            "title": name,
+            "description": desc,
+            "creator": null,
+            "open_issues": 0,
+            "closed_issues": 0,
+            "state": "open",
+            "created_at": Utc::now().to_rfc3339(),
+            "updated_at": Utc::now().to_rfc3339(),
+            "due_on": null,
+            "closed_at": null,
+        });
+
+        serde_json::from_value(milestone_json)
+            .map_err(|e| {
+                eprintln!("Failed to create mock milestone: {}", e);
+                GitHubApiError::NoApi
+            })
     }
 
     async fn post_issue(&self, _issue: &crate::QCIssue) -> Result<String, GitHubApiError> {

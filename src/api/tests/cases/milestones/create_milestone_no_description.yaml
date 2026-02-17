@@ -1,0 +1,35 @@
+name: "POST /api/milestones - create milestone without description"
+description: "Successfully create a milestone with only a name (no description)"
+
+fixtures:
+  milestones:
+    - v1.0.json  # One existing milestone
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones"
+  body:
+    name: "v2.0"
+
+response:
+  status: 201
+  body:
+    match_type: schema
+    schema:
+      type: object
+      item_fields:
+        - number
+        - title
+        - state
+        - open_issues
+        - closed_issues
+      first_item:
+        number: 2
+        title: "v2.0"
+        state: "open"
+        open_issues: 0
+        closed_issues: 0

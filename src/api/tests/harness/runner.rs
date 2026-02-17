@@ -70,14 +70,18 @@ impl TestRunner {
             .await
             .context("Failed to read response body")?;
 
-        // Parse body as JSON (if not empty)
+        // Parse body as JSON (if not empty and needed for validation)
         let body_json = if body_bytes.is_empty() {
             None
-        } else {
+        } else if test_case.response.body.is_some() {
+            // Only parse JSON if body validation is expected
             Some(
                 serde_json::from_slice::<Value>(&body_bytes)
                     .context("Failed to parse response body as JSON")?,
             )
+        } else {
+            // Body validation not specified, skip JSON parsing
+            None
         };
 
         // Validate response
