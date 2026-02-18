@@ -50,6 +50,7 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .route("/api/issues/{number}/review", post(comments::review_issue))
         // Supporting Data
         .route("/api/assignees", get(status::list_assignees))
+        .route("/api/repo", get(status::repo_info))
         // Configuration
         .route(
             "/api/configuration/checklists",

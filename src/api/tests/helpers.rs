@@ -51,6 +51,7 @@ pub struct MockGitInfo {
 
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
+    git_status: GitStatus,
 
     // Call tracking (for assertions)
     calls: Arc<Mutex<Vec<String>>>,
@@ -80,6 +81,7 @@ pub struct MockGitInfoBuilder {
     milestones: Vec<octocrab::models::Milestone>,
     users: Vec<crate::RepoUser>,
     dirty_files: Vec<PathBuf>,
+    git_status: GitStatus,
 }
 
 impl MockGitInfoBuilder {
@@ -94,6 +96,7 @@ impl MockGitInfoBuilder {
             milestones: Vec::new(),
             users: Vec::new(),
             dirty_files: Vec::new(),
+            git_status: GitStatus::Clean,
         }
     }
 
@@ -142,6 +145,11 @@ impl MockGitInfoBuilder {
         self
     }
 
+    pub fn with_status(mut self, status: GitStatus) -> Self {
+        self.git_status = status;
+        self
+    }
+
     pub fn build(self) -> MockGitInfo {
         MockGitInfo {
             owner: self.owner,
@@ -153,6 +161,7 @@ impl MockGitInfoBuilder {
             milestones: Arc::new(Mutex::new(self.milestones)),
             users: Arc::new(Mutex::new(self.users)),
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
+            git_status: self.git_status,
             calls: Arc::new(Mutex::new(Vec::new())),
             write_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -218,7 +227,7 @@ impl GitHelpers for MockGitInfo {
 
 impl GitStatusOps for MockGitInfo {
     fn status(&self) -> Result<GitStatus, GitStatusError> {
-        Ok(GitStatus::Clean)
+        Ok(self.git_status.clone())
     }
 
     fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError> {

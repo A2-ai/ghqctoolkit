@@ -1,8 +1,11 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use super::loader::LoadedFixtures;
-use super::types::GitState;
+use super::types::{GitState, GitStatusSpec};
 use crate::api::tests::helpers::MockGitInfo;
+use crate::GitStatus;
+use gix::ObjectId;
 
 /// Builds MockGitInfo from test specification
 pub struct MockBuilder;
@@ -46,6 +49,39 @@ impl MockBuilder {
             builder = builder.with_dirty_file(PathBuf::from(file));
         }
 
+        // Set git status
+        if let Some(status_spec) = &git_state.status {
+            builder = builder.with_status(Self::convert_status(status_spec));
+        }
+
         builder.build()
+    }
+
+    /// Convert GitStatusSpec to GitStatus
+    fn convert_status(spec: &GitStatusSpec) -> GitStatus {
+        match spec {
+            GitStatusSpec::Clean => GitStatus::Clean,
+            GitStatusSpec::Ahead { commits } => {
+                GitStatus::Ahead(Self::parse_object_ids(commits))
+            }
+            GitStatusSpec::Behind { commits } => {
+                GitStatus::Behind(Self::parse_object_ids(commits))
+            }
+            GitStatusSpec::Diverged { ahead, behind } => GitStatus::Diverged {
+                ahead: Self::parse_object_ids(ahead),
+                behind: Self::parse_object_ids(behind),
+            },
+        }
+    }
+
+    /// Parse commit hash strings into ObjectIds
+    fn parse_object_ids(hashes: &[String]) -> Vec<ObjectId> {
+        hashes
+            .iter()
+            .map(|h| {
+                ObjectId::from_str(h)
+                    .unwrap_or_else(|_| ObjectId::empty_tree(gix::hash::Kind::Sha1))
+            })
+            .collect()
     }
 }

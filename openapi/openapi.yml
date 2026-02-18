@@ -334,6 +334,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/Assignee'
 
+  /repo:
+    get:
+      summary: Get repository information
+      operationId: getRepoInfo
+      tags: [status]
+      description: |
+        Returns information about the current repository including local and remote commits.
+        The remote_commit represents:
+        - When Clean: Same as local_commit (repository is up to date)
+        - When Ahead: The last common ancestor before local commits
+        - When Behind/Diverged: The latest remote commit
+      responses:
+        '200':
+          description: Repository information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepoInfo'
+
   /configuration/checklists:
     get:
       summary: List available checklists
@@ -783,6 +802,38 @@ components:
         name:
           type: string
           nullable: true
+
+    RepoInfo:
+      type: object
+      required:
+        - owner
+        - repo
+        - branch
+        - local_commit
+        - remote_commit
+        - git_status
+        - git_status_detail
+      properties:
+        owner:
+          type: string
+          description: Repository owner/organization
+        repo:
+          type: string
+          description: Repository name
+        branch:
+          type: string
+          description: Current branch name
+        local_commit:
+          type: string
+          description: Current local commit hash
+        remote_commit:
+          type: string
+          description: Remote tracking commit hash (base ancestor when ahead, latest remote when behind)
+        git_status:
+          $ref: '#/components/schemas/GitStatusEnum'
+        git_status_detail:
+          type: string
+          description: Human-readable git status description
 
     Checklist:
       type: object

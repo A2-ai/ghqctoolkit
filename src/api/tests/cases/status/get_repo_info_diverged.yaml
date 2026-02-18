@@ -1,0 +1,37 @@
+name: "GET /api/repo - diverged status"
+description: "Repository is diverged, remote_commit is the latest remote commit (first in behind list)"
+
+fixtures:
+  milestones:
+    - v1.0.json
+
+git_state:
+  commit: "abc1234567890abcdef1234567890abcdef1234"
+  branch: "main"
+  status:
+    type: diverged
+    ahead:
+      - "def5678901234567890abcdef1234567890abcdef"
+      - "9012345678901234567890abcdef1234567890ab"
+    behind:
+      - "4567890123456789012345678901234567890abc"
+      - "8901234567890123456789012345678901234567"
+
+request:
+  method: GET
+  path: "/api/repo"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      owner: "test-owner"
+      repo: "test-repo"
+      branch: "main"
+      local_commit: "abc1234567890abcdef1234567890abcdef1234"
+      remote_commit: "4567890123456789012345678901234567890abc"
+      git_status: "diverged"
+      git_status_detail: "Repository is ahead by 2 and behind by 2 commits"
+
+assert_write_calls: []

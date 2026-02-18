@@ -449,3 +449,42 @@ pub struct ConfigurationStatusResponse {
     pub options: ConfigurationOptions,
     pub checklists: Vec<ChecklistInfo>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RepoInfoResponse {
+    pub owner: String,
+    pub repo: String,
+    pub branch: String,
+    pub local_commit: String,
+    pub remote_commit: String,
+    pub git_status: GitStatusEnum,
+    pub git_status_detail: String,
+}
+
+impl RepoInfoResponse {
+    pub fn new(git_info: &impl GitProvider) -> Result<Self, ApiError> {
+        let git_status = git_info.status()?;
+        let local_commit = git_info.commit()?;
+        let remote_commit = match &git_status {
+            crate::GitStatus::Clean => local_commit.clone(),
+            crate::GitStatus::Ahead(ahead) => {
+                ahead.last().expect("At least one commit ahead").to_string()
+            }
+            crate::GitStatus::Behind(behind) | crate::GitStatus::Diverged { behind, .. } => behind
+                .first()
+                .expect("At least one commit behind")
+                .to_string(),
+        };
+        let api_git_status = GitStatus::from(git_status.clone());
+
+        Ok(Self {
+            owner: git_info.owner().to_string(),
+            repo: git_info.repo().to_string(),
+            branch: git_info.branch()?,
+            local_commit,
+            remote_commit,
+            git_status: api_git_status.status,
+            git_status_detail: git_status.to_string(),
+        })
+    }
+}

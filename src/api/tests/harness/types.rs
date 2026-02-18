@@ -68,6 +68,22 @@ pub struct GitState {
     /// Dirty files in working directory
     #[serde(default)]
     pub dirty_files: Vec<String>,
+    /// Git repository status (ahead/behind/diverged/clean)
+    #[serde(default)]
+    pub status: Option<GitStatusSpec>,
+}
+
+/// Git status specification for tests
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GitStatusSpec {
+    Clean,
+    Ahead { commits: Vec<String> },
+    Behind { commits: Vec<String> },
+    Diverged {
+        ahead: Vec<String>,
+        behind: Vec<String>,
+    },
 }
 
 impl Default for GitState {
@@ -78,6 +94,7 @@ impl Default for GitState {
             commit: default_commit(),
             branch: default_branch(),
             dirty_files: Vec::new(),
+            status: None,
         }
     }
 }
