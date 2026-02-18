@@ -4,7 +4,8 @@ use crate::GitProvider;
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{
-    Checklist, ChecklistInfo, ConfigurationOptions, ConfigurationStatusResponse,
+    Checklist, ChecklistInfo, ConfigGitRepository, ConfigurationOptions,
+    ConfigurationStatusResponse,
 };
 use axum::{Json, extract::State};
 
@@ -41,7 +42,10 @@ pub async fn get_configuration_status<G: GitProvider + 'static>(
 
     let response = ConfigurationStatusResponse {
         directory: config.path.to_string_lossy().to_string(),
-        git_repository: None, // TODO: Implement git status for config repo
+        git_repository: state
+            .configuration_git_info()
+            .map(ConfigGitRepository::new)
+            .transpose()?,
         options: ConfigurationOptions {
             prepended_checklist_note: options.prepended_checklist_note.clone(),
             checklist_display_name: options.checklist_display_name.clone(),

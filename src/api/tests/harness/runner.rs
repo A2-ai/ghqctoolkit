@@ -51,7 +51,7 @@ impl TestRunner {
 
         // Create AppState and router (clone mock to keep a reference for assertions)
         let config = Configuration::default();
-        let state = AppState::new(mock.clone(), config, None);
+        let state = AppState::new(mock.clone(), config, Some(mock.clone()), None);
         let app = create_router(state);
 
         // Build HTTP request
@@ -184,9 +184,12 @@ fn validate_write_calls(
                 },
                 position,
             ),
-            ExpectedWriteCall::PostIssue { title, position } => {
-                (WriteCall::PostIssue { title: title.clone() }, position)
-            }
+            ExpectedWriteCall::PostIssue { title, position } => (
+                WriteCall::PostIssue {
+                    title: title.clone(),
+                },
+                position,
+            ),
             ExpectedWriteCall::PostComment {
                 comment_type,
                 position,

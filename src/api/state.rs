@@ -15,6 +15,8 @@ pub struct AppState<G: GitProvider> {
     git_info: Arc<G>,
     /// Configuration loaded at startup.
     pub configuration: Arc<Configuration>,
+    /// Configuration git info to determine status
+    configuration_git_info: Option<Arc<G>>,
     /// Disk-based cache for GitHub API responses.
     disk_cache: Option<Arc<DiskCache>>,
     /// In-memory cache for issue status responses.
@@ -23,10 +25,16 @@ pub struct AppState<G: GitProvider> {
 
 impl<G: GitProvider> AppState<G> {
     /// Create a new AppState with the given configuration.
-    pub fn new(git_info: G, configuration: Configuration, disk_cache: Option<DiskCache>) -> Self {
+    pub fn new(
+        git_info: G,
+        configuration: Configuration,
+        configuration_git_info: Option<G>,
+        disk_cache: Option<DiskCache>,
+    ) -> Self {
         Self {
             git_info: Arc::new(git_info),
             configuration: Arc::new(configuration),
+            configuration_git_info: configuration_git_info.map(Arc::new),
             disk_cache: disk_cache.map(Arc::new),
             status_cache: Arc::new(RwLock::new(StatusCache::new())),
         }
@@ -38,5 +46,9 @@ impl<G: GitProvider> AppState<G> {
 
     pub fn disk_cache(&self) -> Option<&DiskCache> {
         self.disk_cache.as_ref().map(|d| &**d)
+    }
+
+    pub fn configuration_git_info(&self) -> Option<&G> {
+        self.configuration_git_info.as_ref().map(|g| &**g)
     }
 }

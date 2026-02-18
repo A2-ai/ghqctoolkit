@@ -4,10 +4,15 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 
+use gix::ObjectId;
 use octocrab::models::IssueState;
 use serde::{Deserialize, Serialize};
 
-use crate::{GitHubApiError, IssueThread, api::cache::CacheEntry, create::CreateResult};
+use crate::{
+    GitHubApiError, GitProvider, IssueThread,
+    api::{ApiError, cache::CacheEntry},
+    create::CreateResult,
+};
 
 /// Health check response.
 #[derive(Debug, Serialize)]
@@ -134,6 +139,40 @@ pub struct GitStatus {
     pub detail: String,
     pub ahead_commits: Vec<String>,
     pub behind_commits: Vec<String>,
+}
+
+impl From<crate::GitStatus> for GitStatus {
+    fn from(status: crate::GitStatus) -> Self {
+        let mut res = GitStatus {
+            status: GitStatusEnum::Clean,
+            detail: status.to_string(),
+            ahead_commits: Vec::new(),
+            behind_commits: Vec::new(),
+        };
+
+        let convert_commits = |commits: Vec<ObjectId>| -> Vec<String> {
+            commits.iter().map(ObjectId::to_string).collect()
+        };
+
+        match status {
+            crate::GitStatus::Clean => (),
+            crate::GitStatus::Ahead(ahead_commits) => {
+                res.status = GitStatusEnum::Ahead;
+                res.ahead_commits = convert_commits(ahead_commits);
+            }
+            crate::GitStatus::Behind(behind_commits) => {
+                res.status = GitStatusEnum::Behind;
+                res.behind_commits = convert_commits(behind_commits);
+            }
+            crate::GitStatus::Diverged { ahead, behind } => {
+                res.status = GitStatusEnum::Diverged;
+                res.ahead_commits = convert_commits(ahead);
+                res.behind_commits = convert_commits(behind);
+            }
+        }
+
+        res
+    }
 }
 
 /// Git status enum values.
@@ -372,6 +411,23 @@ pub struct ConfigGitRepository {
     pub repo: String,
     pub status: GitStatusEnum,
     pub dirty_files: Vec<String>,
+}
+
+impl ConfigGitRepository {
+    pub fn new(git_info: &impl GitProvider) -> Result<Self, ApiError> {
+        let status: GitStatus = git_info.status()?.into();
+        let dirty_files = git_info
+            .dirty()?
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        Ok(Self {
+            owner: git_info.owner().to_string(),
+            repo: git_info.repo().to_string(),
+            status: status.status,
+            dirty_files,
+        })
+    }
 }
 
 /// Configuration options.

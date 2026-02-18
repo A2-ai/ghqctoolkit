@@ -2,8 +2,12 @@ name: "GET /api/configuration/status"
 description: "Successfully fetch configuration repository status"
 
 fixtures:
+  milestones:
+    - v1.0.json
 
-git_state: {}
+git_state:
+  commit: "abc123"
+  branch: "main"
 
 request:
   method: GET
@@ -20,3 +24,11 @@ response:
         - git_repository
         - options
         - checklists
+      nested_schemas:
+        git_repository:
+          type: object
+          item_fields:
+            - owner
+            - repo
+            - status
+            - dirty_files

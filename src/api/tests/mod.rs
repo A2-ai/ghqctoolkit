@@ -139,7 +139,7 @@ mod test_runner {
             .build();
 
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None);
+        let state = AppState::new(mock, config, None, None);
         let app = create_router(state.clone());
 
         // FIRST REQUEST: Cache should be empty, will populate

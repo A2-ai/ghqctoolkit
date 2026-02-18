@@ -278,7 +278,7 @@ mod tests {
     async fn test_get_blocking_qc_status_empty() {
         let mock = MockGitInfo::builder().build();
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None);
+        let state = AppState::new(mock, config, None, None);
 
         let status = get_blocking_qc_status_with_cache(&[], &state).await;
 
@@ -300,7 +300,7 @@ mod tests {
             .build();
 
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None);
+        let state = AppState::new(mock, config, None, None);
 
         // Pre-populate cache with approved status
         let key = CacheKey {
@@ -360,7 +360,7 @@ mod tests {
             .build();
 
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None);
+        let state = AppState::new(mock, config, None, None);
 
         // Pre-populate cache with ChangesAfterApproval status
         let key = CacheKey {
@@ -417,7 +417,7 @@ mod tests {
             .build();
 
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None);
+        let state = AppState::new(mock, config, None, None);
 
         // Pre-populate cache with InProgress status
         let key = CacheKey {
@@ -480,7 +480,7 @@ mod tests {
             .build();
 
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None);
+        let state = AppState::new(mock, config, None, None);
 
         // Pre-populate cache with mixed statuses
         let key1 = CacheKey {

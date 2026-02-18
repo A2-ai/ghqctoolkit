@@ -987,11 +987,20 @@ async fn main() -> Result<()> {
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
             let mut configuration = Configuration::from_path(&config_dir);
             configuration.load_checklists();
+            let configuration_git_info = match GitInfo::from_path(&configuration.path, &env) {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to determine configuration git info: {e}. Continuing without git status checks"
+                    );
+                    None
+                }
+            };
 
             let git_info = GitInfo::from_path(&cli.directory, &env)?;
             let disk_cache = DiskCache::from_git_info(&git_info).ok();
 
-            let state = AppState::new(git_info, configuration, disk_cache);
+            let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache);
             let app = create_router(state);
 
             let addr = format!("0.0.0.0:{}", port);
