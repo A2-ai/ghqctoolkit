@@ -317,10 +317,15 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
 
     // Merge cached statuses with newly fetched ones
     let mut statuses = blocked_statuses;
-    statuses.extend(created_threads.entries.into_values().map(|entry| BlockedIssueStatus {
-        issue: entry.issue,
-        qc_status: entry.qc_status,
-    }));
+    statuses.extend(
+        created_threads
+            .entries
+            .into_values()
+            .map(|entry| BlockedIssueStatus {
+                issue: entry.issue,
+                qc_status: entry.qc_status,
+            }),
+    );
 
     Ok(Json(statuses))
 }

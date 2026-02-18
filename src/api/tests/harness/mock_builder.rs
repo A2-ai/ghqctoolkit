@@ -3,8 +3,8 @@ use std::str::FromStr;
 
 use super::loader::LoadedFixtures;
 use super::types::{GitState, GitStatusSpec};
-use crate::api::tests::helpers::MockGitInfo;
 use crate::GitStatus;
+use crate::api::tests::helpers::MockGitInfo;
 use gix::ObjectId;
 
 /// Builds MockGitInfo from test specification
@@ -61,12 +61,8 @@ impl MockBuilder {
     fn convert_status(spec: &GitStatusSpec) -> GitStatus {
         match spec {
             GitStatusSpec::Clean => GitStatus::Clean,
-            GitStatusSpec::Ahead { commits } => {
-                GitStatus::Ahead(Self::parse_object_ids(commits))
-            }
-            GitStatusSpec::Behind { commits } => {
-                GitStatus::Behind(Self::parse_object_ids(commits))
-            }
+            GitStatusSpec::Ahead { commits } => GitStatus::Ahead(Self::parse_object_ids(commits)),
+            GitStatusSpec::Behind { commits } => GitStatus::Behind(Self::parse_object_ids(commits)),
             GitStatusSpec::Diverged { ahead, behind } => GitStatus::Diverged {
                 ahead: Self::parse_object_ids(ahead),
                 behind: Self::parse_object_ids(behind),

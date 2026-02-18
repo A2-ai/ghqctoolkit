@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use octocrab::models::{issues::Issue, Milestone};
+use octocrab::models::{Milestone, issues::Issue};
 
 use super::GitHubApiError;
 use crate::QCIssue;

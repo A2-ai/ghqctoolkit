@@ -1,6 +1,6 @@
 //! Shared test utilities for creating mock GitHub objects
 
-use octocrab::models::{issues::Issue, Milestone};
+use octocrab::models::{Milestone, issues::Issue};
 use serde_json::json;
 
 /// Creates a mock Issue object for testing with configurable parameters
@@ -14,15 +14,36 @@ pub fn create_test_issue(
     state: &str,
 ) -> Issue {
     // Pre-compute all format strings to avoid recursion limit
-    let issue_url = format!("https://api.github.com/repos/{}/{}/issues/{}", owner, repo, issue_number);
+    let issue_url = format!(
+        "https://api.github.com/repos/{}/{}/issues/{}",
+        owner, repo, issue_number
+    );
     let repo_url = format!("https://api.github.com/repos/{}/{}", owner, repo);
-    let labels_url = format!("https://api.github.com/repos/{}/{}/issues/{}/labels{{/name}}", owner, repo, issue_number);
-    let comments_url = format!("https://api.github.com/repos/{}/{}/issues/{}/comments", owner, repo, issue_number);
-    let events_url = format!("https://api.github.com/repos/{}/{}/issues/{}/events", owner, repo, issue_number);
-    let html_url = format!("https://github.com/{}/{}/issues/{}", owner, repo, issue_number);
+    let labels_url = format!(
+        "https://api.github.com/repos/{}/{}/issues/{}/labels{{/name}}",
+        owner, repo, issue_number
+    );
+    let comments_url = format!(
+        "https://api.github.com/repos/{}/{}/issues/{}/comments",
+        owner, repo, issue_number
+    );
+    let events_url = format!(
+        "https://api.github.com/repos/{}/{}/issues/{}/events",
+        owner, repo, issue_number
+    );
+    let html_url = format!(
+        "https://github.com/{}/{}/issues/{}",
+        owner, repo, issue_number
+    );
     let node_id = format!("MDU6SXNzdWU={}", issue_number);
-    let timeline_url = format!("https://api.github.com/repos/{}/{}/issues/{}/timeline", owner, repo, issue_number);
-    let reactions_url = format!("https://api.github.com/repos/{}/{}/issues/{}/reactions", owner, repo, issue_number);
+    let timeline_url = format!(
+        "https://api.github.com/repos/{}/{}/issues/{}/timeline",
+        owner, repo, issue_number
+    );
+    let reactions_url = format!(
+        "https://api.github.com/repos/{}/{}/issues/{}/reactions",
+        owner, repo, issue_number
+    );
 
     // Build milestone using create_test_milestone to avoid duplication
     let milestone_value = milestone_number.map(|num| {
@@ -113,17 +134,32 @@ pub fn create_test_milestone(
     state: &str,
 ) -> Milestone {
     // Pre-compute format strings
-    let ms_url = format!("https://api.github.com/repos/{}/{}/milestones/{}", owner, repo, milestone_number);
-    let ms_html_url = format!("https://github.com/{}/{}/milestone/{}", owner, repo, milestone_number);
-    let ms_labels_url = format!("https://api.github.com/repos/{}/{}/milestones/{}/labels", owner, repo, milestone_number);
+    let ms_url = format!(
+        "https://api.github.com/repos/{}/{}/milestones/{}",
+        owner, repo, milestone_number
+    );
+    let ms_html_url = format!(
+        "https://github.com/{}/{}/milestone/{}",
+        owner, repo, milestone_number
+    );
+    let ms_labels_url = format!(
+        "https://api.github.com/repos/{}/{}/milestones/{}/labels",
+        owner, repo, milestone_number
+    );
     let ms_node_id = format!("MDk6TWlsZXN0b25l{}", milestone_number);
     let cr_avatar_url = format!("https://github.com/images/error/{}_happy.gif", owner);
     let cr_url = format!("https://api.github.com/users/{}", owner);
     let cr_html_url = format!("https://github.com/{}", owner);
     let cr_followers_url = format!("https://api.github.com/users/{}/followers", owner);
-    let cr_following_url = format!("https://api.github.com/users/{}/following{{/other_user}}", owner);
+    let cr_following_url = format!(
+        "https://api.github.com/users/{}/following{{/other_user}}",
+        owner
+    );
     let cr_gists_url = format!("https://api.github.com/users/{}/gists{{/gist_id}}", owner);
-    let cr_starred_url = format!("https://api.github.com/users/{}/starred{{/owner}}{{/repo}}", owner);
+    let cr_starred_url = format!(
+        "https://api.github.com/users/{}/starred{{/owner}}{{/repo}}",
+        owner
+    );
     let cr_subscriptions_url = format!("https://api.github.com/users/{}/subscriptions", owner);
     let cr_organizations_url = format!("https://api.github.com/users/{}/orgs", owner);
     let cr_repos_url = format!("https://api.github.com/users/{}/repos", owner);

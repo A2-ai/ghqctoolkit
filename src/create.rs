@@ -523,48 +523,50 @@ pub async fn batch_post_qc_entries(
             .iter()
             .map(|rf| -> Result<RelevantFile, QCIssueError> {
                 match rf {
-                RelevantFileEntry::ExistingIssue(rel_file) => Ok(rel_file.clone()),
-                RelevantFileEntry::NewIssue {
-                    file_path,
-                    relationship,
-                    description,
-                } => {
-                    let &(issue_number, issue_id) = created_issues
-                        .get(file_path)
-                        .ok_or_else(|| QCIssueError::UnresolvedReference {
-                            file: file_path.clone(),
-                            referencing_file: entry.title.clone(),
-                        })?;
-                    Ok(RelevantFile {
-                        file_name: file_path.clone(),
-                        class: match relationship {
-                            QCRelationship::PreviousQC => RelevantFileClass::PreviousQC {
-                                issue_number,
-                                issue_id: Some(issue_id),
-                                description: description.clone(),
+                    RelevantFileEntry::ExistingIssue(rel_file) => Ok(rel_file.clone()),
+                    RelevantFileEntry::NewIssue {
+                        file_path,
+                        relationship,
+                        description,
+                    } => {
+                        let &(issue_number, issue_id) =
+                            created_issues.get(file_path).ok_or_else(|| {
+                                QCIssueError::UnresolvedReference {
+                                    file: file_path.clone(),
+                                    referencing_file: entry.title.clone(),
+                                }
+                            })?;
+                        Ok(RelevantFile {
+                            file_name: file_path.clone(),
+                            class: match relationship {
+                                QCRelationship::PreviousQC => RelevantFileClass::PreviousQC {
+                                    issue_number,
+                                    issue_id: Some(issue_id),
+                                    description: description.clone(),
+                                },
+                                QCRelationship::GatingQC => RelevantFileClass::GatingQC {
+                                    issue_number,
+                                    issue_id: Some(issue_id),
+                                    description: description.clone(),
+                                },
+                                QCRelationship::RelevantQC => RelevantFileClass::RelevantQC {
+                                    issue_number,
+                                    description: description.clone(),
+                                },
                             },
-                            QCRelationship::GatingQC => RelevantFileClass::GatingQC {
-                                issue_number,
-                                issue_id: Some(issue_id),
-                                description: description.clone(),
-                            },
-                            QCRelationship::RelevantQC => RelevantFileClass::RelevantQC {
-                                issue_number,
-                                description: description.clone(),
-                            },
+                        })
+                    }
+                    RelevantFileEntry::File {
+                        file_path,
+                        justification,
+                    } => Ok(RelevantFile {
+                        file_name: file_path.to_path_buf(),
+                        class: RelevantFileClass::File {
+                            justification: justification.clone(),
                         },
-                    })
+                    }),
                 }
-                RelevantFileEntry::File {
-                    file_path,
-                    justification,
-                } => Ok(RelevantFile {
-                    file_name: file_path.to_path_buf(),
-                    class: RelevantFileClass::File {
-                        justification: justification.clone(),
-                    },
-                }),
-            }})
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         // Get authors for file
@@ -869,7 +871,9 @@ mod tests {
         fn post_issue(
             &self,
             issue: &QCIssue,
-        ) -> impl std::future::Future<Output = Result<octocrab::models::issues::Issue, GitHubApiError>> + Send {
+        ) -> impl std::future::Future<
+            Output = Result<octocrab::models::issues::Issue, GitHubApiError>,
+        > + Send {
             let url = self.post_issue_url.clone();
             let issues_map = self.issues_by_number.clone();
             let body = issue.body(self);
@@ -886,12 +890,15 @@ mod tests {
                     issue_number,
                     &title,
                     &body,
-                    None, // milestone
+                    None,   // milestone
                     "open", // state
                 );
 
                 // Store it so get_issue can find it
-                issues_map.lock().unwrap().insert(issue_number, created_issue.clone());
+                issues_map
+                    .lock()
+                    .unwrap()
+                    .insert(issue_number, created_issue.clone());
 
                 Ok(created_issue)
             }

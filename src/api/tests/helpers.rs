@@ -481,12 +481,15 @@ impl GitHubWriter for MockGitInfo {
             issue_number,
             &issue.title(),
             &issue.body(self),
-            None, // milestone
+            None,   // milestone
             "open", // state
         );
 
         // Store the issue so get_issue can find it later
-        self.issues.lock().unwrap().insert(issue_number, created_issue.clone());
+        self.issues
+            .lock()
+            .unwrap()
+            .insert(issue_number, created_issue.clone());
 
         Ok(created_issue)
     }
