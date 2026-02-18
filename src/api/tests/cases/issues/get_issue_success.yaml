@@ -3,7 +3,9 @@ description: "Retrieve an existing issue by number"
 
 fixtures:
   issues:
-    - test_file_issue.json
+    - type: mock
+      number: 1
+      title: "src/test.rs"
 
 git_state:
   commit: "abc123"

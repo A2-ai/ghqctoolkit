@@ -314,14 +314,13 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
             format_error_list(&created_threads.thread_errors)
         )));
     }
-    let statuses = created_threads
-        .entries
-        .into_values()
-        .map(|entry| BlockedIssueStatus {
-            issue: entry.issue,
-            qc_status: entry.qc_status,
-        })
-        .collect();
+
+    // Merge cached statuses with newly fetched ones
+    let mut statuses = blocked_statuses;
+    statuses.extend(created_threads.entries.into_values().map(|entry| BlockedIssueStatus {
+        issue: entry.issue,
+        qc_status: entry.qc_status,
+    }));
 
     Ok(Json(statuses))
 }

@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use octocrab::models::Milestone;
+use octocrab::models::{issues::Issue, Milestone};
 
 use super::GitHubApiError;
 use crate::QCIssue;
@@ -20,7 +20,7 @@ pub trait GitHubWriter {
     fn post_issue(
         &self,
         issue: &QCIssue,
-    ) -> impl Future<Output = Result<String, GitHubApiError>> + Send;
+    ) -> impl Future<Output = Result<Issue, GitHubApiError>> + Send;
 
     // Unified comment posting system
     fn post_comment<T: CommentBody + Sync + 'static>(
@@ -108,7 +108,7 @@ impl GitHubWriter for GitInfo {
     fn post_issue(
         &self,
         issue: &QCIssue,
-    ) -> impl std::future::Future<Output = Result<String, GitHubApiError>> + Send {
+    ) -> impl std::future::Future<Output = Result<Issue, GitHubApiError>> + Send {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let title = issue.title();
@@ -141,7 +141,7 @@ impl GitHubWriter for GitInfo {
                 repo
             );
 
-            Ok(issue.html_url.to_string())
+            Ok(issue)
         }
     }
 

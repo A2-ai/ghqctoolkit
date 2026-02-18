@@ -24,21 +24,74 @@ pub struct TestCase {
     pub assert_write_calls: Vec<ExpectedWriteCall>,
 }
 
-/// Fixture references (files to load)
+/// Fixture references (files to load) and programmatically created mocks
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Fixtures {
-    /// Issue fixture files (from fixtures/issues/)
+    /// Issues - can be loaded from JSON or created programmatically
     #[serde(default)]
-    pub issues: Vec<String>,
-    /// Milestone fixture files (from fixtures/milestones/)
+    pub issues: Vec<IssueSource>,
+    /// Milestones - can be loaded from JSON or created programmatically
     #[serde(default)]
-    pub milestones: Vec<String>,
+    pub milestones: Vec<MilestoneSource>,
     /// User fixture files (from fixtures/users/)
     #[serde(default)]
-    pub users: Vec<String>,
+    pub users: Vec<UserSource>,
     /// Blocking relationships between issues
     #[serde(default)]
     pub blocking: Vec<BlockingRelationship>,
+}
+
+/// Source for loading or creating an Issue
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum IssueSource {
+    /// Load from JSON fixture file
+    Fixture { file: String },
+    /// Create programmatically with minimal config
+    Mock {
+        number: u64,
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default = "default_open_state")]
+        state: String,
+        #[serde(default)]
+        milestone: Option<i64>,
+    },
+}
+
+/// Source for loading or creating a Milestone
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MilestoneSource {
+    /// Load from JSON fixture file
+    Fixture { file: String },
+    /// Create programmatically with minimal config
+    Mock {
+        number: i64,
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default = "default_open_state")]
+        state: String,
+    },
+}
+
+fn default_open_state() -> String {
+    "open".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UserSource {
+    Fixture {
+        file: String,
+    },
+    Mock {
+        login: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
 }
 
 /// Defines which issues block other issues
@@ -78,8 +131,12 @@ pub struct GitState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GitStatusSpec {
     Clean,
-    Ahead { commits: Vec<String> },
-    Behind { commits: Vec<String> },
+    Ahead {
+        commits: Vec<String>,
+    },
+    Behind {
+        commits: Vec<String>,
+    },
     Diverged {
         ahead: Vec<String>,
         behind: Vec<String>,

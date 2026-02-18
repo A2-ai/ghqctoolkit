@@ -1,10 +1,6 @@
 name: "GET /api/repo - behind status"
 description: "Repository is behind, remote_commit is the latest remote commit (first in behind list)"
 
-fixtures:
-  milestones:
-    - v1.0.json
-
 git_state:
   commit: "abc1234567890abcdef1234567890abcdef1234"
   branch: "main"

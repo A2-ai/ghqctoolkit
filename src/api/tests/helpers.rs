@@ -462,7 +462,7 @@ impl GitHubWriter for MockGitInfo {
         })
     }
 
-    async fn post_issue(&self, issue: &crate::QCIssue) -> Result<String, GitHubApiError> {
+    async fn post_issue(&self, issue: &crate::QCIssue) -> Result<Issue, GitHubApiError> {
         // Track the call
         self.write_calls.lock().unwrap().push(WriteCall::PostIssue {
             title: issue.title().to_string(),
@@ -474,11 +474,21 @@ impl GitHubWriter for MockGitInfo {
             issues.len() as u64 + 1
         };
 
-        // Return a mock issue URL
-        Ok(format!(
-            "https://github.com/{}/{}/issues/{}",
-            self.owner, self.repo, issue_number
-        ))
+        // Create the issue using shared test helper
+        let created_issue = crate::test_utils::create_test_issue(
+            &self.owner,
+            &self.repo,
+            issue_number,
+            &issue.title(),
+            &issue.body(self),
+            None, // milestone
+            "open", // state
+        );
+
+        // Store the issue so get_issue can find it later
+        self.issues.lock().unwrap().insert(issue_number, created_issue.clone());
+
+        Ok(created_issue)
     }
 
     async fn post_comment<T: CommentBody + Sync + 'static>(

@@ -3,9 +3,11 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::api::tests::harness::types::UserSource;
 use crate::git::RepoUser;
+use crate::test_utils::{create_test_issue, create_test_milestone};
 
-use super::types::{BlockingRelationship, Fixtures};
+use super::types::{BlockingRelationship, Fixtures, IssueSource, MilestoneSource};
 
 /// Fixture loader with caching
 pub struct FixtureLoader {
@@ -39,27 +41,68 @@ impl FixtureLoader {
     }
 
     /// Load all fixtures referenced in the test case
-    pub fn load_fixtures(&mut self, fixtures: &Fixtures) -> Result<LoadedFixtures> {
+    pub fn load_fixtures(
+        &mut self,
+        fixtures: &Fixtures,
+        git_state: &super::types::GitState,
+    ) -> Result<LoadedFixtures> {
         let mut issues = HashMap::new();
         let mut milestones = HashMap::new();
         let mut users = Vec::new();
 
-        // Load issues
-        for filename in &fixtures.issues {
-            let issue = self.load_issue(filename)?;
+        // Load or create issues
+        for issue_source in &fixtures.issues {
+            let issue = match issue_source {
+                IssueSource::Fixture { file } => self.load_issue(file)?,
+                IssueSource::Mock {
+                    number,
+                    title,
+                    body,
+                    state,
+                    milestone,
+                } => create_test_issue(
+                    &git_state.owner,
+                    &git_state.repo,
+                    *number,
+                    title,
+                    body,
+                    *milestone,
+                    state,
+                ),
+            };
             issues.insert(issue.number, issue);
         }
 
-        // Load milestones
-        for filename in &fixtures.milestones {
-            let milestone = self.load_milestone(filename)?;
+        // Load or create milestones
+        for milestone_source in &fixtures.milestones {
+            let milestone = match milestone_source {
+                MilestoneSource::Fixture { file } => self.load_milestone(file)?,
+                MilestoneSource::Mock {
+                    number,
+                    title,
+                    description,
+                    state,
+                } => create_test_milestone(
+                    &git_state.owner,
+                    &git_state.repo,
+                    *number,
+                    title,
+                    description.as_deref(),
+                    state,
+                ),
+            };
             milestones.insert(milestone.number, milestone);
         }
 
         // Load users
-        for filename in &fixtures.users {
-            let user_list = self.load_users(filename)?;
-            users.extend(user_list);
+        for user_source in &fixtures.users {
+            match user_source {
+                UserSource::Fixture { file } => users.extend(self.load_users(file)?),
+                UserSource::Mock { login, name } => users.push(RepoUser {
+                    login: login.clone(),
+                    name: name.clone(),
+                }),
+            };
         }
 
         Ok(LoadedFixtures {

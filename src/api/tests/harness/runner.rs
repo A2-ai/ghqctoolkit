@@ -43,7 +43,7 @@ impl TestRunner {
         // Load fixtures
         let fixtures = self
             .loader
-            .load_fixtures(&test_case.fixtures)
+            .load_fixtures(&test_case.fixtures, &test_case.git_state)
             .context("Failed to load fixtures")?;
 
         // Build MockGitInfo

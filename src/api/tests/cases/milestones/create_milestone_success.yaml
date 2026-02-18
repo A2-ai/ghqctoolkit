@@ -2,7 +2,6 @@ name: "POST /api/milestones - create milestone with description"
 description: "Successfully create a new milestone with name and description"
 
 fixtures:
-  milestones: []  # Start with no existing milestones
 
 git_state:
   commit: "abc123"

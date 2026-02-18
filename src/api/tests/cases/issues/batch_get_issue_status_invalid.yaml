@@ -2,7 +2,6 @@ name: "GET /api/issues/status - no valid issue numbers"
 description: "Returns error when no valid issue numbers provided"
 
 fixtures:
-  issues: []
 
 git_state: {}
 

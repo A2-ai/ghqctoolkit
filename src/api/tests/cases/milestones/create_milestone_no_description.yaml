@@ -3,7 +3,11 @@ description: "Successfully create a milestone with only a name (no description)"
 
 fixtures:
   milestones:
-    - v1.0.json  # One existing milestone
+    - type: mock
+      number: 1
+      title: "v1.0"
+      description: "First release"
+      state: "open"
 
 git_state:
   commit: "abc123"

@@ -3,7 +3,17 @@ description: "Successfully create a comment on an existing issue"
 
 fixtures:
   issues:
-    - test_file_issue.json
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+      milestone: 1
 
 git_state: {}
 

@@ -14,6 +14,9 @@ mod relevant_files;
 mod review;
 pub mod utils;
 
+#[cfg(test)]
+pub mod test_utils;
+
 #[cfg(feature = "cli")]
 pub mod cli;
 

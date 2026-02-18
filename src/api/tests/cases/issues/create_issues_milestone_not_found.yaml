@@ -3,10 +3,16 @@ description: "Reject batch creation when milestone doesn't exist"
 
 fixtures:
   milestones:
-    - v1.0.json
-  issues: []
+    - type: mock
+      number: 1
+      title: "v1.0"
+  issues:
   users:
-    - repository_users.json
+    - type: mock
+      login: "octocat"
+      name: "The Octocat"
+    - type: mock
+      login: "reviewer1"
 
 git_state:
   commit: "abc123"

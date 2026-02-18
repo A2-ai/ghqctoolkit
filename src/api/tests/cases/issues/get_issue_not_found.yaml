@@ -2,7 +2,6 @@ name: "GET /api/issues/{number} - not found"
 description: "Return 502 when issue doesn't exist (GitHubApiError maps to ApiError::GitHubApi)"
 
 fixtures:
-  issues: []
 
 git_state: {}
 

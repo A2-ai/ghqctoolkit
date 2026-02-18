@@ -52,9 +52,11 @@ impl QCIssue {
             ));
         }
 
+        // Use up to 7 characters for short commit hash, or full length if shorter
+        let commit_short = &self.commit[..self.commit.len().min(7)];
         metadata.push(format!(
             "[file contents at initial qc commit]({})",
-            git_info.file_content_url(&self.commit[..7], &self.title)
+            git_info.file_content_url(commit_short, &self.title)
         ));
 
         let mut body = vec![metadata.join("\n* ")];
@@ -131,9 +133,15 @@ impl QCIssue {
         &self,
         git_info: &T,
     ) -> Result<CreateResult, QCIssueError> {
-        let issue_url = git_info.post_issue(self).await?;
+        let issue = git_info.post_issue(self).await?;
+        let issue_number = issue.number;
+        let issue_id = issue.id.0;
+        let issue_url = issue.html_url.to_string();
+
         let mut create_result = CreateResult {
-            issue_url: issue_url.to_string(),
+            issue_url,
+            issue_number,
+            issue_id,
             parse_failed: false,
             successful_blocking: Vec::new(),
             blocking_errors: HashMap::new(),
@@ -141,11 +149,7 @@ impl QCIssue {
 
         let blocking_issues = self.blocking_issues();
         if !blocking_issues.is_empty() {
-            // Parse issue number from URL (e.g., "https://github.com/owner/repo/issues/123")
-            if let Some(new_issue_number) = issue_url
-                .split('/')
-                .last()
-                .and_then(|s| s.parse::<u64>().ok())
+            let new_issue_number = issue_number;
             {
                 for (issue_number, issue_id) in blocking_issues {
                     // Get the issue_id if not already available
@@ -171,11 +175,6 @@ impl QCIssue {
                         create_result.successful_blocking.push(issue_number);
                     }
                 }
-            } else {
-                log::warn!(
-                    "Failed to parse issue number form issue url. Skipping all issue blocking..."
-                );
-                create_result.parse_failed = true;
             }
         }
 
@@ -185,6 +184,8 @@ impl QCIssue {
 
 pub struct CreateResult {
     pub issue_url: String,
+    pub issue_number: u64,
+    pub issue_id: u64,
     pub parse_failed: bool,
     pub successful_blocking: Vec<u64>,
     pub blocking_errors: HashMap<u64, GitHubApiError>,
@@ -520,15 +521,21 @@ pub async fn batch_post_qc_entries(
         let relevant_files: Vec<RelevantFile> = entry
             .relevant_files
             .iter()
-            .filter_map(|rf| match rf {
-                RelevantFileEntry::ExistingIssue(rel_file) => Some(rel_file.clone()),
+            .map(|rf| -> Result<RelevantFile, QCIssueError> {
+                match rf {
+                RelevantFileEntry::ExistingIssue(rel_file) => Ok(rel_file.clone()),
                 RelevantFileEntry::NewIssue {
                     file_path,
                     relationship,
                     description,
-                } => created_issues
-                    .get(file_path)
-                    .map(|&(issue_number, issue_id)| RelevantFile {
+                } => {
+                    let &(issue_number, issue_id) = created_issues
+                        .get(file_path)
+                        .ok_or_else(|| QCIssueError::UnresolvedReference {
+                            file: file_path.clone(),
+                            referencing_file: entry.title.clone(),
+                        })?;
+                    Ok(RelevantFile {
                         file_name: file_path.clone(),
                         class: match relationship {
                             QCRelationship::PreviousQC => RelevantFileClass::PreviousQC {
@@ -546,18 +553,19 @@ pub async fn batch_post_qc_entries(
                                 description: description.clone(),
                             },
                         },
-                    }),
+                    })
+                }
                 RelevantFileEntry::File {
                     file_path,
                     justification,
-                } => Some(RelevantFile {
+                } => Ok(RelevantFile {
                     file_name: file_path.to_path_buf(),
                     class: RelevantFileClass::File {
                         justification: justification.clone(),
                     },
                 }),
-            })
-            .collect();
+            }})
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Get authors for file
         let authors = git_info.authors(&entry.title)?;
@@ -577,22 +585,16 @@ pub async fn batch_post_qc_entries(
         // Post with blocking relationships
         let create_result = qc_issue.post_with_blocking(git_info).await?;
 
-        // Extract issue number and fetch ID
-        if let Some(issue_number) = extract_issue_number(&create_result.issue_url) {
-            if let Ok(issue) = git_info.get_issue(issue_number).await {
-                created_issues.insert(entry.title.clone(), (issue_number, issue.id.0));
-            }
-        }
+        // Store the issue number and ID from the created issue
+        created_issues.insert(
+            entry.title.clone(),
+            (create_result.issue_number, create_result.issue_id),
+        );
 
         results.push(create_result);
     }
 
     Ok(results)
-}
-
-/// Extract issue number from GitHub issue URL
-fn extract_issue_number(url: &str) -> Option<u64> {
-    url.split('/').last()?.parse().ok()
 }
 
 /// Dependency validation error
@@ -623,6 +625,11 @@ pub enum QCIssueError {
     DependencyResolution { errors: Vec<DependencyError> },
     #[error("Entry not found for file: {file:?}")]
     EntryNotFound { file: PathBuf },
+    #[error("Unresolved NewIssue reference: {file:?} referenced by {referencing_file:?}")]
+    UnresolvedReference {
+        file: PathBuf,
+        referencing_file: PathBuf,
+    },
 }
 
 #[cfg(test)]
@@ -813,7 +820,7 @@ mod tests {
         post_issue_url: String,
         fail_blocking_ids: Arc<HashSet<u64>>,
         block_calls: Arc<Mutex<Vec<(u64, u64)>>>,
-        issues_by_number: Arc<HashMap<u64, octocrab::models::issues::Issue>>,
+        issues_by_number: Arc<Mutex<HashMap<u64, octocrab::models::issues::Issue>>>,
     }
 
     impl MockGitInfo {
@@ -826,7 +833,7 @@ mod tests {
                 post_issue_url: post_issue_url.to_string(),
                 fail_blocking_ids: Arc::new(fail_blocking_ids),
                 block_calls: Arc::new(Mutex::new(Vec::new())),
-                issues_by_number: Arc::new(issues_by_number),
+                issues_by_number: Arc::new(Mutex::new(issues_by_number)),
             }
         }
     }
@@ -861,10 +868,33 @@ mod tests {
 
         fn post_issue(
             &self,
-            _issue: &QCIssue,
-        ) -> impl std::future::Future<Output = Result<String, GitHubApiError>> + Send {
+            issue: &QCIssue,
+        ) -> impl std::future::Future<Output = Result<octocrab::models::issues::Issue, GitHubApiError>> + Send {
             let url = self.post_issue_url.clone();
-            async move { Ok(url) }
+            let issues_map = self.issues_by_number.clone();
+            let body = issue.body(self);
+            let title = issue.title();
+
+            async move {
+                // Parse issue number from URL
+                let issue_number = url.split('/').last().unwrap().parse::<u64>().unwrap();
+
+                // Create the issue using shared test helper
+                let created_issue = crate::test_utils::create_test_issue(
+                    "owner",
+                    "repo",
+                    issue_number,
+                    &title,
+                    &body,
+                    None, // milestone
+                    "open", // state
+                );
+
+                // Store it so get_issue can find it
+                issues_map.lock().unwrap().insert(issue_number, created_issue.clone());
+
+                Ok(created_issue)
+            }
         }
 
         fn post_comment<T: crate::comment_system::CommentBody + 'static>(
@@ -945,6 +975,8 @@ mod tests {
             let issues_by_number = self.issues_by_number.clone();
             async move {
                 issues_by_number
+                    .lock()
+                    .unwrap()
                     .get(&issue_number)
                     .cloned()
                     .ok_or(GitHubApiError::NoApi)

@@ -243,7 +243,7 @@ impl From<Vec<(String, crate::ChecklistSummary)>> for ChecklistSummary {
             percentage: if sum.total == 0 {
                 0.0
             } else {
-                (sum.completed / sum.total) as f32
+                sum.completed as f32 / sum.total as f32
             },
         }
     }

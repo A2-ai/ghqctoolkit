@@ -2,8 +2,6 @@ name: "GET /api/configuration/status"
 description: "Successfully fetch configuration repository status"
 
 fixtures:
-  milestones:
-    - v1.0.json
 
 git_state:
   commit: "abc123"

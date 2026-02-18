@@ -3,8 +3,12 @@ description: "Retrieve all milestones from repository"
 
 fixtures:
   milestones:
-    - v1.0.json
-    - v2.0.json
+    - type: mock
+      number: 1
+      title: v1.0
+    - type: mock
+      number: 2
+      title: v2.0
 
 git_state: {}
 

@@ -1,10 +1,6 @@
 name: "GET /api/repo - clean status"
 description: "Repository is up to date, remote_commit equals local_commit"
 
-fixtures:
-  milestones:
-    - v1.0.json
-
 git_state:
   commit: "abc1234567890abcdef1234567890abcdef1234"
   branch: "main"

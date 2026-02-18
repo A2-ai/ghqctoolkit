@@ -2,7 +2,7 @@ name: "POST /api/milestones - error on missing name"
 description: "Return 422 Unprocessable Entity when name field is missing"
 
 fixtures:
-  milestones: []
+  milestones:
 
 git_state:
   commit: "abc123"

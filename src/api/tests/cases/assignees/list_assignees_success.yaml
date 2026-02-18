@@ -3,7 +3,13 @@ description: "Retrieve repository assignees with login and name"
 
 fixtures:
   users:
-    - repository_users.json
+    - type: mock
+      login: "octocat"
+      name: "The Octocat"
+    - type: mock
+      login: "reviewer1"
+
+
 
 git_state: {}
 
