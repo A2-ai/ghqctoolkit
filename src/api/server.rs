@@ -12,6 +12,9 @@ use tower_http::trace::TraceLayer;
 
 /// Create the API router with all routes.
 pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
+    // NOTE: Wildcard CORS is intentional for local development serving a GUI.
+    // This should NOT be used in production or networked deployments.
+    // For production, restrict origins to specific domains.
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)

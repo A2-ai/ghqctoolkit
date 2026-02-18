@@ -19,7 +19,10 @@ pub struct CreateMilestoneRequest {
 /// Whether the referenced issue is created or to be created
 #[derive(Debug, Deserialize)]
 pub enum RelevantIssueClass {
-    Exists(u64),
+    Exists {
+        issue_number: u64,
+        issue_id: Option<u64>,
+    },
     New(PathBuf),
 }
 
@@ -35,27 +38,28 @@ pub struct RelevantIssue {
 impl RelevantIssue {
     fn to_entry(&self, relation: QCRelationship) -> RelevantFileEntry {
         match &self.issue_class {
-            RelevantIssueClass::Exists(issue_number) => {
-                RelevantFileEntry::ExistingIssue(RelevantFile {
-                    file_name: self.file_name.clone(),
-                    class: match relation {
-                        QCRelationship::GatingQC => RelevantFileClass::GatingQC {
-                            issue_number: *issue_number,
-                            issue_id: None,
-                            description: self.description.clone(),
-                        },
-                        QCRelationship::PreviousQC => RelevantFileClass::PreviousQC {
-                            issue_number: *issue_number,
-                            issue_id: None,
-                            description: self.description.clone(),
-                        },
-                        QCRelationship::RelevantQC => RelevantFileClass::RelevantQC {
-                            issue_number: *issue_number,
-                            description: self.description.clone(),
-                        },
+            RelevantIssueClass::Exists {
+                issue_number,
+                issue_id,
+            } => RelevantFileEntry::ExistingIssue(RelevantFile {
+                file_name: self.file_name.clone(),
+                class: match relation {
+                    QCRelationship::GatingQC => RelevantFileClass::GatingQC {
+                        issue_number: *issue_number,
+                        issue_id: *issue_id,
+                        description: self.description.clone(),
                     },
-                })
-            }
+                    QCRelationship::PreviousQC => RelevantFileClass::PreviousQC {
+                        issue_number: *issue_number,
+                        issue_id: *issue_id,
+                        description: self.description.clone(),
+                    },
+                    QCRelationship::RelevantQC => RelevantFileClass::RelevantQC {
+                        issue_number: *issue_number,
+                        description: self.description.clone(),
+                    },
+                },
+            }),
             RelevantIssueClass::New(path) => RelevantFileEntry::NewIssue {
                 file_path: path.clone(),
                 relationship: relation,
@@ -90,40 +94,45 @@ pub struct CreateIssueRequest {
     pub relevant_files: Vec<RelevantFileInput>,
 }
 
-impl Into<QCEntry> for CreateIssueRequest {
-    fn into(self) -> QCEntry {
+impl From<CreateIssueRequest> for QCEntry {
+    fn from(request: CreateIssueRequest) -> Self {
         let relevant_files = [
-            self.previous_qc
+            request
+                .relevant_files
                 .into_iter()
-                .map(|r| r.to_entry(QCRelationship::PreviousQC))
-                .collect::<Vec<_>>(),
-            self.gating_qc
-                .into_iter()
-                .map(|r| r.to_entry(QCRelationship::GatingQC))
-                .collect::<Vec<_>>(),
-            self.relevant_qc
-                .into_iter()
-                .map(|r| r.to_entry(QCRelationship::RelevantQC))
-                .collect::<Vec<_>>(),
-            self.relevant_files
-                .into_iter()
-                .map(|r| RelevantFileEntry::File {
-                    file_path: PathBuf::from(&r.file_path),
-                    justification: r.justification,
+                .map(|f| RelevantFileEntry::File {
+                    file_path: PathBuf::from(&f.file_path),
+                    justification: f.justification,
                 })
+                .collect::<Vec<_>>(),
+            request
+                .previous_qc
+                .into_iter()
+                .map(|q| q.to_entry(QCRelationship::PreviousQC))
+                .collect::<Vec<_>>(),
+            request
+                .gating_qc
+                .into_iter()
+                .map(|q| q.to_entry(QCRelationship::GatingQC))
+                .collect::<Vec<_>>(),
+            request
+                .relevant_qc
+                .into_iter()
+                .map(|q| q.to_entry(QCRelationship::RelevantQC))
                 .collect::<Vec<_>>(),
         ]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-        QCEntry {
-            title: PathBuf::from(&self.file),
+
+        Self {
+            title: PathBuf::from(&request.file),
             checklist: Checklist {
-                name: self.checklist_name,
+                name: request.checklist_name,
                 note: None,
-                content: self.checklist_content,
+                content: request.checklist_content,
             },
-            assignees: self.assignees,
+            assignees: request.assignees,
             relevant_files,
         }
     }

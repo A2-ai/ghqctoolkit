@@ -140,16 +140,28 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Query(query): Query<IssueStatusQuery>,
 ) -> Result<Json<Vec<IssueStatusResponse>>, ApiError> {
-    // Parse comma-separated issue numbers
-    let issue_numbers: Vec<u64> = query
-        .issues
-        .split(',')
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
+    // Parse comma-separated issue numbers, validating all inputs
+    let parts: Vec<&str> = query.issues.split(',').map(|s| s.trim()).collect();
+    let mut issue_numbers = Vec::new();
+    let mut invalid_parts = Vec::new();
+
+    for part in parts {
+        match part.parse::<u64>() {
+            Ok(num) => issue_numbers.push(num),
+            Err(_) => invalid_parts.push(part),
+        }
+    }
+
+    if !invalid_parts.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid issue numbers: {}",
+            invalid_parts.join(", ")
+        )));
+    }
 
     if issue_numbers.is_empty() {
         return Err(ApiError::BadRequest(
-            "No valid issue numbers provided".to_string(),
+            "No issue numbers provided".to_string(),
         ));
     }
 
@@ -192,8 +204,11 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
     for issue_number in issue_numbers {
         if let Some(entry) = fetched_issues.cached_entries.get(&issue_number) {
             let mut response = IssueStatusResponse::from_cache_entry(entry.clone(), &dirty);
-            response.blocking_qc_status =
-                determine_blocking_qc_status(&entry.blocking_qc_numbers, &fetched_issues);
+            determine_blocking_qc_status(
+                &mut response.blocking_qc_status,
+                &entry.blocking_qc_numbers,
+                &fetched_issues,
+            );
             responses.push(response);
         } else {
             let error = fetched_issues
@@ -215,11 +230,11 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
     Ok(Json(responses))
 }
 
-fn determine_blocking_qc_status(
+pub(crate) fn determine_blocking_qc_status(
+    blocking_status: &mut BlockingQCStatus,
     blocking_numbers: &[u64],
     fetched_issues: &FetchedIssues,
-) -> BlockingQCStatus {
-    let mut blocking_status = BlockingQCStatus::default();
+) {
     blocking_status.total = blocking_numbers.len() as u32;
     for number in blocking_numbers {
         if let Some(entry) = fetched_issues.cached_entries.get(number) {
@@ -260,8 +275,6 @@ fn determine_blocking_qc_status(
             blocking_status.approved_count, blocking_status.total
         )
     };
-
-    blocking_status
 }
 
 /// GET /api/issues/{number}
@@ -269,12 +282,7 @@ pub async fn get_issue<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Path(number): Path<u64>,
 ) -> Result<Json<Issue>, ApiError> {
-    let issue = state
-        .git_info()
-        .get_issue(number)
-        .await
-        .map(Issue::from)?
-        .into();
+    let issue = state.git_info().get_issue(number).await.map(Issue::from)?;
 
     Ok(Json(issue))
 }

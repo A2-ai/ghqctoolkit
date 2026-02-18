@@ -674,9 +674,18 @@ components:
           required: [Exists]
           properties:
             Exists:
-              type: integer
-              description: Issue number of the existing issue
-              example: 42
+              type: object
+              required: [issue_number]
+              properties:
+                issue_number:
+                  type: integer
+                  description: Issue number of the existing issue
+                  example: 42
+                issue_id:
+                  type: integer
+                  nullable: true
+                  description: Optional GitHub issue ID (node ID numeric part)
+                  example: 123456789
         - type: object
           title: NewIssue
           description: Reference to an issue being created in this batch
@@ -687,7 +696,9 @@ components:
               description: File path matching another file in this batch
               example: "src/utils/helpers.R"
       example:
-        Exists: 42
+        Exists:
+          issue_number: 42
+          issue_id: 123456789
 
     RelevantFileInput:
       type: object

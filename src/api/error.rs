@@ -19,6 +19,9 @@ pub enum ApiError {
     /// Conflict error, e.g., blocking QCs not approved (409)
     #[error("Request caused conflict: {0}")]
     Conflict(String),
+    /// Conflict with structured data (409) - avoids double JSON encoding
+    #[error("Request caused conflict")]
+    ConflictDetails(serde_json::Value),
     /// GitHub API error (502)
     #[error("GitHub API Error: {0}")]
     GitHubApi(String),
@@ -37,16 +40,26 @@ struct ErrorResponse {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
-            ApiError::GitHubApi(msg) => (StatusCode::BAD_GATEWAY, msg),
-            ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),
-            ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-        };
+        match self {
+            // ConflictDetails returns structured JSON directly without wrapping
+            ApiError::ConflictDetails(value) => {
+                (StatusCode::CONFLICT, Json(value)).into_response()
+            }
+            // All other errors wrap message in ErrorResponse
+            _ => {
+                let (status, message) = match self {
+                    ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+                    ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+                    ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+                    ApiError::GitHubApi(msg) => (StatusCode::BAD_GATEWAY, msg),
+                    ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),
+                    ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+                    ApiError::ConflictDetails(_) => unreachable!(),
+                };
 
-        (status, Json(ErrorResponse { error: message })).into_response()
+                (status, Json(ErrorResponse { error: message })).into_response()
+            }
+        }
     }
 }
 

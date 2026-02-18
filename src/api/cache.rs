@@ -141,10 +141,14 @@ impl StatusCache {
             cache_entry.issue = update_issue.clone().into();
             match cache_entry.qc_status.status {
                 QCStatusEnum::Approved => {
-                    cache_entry.qc_status.status = QCStatusEnum::ChangeRequested
+                    cache_entry.qc_status.status = QCStatusEnum::ChangeRequested;
+                    // Clear approved commit since approval is revoked
+                    cache_entry.qc_status.approved_commit = None;
                 }
                 QCStatusEnum::ChangesAfterApproval => {
-                    cache_entry.qc_status.status = QCStatusEnum::ChangesToComment
+                    cache_entry.qc_status.status = QCStatusEnum::ChangesToComment;
+                    // Clear approved commit since approval is revoked
+                    cache_entry.qc_status.approved_commit = None;
                 }
                 _ => (),
             };
@@ -248,6 +252,9 @@ impl UpdateAction {
                 }
             }
             UpdateAction::Approve => {
+                // Always record the approved commit
+                qc_status.approved_commit = Some(current_commit.to_string());
+
                 if is_latest_commit {
                     qc_status.status = QCStatusEnum::Approved;
                     qc_status.status_detail = "Approved".to_string();

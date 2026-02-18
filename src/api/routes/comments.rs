@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use crate::api::cache::{UpdateAction, update_cache_after_comment, update_cache_after_unapproval};
 use crate::api::error::ApiError;
 use crate::api::fetch_helpers::{CreatedThreads, FetchedIssues};
+use crate::api::routes::issues::determine_blocking_qc_status;
 use crate::api::state::AppState;
 use crate::api::types::{
-    ApprovalResponse, ApproveQuery, ApproveRequest, BlockingQCError, BlockingQCItem,
-    BlockingQCItemWithStatus, BlockingQCStatus, CommentResponse, CreateCommentRequest,
-    QCStatusEnum, ReviewRequest, UnapprovalResponse, UnapproveRequest,
+    ApprovalResponse, ApproveQuery, ApproveRequest, BlockingQCError, BlockingQCItemWithStatus,
+    BlockingQCStatus, CommentResponse, CreateCommentRequest, ReviewRequest, UnapprovalResponse,
+    UnapproveRequest,
 };
 use crate::{GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, parse_blocking_qcs};
 use axum::{
@@ -86,8 +87,10 @@ pub async fn approve_issue<G: GitProvider + 'static>(
             not_approved: blocking_status.not_approved,
             errors: blocking_status.errors,
         };
-        let json = serde_json::to_string_pretty(&conflict).unwrap_or_default();
-        return Err(ApiError::Conflict(json));
+        // Use ConflictDetails to avoid double JSON encoding
+        let value = serde_json::to_value(conflict)
+            .unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize conflict details"}));
+        return Err(ApiError::ConflictDetails(value));
     }
 
     let commit = parse_str_as_commit(&request.commit)?;
@@ -100,8 +103,9 @@ pub async fn approve_issue<G: GitProvider + 'static>(
     };
 
     let approval_url = state.git_info().post_comment(&approval).await?;
-    state.git_info().close_issue(issue.number).await?;
 
+    // Update cache immediately after posting comment, before closing issue
+    // This ensures cache reflects the comment even if close_issue fails
     update_cache_after_comment(
         &state,
         &approval.issue,
@@ -109,6 +113,8 @@ pub async fn approve_issue<G: GitProvider + 'static>(
         UpdateAction::Approve,
     )
     .await;
+
+    state.git_info().close_issue(issue.number).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -167,7 +173,7 @@ pub async fn review_issue<G: GitProvider + 'static>(
 
     let review = QCReview {
         file: PathBuf::from(&issue.title),
-        issue: issue,
+        issue,
         commit,
         note: request.note,
         no_diff: !request.include_diff,
@@ -184,10 +190,7 @@ pub async fn review_issue<G: GitProvider + 'static>(
     )
     .await;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(CommentResponse { comment_url }),
-    ))
+    Ok((StatusCode::CREATED, Json(CommentResponse { comment_url })))
 }
 
 fn parse_str_as_commit(commit: &str) -> Result<ObjectId, ApiError> {
@@ -235,35 +238,7 @@ pub(crate) async fn get_blocking_qc_status_with_cache<G: GitProvider>(
             }),
     );
 
-    for blocking_qc in blocking_qcs {
-        if let Some(entry) = fetched_issues.cached_entries.get(blocking_qc) {
-            match entry.qc_status.status {
-                QCStatusEnum::Approved | QCStatusEnum::ChangesAfterApproval => {
-                    status.approved_count += 1;
-                    status.approved.push(BlockingQCItem {
-                        issue_number: *blocking_qc,
-                        file_name: entry.issue.title.clone(),
-                    });
-                }
-                _ => {
-                    status.not_approved.push(BlockingQCItemWithStatus {
-                        issue_number: *blocking_qc,
-                        file_name: entry.issue.title.clone(),
-                        status: entry.qc_status.status_detail.clone(),
-                    });
-                }
-            }
-        }
-    }
-
-    status.summary = if status.approved_count == status.total {
-        "All blocking QCs approved".to_string()
-    } else {
-        format!(
-            "{}/{} blocking QCs are approved",
-            status.approved_count, status.total
-        )
-    };
+    determine_blocking_qc_status(&mut status, blocking_qcs, &fetched_issues);
 
     status
 }
@@ -275,7 +250,7 @@ mod tests {
     use crate::api::cache::{CacheEntry, CacheKey};
     use crate::api::state::AppState;
     use crate::api::tests::helpers::{MockGitInfo, load_test_issue};
-    use crate::api::types::{ChecklistSummary, Issue, QCStatus};
+    use crate::api::types::{ChecklistSummary, Issue, QCStatus, QCStatusEnum};
 
     #[tokio::test]
     async fn test_get_blocking_qc_status_empty() {
