@@ -52,10 +52,7 @@ pub async fn create_comment<G: GitProvider + 'static>(
     )
     .await;
 
-    Ok((
-        StatusCode::from_u16(200).unwrap(),
-        Json(CommentResponse { comment_url }),
-    ))
+    Ok((StatusCode::CREATED, Json(CommentResponse { comment_url })))
 }
 
 /// POST /api/issues/{number}/approve
@@ -64,7 +61,7 @@ pub async fn approve_issue<G: GitProvider + 'static>(
     Path(number): Path<u64>,
     Query(query): Query<ApproveQuery>,
     Json(request): Json<ApproveRequest>,
-) -> Result<Json<ApprovalResponse>, ApiError> {
+) -> Result<(StatusCode, Json<ApprovalResponse>), ApiError> {
     let issue = state.git_info().get_issue(number).await?;
     let blocking_qcs = issue
         .body
@@ -113,23 +110,26 @@ pub async fn approve_issue<G: GitProvider + 'static>(
     )
     .await;
 
-    Ok(Json(ApprovalResponse {
-        approval_url,
-        skipped_unapproved: if query.force {
-            blocking_status
-                .not_approved
-                .iter()
-                .map(|c| c.issue_number)
-                .collect()
-        } else {
-            Vec::new()
-        },
-        skipped_errors: if query.force {
-            blocking_status.errors
-        } else {
-            Vec::new()
-        },
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(ApprovalResponse {
+            approval_url,
+            skipped_unapproved: if query.force {
+                blocking_status
+                    .not_approved
+                    .iter()
+                    .map(|c| c.issue_number)
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            skipped_errors: if query.force {
+                blocking_status.errors
+            } else {
+                Vec::new()
+            },
+        }),
+    ))
 }
 
 /// POST /api/issues/{number}/unapprove
@@ -137,7 +137,7 @@ pub async fn unapprove_issue<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Path(number): Path<u64>,
     Json(request): Json<UnapproveRequest>,
-) -> Result<Json<UnapprovalResponse>, ApiError> {
+) -> Result<(StatusCode, Json<UnapprovalResponse>), ApiError> {
     let issue = state.git_info().get_issue(number).await?;
     let unapprove = QCUnapprove {
         issue,
@@ -149,7 +149,10 @@ pub async fn unapprove_issue<G: GitProvider + 'static>(
 
     update_cache_after_unapproval(&state, &unapprove.issue).await;
 
-    Ok(Json(UnapprovalResponse { unapproval_url }))
+    Ok((
+        StatusCode::CREATED,
+        Json(UnapprovalResponse { unapproval_url }),
+    ))
 }
 
 /// POST /api/issues/{number}/review
@@ -182,7 +185,7 @@ pub async fn review_issue<G: GitProvider + 'static>(
     .await;
 
     Ok((
-        StatusCode::from_u16(200).unwrap(),
+        StatusCode::CREATED,
         Json(CommentResponse { comment_url }),
     ))
 }

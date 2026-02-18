@@ -412,24 +412,32 @@ pub struct DependencyCycle {
 /// Uses topological sort (Kahn's algorithm) to determine valid creation order.
 /// Returns errors if circular dependencies or other issues detected.
 fn resolve_creation_order(entries: &[QCEntry]) -> ResolutionResult {
-    // Validate for duplicates and self-references
     let mut res = ResolutionResult::default();
     let mut seen_files = HashSet::new();
 
+    // First pass: collect all files and check for duplicates
     for entry in entries {
-        // Check for duplicates
         if !seen_files.insert(entry.title.clone()) {
             res.errors.push(DependencyError::DuplicateFile {
                 file: entry.title.clone(),
             });
         }
+    }
 
-        // Check for self-references
+    // Second pass: validate all references (now that we know all files in batch)
+    for entry in entries {
         for rel_file in &entry.relevant_files {
             if let RelevantFileEntry::NewIssue { file_path, .. } = rel_file {
                 if file_path == &entry.title {
+                    // Self-reference
                     res.errors.push(DependencyError::SelfReference {
                         file: entry.title.clone(),
+                    });
+                } else if !seen_files.contains(file_path) {
+                    // Referenced file is not in the batch
+                    res.errors.push(DependencyError::MissingBatchReference {
+                        referencing_file: entry.title.clone(),
+                        referenced_file: file_path.clone(),
                     });
                 }
             }
@@ -613,6 +621,12 @@ pub enum DependencyError {
 
     #[error("Duplicate file in batch: {file:?}")]
     DuplicateFile { file: PathBuf },
+
+    #[error("File {referencing_file:?} references {referenced_file:?} which is not in the batch")]
+    MissingBatchReference {
+        referencing_file: PathBuf,
+        referenced_file: PathBuf,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1315,6 +1329,32 @@ mod tests {
         assert!(matches!(
             result.errors[0],
             DependencyError::DuplicateFile { .. }
+        ));
+    }
+
+    #[test]
+    fn test_missing_batch_reference() {
+        // A references B which is not in the batch
+        // Expected: missing batch reference error (caught before creation starts)
+        let entries = vec![make_entry(
+            "A",
+            vec![RelevantFileEntry::NewIssue {
+                file_path: PathBuf::from("B"),
+                relationship: QCRelationship::GatingQC,
+                description: Some("Needs B".to_string()),
+            }],
+        )];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(!result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert!(result.creation_order.is_empty());
+
+        // Verify error is MissingBatchReference
+        assert!(matches!(
+            result.errors[0],
+            DependencyError::MissingBatchReference { .. }
         ));
     }
 

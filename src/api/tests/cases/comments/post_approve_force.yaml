@@ -46,7 +46,7 @@ request:
     note: "Force approving"
 
 response:
-  status: 200
+  status: 201
   body:
     match_type: schema
     schema:

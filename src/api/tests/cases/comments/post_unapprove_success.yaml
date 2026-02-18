@@ -24,7 +24,7 @@ request:
     reason: "Something is wrong"
 
 response:
-  status: 200
+  status: 201
   body:
     match_type: exact
     value:
