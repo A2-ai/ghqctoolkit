@@ -13,7 +13,7 @@ use super::{
     assertions::{ResponseAsserter, ValidationError},
     loader::FixtureLoader,
     mock_builder::MockBuilder,
-    types::{ExpectedWriteCall, HttpMethod, HttpRequest, TestCase},
+    types::{CallPosition, ExpectedWriteCall, HttpMethod, HttpRequest, LastPosition, TestCase},
 };
 
 /// Test runner that executes test cases
@@ -170,28 +170,90 @@ fn validate_write_calls(
     let actual_calls = mock.write_calls();
     let mut errors = Vec::new();
 
-    // Convert expected calls to WriteCall for comparison
+    // Convert expected calls to WriteCall and validate
     for expected_call in expected {
-        let write_call = match expected_call {
-            ExpectedWriteCall::CreateMilestone { name, description } => {
+        let (write_call, position) = match expected_call {
+            ExpectedWriteCall::CreateMilestone {
+                name,
+                description,
+                position,
+            } => (
                 WriteCall::CreateMilestone {
                     name: name.clone(),
                     description: description.clone(),
-                }
+                },
+                position,
+            ),
+            ExpectedWriteCall::PostIssue { title, position } => {
+                (WriteCall::PostIssue { title: title.clone() }, position)
             }
-            ExpectedWriteCall::PostComment { comment_type } => WriteCall::PostComment {
-                comment_type: comment_type.clone(),
-            },
-            ExpectedWriteCall::CloseIssue { issue_number } => WriteCall::CloseIssue {
-                issue_number: *issue_number,
-            },
-            ExpectedWriteCall::OpenIssue { issue_number } => WriteCall::OpenIssue {
-                issue_number: *issue_number,
-            },
+            ExpectedWriteCall::PostComment {
+                comment_type,
+                position,
+            } => (
+                WriteCall::PostComment {
+                    comment_type: comment_type.clone(),
+                },
+                position,
+            ),
+            ExpectedWriteCall::CloseIssue {
+                issue_number,
+                position,
+            } => (
+                WriteCall::CloseIssue {
+                    issue_number: *issue_number,
+                },
+                position,
+            ),
+            ExpectedWriteCall::OpenIssue {
+                issue_number,
+                position,
+            } => (
+                WriteCall::OpenIssue {
+                    issue_number: *issue_number,
+                },
+                position,
+            ),
         };
 
+        // Check if call exists
         if !actual_calls.contains(&write_call) {
             errors.push(format!("Expected write call not found: {:?}", write_call));
+            continue;
+        }
+
+        // Check position if specified
+        if let Some(pos) = position {
+            match pos {
+                CallPosition::Index(idx) => {
+                    if let Some(actual_call) = actual_calls.get(*idx) {
+                        if actual_call != &write_call {
+                            errors.push(format!(
+                                "Call at position {} mismatch: expected {:?}, got {:?}",
+                                idx, write_call, actual_call
+                            ));
+                        }
+                    } else {
+                        errors.push(format!(
+                            "Position {} out of bounds (total calls: {})",
+                            idx,
+                            actual_calls.len()
+                        ));
+                    }
+                }
+                CallPosition::Last(LastPosition::Last) => {
+                    if let Some(last_call) = actual_calls.last() {
+                        if last_call != &write_call {
+                            errors.push(format!(
+                                "Last call mismatch: expected {:?}, got {:?}",
+                                write_call, last_call
+                            ));
+                        }
+                    } else {
+                        errors.push("No calls made, cannot validate last position".to_string());
+                    }
+                }
+            }
         }
     }
 

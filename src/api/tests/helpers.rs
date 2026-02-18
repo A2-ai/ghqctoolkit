@@ -20,6 +20,9 @@ pub enum WriteCall {
         name: String,
         description: Option<String>,
     },
+    PostIssue {
+        title: String,
+    },
     PostComment {
         comment_type: String,
     },
@@ -58,12 +61,6 @@ impl MockGitInfo {
     /// Create a new mock with default values.
     pub fn builder() -> MockGitInfoBuilder {
         MockGitInfoBuilder::new()
-    }
-
-    /// Check if a specific write operation was called.
-    pub fn was_called(&self, expected: &WriteCall) -> bool {
-        let calls = self.write_calls.lock().unwrap();
-        calls.iter().any(|call| call == expected)
     }
 
     /// Get all write calls for inspection.
@@ -456,8 +453,23 @@ impl GitHubWriter for MockGitInfo {
         })
     }
 
-    async fn post_issue(&self, _issue: &crate::QCIssue) -> Result<String, GitHubApiError> {
-        Err(GitHubApiError::NoApi)
+    async fn post_issue(&self, issue: &crate::QCIssue) -> Result<String, GitHubApiError> {
+        // Track the call
+        self.write_calls.lock().unwrap().push(WriteCall::PostIssue {
+            title: issue.title().to_string(),
+        });
+
+        // Generate issue number based on existing issues count + 1
+        let issue_number = {
+            let issues = self.issues.lock().unwrap();
+            issues.len() as u64 + 1
+        };
+
+        // Return a mock issue URL
+        Ok(format!(
+            "https://github.com/{}/{}/issues/{}",
+            self.owner, self.repo, issue_number
+        ))
     }
 
     async fn post_comment<T: CommentBody + Sync + 'static>(

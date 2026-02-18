@@ -1,0 +1,31 @@
+name: "POST /api/milestones/{number}/issues - unknown assignees error"
+description: "Reject batch creation when assignees don't exist in repository"
+
+fixtures:
+  milestones:
+    - v1.0.json
+  issues: []
+  users:
+    - repository_users.json
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones/1/issues"
+  body:
+    - file: "src/analysis/results.R"
+      checklist_name: "Review"
+      checklist_content: "- [ ] Check"
+      assignees: ["reviewer1", "unknown_user", "another_unknown"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+
+response:
+  status: 400
+
+assert_write_calls: []

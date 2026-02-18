@@ -1,0 +1,47 @@
+name: "POST /api/milestones/{number}/issues - circular dependency error"
+description: "Reject batch creation when circular dependencies are detected"
+
+fixtures:
+  milestones:
+    - v1.0.json
+  issues: []
+  users:
+    - repository_users.json
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones/1/issues"
+  body:
+    # A depends on B
+    - file: "src/file_a.R"
+      checklist_name: "Review"
+      checklist_content: "- [ ] Check"
+      assignees: ["reviewer1"]
+      gating_qc:
+        - file_name: "src/file_b.R"
+          issue_class:
+            New: "src/file_b.R"
+      previous_qc: []
+      relevant_qc: []
+      relevant_files: []
+    # B depends on A (circular!)
+    - file: "src/file_b.R"
+      checklist_name: "Review"
+      checklist_content: "- [ ] Check"
+      assignees: ["reviewer1"]
+      gating_qc:
+        - file_name: "src/file_a.R"
+          issue_class:
+            New: "src/file_a.R"
+      previous_qc: []
+      relevant_qc: []
+      relevant_files: []
+
+response:
+  status: 400
+
+assert_write_calls: []

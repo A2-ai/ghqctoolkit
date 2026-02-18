@@ -96,29 +96,48 @@ paths:
                   $ref: '#/components/schemas/Issue'
         '404':
           description: Milestone not found
-
-  /issues:
     post:
-      summary: Create a new QC issue
-      operationId: createIssue
+      summary: Create QC issues in batch
+      description: |
+        Create multiple QC issues in a milestone with dependency resolution.
+        Issues can reference each other within the batch, and creation order is
+        automatically determined based on dependencies.
+      operationId: createIssues
       tags: [issues]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          description: Milestone number to create issues in
+          schema:
+            type: integer
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateIssueRequest'
+              type: array
+              items:
+                $ref: '#/components/schemas/CreateIssueRequest'
+              minItems: 1
       responses:
         '201':
-          description: Issue created
+          description: Issues created successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CreateIssueResponse'
+                type: array
+                items:
+                  $ref: '#/components/schemas/CreateIssueResponse'
         '400':
-          description: Invalid request
-        '409':
-          description: Issue already exists for file in milestone
+          description: |
+            Invalid request. Possible reasons:
+            - Unknown assignees
+            - Circular dependencies detected
+            - Duplicate files in batch
+            - Self-references detected
+        '404':
+          description: Milestone not found
 
   /issues/status:
     get:
@@ -571,47 +590,85 @@ components:
 
     CreateIssueRequest:
       type: object
-      required: [milestone_number, file, checklist_name, checklist_content]
+      required: [file, checklist_name, checklist_content]
       properties:
-        milestone_number:
-          type: integer
-          description: Milestone number to create issue in
         file:
           type: string
+          description: Path to the file being QC'd
+          example: "src/analysis/results.R"
         checklist_name:
           type: string
+          description: Name of the checklist to use
+          example: "Code Review"
         checklist_content:
           type: string
+          description: Markdown checklist content with checkboxes
+          example: "- [ ] Code compiles\n- [ ] Tests pass"
         assignees:
           type: array
+          description: GitHub usernames to assign to the issue
           items:
             type: string
+          example: ["reviewer1", "reviewer2"]
         previous_qc:
           type: array
+          description: Previous QC issues that must be approved before this one
           items:
             $ref: '#/components/schemas/RelevantIssue'
         gating_qc:
           type: array
+          description: Gating QC issues that must be approved before this one
           items:
             $ref: '#/components/schemas/RelevantIssue'
         relevant_qc:
           type: array
+          description: Related QC issues (informational, don't block approval)
           items:
             $ref: '#/components/schemas/RelevantIssue'
         relevant_files:
           type: array
+          description: Files without QC issues (requires justification)
           items:
             $ref: '#/components/schemas/RelevantFileInput'
 
     RelevantIssue:
       type: object
-      required: [issue_number]
+      required: [file_name, issue_class]
       properties:
-        issue_number:
-          type: integer
+        file_name:
+          type: string
+          description: Path to the related file
+          example: "src/utils/helpers.R"
+        issue_class:
+          $ref: '#/components/schemas/RelevantIssueClass'
         description:
           type: string
           nullable: true
+          description: Optional description of the relationship
+          example: "Depends on helper functions"
+
+    RelevantIssueClass:
+      oneOf:
+        - type: object
+          title: ExistingIssue
+          description: Reference to an already-created issue
+          required: [Exists]
+          properties:
+            Exists:
+              type: integer
+              description: Issue number of the existing issue
+              example: 42
+        - type: object
+          title: NewIssue
+          description: Reference to an issue being created in this batch
+          required: [New]
+          properties:
+            New:
+              type: string
+              description: File path matching another file in this batch
+              example: "src/utils/helpers.R"
+      example:
+        Exists: 42
 
     RelevantFileInput:
       type: object

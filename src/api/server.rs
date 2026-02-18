@@ -25,10 +25,9 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .route("/api/milestones", post(milestones::create_milestone::<G>))
         .route(
             "/api/milestones/{number}/issues",
-            get(milestones::list_milestone_issues::<G>),
+            get(milestones::list_milestone_issues::<G>).post(issues::create_issues::<G>),
         )
         // Issues
-        .route("/api/issues", post(issues::create_issue))
         .route("/api/issues/status", get(issues::batch_get_issue_status))
         .route("/api/issues/{number}", get(issues::get_issue))
         .route(

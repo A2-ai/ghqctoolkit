@@ -124,18 +124,6 @@ pub enum HttpMethod {
     Patch,
 }
 
-impl HttpMethod {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            HttpMethod::Get => "GET",
-            HttpMethod::Post => "POST",
-            HttpMethod::Put => "PUT",
-            HttpMethod::Delete => "DELETE",
-            HttpMethod::Patch => "PATCH",
-        }
-    }
-}
-
 /// Expected HTTP response
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExpectedResponse {
@@ -214,14 +202,44 @@ pub enum ExpectedWriteCall {
         name: String,
         #[serde(default)]
         description: Option<String>,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
+    PostIssue {
+        title: String,
+        #[serde(default)]
+        position: Option<CallPosition>,
     },
     PostComment {
         comment_type: String,
+        #[serde(default)]
+        position: Option<CallPosition>,
     },
     CloseIssue {
         issue_number: u64,
+        #[serde(default)]
+        position: Option<CallPosition>,
     },
     OpenIssue {
         issue_number: u64,
+        #[serde(default)]
+        position: Option<CallPosition>,
     },
+}
+
+/// Position assertion for write calls
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum CallPosition {
+    /// Exact index (0-based)
+    Index(usize),
+    /// Special position "last"
+    Last(LastPosition),
+}
+
+/// Marker for "last" position
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum LastPosition {
+    Last,
 }

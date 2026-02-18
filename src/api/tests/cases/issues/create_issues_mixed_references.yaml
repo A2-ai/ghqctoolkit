@@ -1,0 +1,70 @@
+name: "POST /api/milestones/{number}/issues - mixed existing and new references"
+description: "Create issues that reference both existing issues and issues in the batch"
+
+fixtures:
+  milestones:
+    - v1.0.json
+  issues:
+    - config_file_issue.json  # Issue #2: src/config.rs
+  users:
+    - repository_users.json
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones/1/issues"
+  body:
+    # Analysis depends on config (existing #2) and helpers (new)
+    - file: "src/analysis/results.R"
+      checklist_name: "Analysis Review"
+      checklist_content: "- [ ] Results validated"
+      assignees: ["reviewer1"]
+      previous_qc:
+        - file_name: "src/config.rs"
+          issue_class:
+            Exists: 2
+          description: "Configuration used by analysis"
+      gating_qc:
+        - file_name: "src/utils/helpers.R"
+          issue_class:
+            New: "src/utils/helpers.R"
+          description: "Helper functions"
+      relevant_qc: []
+      relevant_files: []
+    # Helpers only depends on config (existing #2)
+    - file: "src/utils/helpers.R"
+      checklist_name: "Helper Review"
+      checklist_content: "- [ ] Functions documented"
+      assignees: ["reviewer1"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc:
+        - file_name: "src/config.rs"
+          issue_class:
+            Exists: 2
+          description: "Uses configuration"
+      relevant_files: []
+
+response:
+  status: 201
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 2
+      item_fields:
+        - issue_url
+        - blocking_created
+        - blocking_errors
+
+# Helpers should be created first (position 0), then analysis last
+assert_write_calls:
+  - type: PostIssue
+    title: "src/utils/helpers.R"
+    position: 0
+  - type: PostIssue
+    title: "src/analysis/results.R"
+    position: last

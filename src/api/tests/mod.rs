@@ -17,10 +17,10 @@ mod test_runner {
 
     use crate::Configuration;
     use crate::api::cache::CacheKey;
+    use crate::api::tests::harness::runner::TestRunner;
+    use crate::api::tests::harness::types::TestCase;
     use crate::api::tests::helpers::{MockGitInfo, load_test_issue, load_test_milestone};
     use crate::api::{AppState, create_router};
-
-    use super::harness::{TestCase, TestRunner};
 
     /// Discover all YAML test cases recursively
     fn discover_test_cases() -> Vec<PathBuf> {

@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use octocrab::models::IssueState;
 use serde::{Deserialize, Serialize};
 
-use crate::{IssueThread, api::cache::CacheEntry};
+use crate::{GitHubApiError, IssueThread, api::cache::CacheEntry, create::CreateResult};
 
 /// Health check response.
 #[derive(Debug, Serialize)]
@@ -232,6 +232,15 @@ pub struct BlockingQCError {
     pub error: String,
 }
 
+impl From<(u64, GitHubApiError)> for BlockingQCError {
+    fn from(value: (u64, GitHubApiError)) -> Self {
+        Self {
+            issue_number: value.0,
+            error: value.1.to_string(),
+        }
+    }
+}
+
 /// Blocking QC status summary.
 #[derive(Debug, Serialize, Default)]
 pub struct BlockingQCStatus {
@@ -280,9 +289,22 @@ pub struct BlockedIssueStatus {
 #[derive(Debug, Serialize)]
 pub struct CreateIssueResponse {
     pub issue_url: String,
-    pub issue_number: u64,
     pub blocking_created: Vec<u64>,
     pub blocking_errors: Vec<BlockingQCError>,
+}
+
+impl From<CreateResult> for CreateIssueResponse {
+    fn from(res: CreateResult) -> Self {
+        Self {
+            issue_url: res.issue_url,
+            blocking_created: res.successful_blocking,
+            blocking_errors: res
+                .blocking_errors
+                .into_iter()
+                .map(BlockingQCError::from)
+                .collect(),
+        }
+    }
 }
 
 /// Response for comment creation.

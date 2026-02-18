@@ -1,0 +1,43 @@
+name: "POST /api/milestones/{number}/issues - issues already exist"
+description: "Reject batch creation when files already have issues in the milestone"
+
+fixtures:
+  milestones:
+    - v1.0.json
+  issues:
+    - test_file_issue.json     # Issue #1: src/test.rs
+    - config_file_issue.json   # Issue #2: src/config.rs
+  users:
+    - repository_users.json
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones/1/issues"
+  body:
+    # This file already has issue #1
+    - file: "src/test.rs"
+      checklist_name: "Review"
+      checklist_content: "- [ ] Check"
+      assignees: ["reviewer1"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+    # New file (no existing issue)
+    - file: "src/new_file.R"
+      checklist_name: "Review"
+      checklist_content: "- [ ] Check"
+      assignees: ["reviewer1"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+
+response:
+  status: 409
+
+assert_write_calls: []

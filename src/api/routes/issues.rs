@@ -1,6 +1,5 @@
 //! Issue endpoints.
 
-use crate::GitProvider;
 use crate::api::cache::CacheKey;
 use crate::api::error::ApiError;
 use crate::api::fetch_helpers::{CreatedThreads, FetchedIssues, format_error_list};
@@ -10,13 +9,16 @@ use crate::api::types::{
     BlockingQCStatus, CreateIssueRequest, CreateIssueResponse, Issue, IssueStatusResponse,
     QCStatusEnum,
 };
+use crate::create::QCIssueError;
+use crate::{GitProvider, QCEntry, batch_post_qc_entries, get_repo_users};
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub struct IssueStatusQuery {
@@ -24,17 +26,113 @@ pub struct IssueStatusQuery {
     pub issues: String,
 }
 
-/// POST /api/issues
-pub async fn create_issue<G: GitProvider + 'static>(
+/// POST /api/milestones/{number}/issues
+pub async fn create_issues<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
-    Json(request): Json<CreateIssueRequest>,
-) -> Result<(StatusCode, Json<CreateIssueResponse>), ApiError> {
-    // TODO: Implement issue creation logic
-    // This will involve:
-    // 1. Validating assignees
-    // 2. Creating the issue with checklist
-    // 3. Handling blocking QC creation
-    todo!("Implement create_issue")
+    Path(milestone_number): Path<u64>,
+    Json(requests): Json<Vec<CreateIssueRequest>>,
+) -> Result<(StatusCode, Json<Vec<CreateIssueResponse>>), ApiError> {
+    // Validate milestone exists
+    let milestones = state.git_info().get_milestones().await?;
+    if !milestones
+        .iter()
+        .any(|m| m.number == milestone_number as i64)
+    {
+        return Err(ApiError::NotFound(format!(
+            "Milestone {} not found",
+            milestone_number
+        )));
+    }
+
+    // Get existing issues in milestone
+    let milestone_issues = state
+        .git_info()
+        .get_issues(Some(milestone_number))
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!(
+                "Failed to determine issues in milestone {milestone_number}: {e}. Defaulting to none"
+            );
+            Vec::new()
+        });
+
+    let entries = requests
+        .into_iter()
+        .map(CreateIssueRequest::into)
+        .collect::<Vec<QCEntry>>();
+
+    // Check for duplicate filenames within the request
+    let mut seen_files = HashSet::new();
+    let mut duplicate_files = Vec::new();
+    for entry in &entries {
+        if !seen_files.insert(&entry.title) {
+            duplicate_files.push(entry.title.to_string_lossy().to_string());
+        }
+    }
+    if !duplicate_files.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "Duplicate files in request:\n  - {}",
+            duplicate_files.join("\n  - ")
+        )));
+    }
+
+    // Validate assignees exist in repository
+    let repo_users = get_repo_users(state.disk_cache(), state.git_info())
+        .await?
+        .into_iter()
+        .map(|r| r.login)
+        .collect::<HashSet<_>>();
+
+    let unknown_assignees = entries
+        .iter()
+        .flat_map(|e| e.assignees.iter())
+        .filter(|a| !repo_users.contains(*a))
+        .collect::<HashSet<_>>();
+    let mut unknown_assignees = unknown_assignees.into_iter().cloned().collect::<Vec<_>>();
+    unknown_assignees.sort();
+    if !unknown_assignees.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "Unknown assignees: {}",
+            unknown_assignees.join(", ")
+        )));
+    }
+
+    // Check if any files already have issues in this milestone
+    let duplicate_issues = entries
+        .iter()
+        .filter(|e| {
+            milestone_issues
+                .iter()
+                .any(|i| PathBuf::from(&i.title) == e.title)
+        })
+        .map(|e| e.title.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    if !duplicate_issues.is_empty() {
+        return Err(ApiError::Conflict(format!(
+            "Issues already exist in milestone for files:\n  - {}",
+            duplicate_issues.join("\n  - ")
+        )));
+    }
+
+    let res = batch_post_qc_entries(&entries, state.git_info(), milestone_number)
+        .await
+        .map_err(|e| match e {
+            QCIssueError::DependencyResolution { errors } => ApiError::BadRequest(format!(
+                "Failed to resolve issue creation order:\n  -{}",
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n  -")
+            )),
+            QCIssueError::GitHubApiError(e) => ApiError::GitHubApi(e.to_string()),
+            _ => ApiError::Internal(e.to_string()),
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(res.into_iter().map(CreateIssueResponse::from).collect()),
+    ))
 }
 
 /// GET /api/issues/status?issues=1,2,3

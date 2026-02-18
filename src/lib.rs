@@ -36,7 +36,7 @@ pub use configuration::{
     Checklist, Configuration, ConfigurationOptions, configuration_status, determine_config_dir,
     setup_configuration,
 };
-pub use create::QCIssue;
+pub use create::{QCEntry, QCIssue, QCRelationship, RelevantFileEntry, batch_post_qc_entries};
 pub use git::{
     AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitComment, GitCommit,
     GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,

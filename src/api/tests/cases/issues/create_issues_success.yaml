@@ -1,0 +1,62 @@
+name: "POST /api/milestones/{number}/issues - create multiple independent issues"
+description: "Successfully create multiple QC issues with no dependencies"
+
+fixtures:
+  milestones:
+    - v1.0.json
+  issues: []
+  users:
+    - repository_users.json
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones/1/issues"
+  body:
+    - file: "src/analysis/results.R"
+      checklist_name: "Code Review"
+      checklist_content: "- [ ] Code compiles\n- [ ] Tests pass"
+      assignees: ["reviewer1"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+    - file: "src/utils/helpers.R"
+      checklist_name: "Helper Review"
+      checklist_content: "- [ ] Functions documented\n- [ ] Unit tests added"
+      assignees: ["octocat"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+    - file: "README.md"
+      checklist_name: "Documentation"
+      checklist_content: "- [ ] Clear instructions\n- [ ] Examples included"
+      assignees: []
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+
+response:
+  status: 201
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 3
+      item_fields:
+        - issue_url
+        - blocking_created
+        - blocking_errors
+
+assert_write_calls:
+  - type: PostIssue
+    title: "src/analysis/results.R"
+  - type: PostIssue
+    title: "src/utils/helpers.R"
+  - type: PostIssue
+    title: "README.md"
