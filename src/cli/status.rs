@@ -277,6 +277,10 @@ async fn get_milestone_status_rows(
 ) -> Result<Vec<MilestoneStatusRow>> {
     let mut rows = Vec::new();
 
+    // Fetch once before processing issues (same result for all issues)
+    let git_status = fetch_and_status(git_info).unwrap_or(GitStatus::Clean);
+    let dirty_files = git_info.dirty().unwrap_or_default();
+
     for milestone in milestones {
         // Get all issues for this milestone
         let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
@@ -285,10 +289,6 @@ async fn get_milestone_status_rows(
             // Create IssueThread for each issue
             if let Ok(issue_thread) = IssueThread::from_issue(&issue, cache, git_info).await {
                 let file_commits = issue_thread.file_commits();
-
-                // Get git status
-                let git_status = fetch_and_status(git_info).unwrap_or(GitStatus::Clean);
-                let dirty_files = git_info.dirty().unwrap_or_default();
 
                 // Determine QC status
                 let qc_status = QCStatus::determine_status(&issue_thread);

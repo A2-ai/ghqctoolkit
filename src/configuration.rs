@@ -54,7 +54,7 @@ pub struct Checklist {
 }
 
 impl Checklist {
-    pub fn new(name: String, note: Option<String>, content: String) -> Self {
+    pub fn new(name: String, note: Option<&str>, content: String) -> Self {
         let content = format!(
             "{}{content}",
             note.map(|n| format!("{n}\n\n")).unwrap_or_default()
@@ -161,17 +161,11 @@ impl Configuration {
                 "txt" => {
                     match extract_title_from_filename(&path) {
                         Ok(key) => {
-                            let checklist = Checklist {
-                                name: key.to_string(),
-                                content: format!(
-                                    "{}{content}",
-                                    self.options
-                                        .prepended_checklist_note
-                                        .as_ref()
-                                        .map(|note| format!("{note}\n\n"))
-                                        .unwrap_or_default()
-                                ),
-                            };
+                            let checklist = Checklist::new(
+                                key.to_string(),
+                                self.options.prepended_checklist_note.as_deref(),
+                                content,
+                            );
                             self.checklists.insert(key, checklist);
                         }
                         Err(e) => {
@@ -186,17 +180,11 @@ impl Configuration {
                 }
                 "yaml" | "yml" => match parse_yaml_checklist(&content) {
                     Ok((title, content)) => {
-                        let checklist = Checklist {
-                            name: title.to_string(),
-                            content: format!(
-                                "{}{content}",
-                                self.options
-                                    .prepended_checklist_note
-                                    .as_ref()
-                                    .map(|note| format!("{note}\n\n"))
-                                    .unwrap_or_default()
-                            ),
-                        };
+                        let checklist = Checklist::new(
+                            title.to_string(),
+                            self.options.prepended_checklist_note.as_deref(),
+                            content,
+                        );
                         self.checklists.insert(title, checklist);
                     }
                     Err(e) => {

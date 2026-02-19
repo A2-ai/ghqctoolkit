@@ -244,21 +244,34 @@ impl GitStatusOps for GitInfo {
 /// not a stale local tracking branch. It first performs a git fetch to update the
 /// refs/remotes/origin/* tracking branches, then checks the status.
 ///
+/// If the fetch fails (e.g., no network access, no usable origin), it falls back to
+/// checking the local status against the last-fetched remote state. This prevents hard
+/// failures for offline workflows while still providing fresh remote data when available.
+///
 /// # Arguments
 /// * `git_info` - A reference to an object implementing both GitRepository and GitStatusOps
 ///
 /// # Returns
 /// * `Ok(GitStatus)` - The current status of the repository relative to the remote
-/// * `Err(GitStatusError)` - If fetch or status check fails
+/// * `Err(GitStatusError)` - If status check fails (fetch errors are logged and ignored)
 pub fn fetch_and_status<T>(git_info: &T) -> Result<GitStatus, GitStatusError>
 where
     T: GitRepository + GitStatusOps,
 {
     log::debug!("Fetching from remote before status check");
-    let changes_found = git_info.fetch()?;
-    log::debug!(
-        "Fetch complete (changes found: {}), checking status",
-        changes_found
-    );
+    match git_info.fetch() {
+        Ok(changes_found) => {
+            log::debug!(
+                "Fetch complete (changes found: {}), checking status",
+                changes_found
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to fetch from remote: {}. Falling back to local status check against last-fetched remote state.",
+                e
+            );
+        }
+    }
     git_info.status()
 }

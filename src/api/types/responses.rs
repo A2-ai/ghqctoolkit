@@ -407,16 +407,30 @@ pub struct ConfigGitRepository {
 }
 
 impl ConfigGitRepository {
-    pub fn new(git_info: &impl GitProvider) -> Result<Self, ApiError> {
-        let status: GitStatus = fetch_and_status(git_info)?.into();
-        let dirty_files = git_info
-            .dirty()?
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+    pub async fn new<G: GitProvider + Clone + Send + 'static>(
+        git_info: &G,
+    ) -> Result<Self, ApiError> {
+        let owner = git_info.owner().to_string();
+        let repo = git_info.repo().to_string();
+        let git_info = git_info.clone();
+
+        // Perform blocking git operations in a blocking task
+        let (status, dirty_files) = tokio::task::spawn_blocking(move || {
+            let status: GitStatus = fetch_and_status(&git_info)?.into();
+            let dirty_files = git_info
+                .dirty()?
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+
+            Ok::<_, ApiError>((status, dirty_files))
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))??;
+
         Ok(Self {
-            owner: git_info.owner().to_string(),
-            repo: git_info.repo().to_string(),
+            owner,
+            repo,
             status: status.status,
             dirty_files,
         })
@@ -455,29 +469,52 @@ pub struct RepoInfoResponse {
 }
 
 impl RepoInfoResponse {
-    pub fn new(git_info: &impl GitProvider) -> Result<Self, ApiError> {
-        let git_status = fetch_and_status(git_info)?;
-        let local_commit = git_info.commit()?;
-        let remote_commit = match &git_status {
-            crate::GitStatus::Clean => local_commit.clone(),
-            crate::GitStatus::Ahead(ahead) => {
-                ahead.last().expect("At least one commit ahead").to_string()
-            }
-            crate::GitStatus::Behind(behind) | crate::GitStatus::Diverged { behind, .. } => behind
-                .first()
-                .expect("At least one commit behind")
-                .to_string(),
-        };
-        let api_git_status = GitStatus::from(git_status.clone());
+    pub async fn new<G: GitProvider + Clone + Send + 'static>(
+        git_info: &G,
+    ) -> Result<Self, ApiError> {
+        let owner = git_info.owner().to_string();
+        let repo = git_info.repo().to_string();
+        let git_info = git_info.clone();
+
+        // Perform blocking git operations in a blocking task
+        let (branch, local_commit, remote_commit, git_status_enum, git_status_detail) =
+            tokio::task::spawn_blocking(move || {
+                let git_status = fetch_and_status(&git_info)?;
+                let local_commit = git_info.commit()?;
+                let branch = git_info.branch()?;
+                let remote_commit = match &git_status {
+                    crate::GitStatus::Clean => local_commit.clone(),
+                    crate::GitStatus::Ahead(ahead) => {
+                        ahead.last().expect("At least one commit ahead").to_string()
+                    }
+                    crate::GitStatus::Behind(behind) | crate::GitStatus::Diverged { behind, .. } => {
+                        behind
+                            .first()
+                            .expect("At least one commit behind")
+                            .to_string()
+                    }
+                };
+                let api_git_status = GitStatus::from(git_status.clone());
+
+                Ok::<_, ApiError>((
+                    branch,
+                    local_commit,
+                    remote_commit,
+                    api_git_status.status,
+                    git_status.to_string(),
+                ))
+            })
+            .await
+            .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))??;
 
         Ok(Self {
-            owner: git_info.owner().to_string(),
-            repo: git_info.repo().to_string(),
-            branch: git_info.branch()?,
+            owner,
+            repo,
+            branch,
             local_commit,
             remote_commit,
-            git_status: api_git_status.status,
-            git_status_detail: git_status.to_string(),
+            git_status: git_status_enum,
+            git_status_detail,
         })
     }
 }

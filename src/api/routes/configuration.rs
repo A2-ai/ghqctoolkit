@@ -40,12 +40,14 @@ pub async fn get_configuration_status<G: GitProvider + 'static>(
         })
         .collect();
 
+    let git_repository = match state.configuration_git_info() {
+        Some(git_info) => Some(ConfigGitRepository::new(git_info).await?),
+        None => None,
+    };
+
     let response = ConfigurationStatusResponse {
         directory: config.path.to_string_lossy().to_string(),
-        git_repository: state
-            .configuration_git_info()
-            .map(ConfigGitRepository::new)
-            .transpose()?,
+        git_repository,
         options: ConfigurationOptions {
             prepended_checklist_note: options.prepended_checklist_note.clone(),
             checklist_display_name: options.checklist_display_name.clone(),

@@ -49,12 +49,12 @@ pub async fn create_issues<G: GitProvider + 'static>(
         .git_info()
         .get_issues(Some(milestone_number))
         .await
-        .unwrap_or_else(|e| {
-            log::warn!(
-                "Failed to determine issues in milestone {milestone_number}: {e}. Defaulting to none"
-            );
-            Vec::new()
-        });
+        .map_err(|e| {
+            ApiError::GitHubApi(format!(
+                "Failed to fetch existing issues in milestone {}: {}",
+                milestone_number, e
+            ))
+        })?;
 
     let entries = requests
         .into_iter()

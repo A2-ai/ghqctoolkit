@@ -26,5 +26,5 @@ pub async fn list_assignees<G: GitProvider + 'static>(
 pub async fn repo_info<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
 ) -> Result<Json<RepoInfoResponse>, ApiError> {
-    RepoInfoResponse::new(state.git_info()).map(Json)
+    RepoInfoResponse::new(state.git_info()).await.map(Json)
 }

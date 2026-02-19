@@ -41,7 +41,8 @@ request:
       previous_qc:
         - file_name: "src/config.rs"
           issue_class:
-            Exists: 2
+            Exists:
+              issue_number: 2
           description: "Configuration used by analysis"
       gating_qc:
         - file_name: "src/utils/helpers.R"
@@ -60,7 +61,8 @@ request:
       relevant_qc:
         - file_name: "src/config.rs"
           issue_class:
-            Exists: 2
+            Exists:
+              issue_number: 2
           description: "Uses configuration"
       relevant_files: []
 

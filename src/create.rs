@@ -679,7 +679,7 @@ mod tests {
             ],
             checklist: Checklist::new(
                 "Code Review Checklist".to_string(),
-                Some("NOTE".to_string()),
+                Some("NOTE"),
                 "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
             ),
             assignees: vec!["reviewer1".to_string(), "reviewer2".to_string()],
