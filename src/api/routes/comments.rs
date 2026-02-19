@@ -88,8 +88,9 @@ pub async fn approve_issue<G: GitProvider + 'static>(
             errors: blocking_status.errors,
         };
         // Use ConflictDetails to avoid double JSON encoding
-        let value = serde_json::to_value(conflict)
-            .unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize conflict details"}));
+        let value = serde_json::to_value(conflict).unwrap_or_else(
+            |_| serde_json::json!({"error": "Failed to serialize conflict details"}),
+        );
         return Err(ApiError::ConflictDetails(value));
     }
 

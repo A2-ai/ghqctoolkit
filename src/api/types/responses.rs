@@ -487,12 +487,11 @@ impl RepoInfoResponse {
                     crate::GitStatus::Ahead(ahead) => {
                         ahead.last().expect("At least one commit ahead").to_string()
                     }
-                    crate::GitStatus::Behind(behind) | crate::GitStatus::Diverged { behind, .. } => {
-                        behind
-                            .first()
-                            .expect("At least one commit behind")
-                            .to_string()
-                    }
+                    crate::GitStatus::Behind(behind)
+                    | crate::GitStatus::Diverged { behind, .. } => behind
+                        .first()
+                        .expect("At least one commit behind")
+                        .to_string(),
                 };
                 let api_git_status = GitStatus::from(git_status.clone());
 

@@ -7,8 +7,7 @@ use octocrab::models::Milestone;
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::{
     BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitStatus, GitStatusOps,
-    IssueThread, QCStatus, analyze_issue_checklists, get_blocking_qc_status,
-    git::fetch_and_status,
+    IssueThread, QCStatus, analyze_issue_checklists, get_blocking_qc_status, git::fetch_and_status,
 };
 
 pub async fn interactive_status(

@@ -1,7 +1,7 @@
 use std::{fmt, path::PathBuf};
 
-use crate::git::repository::{GitRepository, GitRepositoryError};
 use crate::GitInfo;
+use crate::git::repository::{GitRepository, GitRepositoryError};
 use gix::ObjectId;
 #[cfg(test)]
 use mockall::automock;

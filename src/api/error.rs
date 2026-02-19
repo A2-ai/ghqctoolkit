@@ -42,9 +42,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
             // ConflictDetails returns structured JSON directly without wrapping
-            ApiError::ConflictDetails(value) => {
-                (StatusCode::CONFLICT, Json(value)).into_response()
-            }
+            ApiError::ConflictDetails(value) => (StatusCode::CONFLICT, Json(value)).into_response(),
             // All other errors wrap message in ErrorResponse
             _ => {
                 let (status, message) = match self {
