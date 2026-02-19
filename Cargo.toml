@@ -39,6 +39,9 @@ lazy_static = "1.5"
 axum = { version = "0.8", optional = true }
 tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
+rust-embed = { version = "8", optional = true }
+open = { version = "5", optional = true }
+mime_guess = { version = "2", optional = true }
 tar = "0.4"
 flate2 = "1.1"
 calamine = "0.31.0"
@@ -60,6 +63,13 @@ api = [
     "dep:axum",
     "dep:tower",
     "dep:tower-http",
+]
+ui = [
+    "api",
+    "dep:rust-embed",
+    "dep:open",
+    "dep:anyhow",
+    "dep:mime_guess",
 ]
 
 [dev-dependencies]

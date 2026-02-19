@@ -1,3 +1,5 @@
 /target
 .DS_store
 cache
+ui/node_modules/
+ui/dist/

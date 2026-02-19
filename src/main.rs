@@ -58,9 +58,16 @@ enum Commands {
         #[command(subcommand)]
         configuration_command: ConfigurationCommands,
     },
-    #[cfg(feature = "api")]
+    #[cfg(all(feature = "api", not(feature = "ui")))]
     /// Start the API server
     Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "3103")]
+        port: u16,
+    },
+    #[cfg(feature = "ui")]
+    /// Start the embedded UI server and open the browser
+    Ui {
         /// Port to listen on
         #[arg(short, long, default_value = "3103")]
         port: u16,
@@ -979,7 +986,7 @@ async fn main() -> Result<()> {
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
-        #[cfg(feature = "api")]
+        #[cfg(all(feature = "api", not(feature = "ui")))]
         Commands::Serve { port } => {
             use ghqctoolkit::api::{AppState, create_router};
 
@@ -1007,6 +1014,29 @@ async fn main() -> Result<()> {
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;
             axum::serve(listener, app).await?;
+        }
+        #[cfg(feature = "ui")]
+        Commands::Ui { port } => {
+            use ghqctoolkit::api::AppState;
+
+            let config_dir = determine_config_dir(cli.config_dir, &env)?;
+            let mut configuration = Configuration::from_path(&config_dir);
+            configuration.load_checklists();
+            let configuration_git_info = match GitInfo::from_path(&configuration.path, &env) {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to determine configuration git info: {e}. Continuing without git status checks"
+                    );
+                    None
+                }
+            };
+
+            let git_info = GitInfo::from_path(&cli.directory, &env)?;
+            let disk_cache = DiskCache::from_git_info(&git_info).ok();
+
+            let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache);
+            ghqctoolkit::ui::run(port, state).await?;
         }
     }
 
