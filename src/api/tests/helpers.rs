@@ -42,6 +42,7 @@ pub struct MockGitInfo {
     repo: String,
     current_commit: String,
     current_branch: String,
+    remote_commit: String,
 
     // Mock data storage
     issues: Arc<Mutex<HashMap<u64, Issue>>>,
@@ -76,6 +77,7 @@ pub struct MockGitInfoBuilder {
     repo: String,
     commit: String,
     branch: String,
+    remote_commit: String,
     issues: HashMap<u64, Issue>,
     blocked_issues: HashMap<u64, Vec<Issue>>,
     milestones: Vec<octocrab::models::Milestone>,
@@ -89,8 +91,9 @@ impl MockGitInfoBuilder {
         Self {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            commit: "abc123".to_string(),
+            commit: "abc1234567890abcdef1234567890abcdef12340".to_string(),
             branch: "main".to_string(),
+            remote_commit: "def4567890abcdef4567890abcdef4567890abc0".to_string(),
             issues: HashMap::new(),
             blocked_issues: HashMap::new(),
             milestones: Vec::new(),
@@ -117,6 +120,11 @@ impl MockGitInfoBuilder {
 
     pub fn with_branch(mut self, branch: impl Into<String>) -> Self {
         self.branch = branch.into();
+        self
+    }
+
+    pub fn with_remote_commit(mut self, remote_commit: impl Into<String>) -> Self {
+        self.remote_commit = remote_commit.into();
         self
     }
 
@@ -156,6 +164,7 @@ impl MockGitInfoBuilder {
             repo: self.repo,
             current_commit: self.commit,
             current_branch: self.branch,
+            remote_commit: self.remote_commit,
             issues: Arc::new(Mutex::new(self.issues)),
             blocked_issues: Arc::new(Mutex::new(self.blocked_issues)),
             milestones: Arc::new(Mutex::new(self.milestones)),
@@ -231,10 +240,9 @@ impl GitHelpers for MockGitInfo {
 
 impl GitStatusOps for MockGitInfo {
     fn state(&self) -> Result<(ObjectId, GitState), GitStatusError> {
-        Ok((
-            ObjectId::empty_tree(gix::hash::Kind::Sha1),
-            self.git_state.clone(),
-        ))
+        let remote_commit = ObjectId::from_str(&self.remote_commit)
+            .expect("remote_commit should be a valid SHA-1 hash");
+        Ok((remote_commit, self.git_state.clone()))
     }
 
     fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError> {

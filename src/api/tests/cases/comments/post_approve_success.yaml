@@ -32,6 +32,7 @@ response:
       approval_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"
       skipped_unapproved: []
       skipped_errors: []
+      closed: true
 
 assert_write_calls:
   - type: PostComment

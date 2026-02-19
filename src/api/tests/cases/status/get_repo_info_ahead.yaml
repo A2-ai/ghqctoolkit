@@ -2,8 +2,9 @@ name: "GET /api/repo - ahead status"
 description: "Repository is ahead, remote_commit is the base commit (last in ahead list)"
 
 git_state:
-  commit: "abc1234567890abcdef1234567890abcdef1234"
+  commit: "abc1234567890abcdef1234567890abcdef12340"
   branch: "main"
+  remote_commit: "9012345678901234567890abcdef1234567890ab"
   status:
     type: ahead
     commits:
@@ -22,7 +23,7 @@ response:
       owner: "test-owner"
       repo: "test-repo"
       branch: "main"
-      local_commit: "abc1234567890abcdef1234567890abcdef1234"
+      local_commit: "abc1234567890abcdef1234567890abcdef12340"
       remote_commit: "9012345678901234567890abcdef1234567890ab"
       git_status: "ahead"
       git_status_detail: "Repository is ahead by 2 commits"

@@ -17,7 +17,8 @@ impl MockBuilder {
             .with_owner(&git_state.owner)
             .with_repo(&git_state.repo)
             .with_commit(&git_state.commit)
-            .with_branch(&git_state.branch);
+            .with_branch(&git_state.branch)
+            .with_remote_commit(&git_state.remote_commit);
 
         // Add all issues
         for (number, issue) in &fixtures.issues {

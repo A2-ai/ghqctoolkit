@@ -288,7 +288,7 @@ mod tests {
         let key = CacheKey {
             issue_updated_at: test_issue.updated_at,
             branch: "main".to_string(),
-            head_commit: "abc123".to_string(),
+            head_commit: "abc1234567890abcdef1234567890abcdef12340".to_string(),
         };
         let entry = CacheEntry {
             issue: Issue {
@@ -349,7 +349,7 @@ mod tests {
         let key = CacheKey {
             issue_updated_at: test_issue1.updated_at,
             branch: "main".to_string(),
-            head_commit: "abc123".to_string(),
+            head_commit: "abc1234567890abcdef1234567890abcdef12340".to_string(),
         };
         let entry = CacheEntry {
             issue: Issue {

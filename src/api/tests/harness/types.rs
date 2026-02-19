@@ -124,6 +124,9 @@ pub struct GitState {
     /// Git repository status (ahead/behind/diverged/clean)
     #[serde(default)]
     pub status: Option<GitStatusSpec>,
+    /// Remote commit hash (for status calculations)
+    #[serde(default = "default_remote_commit")]
+    pub remote_commit: String,
 }
 
 /// Git status specification for tests
@@ -152,6 +155,7 @@ impl Default for GitState {
             branch: default_branch(),
             dirty_files: Vec::new(),
             status: None,
+            remote_commit: default_remote_commit(),
         }
     }
 }
@@ -165,11 +169,15 @@ fn default_repo() -> String {
 }
 
 fn default_commit() -> String {
-    "abc123".to_string()
+    "abc1234567890abcdef1234567890abcdef12340".to_string()
 }
 
 fn default_branch() -> String {
     "main".to_string()
+}
+
+fn default_remote_commit() -> String {
+    "def4567890abcdef4567890abcdef4567890abc0".to_string()
 }
 
 /// HTTP request specification

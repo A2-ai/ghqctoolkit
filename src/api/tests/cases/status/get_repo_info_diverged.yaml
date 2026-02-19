@@ -2,8 +2,9 @@ name: "GET /api/repo - diverged status"
 description: "Repository is diverged, remote_commit is the latest remote commit (first in behind list)"
 
 git_state:
-  commit: "abc1234567890abcdef1234567890abcdef1234"
+  commit: "abc1234567890abcdef1234567890abcdef12340"
   branch: "main"
+  remote_commit: "4567890123456789012345678901234567890abc"
   status:
     type: diverged
     ahead:
@@ -25,7 +26,7 @@ response:
       owner: "test-owner"
       repo: "test-repo"
       branch: "main"
-      local_commit: "abc1234567890abcdef1234567890abcdef1234"
+      local_commit: "abc1234567890abcdef1234567890abcdef12340"
       remote_commit: "4567890123456789012345678901234567890abc"
       git_status: "diverged"
       git_status_detail: "Repository is ahead by 2 and behind by 2 commits"

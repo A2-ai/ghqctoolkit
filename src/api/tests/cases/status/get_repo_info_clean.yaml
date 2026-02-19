@@ -2,8 +2,9 @@ name: "GET /api/repo - clean status"
 description: "Repository is up to date, remote_commit equals local_commit"
 
 git_state:
-  commit: "abc1234567890abcdef1234567890abcdef1234"
+  commit: "abc1234567890abcdef1234567890abcdef12340"
   branch: "main"
+  remote_commit: "abc1234567890abcdef1234567890abcdef12340"
   status:
     type: clean
 
@@ -19,8 +20,8 @@ response:
       owner: "test-owner"
       repo: "test-repo"
       branch: "main"
-      local_commit: "abc1234567890abcdef1234567890abcdef1234"
-      remote_commit: "abc1234567890abcdef1234567890abcdef1234"
+      local_commit: "abc1234567890abcdef1234567890abcdef12340"
+      remote_commit: "abc1234567890abcdef1234567890abcdef12340"
       git_status: "clean"
       git_status_detail: "Repository is up to date!"
 
