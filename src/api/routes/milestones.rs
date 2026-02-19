@@ -26,6 +26,11 @@ pub async fn create_milestone<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Json(request): Json<CreateMilestoneRequest>,
 ) -> Result<(StatusCode, Json<Milestone>), ApiError> {
+    if request.name.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "Empty Milestone name not allowed".to_string(),
+        ));
+    }
     let milestone = state
         .git_info()
         .create_milestone(&request.name, &request.description)

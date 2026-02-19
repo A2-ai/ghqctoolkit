@@ -17,7 +17,7 @@ use ghqctoolkit::{
     GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps, IssueThread,
     QCContext, QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation,
     archive, configuration_status, create_labels_if_needed, create_staging_dir,
-    determine_config_dir, fetch_and_status, fetch_milestone_issues, get_blocking_qc_status,
+    determine_config_dir, fetch_milestone_issues, get_blocking_qc_status, get_git_status,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
     unapprove_with_impact,
 };
@@ -543,8 +543,7 @@ async fn main() -> Result<()> {
                                 analyze_issue_checklists(issue.body.as_deref());
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
-                            let git_status = fetch_and_status(&git_info)?;
-                            let dirty_files = git_info.dirty()?;
+                            let git_status = get_git_status(&git_info)?;
                             let qc_status = QCStatus::determine_status(&issue_thread);
                             let file_commits = issue_thread.file_commits();
                             let blocking_qc_status = get_blocking_qc_status(
@@ -557,9 +556,9 @@ async fn main() -> Result<()> {
                                 "{}",
                                 single_issue_status(
                                     &issue_thread,
-                                    &git_status,
+                                    &git_status.state,
                                     &qc_status,
-                                    &dirty_files,
+                                    &git_status.dirty,
                                     &file_commits,
                                     &checklist_summaries,
                                     &blocking_qc_status
@@ -1003,7 +1002,7 @@ async fn main() -> Result<()> {
             let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache);
             let app = create_router(state);
 
-            let addr = format!("0.0.0.0:{}", port);
+            let addr = format!("127.0.0.0:{}", port);
             println!("Starting API server on http://{}", addr);
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;

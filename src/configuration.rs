@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::{GitCli, GitRepository, GitStatusOps, fetch_and_status};
+use crate::git::{GitCli, GitRepository, GitStatusOps, get_git_status};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -471,30 +471,32 @@ pub fn configuration_status(
         .join(" ");
 
     let git_str = if let Some(git_info) = git_info {
-        format!(
-            "\n📦 git repository: {}/{}{}{}",
-            git_info.owner(),
-            git_info.repo(),
-            if let Ok(status) = fetch_and_status(git_info) {
-                format!("\n{}", status)
-            } else {
-                String::new()
-            },
-            if let Ok(dirty_files) = git_info.dirty()
-                && !dirty_files.is_empty()
-            {
+        let status = get_git_status(git_info).ok();
+        let status_detail = status
+            .as_ref()
+            .map(|s| format!("\n{}", s.state))
+            .unwrap_or_default();
+        let dirty_detail = status
+            .as_ref()
+            .filter(|s| !s.dirty.is_empty())
+            .map(|s| {
                 format!(
                     "\n⚠️ {} files with uncommitted changes:\n  - {}",
-                    dirty_files.len(),
-                    dirty_files
+                    s.dirty.len(),
+                    s.dirty
                         .iter()
                         .map(|p| format!("{}", p.display()))
                         .collect::<Vec<_>>()
                         .join("\n  - ")
                 )
-            } else {
-                String::new()
-            }
+            })
+            .unwrap_or_default();
+        format!(
+            "\n📦 git repository: {}/{}{}{}",
+            git_info.owner(),
+            git_info.repo(),
+            status_detail,
+            dirty_detail
         )
     } else {
         String::new()
@@ -768,7 +770,7 @@ Second Checklist:
         struct MockGitInfo {
             owner: String,
             repo: String,
-            status: crate::git::GitStatus,
+            status: crate::git::GitState,
             dirty_files: Vec<PathBuf>,
         }
 
@@ -799,8 +801,14 @@ Second Checklist:
         }
 
         impl crate::git::GitStatusOps for MockGitInfo {
-            fn status(&self) -> Result<crate::git::GitStatus, crate::git::GitStatusError> {
-                Ok(self.status.clone())
+            fn state(
+                &self,
+            ) -> Result<(gix::ObjectId, crate::git::GitState), crate::git::GitStatusError>
+            {
+                Ok((
+                    gix::ObjectId::empty_tree(gix::hash::Kind::Sha1),
+                    self.status.clone(),
+                ))
             }
             fn dirty(&self) -> Result<Vec<PathBuf>, crate::GitStatusError> {
                 Ok(self.dirty_files.clone())
@@ -816,7 +824,7 @@ Second Checklist:
         let git_info = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::git::GitStatus::Clean,
+            status: crate::git::GitState::Clean,
             dirty_files: Vec::new(),
         };
 
@@ -831,7 +839,7 @@ Second Checklist:
         let git_info_dirty = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::git::GitStatus::Clean,
+            status: crate::git::GitState::Clean,
             dirty_files: vec![PathBuf::from("src/main.rs"), PathBuf::from("README.md")],
         };
 

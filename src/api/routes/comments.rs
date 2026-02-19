@@ -115,7 +115,7 @@ pub async fn approve_issue<G: GitProvider + 'static>(
     )
     .await;
 
-    state.git_info().close_issue(issue.number).await?;
+    let closed = state.git_info().close_issue(issue.number).await.is_ok();
 
     Ok((
         StatusCode::CREATED,
@@ -135,6 +135,7 @@ pub async fn approve_issue<G: GitProvider + 'static>(
             } else {
                 Vec::new()
             },
+            closed,
         }),
     ))
 }
@@ -152,13 +153,16 @@ pub async fn unapprove_issue<G: GitProvider + 'static>(
     };
 
     let unapproval_url = state.git_info().post_comment(&unapprove).await?;
-    state.git_info().open_issue(number).await?;
-
     update_cache_after_unapproval(&state, &unapprove.issue).await;
+
+    let opened = state.git_info().open_issue(number).await.is_ok();
 
     Ok((
         StatusCode::CREATED,
-        Json(UnapprovalResponse { unapproval_url }),
+        Json(UnapprovalResponse {
+            unapproval_url,
+            opened,
+        }),
     ))
 }
 

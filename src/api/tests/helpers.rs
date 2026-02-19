@@ -3,9 +3,9 @@
 use crate::CommentBody;
 use crate::git::{
     GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
-    GitRepository, GitRepositoryError, GitStatusError, GitStatusOps,
+    GitRepository, GitRepositoryError, GitState, GitStatusError, GitStatusOps,
 };
-use crate::{GitAuthor, GitCommit, GitHubApiError, GitHubReader, GitHubWriter, GitStatus};
+use crate::{GitAuthor, GitCommit, GitHubApiError, GitHubReader, GitHubWriter};
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
 use std::collections::HashMap;
@@ -51,7 +51,7 @@ pub struct MockGitInfo {
 
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
-    git_status: GitStatus,
+    git_state: GitState,
 
     // Call tracking (for assertions)
     calls: Arc<Mutex<Vec<String>>>,
@@ -81,7 +81,7 @@ pub struct MockGitInfoBuilder {
     milestones: Vec<octocrab::models::Milestone>,
     users: Vec<crate::RepoUser>,
     dirty_files: Vec<PathBuf>,
-    git_status: GitStatus,
+    git_state: GitState,
 }
 
 impl MockGitInfoBuilder {
@@ -96,7 +96,7 @@ impl MockGitInfoBuilder {
             milestones: Vec::new(),
             users: Vec::new(),
             dirty_files: Vec::new(),
-            git_status: GitStatus::Clean,
+            git_state: GitState::Clean,
         }
     }
 
@@ -145,8 +145,8 @@ impl MockGitInfoBuilder {
         self
     }
 
-    pub fn with_status(mut self, status: GitStatus) -> Self {
-        self.git_status = status;
+    pub fn with_status(mut self, status: GitState) -> Self {
+        self.git_state = status;
         self
     }
 
@@ -161,7 +161,7 @@ impl MockGitInfoBuilder {
             milestones: Arc::new(Mutex::new(self.milestones)),
             users: Arc::new(Mutex::new(self.users)),
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
-            git_status: self.git_status,
+            git_state: self.git_state,
             calls: Arc::new(Mutex::new(Vec::new())),
             write_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -230,8 +230,11 @@ impl GitHelpers for MockGitInfo {
 }
 
 impl GitStatusOps for MockGitInfo {
-    fn status(&self) -> Result<GitStatus, GitStatusError> {
-        Ok(self.git_status.clone())
+    fn state(&self) -> Result<(ObjectId, GitState), GitStatusError> {
+        Ok((
+            ObjectId::empty_tree(gix::hash::Kind::Sha1),
+            self.git_state.clone(),
+        ))
     }
 
     fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError> {

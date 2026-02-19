@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use super::loader::LoadedFixtures;
 use super::types::{GitState, GitStatusSpec};
-use crate::GitStatus;
+use crate::GitState as RepoGitState;
 use crate::api::tests::helpers::MockGitInfo;
 use gix::ObjectId;
 
@@ -57,13 +57,17 @@ impl MockBuilder {
         builder.build()
     }
 
-    /// Convert GitStatusSpec to GitStatus
-    fn convert_status(spec: &GitStatusSpec) -> GitStatus {
+    /// Convert GitStatusSpec to GitState
+    fn convert_status(spec: &GitStatusSpec) -> RepoGitState {
         match spec {
-            GitStatusSpec::Clean => GitStatus::Clean,
-            GitStatusSpec::Ahead { commits } => GitStatus::Ahead(Self::parse_object_ids(commits)),
-            GitStatusSpec::Behind { commits } => GitStatus::Behind(Self::parse_object_ids(commits)),
-            GitStatusSpec::Diverged { ahead, behind } => GitStatus::Diverged {
+            GitStatusSpec::Clean => RepoGitState::Clean,
+            GitStatusSpec::Ahead { commits } => {
+                RepoGitState::Ahead(Self::parse_object_ids(commits))
+            }
+            GitStatusSpec::Behind { commits } => {
+                RepoGitState::Behind(Self::parse_object_ids(commits))
+            }
+            GitStatusSpec::Diverged { ahead, behind } => RepoGitState::Diverged {
                 ahead: Self::parse_object_ids(ahead),
                 behind: Self::parse_object_ids(behind),
             },

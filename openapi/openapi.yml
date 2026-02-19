@@ -770,6 +770,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BlockingQCError'
+        closed:
+          type: bool
+          description: "Whether the issue was successfully closed"
 
     UnapproveRequest:
       type: object
@@ -783,6 +786,9 @@ components:
       properties:
         unapproval_url:
           type: string
+        opened:
+          type: bool
+          description: "Whether the issue was successfully re-opened"
     BlockedIssueStatus:
       type: object
       required: [issue, qc_status]

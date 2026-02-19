@@ -24,7 +24,7 @@ pub use file_ops::MockGitFileOps;
 pub use helpers::GitHelpers;
 pub use provider::GitProvider;
 pub use repository::{GitRepository, GitRepositoryError};
-pub use status::{GitStatus, GitStatusError, GitStatusOps, fetch_and_status};
+pub use status::{GitState, GitStatus, GitStatusError, GitStatusOps, get_git_status};
 
 use crate::utils::EnvProvider;
 

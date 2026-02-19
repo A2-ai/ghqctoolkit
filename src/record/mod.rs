@@ -11,8 +11,8 @@ use tera::{Context, Tera};
 
 use crate::{
     ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, GitStatusOps,
-    RepoUser, get_issue_comments, get_issue_events, get_repo_users,
-    git::{GitComment, GitCommitAnalysis, GitFileOps, GitStatus, fetch_and_status},
+    RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
+    git::{GitComment, GitCommitAnalysis, GitFileOps, GitState},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
     utils::EnvProvider,
@@ -204,8 +204,9 @@ pub async fn get_milestone_issue_information(
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
     let staging_dir = staging_dir.as_ref();
     let repo_users = get_repo_users(cache, git_info).await?;
-    let git_status = fetch_and_status(git_info)?;
-    let dirty_files = git_info.dirty()?;
+    let git_status = get_git_status(git_info)?;
+    let git_state = git_status.state.clone();
+    let dirty_files = git_status.dirty.clone();
 
     let mut res = HashMap::new();
     for (milestone_name, issues) in milestone_issues {
@@ -214,7 +215,7 @@ pub async fn get_milestone_issue_information(
             .iter()
             .map(|issue| {
                 let repo_users_clone = repo_users.clone();
-                let git_status_clone = git_status.clone();
+                let git_status_clone = git_state.clone();
                 let dirty_files_clone = dirty_files.clone();
                 async move {
                     create_issue_information(
@@ -269,7 +270,7 @@ pub async fn create_issue_information(
     issue: &Issue,
     milestone_name: &str,
     repo_users: &[RepoUser],
-    git_status: &GitStatus,
+    git_status: &GitState,
     dirty_files: &[PathBuf],
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),

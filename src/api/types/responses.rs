@@ -12,7 +12,7 @@ use crate::{
     GitHubApiError, GitProvider, IssueThread,
     api::{ApiError, cache::CacheEntry},
     create::CreateResult,
-    git::fetch_and_status,
+    get_git_status,
 };
 
 /// Health check response.
@@ -142,8 +142,8 @@ pub struct GitStatus {
     pub behind_commits: Vec<String>,
 }
 
-impl From<crate::GitStatus> for GitStatus {
-    fn from(status: crate::GitStatus) -> Self {
+impl From<crate::GitState> for GitStatus {
+    fn from(status: crate::GitState) -> Self {
         let mut res = GitStatus {
             status: GitStatusEnum::Clean,
             detail: status.to_string(),
@@ -156,16 +156,16 @@ impl From<crate::GitStatus> for GitStatus {
         };
 
         match status {
-            crate::GitStatus::Clean => (),
-            crate::GitStatus::Ahead(ahead_commits) => {
+            crate::GitState::Clean => (),
+            crate::GitState::Ahead(ahead_commits) => {
                 res.status = GitStatusEnum::Ahead;
                 res.ahead_commits = convert_commits(ahead_commits);
             }
-            crate::GitStatus::Behind(behind_commits) => {
+            crate::GitState::Behind(behind_commits) => {
                 res.status = GitStatusEnum::Behind;
                 res.behind_commits = convert_commits(behind_commits);
             }
-            crate::GitStatus::Diverged { ahead, behind } => {
+            crate::GitState::Diverged { ahead, behind } => {
                 res.status = GitStatusEnum::Diverged;
                 res.ahead_commits = convert_commits(ahead);
                 res.behind_commits = convert_commits(behind);
@@ -359,12 +359,14 @@ pub struct ApprovalResponse {
     pub approval_url: String,
     pub skipped_unapproved: Vec<u64>,
     pub skipped_errors: Vec<BlockingQCError>,
+    pub closed: bool,
 }
 
 /// Response for issue unapproval.
 #[derive(Debug, Serialize)]
 pub struct UnapprovalResponse {
     pub unapproval_url: String,
+    pub opened: bool,
 }
 
 /// Repository assignee.
@@ -416,14 +418,15 @@ impl ConfigGitRepository {
 
         // Perform blocking git operations in a blocking task
         let (status, dirty_files) = tokio::task::spawn_blocking(move || {
-            let status: GitStatus = fetch_and_status(&git_info)?.into();
-            let dirty_files = git_info
-                .dirty()?
+            let status = get_git_status(&git_info)?;
+            let api_status: GitStatus = status.state.into();
+            let dirty_files = status
+                .dirty
                 .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect::<Vec<_>>();
 
-            Ok::<_, ApiError>((status, dirty_files))
+            Ok::<_, ApiError>((api_status, dirty_files))
         })
         .await
         .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))??;
@@ -479,28 +482,18 @@ impl RepoInfoResponse {
         // Perform blocking git operations in a blocking task
         let (branch, local_commit, remote_commit, git_status_enum, git_status_detail) =
             tokio::task::spawn_blocking(move || {
-                let git_status = fetch_and_status(&git_info)?;
+                let git_status = get_git_status(&git_info)?;
                 let local_commit = git_info.commit()?;
                 let branch = git_info.branch()?;
-                let remote_commit = match &git_status {
-                    crate::GitStatus::Clean => local_commit.clone(),
-                    crate::GitStatus::Ahead(ahead) => {
-                        ahead.last().expect("At least one commit ahead").to_string()
-                    }
-                    crate::GitStatus::Behind(behind)
-                    | crate::GitStatus::Diverged { behind, .. } => behind
-                        .first()
-                        .expect("At least one commit behind")
-                        .to_string(),
-                };
-                let api_git_status = GitStatus::from(git_status.clone());
+                let remote_commit = git_status.remote_commit.to_string();
+                let api_git_status = GitStatus::from(git_status.state.clone());
 
                 Ok::<_, ApiError>((
                     branch,
                     local_commit,
                     remote_commit,
                     api_git_status.status,
-                    git_status.to_string(),
+                    git_status.state.to_string(),
                 ))
             })
             .await

@@ -6,8 +6,8 @@ use octocrab::models::Milestone;
 
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::{
-    BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitStatus, GitStatusOps,
-    IssueThread, QCStatus, analyze_issue_checklists, get_blocking_qc_status, git::fetch_and_status,
+    BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState, IssueThread,
+    QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
 };
 
 pub async fn interactive_status(
@@ -41,8 +41,7 @@ pub async fn interactive_status(
     let file_commits = issue_thread.file_commits();
 
     // Get git status for the file
-    let git_status = fetch_and_status(git_info)?;
-    let dirty_files = git_info.dirty()?;
+    let git_status = get_git_status(git_info)?;
 
     // Determine QC status
     let qc_status = QCStatus::determine_status(&issue_thread);
@@ -54,9 +53,9 @@ pub async fn interactive_status(
         "\n{}",
         single_issue_status(
             &issue_thread,
-            &git_status,
+            &git_status.state,
             &qc_status,
-            &dirty_files,
+            &git_status.dirty,
             &file_commits,
             &checklist_summary,
             &blocking_qc_status,
@@ -68,7 +67,7 @@ pub async fn interactive_status(
 
 pub fn single_issue_status(
     issue_thread: &IssueThread,
-    git_status: &GitStatus,
+    git_status: &GitState,
     qc_status: &QCStatus,
     dirty_files: &[PathBuf],
     file_commits: &[&ObjectId],
@@ -101,7 +100,7 @@ pub fn single_issue_status(
     let is_dirty = dirty_files.contains(&issue_thread.file);
 
     let git_str = match git_status {
-        GitStatus::Clean => {
+        GitState::Clean => {
             log::debug!("Repository git status: clean");
             if is_dirty {
                 "File has local, uncommitted changes"
@@ -109,7 +108,7 @@ pub fn single_issue_status(
                 "File is up to date!"
             }
         }
-        GitStatus::Ahead(commits) => {
+        GitState::Ahead(commits) => {
             log::debug!("Repository git status: ahead");
             match (file_commits.iter().any(|c| commits.contains(c)), is_dirty) {
                 (true, true) => "File has local, committed changes and uncommitted changes",
@@ -118,7 +117,7 @@ pub fn single_issue_status(
                 (false, false) => "File is up to date!",
             }
         }
-        GitStatus::Behind(commits) => {
+        GitState::Behind(commits) => {
             log::debug!("Repository git status: behind");
             match (file_commits.iter().any(|c| commits.contains(c)), is_dirty) {
                 (true, true) => {
@@ -129,7 +128,7 @@ pub fn single_issue_status(
                 (false, false) => "File is up to date!",
             }
         }
-        GitStatus::Diverged { ahead, behind } => {
+        GitState::Diverged { ahead, behind } => {
             log::debug!("Repository git status: diverged");
             let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
             let is_behind = file_commits.iter().any(|c| behind.contains(c));
@@ -277,8 +276,10 @@ async fn get_milestone_status_rows(
     let mut rows = Vec::new();
 
     // Fetch once before processing issues (same result for all issues)
-    let git_status = fetch_and_status(git_info).unwrap_or(GitStatus::Clean);
-    let dirty_files = git_info.dirty().unwrap_or_default();
+    let (git_status, dirty_files) = match get_git_status(git_info) {
+        Ok(status) => (status.state, status.dirty),
+        Err(_) => (GitState::Clean, Vec::new()),
+    };
 
     for milestone in milestones {
         // Get all issues for this milestone
