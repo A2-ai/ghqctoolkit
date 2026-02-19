@@ -344,6 +344,10 @@ mod tests {
         fn path(&self) -> &std::path::Path {
             std::path::Path::new("/test")
         }
+
+        fn fetch(&self) -> Result<bool, GitRepositoryError> {
+            Ok(false) // Mock: no changes fetched
+        }
     }
 
     #[test]

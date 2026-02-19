@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::{GitCli, GitRepository, GitStatusOps};
+use crate::git::{GitCli, GitRepository, GitStatusOps, fetch_and_status};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,17 +50,16 @@ impl ConfigurationOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checklist {
     pub name: String,
-    pub note: Option<String>,
     pub content: String,
 }
 
 impl Checklist {
     pub fn new(name: String, note: Option<String>, content: String) -> Self {
-        Self {
-            name,
-            note,
-            content,
-        }
+        let content = format!(
+            "{}{content}",
+            note.map(|n| format!("{n}\n\n")).unwrap_or_default()
+        );
+        Self { name, content }
     }
 
     fn items(&self) -> usize {
@@ -70,12 +69,7 @@ impl Checklist {
 
 impl fmt::Display for Checklist {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let note = if let Some(n) = &self.note {
-            format!("\n\n{n}")
-        } else {
-            String::new()
-        };
-        writeln!(f, "# {}{note}\n\n{}", self.name, self.content)
+        writeln!(f, "# {}\n\n{}", self.name, self.content)
     }
 }
 
@@ -83,7 +77,6 @@ impl Default for Checklist {
     fn default() -> Self {
         Self {
             name: "Custom".to_string(),
-            note: None,
             content: "- [ ] [INSERT]".to_string(),
         }
     }
@@ -170,8 +163,14 @@ impl Configuration {
                         Ok(key) => {
                             let checklist = Checklist {
                                 name: key.to_string(),
-                                note: self.options.prepended_checklist_note.clone(),
-                                content,
+                                content: format!(
+                                    "{}{content}",
+                                    self.options
+                                        .prepended_checklist_note
+                                        .as_ref()
+                                        .map(|note| format!("{note}\n\n"))
+                                        .unwrap_or_default()
+                                ),
                             };
                             self.checklists.insert(key, checklist);
                         }
@@ -189,8 +188,14 @@ impl Configuration {
                     Ok((title, content)) => {
                         let checklist = Checklist {
                             name: title.to_string(),
-                            note: self.options.prepended_checklist_note.clone(),
-                            content,
+                            content: format!(
+                                "{}{content}",
+                                self.options
+                                    .prepended_checklist_note
+                                    .as_ref()
+                                    .map(|note| format!("{note}\n\n"))
+                                    .unwrap_or_default()
+                            ),
                         };
                         self.checklists.insert(title, checklist);
                     }
@@ -199,7 +204,7 @@ impl Configuration {
                             "Could not parse yaml at {} as valid checklist due to: {}",
                             path.display(),
                             e
-                        )
+                        );
                     }
                 },
                 _ => continue, // Skip other file types
@@ -482,7 +487,7 @@ pub fn configuration_status(
             "\n📦 git repository: {}/{}{}{}",
             git_info.owner(),
             git_info.repo(),
-            if let Ok(status) = git_info.status() {
+            if let Ok(status) = fetch_and_status(git_info) {
                 format!("\n{}", status)
             } else {
                 String::new()
@@ -798,6 +803,10 @@ Second Checklist:
 
             fn path(&self) -> &std::path::Path {
                 std::path::Path::new(".")
+            }
+
+            fn fetch(&self) -> Result<bool, crate::git::GitRepositoryError> {
+                Ok(false) // Mock: no changes fetched
             }
         }
 

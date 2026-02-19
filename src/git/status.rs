@@ -1,5 +1,6 @@
 use std::{fmt, path::PathBuf};
 
+use crate::git::repository::{GitRepository, GitRepositoryError};
 use crate::GitInfo;
 use gix::ObjectId;
 #[cfg(test)]
@@ -85,6 +86,8 @@ pub enum GitStatusError {
     TraverseError(gix::revision::walk::iter::Error),
     #[error("Failed to access repository: {0}")]
     RepositoryError(#[from] crate::git::GitInfoError),
+    #[error("Failed to fetch from remote: {0}")]
+    FetchError(#[from] GitRepositoryError),
 }
 
 /// Repository and file status operations
@@ -233,4 +236,29 @@ impl GitStatusOps for GitInfo {
         log::debug!("Repository has {} uncommitted changes", dirty_files.len());
         Ok(dirty_files)
     }
+}
+
+/// Fetch from remote and then get repository status
+///
+/// This function ensures the status check is performed against the actual remote state,
+/// not a stale local tracking branch. It first performs a git fetch to update the
+/// refs/remotes/origin/* tracking branches, then checks the status.
+///
+/// # Arguments
+/// * `git_info` - A reference to an object implementing both GitRepository and GitStatusOps
+///
+/// # Returns
+/// * `Ok(GitStatus)` - The current status of the repository relative to the remote
+/// * `Err(GitStatusError)` - If fetch or status check fails
+pub fn fetch_and_status<T>(git_info: &T) -> Result<GitStatus, GitStatusError>
+where
+    T: GitRepository + GitStatusOps,
+{
+    log::debug!("Fetching from remote before status check");
+    let changes_found = git_info.fetch()?;
+    log::debug!(
+        "Fetch complete (changes found: {}), checking status",
+        changes_found
+    );
+    git_info.status()
 }

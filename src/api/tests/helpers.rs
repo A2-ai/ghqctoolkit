@@ -197,6 +197,10 @@ impl GitRepository for MockGitInfo {
     fn path(&self) -> &Path {
         Path::new(".")
     }
+
+    fn fetch(&self) -> Result<bool, GitRepositoryError> {
+        Ok(false) // Mock: no changes fetched
+    }
 }
 
 impl GitHelpers for MockGitInfo {

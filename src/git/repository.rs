@@ -1,4 +1,5 @@
 use crate::GitInfo;
+use gix::remote::fetch::Status;
 #[cfg(test)]
 use mockall::automock;
 use std::path::Path;
@@ -13,6 +14,12 @@ pub enum GitRepositoryError {
     HeadIdError(gix::reference::head_id::Error),
     #[error("Failed to access repository: {0}")]
     RepositoryError(#[from] crate::git::GitInfoError),
+    #[error("Failed to find remote: {0}")]
+    RemoteNotFound(String),
+    #[error("Failed to connect to remote: {0}")]
+    RemoteConnectionError(String),
+    #[error("Failed to fetch from remote: {0}")]
+    FetchError(String),
 }
 
 /// Basic repository information and metadata
@@ -32,6 +39,9 @@ pub trait GitRepository {
 
     /// Get the repository path on the filesystem
     fn path(&self) -> &Path;
+
+    /// Fetch the repository remote. Return whether changes found
+    fn fetch(&self) -> Result<bool, GitRepositoryError>;
 }
 
 impl GitRepository for GitInfo {
@@ -106,5 +116,33 @@ impl GitRepository for GitInfo {
 
     fn path(&self) -> &Path {
         &self.repository_path
+    }
+
+    fn fetch(&self) -> Result<bool, GitRepositoryError> {
+        let repo = self.repository()?;
+
+        // Find the origin remote
+        let remote_name = "origin";
+        let remote = repo
+            .find_remote(remote_name)
+            .map_err(|e| GitRepositoryError::RemoteNotFound(format!("{}: {}", remote_name, e)))?;
+
+        log::debug!("Fetching from remote: {}", remote_name);
+
+        // Connect to the remote
+        let connection = remote
+            .connect(gix::remote::Direction::Fetch)
+            .map_err(|e| GitRepositoryError::RemoteConnectionError(format!("{}", e)))?;
+
+        // Perform the fetch
+        let outcome = connection
+            .prepare_fetch(gix::progress::Discard, Default::default())
+            .map_err(|e| GitRepositoryError::FetchError(format!("Failed to prepare fetch: {}", e)))?
+            .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
+            .map_err(|e| GitRepositoryError::FetchError(format!("Failed to receive: {}", e)))?;
+
+        log::debug!("Fetch completed successfully");
+
+        Ok(matches!(outcome.status, Status::Change { .. }))
     }
 }

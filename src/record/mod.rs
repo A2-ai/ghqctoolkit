@@ -12,7 +12,7 @@ use tera::{Context, Tera};
 use crate::{
     ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, GitStatusOps,
     RepoUser, get_issue_comments, get_issue_events, get_repo_users,
-    git::{GitComment, GitCommitAnalysis, GitFileOps, GitStatus},
+    git::{GitComment, GitCommitAnalysis, GitFileOps, GitStatus, fetch_and_status},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
     utils::EnvProvider,
@@ -198,13 +198,13 @@ pub async fn fetch_milestone_issues(
 pub async fn get_milestone_issue_information(
     milestone_issues: &HashMap<String, Vec<Issue>>,
     cache: Option<&DiskCache>,
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps),
+    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps + GitRepository),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
     let staging_dir = staging_dir.as_ref();
     let repo_users = get_repo_users(cache, git_info).await?;
-    let git_status = git_info.status()?;
+    let git_status = fetch_and_status(git_info)?;
     let dirty_files = git_info.dirty()?;
 
     let mut res = HashMap::new();

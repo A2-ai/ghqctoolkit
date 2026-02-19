@@ -12,6 +12,7 @@ use crate::{
     GitHubApiError, GitProvider, IssueThread,
     api::{ApiError, cache::CacheEntry},
     create::CreateResult,
+    git::fetch_and_status,
 };
 
 /// Health check response.
@@ -382,17 +383,9 @@ pub struct Checklist {
 
 impl From<crate::Checklist> for Checklist {
     fn from(checklist: crate::Checklist) -> Self {
-        let content = format!(
-            "{}{}",
-            match &checklist.note {
-                Some(n) => format!("{n}\n\n"),
-                None => String::new(),
-            },
-            checklist.content
-        );
         Self {
-            name: checklist.name.to_string(),
-            content,
+            name: checklist.name,
+            content: checklist.content,
         }
     }
 }
@@ -415,7 +408,7 @@ pub struct ConfigGitRepository {
 
 impl ConfigGitRepository {
     pub fn new(git_info: &impl GitProvider) -> Result<Self, ApiError> {
-        let status: GitStatus = git_info.status()?.into();
+        let status: GitStatus = fetch_and_status(git_info)?.into();
         let dirty_files = git_info
             .dirty()?
             .iter()
@@ -463,7 +456,7 @@ pub struct RepoInfoResponse {
 
 impl RepoInfoResponse {
     pub fn new(git_info: &impl GitProvider) -> Result<Self, ApiError> {
-        let git_status = git_info.status()?;
+        let git_status = fetch_and_status(git_info)?;
         let local_commit = git_info.commit()?;
         let remote_commit = match &git_status {
             crate::GitStatus::Clean => local_commit.clone(),

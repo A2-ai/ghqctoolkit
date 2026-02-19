@@ -129,7 +129,6 @@ impl From<CreateIssueRequest> for QCEntry {
             title: PathBuf::from(&request.file),
             checklist: Checklist {
                 name: request.checklist_name,
-                note: None,
                 content: request.checklist_content,
             },
             assignees: request.assignees,

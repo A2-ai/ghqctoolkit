@@ -44,7 +44,8 @@ pub use git::{
     AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitComment, GitCommit,
     GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
     GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError, GitProvider, GitRepository,
-    GitRepositoryError, GitStatus, GitStatusError, GitStatusOps, RepoUser, find_file_commits,
+    GitRepositoryError, GitStatus, GitStatusError, GitStatusOps, RepoUser, fetch_and_status,
+    find_file_commits,
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,

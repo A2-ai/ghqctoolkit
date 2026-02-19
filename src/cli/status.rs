@@ -8,6 +8,7 @@ use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::{
     BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitStatus, GitStatusOps,
     IssueThread, QCStatus, analyze_issue_checklists, get_blocking_qc_status,
+    git::fetch_and_status,
 };
 
 pub async fn interactive_status(
@@ -41,7 +42,7 @@ pub async fn interactive_status(
     let file_commits = issue_thread.file_commits();
 
     // Get git status for the file
-    let git_status = git_info.status()?;
+    let git_status = fetch_and_status(git_info)?;
     let dirty_files = git_info.dirty()?;
 
     // Determine QC status
@@ -286,7 +287,7 @@ async fn get_milestone_status_rows(
                 let file_commits = issue_thread.file_commits();
 
                 // Get git status
-                let git_status = git_info.status().unwrap_or(GitStatus::Clean);
+                let git_status = fetch_and_status(git_info).unwrap_or(GitStatus::Clean);
                 let dirty_files = git_info.dirty().unwrap_or_default();
 
                 // Determine QC status
