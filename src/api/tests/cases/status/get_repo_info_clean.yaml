@@ -1,0 +1,28 @@
+name: "GET /api/repo - clean status"
+description: "Repository is up to date, remote_commit equals local_commit"
+
+git_state:
+  commit: "abc1234567890abcdef1234567890abcdef12340"
+  branch: "main"
+  remote_commit: "abc1234567890abcdef1234567890abcdef12340"
+  status:
+    type: clean
+
+request:
+  method: GET
+  path: "/api/repo"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      owner: "test-owner"
+      repo: "test-repo"
+      branch: "main"
+      local_commit: "abc1234567890abcdef1234567890abcdef12340"
+      remote_commit: "abc1234567890abcdef1234567890abcdef12340"
+      git_status: "clean"
+      git_status_detail: "Repository is up to date!"
+
+assert_write_calls: []

@@ -1,0 +1,41 @@
+name: "GET /api/issues/status - dirty file detection"
+description: "Verify dirty=true when file has uncommitted changes"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+      milestone: 1
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+  dirty_files:
+    - "src/test.rs"
+
+request:
+  method: GET
+  path: "/api/issues/status"
+  query:
+    issues: "1"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 1
+      item_fields:
+        - issue
+        - dirty
+      first_item:
+        dirty: true

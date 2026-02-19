@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
     path::{Path, PathBuf},
 };
@@ -10,18 +10,8 @@ use crate::{
         GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
         GitHubWriter, GitRepository, GitRepositoryError,
     },
-    relevant_files::{RelevantFile, relevant_files_section},
+    relevant_files::{RelevantFile, RelevantFileClass, relevant_files_section},
 };
-
-#[derive(Debug, thiserror::Error)]
-pub enum QCIssueError {
-    #[error(transparent)]
-    GitRepositoryError(#[from] GitRepositoryError),
-    #[error(transparent)]
-    GitFileOpsError(#[from] GitFileOpsError),
-    #[error(transparent)]
-    GitHubApiError(#[from] GitHubApiError),
-}
 
 #[derive(Debug, Clone)]
 pub struct QCIssue {
@@ -62,9 +52,11 @@ impl QCIssue {
             ));
         }
 
+        // Use up to 7 characters for short commit hash, or full length if shorter
+        let commit_short = &self.commit[..self.commit.len().min(7)];
         metadata.push(format!(
             "[file contents at initial qc commit]({})",
-            git_info.file_content_url(&self.commit[..7], &self.title)
+            git_info.file_content_url(commit_short, &self.title)
         ));
 
         let mut body = vec![metadata.join("\n* ")];
@@ -141,9 +133,15 @@ impl QCIssue {
         &self,
         git_info: &T,
     ) -> Result<CreateResult, QCIssueError> {
-        let issue_url = git_info.post_issue(self).await?;
+        let issue = git_info.post_issue(self).await?;
+        let issue_number = issue.number;
+        let issue_id = issue.id.0;
+        let issue_url = issue.html_url.to_string();
+
         let mut create_result = CreateResult {
-            issue_url: issue_url.to_string(),
+            issue_url,
+            issue_number,
+            issue_id,
             parse_failed: false,
             successful_blocking: Vec::new(),
             blocking_errors: HashMap::new(),
@@ -151,11 +149,7 @@ impl QCIssue {
 
         let blocking_issues = self.blocking_issues();
         if !blocking_issues.is_empty() {
-            // Parse issue number from URL (e.g., "https://github.com/owner/repo/issues/123")
-            if let Some(new_issue_number) = issue_url
-                .split('/')
-                .last()
-                .and_then(|s| s.parse::<u64>().ok())
+            let new_issue_number = issue_number;
             {
                 for (issue_number, issue_id) in blocking_issues {
                     // Get the issue_id if not already available
@@ -181,11 +175,6 @@ impl QCIssue {
                         create_result.successful_blocking.push(issue_number);
                     }
                 }
-            } else {
-                log::warn!(
-                    "Failed to parse issue number form issue url. Skipping all issue blocking..."
-                );
-                create_result.parse_failed = true;
             }
         }
 
@@ -194,10 +183,12 @@ impl QCIssue {
 }
 
 pub struct CreateResult {
-    issue_url: String,
-    parse_failed: bool,
-    successful_blocking: Vec<u64>,
-    blocking_errors: HashMap<u64, GitHubApiError>,
+    pub issue_url: String,
+    pub issue_number: u64,
+    pub issue_id: u64,
+    pub parse_failed: bool,
+    pub successful_blocking: Vec<u64>,
+    pub blocking_errors: HashMap<u64, GitHubApiError>,
 }
 
 impl fmt::Display for CreateResult {
@@ -246,6 +237,417 @@ impl fmt::Display for CreateResult {
     }
 }
 
+/// Entry for creating a single QC issue in a batch
+#[derive(Debug, Clone)]
+pub struct QCEntry {
+    /// File path (used as unique identifier)
+    pub title: PathBuf,
+    /// Checklist to use
+    pub checklist: Checklist,
+    /// Assignees for this issue
+    pub assignees: Vec<String>,
+    /// Related files (existing or being created in this batch)
+    pub relevant_files: Vec<RelevantFileEntry>,
+}
+
+/// Reference to a related file (either existing or new)
+#[derive(Debug, Clone)]
+pub enum RelevantFileEntry {
+    /// Reference to an already-created issue
+    ExistingIssue(RelevantFile),
+    /// Reference to an issue being created in this batch
+    NewIssue {
+        file_path: PathBuf,
+        relationship: QCRelationship,
+        description: Option<String>,
+    },
+    File {
+        file_path: PathBuf,
+        justification: String,
+    },
+}
+
+/// Type of QC relationship
+#[derive(Debug, Clone, Copy)]
+pub enum QCRelationship {
+    PreviousQC,
+    GatingQC,
+    RelevantQC,
+}
+
+/// Dependency graph for batch QC entry creation using references
+#[derive(Debug)]
+struct DependencyGraph<'a> {
+    /// Map from file path to entry
+    entries: HashMap<PathBuf, &'a QCEntry>,
+    /// Forward edges: file -> set of files that depend on it
+    /// If A blocks B, dependents[A] contains B
+    dependents: HashMap<PathBuf, HashSet<PathBuf>>,
+    /// Reverse edges: file -> set of files it depends on
+    /// If A blocks B, dependencies[B] contains A
+    dependencies: HashMap<PathBuf, HashSet<PathBuf>>,
+}
+
+impl<'a> DependencyGraph<'a> {
+    /// Build dependency graph from QC entries
+    fn build(entries: &'a [QCEntry]) -> Self {
+        let mut entry_map = HashMap::new();
+        let mut dependents = HashMap::new();
+        let mut dependencies = HashMap::new();
+
+        // Build entry map and initialize dependency sets
+        for entry in entries {
+            entry_map.insert(entry.title.clone(), entry);
+            dependents.insert(entry.title.clone(), HashSet::new());
+            dependencies.insert(entry.title.clone(), HashSet::new());
+        }
+
+        // Build dependency relationships
+        for entry in entries {
+            for relevant_file in &entry.relevant_files {
+                if let RelevantFileEntry::NewIssue { file_path, .. } = relevant_file {
+                    // Track ALL New references - they all must be created first (for hyperlinks)
+                    if entry_map.contains_key(file_path) {
+                        // file_path blocks entry.title
+                        dependents
+                            .get_mut(file_path)
+                            .unwrap()
+                            .insert(entry.title.clone());
+                        dependencies
+                            .get_mut(&entry.title)
+                            .unwrap()
+                            .insert(file_path.clone());
+                    }
+                }
+            }
+        }
+
+        Self {
+            entries: entry_map,
+            dependents,
+            dependencies,
+        }
+    }
+
+    /// Detect cycles in dependency graph using DFS
+    fn detect_cycles(&self) -> Vec<DependencyCycle> {
+        let mut cycles = Vec::new();
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+        let mut path = Vec::new();
+
+        for file_path in self.entries.keys() {
+            if !visited.contains(file_path) {
+                self.detect_cycle_dfs(
+                    file_path,
+                    &mut visited,
+                    &mut rec_stack,
+                    &mut path,
+                    &mut cycles,
+                );
+            }
+        }
+
+        cycles
+    }
+
+    fn detect_cycle_dfs(
+        &self,
+        path_buf: &PathBuf,
+        visited: &mut HashSet<PathBuf>,
+        rec_stack: &mut HashSet<PathBuf>,
+        path: &mut Vec<PathBuf>,
+        cycles: &mut Vec<DependencyCycle>,
+    ) {
+        visited.insert(path_buf.clone());
+        rec_stack.insert(path_buf.clone());
+        path.push(path_buf.clone());
+
+        if let Some(deps) = self.dependents.get(path_buf) {
+            for dependent_path in deps {
+                if !visited.contains(dependent_path) {
+                    self.detect_cycle_dfs(dependent_path, visited, rec_stack, path, cycles);
+                } else if rec_stack.contains(dependent_path) {
+                    // Found cycle - extract from path
+                    if let Some(cycle_start) = path.iter().position(|p| p == dependent_path) {
+                        let cycle_files: Vec<PathBuf> = path[cycle_start..].to_vec();
+                        cycles.push(DependencyCycle { files: cycle_files });
+                    }
+                }
+            }
+        }
+
+        path.pop();
+        rec_stack.remove(path_buf);
+    }
+
+    fn in_degree(&self) -> HashMap<&PathBuf, usize> {
+        self.dependencies
+            .iter()
+            .map(|(file, dependencies)| (file, dependencies.len()))
+            .collect()
+    }
+}
+
+/// Result of dependency resolution
+#[derive(Debug, Clone, Default)]
+pub struct ResolutionResult {
+    /// Creation order (file paths in order)
+    creation_order: Vec<PathBuf>,
+    /// Detected cycles (if any)
+    cycles: Vec<DependencyCycle>,
+    /// Validation errors
+    errors: Vec<DependencyError>,
+}
+
+/// Circular dependency cycle
+#[derive(Debug, Clone)]
+pub struct DependencyCycle {
+    /// Files involved in cycle (in order)
+    files: Vec<PathBuf>,
+}
+
+/// Resolve creation order for batch of QC entries
+///
+/// Uses topological sort (Kahn's algorithm) to determine valid creation order.
+/// Returns errors if circular dependencies or other issues detected.
+fn resolve_creation_order(entries: &[QCEntry]) -> ResolutionResult {
+    let mut res = ResolutionResult::default();
+    let mut seen_files = HashSet::new();
+
+    // First pass: collect all files and check for duplicates
+    for entry in entries {
+        if !seen_files.insert(entry.title.clone()) {
+            res.errors.push(DependencyError::DuplicateFile {
+                file: entry.title.clone(),
+            });
+        }
+    }
+
+    // Second pass: validate all references (now that we know all files in batch)
+    for entry in entries {
+        for rel_file in &entry.relevant_files {
+            if let RelevantFileEntry::NewIssue { file_path, .. } = rel_file {
+                if file_path == &entry.title {
+                    // Self-reference
+                    res.errors.push(DependencyError::SelfReference {
+                        file: entry.title.clone(),
+                    });
+                } else if !seen_files.contains(file_path) {
+                    // Referenced file is not in the batch
+                    res.errors.push(DependencyError::MissingBatchReference {
+                        referencing_file: entry.title.clone(),
+                        referenced_file: file_path.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    if !res.errors.is_empty() {
+        return res;
+    }
+
+    // Build dependency graph
+    let graph = DependencyGraph::build(entries);
+
+    // Perform topological sort using Kahn's algorithm
+    // Calculate in-degree for each node (number of dependencies)
+    let mut in_degree = graph.in_degree();
+
+    // Start with nodes that have no dependencies
+    let mut queue: VecDeque<PathBuf> = in_degree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(&path, _)| path.clone())
+        .collect();
+
+    while let Some(path) = queue.pop_front() {
+        res.creation_order.push(path.clone());
+
+        // Reduce in-degree for all dependents
+        if let Some(deps) = graph.dependents.get(&path) {
+            for dependent_path in deps {
+                let degree = in_degree.get_mut(dependent_path).unwrap();
+                *degree -= 1;
+                if *degree == 0 {
+                    queue.push_back(dependent_path.clone());
+                }
+            }
+        }
+    }
+
+    // Check if all entries were processed
+    if res.creation_order.len() != entries.len() {
+        // Cycles detected - find them
+        let cycles = graph.detect_cycles();
+        res.errors = cycles
+            .iter()
+            .map(|c| DependencyError::CircularDependency { cycle: c.clone() })
+            .collect();
+        res.cycles = cycles;
+    }
+
+    res
+}
+
+/// Create multiple QC issues in resolved dependency order
+pub async fn batch_post_qc_entries(
+    entries: &[QCEntry],
+    git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps),
+    milestone_id: u64,
+) -> Result<Vec<CreateResult>, QCIssueError> {
+    let commit = git_info.commit()?;
+    let branch = git_info.branch()?;
+
+    // Resolve creation order
+    let resolution = resolve_creation_order(entries);
+
+    // Check for errors
+    if !resolution.errors.is_empty() {
+        return Err(QCIssueError::DependencyResolution {
+            errors: resolution.errors,
+        });
+    }
+
+    // Build map from file path to entry for quick lookup
+    let entry_map: HashMap<PathBuf, &QCEntry> =
+        entries.iter().map(|e| (e.title.clone(), e)).collect();
+
+    // Create issues in resolved order
+    let mut results = Vec::new();
+    let mut created_issues: HashMap<PathBuf, (u64, u64)> = HashMap::new();
+
+    for file_path in &resolution.creation_order {
+        let entry = entry_map
+            .get(file_path)
+            .ok_or(QCIssueError::EntryNotFound {
+                file: file_path.clone(),
+            })?;
+
+        // Resolve RelevantFileEntry::New references to actual issue numbers
+        let relevant_files: Vec<RelevantFile> = entry
+            .relevant_files
+            .iter()
+            .map(|rf| -> Result<RelevantFile, QCIssueError> {
+                match rf {
+                    RelevantFileEntry::ExistingIssue(rel_file) => Ok(rel_file.clone()),
+                    RelevantFileEntry::NewIssue {
+                        file_path,
+                        relationship,
+                        description,
+                    } => {
+                        let &(issue_number, issue_id) =
+                            created_issues.get(file_path).ok_or_else(|| {
+                                QCIssueError::UnresolvedReference {
+                                    file: file_path.clone(),
+                                    referencing_file: entry.title.clone(),
+                                }
+                            })?;
+                        Ok(RelevantFile {
+                            file_name: file_path.clone(),
+                            class: match relationship {
+                                QCRelationship::PreviousQC => RelevantFileClass::PreviousQC {
+                                    issue_number,
+                                    issue_id: Some(issue_id),
+                                    description: description.clone(),
+                                },
+                                QCRelationship::GatingQC => RelevantFileClass::GatingQC {
+                                    issue_number,
+                                    issue_id: Some(issue_id),
+                                    description: description.clone(),
+                                },
+                                QCRelationship::RelevantQC => RelevantFileClass::RelevantQC {
+                                    issue_number,
+                                    description: description.clone(),
+                                },
+                            },
+                        })
+                    }
+                    RelevantFileEntry::File {
+                        file_path,
+                        justification,
+                    } => Ok(RelevantFile {
+                        file_name: file_path.to_path_buf(),
+                        class: RelevantFileClass::File {
+                            justification: justification.clone(),
+                        },
+                    }),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Get authors for file
+        let authors = git_info.authors(&entry.title)?;
+
+        // Create QCIssue
+        let qc_issue = QCIssue {
+            milestone_id,
+            title: entry.title.clone(),
+            commit: commit.clone(),
+            branch: branch.clone(),
+            authors,
+            checklist: entry.checklist.clone(),
+            assignees: entry.assignees.clone(),
+            relevant_files,
+        };
+
+        // Post with blocking relationships
+        let create_result = qc_issue.post_with_blocking(git_info).await?;
+
+        // Store the issue number and ID from the created issue
+        created_issues.insert(
+            entry.title.clone(),
+            (create_result.issue_number, create_result.issue_id),
+        );
+
+        results.push(create_result);
+    }
+
+    Ok(results)
+}
+
+/// Dependency validation error
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum DependencyError {
+    #[error("Circular dependency: {}", .cycle.files.iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" -> "))]
+    CircularDependency { cycle: DependencyCycle },
+
+    #[error("File {file:?} references itself")]
+    SelfReference { file: PathBuf },
+
+    #[error("Duplicate file in batch: {file:?}")]
+    DuplicateFile { file: PathBuf },
+
+    #[error("File {referencing_file:?} references {referenced_file:?} which is not in the batch")]
+    MissingBatchReference {
+        referencing_file: PathBuf,
+        referenced_file: PathBuf,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum QCIssueError {
+    #[error(transparent)]
+    GitRepositoryError(#[from] GitRepositoryError),
+    #[error(transparent)]
+    GitFileOpsError(#[from] GitFileOpsError),
+    #[error(transparent)]
+    GitHubApiError(#[from] GitHubApiError),
+    #[error("Dependency resolution failed: {errors:?}")]
+    DependencyResolution { errors: Vec<DependencyError> },
+    #[error("Entry not found for file: {file:?}")]
+    EntryNotFound { file: PathBuf },
+    #[error("Unresolved NewIssue reference: {file:?} referenced by {referencing_file:?}")]
+    UnresolvedReference {
+        file: PathBuf,
+        referencing_file: PathBuf,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,7 +679,7 @@ mod tests {
             ],
             checklist: Checklist::new(
                 "Code Review Checklist".to_string(),
-                Some("NOTE".to_string()),
+                Some("NOTE"),
                 "- [ ] Code compiles without warnings\n- [ ] Tests pass\n- [ ] Documentation updated".to_string(),
             ),
             assignees: vec!["reviewer1".to_string(), "reviewer2".to_string()],
@@ -434,7 +836,7 @@ mod tests {
         post_issue_url: String,
         fail_blocking_ids: Arc<HashSet<u64>>,
         block_calls: Arc<Mutex<Vec<(u64, u64)>>>,
-        issues_by_number: Arc<HashMap<u64, octocrab::models::issues::Issue>>,
+        issues_by_number: Arc<Mutex<HashMap<u64, octocrab::models::issues::Issue>>>,
     }
 
     impl MockGitInfo {
@@ -447,7 +849,7 @@ mod tests {
                 post_issue_url: post_issue_url.to_string(),
                 fail_blocking_ids: Arc::new(fail_blocking_ids),
                 block_calls: Arc::new(Mutex::new(Vec::new())),
-                issues_by_number: Arc::new(issues_by_number),
+                issues_by_number: Arc::new(Mutex::new(issues_by_number)),
             }
         }
     }
@@ -482,10 +884,38 @@ mod tests {
 
         fn post_issue(
             &self,
-            _issue: &QCIssue,
-        ) -> impl std::future::Future<Output = Result<String, GitHubApiError>> + Send {
+            issue: &QCIssue,
+        ) -> impl std::future::Future<
+            Output = Result<octocrab::models::issues::Issue, GitHubApiError>,
+        > + Send {
             let url = self.post_issue_url.clone();
-            async move { Ok(url) }
+            let issues_map = self.issues_by_number.clone();
+            let body = issue.body(self);
+            let title = issue.title();
+
+            async move {
+                // Parse issue number from URL
+                let issue_number = url.split('/').last().unwrap().parse::<u64>().unwrap();
+
+                // Create the issue using shared test helper
+                let created_issue = crate::test_utils::create_test_issue(
+                    "owner",
+                    "repo",
+                    issue_number,
+                    &title,
+                    &body,
+                    None,   // milestone
+                    "open", // state
+                );
+
+                // Store it so get_issue can find it
+                issues_map
+                    .lock()
+                    .unwrap()
+                    .insert(issue_number, created_issue.clone());
+
+                Ok(created_issue)
+            }
         }
 
         fn post_comment<T: crate::comment_system::CommentBody + 'static>(
@@ -566,6 +996,8 @@ mod tests {
             let issues_by_number = self.issues_by_number.clone();
             async move {
                 issues_by_number
+                    .lock()
+                    .unwrap()
                     .get(&issue_number)
                     .cloned()
                     .ok_or(GitHubApiError::NoApi)
@@ -691,5 +1123,464 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert!(calls.contains(&(42, issue_one.id.0)));
         assert!(calls.contains(&(42, issue_two.id.0)));
+    }
+
+    fn make_entry(title: &str, relevant_files: Vec<RelevantFileEntry>) -> QCEntry {
+        QCEntry {
+            title: PathBuf::from(title),
+            checklist: Checklist::new("Test".to_string(), None, "- [ ] test".to_string()),
+            assignees: vec![],
+            relevant_files,
+        }
+    }
+
+    #[test]
+    fn test_linear_dependency() {
+        // A blocks B blocks C
+        // Expected order: [A, B, C]
+        let entries = vec![
+            make_entry(
+                "C",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("B"),
+                    relationship: QCRelationship::PreviousQC,
+                    description: None,
+                }],
+            ),
+            make_entry(
+                "B",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("A"),
+                    relationship: QCRelationship::GatingQC,
+                    description: None,
+                }],
+            ),
+            make_entry("A", vec![]),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert_eq!(result.creation_order.len(), 3);
+
+        // A must come before B, B must come before C
+        let a_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("A"))
+            .unwrap();
+        let b_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("B"))
+            .unwrap();
+        let c_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("C"))
+            .unwrap();
+
+        assert!(a_pos < b_pos);
+        assert!(b_pos < c_pos);
+    }
+
+    #[test]
+    fn test_diamond_dependency() {
+        // A blocks B and C, B and C block D
+        // Expected: A first, D last
+        let entries = vec![
+            make_entry(
+                "D",
+                vec![
+                    RelevantFileEntry::NewIssue {
+                        file_path: PathBuf::from("B"),
+                        relationship: QCRelationship::PreviousQC,
+                        description: None,
+                    },
+                    RelevantFileEntry::NewIssue {
+                        file_path: PathBuf::from("C"),
+                        relationship: QCRelationship::GatingQC,
+                        description: None,
+                    },
+                ],
+            ),
+            make_entry(
+                "B",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("A"),
+                    relationship: QCRelationship::PreviousQC,
+                    description: None,
+                }],
+            ),
+            make_entry(
+                "C",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("A"),
+                    relationship: QCRelationship::GatingQC,
+                    description: None,
+                }],
+            ),
+            make_entry("A", vec![]),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert_eq!(result.creation_order.len(), 4);
+
+        // A must come first
+        assert_eq!(result.creation_order[0], PathBuf::from("A"));
+
+        // D must come last
+        assert_eq!(result.creation_order[3], PathBuf::from("D"));
+
+        // B and C must come after A but before D
+        let b_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("B"))
+            .unwrap();
+        let c_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("C"))
+            .unwrap();
+        assert!(b_pos > 0 && b_pos < 3);
+        assert!(c_pos > 0 && c_pos < 3);
+    }
+
+    #[test]
+    fn test_circular_dependency() {
+        // A blocks B blocks A
+        // Expected: cycle detected
+        let entries = vec![
+            make_entry(
+                "A",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("B"),
+                    relationship: QCRelationship::PreviousQC,
+                    description: None,
+                }],
+            ),
+            make_entry(
+                "B",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("A"),
+                    relationship: QCRelationship::GatingQC,
+                    description: None,
+                }],
+            ),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(!result.errors.is_empty());
+        assert!(!result.cycles.is_empty());
+        assert!(result.creation_order.is_empty());
+
+        // Verify error is CircularDependency
+        assert!(matches!(
+            result.errors[0],
+            DependencyError::CircularDependency { .. }
+        ));
+    }
+
+    #[test]
+    fn test_self_reference() {
+        // A references A
+        // Expected: self-reference error
+        let entries = vec![make_entry(
+            "A",
+            vec![RelevantFileEntry::NewIssue {
+                file_path: PathBuf::from("A"),
+                relationship: QCRelationship::PreviousQC,
+                description: None,
+            }],
+        )];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(!result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert!(result.creation_order.is_empty());
+
+        // Verify error is SelfReference
+        assert!(matches!(
+            result.errors[0],
+            DependencyError::SelfReference { .. }
+        ));
+    }
+
+    #[test]
+    fn test_duplicate_file() {
+        // Two entries with same file
+        // Expected: duplicate error
+        let entries = vec![make_entry("A", vec![]), make_entry("A", vec![])];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(!result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert!(result.creation_order.is_empty());
+
+        // Verify error is DuplicateFile
+        assert!(matches!(
+            result.errors[0],
+            DependencyError::DuplicateFile { .. }
+        ));
+    }
+
+    #[test]
+    fn test_missing_batch_reference() {
+        // A references B which is not in the batch
+        // Expected: missing batch reference error (caught before creation starts)
+        let entries = vec![make_entry(
+            "A",
+            vec![RelevantFileEntry::NewIssue {
+                file_path: PathBuf::from("B"),
+                relationship: QCRelationship::GatingQC,
+                description: Some("Needs B".to_string()),
+            }],
+        )];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(!result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert!(result.creation_order.is_empty());
+
+        // Verify error is MissingBatchReference
+        assert!(matches!(
+            result.errors[0],
+            DependencyError::MissingBatchReference { .. }
+        ));
+    }
+
+    #[test]
+    fn test_relevant_qc_creates_dependency() {
+        // A has RelevantQC reference to B
+        // Expected: B created before A (for hyperlink)
+        // Note: RelevantQC doesn't block approval, but still needs to be created first
+        let entries = vec![
+            make_entry(
+                "A",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("B"),
+                    relationship: QCRelationship::RelevantQC,
+                    description: Some("Just a reference".to_string()),
+                }],
+            ),
+            make_entry("B", vec![]),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert_eq!(result.creation_order.len(), 2);
+
+        // B must come before A (to create the hyperlink)
+        let b_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("B"))
+            .unwrap();
+        let a_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("A"))
+            .unwrap();
+
+        assert!(b_pos < a_pos);
+    }
+
+    #[test]
+    fn test_mixed_existing_and_new_references() {
+        // A references existing issue and B (new)
+        // B references existing issue
+        // C has only a file reference (no issue dependencies)
+        // Expected: B created before A, C can be anywhere
+        let existing_ref = RelevantFile {
+            file_name: PathBuf::from("existing.rs"),
+            class: RelevantFileClass::PreviousQC {
+                issue_number: 100,
+                issue_id: Some(1000),
+                description: Some("Existing issue".to_string()),
+            },
+        };
+
+        let entries = vec![
+            make_entry(
+                "A",
+                vec![
+                    RelevantFileEntry::ExistingIssue(existing_ref.clone()),
+                    RelevantFileEntry::NewIssue {
+                        file_path: PathBuf::from("B"),
+                        relationship: QCRelationship::GatingQC,
+                        description: None,
+                    },
+                ],
+            ),
+            make_entry("B", vec![RelevantFileEntry::ExistingIssue(existing_ref)]),
+            make_entry(
+                "C",
+                vec![RelevantFileEntry::File {
+                    file_path: PathBuf::from("C"),
+                    justification: "justification".to_string(),
+                }],
+            ),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert_eq!(result.creation_order.len(), 3);
+
+        // B must come before A
+        let b_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("B"))
+            .unwrap();
+        let a_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("A"))
+            .unwrap();
+
+        assert!(b_pos < a_pos);
+    }
+
+    #[test]
+    fn test_complex_cycle_detection() {
+        // A blocks B, B blocks C, C blocks A
+        // Expected: cycle detected with all three files
+        let entries = vec![
+            make_entry(
+                "A",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("B"),
+                    relationship: QCRelationship::PreviousQC,
+                    description: None,
+                }],
+            ),
+            make_entry(
+                "B",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("C"),
+                    relationship: QCRelationship::GatingQC,
+                    description: None,
+                }],
+            ),
+            make_entry(
+                "C",
+                vec![RelevantFileEntry::NewIssue {
+                    file_path: PathBuf::from("A"),
+                    relationship: QCRelationship::RelevantQC,
+                    description: None,
+                }],
+            ),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(!result.errors.is_empty());
+        assert!(!result.cycles.is_empty());
+        assert!(result.creation_order.is_empty());
+
+        // Verify cycle contains all three files
+        let cycle_files: HashSet<PathBuf> = result.cycles[0].files.iter().cloned().collect();
+        assert_eq!(cycle_files.len(), 3);
+        assert!(cycle_files.contains(&PathBuf::from("A")));
+        assert!(cycle_files.contains(&PathBuf::from("B")));
+        assert!(cycle_files.contains(&PathBuf::from("C")));
+    }
+
+    #[test]
+    fn test_no_dependencies() {
+        // Three independent entries
+        // Expected: all can be created (order doesn't matter)
+        let entries = vec![
+            make_entry("A", vec![]),
+            make_entry("B", vec![]),
+            make_entry("C", vec![]),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert_eq!(result.creation_order.len(), 3);
+
+        // All three files should be in the result
+        let result_set: HashSet<PathBuf> = result.creation_order.iter().cloned().collect();
+        assert!(result_set.contains(&PathBuf::from("A")));
+        assert!(result_set.contains(&PathBuf::from("B")));
+        assert!(result_set.contains(&PathBuf::from("C")));
+    }
+
+    #[test]
+    fn test_all_relationship_types() {
+        // Test that all three relationship types create dependencies
+        let entries = vec![
+            make_entry(
+                "main",
+                vec![
+                    RelevantFileEntry::NewIssue {
+                        file_path: PathBuf::from("previous"),
+                        relationship: QCRelationship::PreviousQC,
+                        description: None,
+                    },
+                    RelevantFileEntry::NewIssue {
+                        file_path: PathBuf::from("gating"),
+                        relationship: QCRelationship::GatingQC,
+                        description: None,
+                    },
+                    RelevantFileEntry::NewIssue {
+                        file_path: PathBuf::from("relevant"),
+                        relationship: QCRelationship::RelevantQC,
+                        description: None,
+                    },
+                ],
+            ),
+            make_entry("previous", vec![]),
+            make_entry("gating", vec![]),
+            make_entry("relevant", vec![]),
+        ];
+
+        let result = resolve_creation_order(&entries);
+
+        assert!(result.errors.is_empty());
+        assert!(result.cycles.is_empty());
+        assert_eq!(result.creation_order.len(), 4);
+
+        // All dependencies must come before main
+        let main_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("main"))
+            .unwrap();
+        let prev_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("previous"))
+            .unwrap();
+        let gating_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("gating"))
+            .unwrap();
+        let relevant_pos = result
+            .creation_order
+            .iter()
+            .position(|p| p == &PathBuf::from("relevant"))
+            .unwrap();
+
+        assert!(prev_pos < main_pos);
+        assert!(gating_pos < main_pos);
+        assert!(relevant_pos < main_pos);
     }
 }

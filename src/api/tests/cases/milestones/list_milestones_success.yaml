@@ -1,0 +1,31 @@
+name: "GET /api/milestones - success with multiple milestones"
+description: "Retrieve all milestones from repository"
+
+fixtures:
+  milestones:
+    - type: mock
+      number: 1
+      title: v1.0
+    - type: mock
+      number: 2
+      title: v2.0
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/milestones"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      min_length: 2
+      item_fields:
+        - number
+        - title
+        - state
+        - open_issues
+        - closed_issues

@@ -1,0 +1,38 @@
+name: "POST /api/issues/{number}/unapprove - unapprove and open issue"
+description: "Successfully unapprove an issue and re-open it"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+      milestone: 1
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/1/unapprove"
+  body:
+    reason: "Something is wrong"
+
+response:
+  status: 201
+  body:
+    match_type: exact
+    value:
+      unapproval_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"
+      opened: true
+
+assert_write_calls:
+  - type: PostComment
+    comment_type: "ghqctoolkit::approve::QCUnapprove"
+  - type: OpenIssue
+    issue_number: 1

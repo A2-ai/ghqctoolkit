@@ -1,0 +1,17 @@
+name: "GET /api/assignees - empty list"
+description: "Repository with no assignees returns empty array"
+
+fixtures:
+  users: []
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/assignees"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value: []

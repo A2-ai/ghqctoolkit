@@ -1,0 +1,327 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Complete test specification loaded from YAML
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TestCase {
+    /// Test name (displayed in output)
+    pub name: String,
+    /// Test description (optional)
+    #[serde(default)]
+    pub description: String,
+    /// References to JSON fixture files
+    #[serde(default)]
+    pub fixtures: Fixtures,
+    /// Git repository state for MockGitInfo
+    #[serde(default)]
+    pub git_state: GitState,
+    /// HTTP request specification
+    pub request: HttpRequest,
+    /// Expected response
+    pub response: ExpectedResponse,
+    /// Expected write operations to mock (optional)
+    #[serde(default)]
+    pub assert_write_calls: Vec<ExpectedWriteCall>,
+}
+
+/// Fixture references (files to load) and programmatically created mocks
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Fixtures {
+    /// Issues - can be loaded from JSON or created programmatically
+    #[serde(default)]
+    pub issues: Vec<IssueSource>,
+    /// Milestones - can be loaded from JSON or created programmatically
+    #[serde(default)]
+    pub milestones: Vec<MilestoneSource>,
+    /// User fixture files (from fixtures/users/)
+    #[serde(default)]
+    pub users: Vec<UserSource>,
+    /// Blocking relationships between issues
+    #[serde(default)]
+    pub blocking: Vec<BlockingRelationship>,
+}
+
+/// Source for loading or creating an Issue
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum IssueSource {
+    /// Load from JSON fixture file
+    Fixture { file: String },
+    /// Create programmatically with minimal config
+    Mock {
+        number: u64,
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default = "default_open_state")]
+        state: String,
+        #[serde(default)]
+        milestone: Option<i64>,
+    },
+}
+
+/// Source for loading or creating a Milestone
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MilestoneSource {
+    /// Load from JSON fixture file
+    Fixture { file: String },
+    /// Create programmatically with minimal config
+    Mock {
+        number: i64,
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default = "default_open_state")]
+        state: String,
+    },
+}
+
+fn default_open_state() -> String {
+    "open".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UserSource {
+    Fixture {
+        file: String,
+    },
+    Mock {
+        login: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+}
+
+/// Defines which issues block other issues
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlockingRelationship {
+    /// Issue number that blocks others
+    pub issue: u64,
+    /// Issue numbers that are blocked
+    pub blocks: Vec<u64>,
+}
+
+/// Git repository state for MockGitInfo
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitState {
+    /// Repository owner
+    #[serde(default = "default_owner")]
+    pub owner: String,
+    /// Repository name
+    #[serde(default = "default_repo")]
+    pub repo: String,
+    /// Current commit hash
+    #[serde(default = "default_commit")]
+    pub commit: String,
+    /// Current branch name
+    #[serde(default = "default_branch")]
+    pub branch: String,
+    /// Dirty files in working directory
+    #[serde(default)]
+    pub dirty_files: Vec<String>,
+    /// Git repository status (ahead/behind/diverged/clean)
+    #[serde(default)]
+    pub status: Option<GitStatusSpec>,
+    /// Remote commit hash (for status calculations)
+    #[serde(default = "default_remote_commit")]
+    pub remote_commit: String,
+}
+
+/// Git status specification for tests
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GitStatusSpec {
+    Clean,
+    Ahead {
+        commits: Vec<String>,
+    },
+    Behind {
+        commits: Vec<String>,
+    },
+    Diverged {
+        ahead: Vec<String>,
+        behind: Vec<String>,
+    },
+}
+
+impl Default for GitState {
+    fn default() -> Self {
+        Self {
+            owner: default_owner(),
+            repo: default_repo(),
+            commit: default_commit(),
+            branch: default_branch(),
+            dirty_files: Vec::new(),
+            status: None,
+            remote_commit: default_remote_commit(),
+        }
+    }
+}
+
+fn default_owner() -> String {
+    "test-owner".to_string()
+}
+
+fn default_repo() -> String {
+    "test-repo".to_string()
+}
+
+fn default_commit() -> String {
+    "abc1234567890abcdef1234567890abcdef12340".to_string()
+}
+
+fn default_branch() -> String {
+    "main".to_string()
+}
+
+fn default_remote_commit() -> String {
+    "def4567890abcdef4567890abcdef4567890abc0".to_string()
+}
+
+/// HTTP request specification
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HttpRequest {
+    /// HTTP method
+    pub method: HttpMethod,
+    /// Request path (e.g., "/api/issues/1")
+    pub path: String,
+    /// Query parameters (optional)
+    #[serde(default)]
+    pub query: HashMap<String, String>,
+    /// Request body as JSON value (optional)
+    #[serde(default)]
+    pub body: Option<serde_json::Value>,
+}
+
+/// HTTP method enum
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+    Patch,
+}
+
+/// Expected HTTP response
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExpectedResponse {
+    /// Expected HTTP status code
+    pub status: u16,
+    /// Expected response body (optional)
+    #[serde(default)]
+    pub body: Option<ResponseBody>,
+}
+
+/// Response body assertion configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ResponseBody {
+    /// Match type: exact, partial, or schema
+    pub match_type: MatchType,
+    /// For exact matching: full expected value (used when matching arrays/scalars)
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    /// For exact/partial matching: expected fields (used when matching objects)
+    #[serde(default)]
+    pub fields: HashMap<String, serde_json::Value>,
+    /// For schema matching: schema definition
+    #[serde(default)]
+    pub schema: Option<SchemaAssertion>,
+}
+
+/// Match type for response body validation
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchType {
+    /// Full JSON equality
+    Exact,
+    /// Check only specified fields
+    Partial,
+    /// Validate structure/schema
+    Schema,
+}
+
+/// Schema validation rules
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SchemaAssertion {
+    /// Expected type
+    #[serde(rename = "type")]
+    pub schema_type: SchemaType,
+    /// For arrays: minimum length
+    #[serde(default)]
+    pub min_length: Option<usize>,
+    /// For arrays: exact length (optional)
+    #[serde(default)]
+    pub exact_length: Option<usize>,
+    /// For arrays/objects: required field names
+    #[serde(default)]
+    pub item_fields: Vec<String>,
+    /// For arrays: expected field values in first item
+    #[serde(default)]
+    pub first_item: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Schema type enum
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaType {
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Null,
+}
+
+/// Expected write call assertion for mock validation
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum ExpectedWriteCall {
+    CreateMilestone {
+        name: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
+    PostIssue {
+        title: String,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
+    PostComment {
+        comment_type: String,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
+    CloseIssue {
+        issue_number: u64,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
+    OpenIssue {
+        issue_number: u64,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
+}
+
+/// Position assertion for write calls
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum CallPosition {
+    /// Exact index (0-based)
+    Index(usize),
+    /// Special position "last"
+    Last(LastPosition),
+}
+
+/// Marker for "last" position
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum LastPosition {
+    Last,
+}

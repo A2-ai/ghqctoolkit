@@ -1,0 +1,916 @@
+openapi: 3.0.3
+info:
+  title: GHQC Toolkit API
+  description: REST API for GitHub Quality Control workflow management
+  version: 1.0.0
+
+servers:
+  - url: /api
+    description: Default API path
+  - url: /{prefix}/api
+    description: API with custom prefix
+    variables:
+      prefix:
+        default: ""
+        description: Optional path prefix before /api
+
+tags:
+  - name: health
+    description: Health check endpoints
+  - name: milestones
+    description: Milestone management
+  - name: issues
+    description: Issue management
+  - name: comments
+    description: Comments, approvals, and reviews
+  - name: status
+    description: Supporting data queries
+  - name: configuration
+    description: Configuration management
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags: [health]
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /milestones:
+    get:
+      summary: List all milestones
+      operationId: listMilestones
+      tags: [milestones]
+      responses:
+        '200':
+          description: List of milestones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Milestone'
+    post:
+      summary: Create a new milestone
+      operationId: createMilestone
+      tags: [milestones]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMilestoneRequest'
+      responses:
+        '201':
+          description: Milestone created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Milestone'
+
+  /milestones/{number}/issues:
+    get:
+      summary: List issues in milestone
+      operationId: listMilestoneIssues
+      tags: [milestones]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of issues
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Issue'
+        '404':
+          description: Milestone not found
+    post:
+      summary: Create QC issues in batch
+      description: |
+        Create multiple QC issues in a milestone with dependency resolution.
+        Issues can reference each other within the batch, and creation order is
+        automatically determined based on dependencies.
+      operationId: createIssues
+      tags: [issues]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          description: Milestone number to create issues in
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/CreateIssueRequest'
+              minItems: 1
+      responses:
+        '201':
+          description: Issues created successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CreateIssueResponse'
+        '400':
+          description: |
+            Invalid request. Possible reasons:
+            - Unknown assignees
+            - Circular dependencies detected
+            - Duplicate files in batch
+            - Self-references detected
+        '404':
+          description: Milestone not found
+
+  /issues/status:
+    get:
+      summary: Batch get issue statuses
+      description: Get detailed status for multiple issues at once.
+      operationId: batchGetIssueStatus
+      tags: [issues]
+      parameters:
+        - name: issues
+          in: query
+          required: true
+          description: Comma-separated list of issue numbers
+          schema:
+            type: string
+          example: "1,2,3"
+      responses:
+        '200':
+          description: Array of issue statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IssueStatusResponse'
+
+  /issues/{number}:
+    get:
+      summary: Get issue details
+      operationId: getIssue
+      tags: [issues]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Issue details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '404':
+          description: Issue not found
+
+  /issues/{number}/comment:
+    post:
+      summary: Post a commit-to-commit comment
+      operationId: createComment
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+      responses:
+        '201':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentResponse'
+
+  /issues/{number}/approve:
+    post:
+      summary: Approve and close issue
+      operationId: approveIssue
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: force
+          in: query
+          required: false
+          description: Force approval even if blocking QCs are not approved
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+      responses:
+        '200':
+          description: Issue approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalResponse'
+        '409':
+          description: Blocking QCs not approved
+
+  /issues/{number}/unapprove:
+    post:
+      summary: Unapprove and reopen issue
+      operationId: unapproveIssue
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnapproveRequest'
+      responses:
+        '200':
+          description: Issue unapproved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnapprovalResponse'
+
+  /issues/{number}/review:
+    post:
+      summary: Post working directory review
+      operationId: reviewIssue
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+      responses:
+        '201':
+          description: Review posted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentResponse'
+
+  /issues/{number}/blocked:
+    get:
+      summary: Get issues blocked by this issue
+      description: Returns a flat list of issues that depend on this issue (via gating_qc or previous_qc) along with their current status.
+      operationId: getBlockedIssues
+      tags: [issues]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of blocked issues with status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BlockedIssueStatus'
+        '404':
+          description: Issue not found
+        '501':
+          description: Blocking dependencies API not available on this GitHub server
+
+  /assignees:
+    get:
+      summary: List repository assignees
+      operationId: listAssignees
+      tags: [status]
+      responses:
+        '200':
+          description: List of assignees
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Assignee'
+
+  /repo:
+    get:
+      summary: Get repository information
+      operationId: getRepoInfo
+      tags: [status]
+      description: |
+        Returns information about the current repository including local and remote commits.
+        The remote_commit represents:
+        - When Clean: Same as local_commit (repository is up to date)
+        - When Ahead: The last common ancestor before local commits
+        - When Behind/Diverged: The latest remote commit
+      responses:
+        '200':
+          description: Repository information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepoInfo'
+
+  /configuration/checklists:
+    get:
+      summary: List available checklists
+      operationId: listChecklists
+      tags: [configuration]
+      responses:
+        '200':
+          description: List of checklists
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Checklist'
+
+  /configuration/status:
+    get:
+      summary: Get configuration status
+      operationId: getConfigurationStatus
+      tags: [configuration]
+      responses:
+        '200':
+          description: Configuration status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationStatusResponse'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: 1.0.0
+
+    Milestone:
+      type: object
+      properties:
+        number:
+          type: integer
+        title:
+          type: string
+        state:
+          type: string
+          enum: [open, closed]
+        description:
+          type: string
+          nullable: true
+        open_issues:
+          type: integer
+        closed_issues:
+          type: integer
+
+    CreateMilestoneRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+
+    Issue:
+      type: object
+      properties:
+        number:
+          type: integer
+        title:
+          type: string
+        state:
+          type: string
+          enum: [open, closed]
+        html_url:
+          type: string
+        assignees:
+          type: array
+          items:
+            type: string
+        labels:
+          type: array
+          items:
+            type: string
+        milestone:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    IssueStatusResponse:
+      type: object
+      properties:
+        issue:
+          $ref: '#/components/schemas/Issue'
+        qc_status:
+          $ref: '#/components/schemas/QCStatus'
+        dirty:
+          type: boolean
+          description: Whether the file for this issue has uncommitted changes
+        branch:
+          type: string
+          description: The git branch this issue was created on
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueCommit'
+        checklist_summary:
+          $ref: '#/components/schemas/ChecklistSummary'
+        blocking_qc_status:
+          $ref: '#/components/schemas/BlockingQCStatus'
+
+    QCStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - approved
+            - changes_after_approval
+            - awaiting_review
+            - change_requested
+            - in_progress
+            - approval_required
+            - changes_to_comment
+          description: |
+            - approved: Issue approved, no changes after
+            - changes_after_approval: Approved but file changed since
+            - awaiting_review: Latest commit notified but not reviewed
+            - change_requested: Reviewed with changes requested
+            - in_progress: Awaiting approval
+            - approval_required: Closed without approval
+            - changes_to_comment: File changes not yet commented on
+        status_detail:
+          type: string
+          description: Human-readable status description
+        approved_commit:
+          type: string
+          nullable: true
+        initial_commit:
+          type: string
+        latest_commit:
+          type: string
+
+    GitStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [clean, ahead, behind, diverged]
+          description: |
+            - clean: Up to date with remote
+            - ahead: Local commits not on remote
+            - behind: Remote commits not local
+            - diverged: Both ahead and behind
+        detail:
+          type: string
+          description: Human-readable status description
+        ahead_commits:
+          type: array
+          items:
+            type: string
+        behind_commits:
+          type: array
+          items:
+            type: string
+
+    IssueCommit:
+      type: object
+      properties:
+        hash:
+          type: string
+        message:
+          type: string
+        statuses:
+          type: array
+          items:
+            type: string
+            enum: [initial, notification, approved, reviewed]
+        file_changed:
+          type: boolean
+
+    ChecklistSummary:
+      type: object
+      properties:
+        completed:
+          type: integer
+        total:
+          type: integer
+        percentage:
+          type: number
+          format: float
+
+    BlockingQCStatus:
+      type: object
+      properties:
+        total:
+          type: integer
+        approved_count:
+          type: integer
+        summary:
+          type: string
+          description: Formatted summary like "1/2 (50.0%)"
+        approved:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockingQCItem'
+        not_approved:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockingQCItemWithStatus'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockingQCError'
+
+    BlockingQCItem:
+      type: object
+      properties:
+        issue_number:
+          type: integer
+        file_name:
+          type: string
+
+    BlockingQCItemWithStatus:
+      type: object
+      properties:
+        issue_number:
+          type: integer
+        file_name:
+          type: string
+        status:
+          type: string
+
+    BlockingQCError:
+      type: object
+      properties:
+        issue_number:
+          type: integer
+        error:
+          type: string
+
+    CreateIssueRequest:
+      type: object
+      required: [file, checklist_name, checklist_content]
+      properties:
+        file:
+          type: string
+          description: Path to the file being QC'd
+          example: "src/analysis/results.R"
+        checklist_name:
+          type: string
+          description: Name of the checklist to use
+          example: "Code Review"
+        checklist_content:
+          type: string
+          description: Markdown checklist content with checkboxes
+          example: "- [ ] Code compiles\n- [ ] Tests pass"
+        assignees:
+          type: array
+          description: GitHub usernames to assign to the issue
+          items:
+            type: string
+          example: ["reviewer1", "reviewer2"]
+        previous_qc:
+          type: array
+          description: Previous QC issues that must be approved before this one
+          items:
+            $ref: '#/components/schemas/RelevantIssue'
+        gating_qc:
+          type: array
+          description: Gating QC issues that must be approved before this one
+          items:
+            $ref: '#/components/schemas/RelevantIssue'
+        relevant_qc:
+          type: array
+          description: Related QC issues (informational, don't block approval)
+          items:
+            $ref: '#/components/schemas/RelevantIssue'
+        relevant_files:
+          type: array
+          description: Files without QC issues (requires justification)
+          items:
+            $ref: '#/components/schemas/RelevantFileInput'
+
+    RelevantIssue:
+      type: object
+      required: [file_name, issue_class]
+      properties:
+        file_name:
+          type: string
+          description: Path to the related file
+          example: "src/utils/helpers.R"
+        issue_class:
+          $ref: '#/components/schemas/RelevantIssueClass'
+        description:
+          type: string
+          nullable: true
+          description: Optional description of the relationship
+          example: "Depends on helper functions"
+
+    RelevantIssueClass:
+      oneOf:
+        - type: object
+          title: ExistingIssue
+          description: Reference to an already-created issue
+          required: [Exists]
+          properties:
+            Exists:
+              type: object
+              required: [issue_number]
+              properties:
+                issue_number:
+                  type: integer
+                  description: Issue number of the existing issue
+                  example: 42
+                issue_id:
+                  type: integer
+                  nullable: true
+                  description: Optional GitHub issue ID (node ID numeric part)
+                  example: 123456789
+        - type: object
+          title: NewIssue
+          description: Reference to an issue being created in this batch
+          required: [New]
+          properties:
+            New:
+              type: string
+              description: File path matching another file in this batch
+              example: "src/utils/helpers.R"
+      example:
+        Exists:
+          issue_number: 42
+          issue_id: 123456789
+
+    RelevantFileInput:
+      type: object
+      required: [file_path, justification]
+      properties:
+        file_path:
+          type: string
+        justification:
+          type: string
+
+    CreateIssueResponse:
+      type: object
+      properties:
+        issue_url:
+          type: string
+        issue_number:
+          type: integer
+        blocking_created:
+          type: array
+          items:
+            type: integer
+        blocking_errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockingQCError'
+
+    CreateCommentRequest:
+      type: object
+      required: [current_commit]
+      properties:
+        current_commit:
+          type: string
+        previous_commit:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        include_diff:
+          type: boolean
+          default: true
+
+    CommentResponse:
+      type: object
+      properties:
+        comment_url:
+          type: string
+
+    ApproveRequest:
+      type: object
+      required: [commit]
+      properties:
+        commit:
+          type: string
+        note:
+          type: string
+          nullable: true
+
+    ApprovalResponse:
+      type: object
+      properties:
+        approval_url:
+          type: string
+        skipped_unapproved:
+          type: array
+          items:
+            type: integer
+        skipped_errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockingQCError'
+        closed:
+          type: bool
+          description: "Whether the issue was successfully closed"
+
+    UnapproveRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+
+    UnapprovalResponse:
+      type: object
+      properties:
+        unapproval_url:
+          type: string
+        opened:
+          type: bool
+          description: "Whether the issue was successfully re-opened"
+    BlockedIssueStatus:
+      type: object
+      required: [issue, qc_status]
+      properties:
+        issue:
+          $ref: '#/components/schemas/Issue'
+        qc_status:
+          $ref: '#/components/schemas/QCStatus'
+
+    ReviewRequest:
+      type: object
+      required: [commit]
+      properties:
+        commit:
+          type: string
+        note:
+          type: string
+          nullable: true
+        include_diff:
+          type: boolean
+          default: true
+
+    Assignee:
+      type: object
+      properties:
+        login:
+          type: string
+        name:
+          type: string
+          nullable: true
+
+    RepoInfo:
+      type: object
+      required:
+        - owner
+        - repo
+        - branch
+        - local_commit
+        - remote_commit
+        - git_status
+        - git_status_detail
+      properties:
+        owner:
+          type: string
+          description: Repository owner/organization
+        repo:
+          type: string
+          description: Repository name
+        branch:
+          type: string
+          description: Current branch name
+        local_commit:
+          type: string
+          description: Current local commit hash
+        remote_commit:
+          type: string
+          description: Remote tracking commit hash (base ancestor when ahead, latest remote when behind)
+        git_status:
+          $ref: '#/components/schemas/GitStatusEnum'
+        git_status_detail:
+          type: string
+          description: Human-readable git status description
+
+    Checklist:
+      type: object
+      properties:
+        name:
+          type: string
+        content:
+          type: string
+
+    ChecklistInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        item_count:
+          type: integer
+
+    ConfigurationStatusResponse:
+      type: object
+      properties:
+        directory:
+          type: string
+        git_repository:
+          $ref: '#/components/schemas/ConfigGitRepository'
+        options:
+          $ref: '#/components/schemas/ConfigurationOptions'
+        checklists:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChecklistInfo'
+
+    ConfigGitRepository:
+      type: object
+      nullable: true
+      properties:
+        owner:
+          type: string
+        repo:
+          type: string
+        status:
+          type: string
+          enum: [clean, ahead, behind, diverged]
+        dirty_files:
+          type: array
+          items:
+            type: string
+
+    ConfigurationOptions:
+      type: object
+      properties:
+        prepended_checklist_note:
+          type: string
+          nullable: true
+        checklist_display_name:
+          type: string
+        logo_path:
+          type: string
+        logo_found:
+          type: boolean
+        checklist_directory:
+          type: string
+        record_path:
+          type: string

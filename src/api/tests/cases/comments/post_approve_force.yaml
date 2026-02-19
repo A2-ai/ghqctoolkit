@@ -1,0 +1,63 @@
+name: "POST /api/issues/{number}/approve - force approve despite blocking"
+description: "Successfully approve with force=true even when gating QC is not approved"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+      milestone: 1
+    - type: mock
+      number: 2
+      title: "src/config.rs"
+      body: |
+        Quality check issue for src/config.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: feature/config-update
+        author: Jane Developer <developer@example.com>
+        
+        ## Relevant Files
+        
+        ### Gating QC
+        - [src/test.rs](https://github.com/owner/repo/issues/1) - Must be approved before this file
+        
+        ### Previous QC
+        None
+      milestone: 1
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/2/approve"
+  query:
+    force: "true"
+  body:
+    commit: "456def789abc012345678901234567890123cdef"
+    note: "Force approving"
+
+response:
+  status: 201
+  body:
+    match_type: schema
+    schema:
+      type: object
+      item_fields:
+        - approval_url
+        - skipped_unapproved
+        - skipped_errors
+
+assert_write_calls:
+  - type: PostComment
+    comment_type: "ghqctoolkit::approve::QCApprove"
+  - type: CloseIssue
+    issue_number: 2

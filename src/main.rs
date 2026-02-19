@@ -14,10 +14,10 @@ use ghqctoolkit::cli::{
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
-    GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, GitStatusOps, IssueThread,
-    QCContext, QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation,
-    archive, configuration_status, create_labels_if_needed, create_staging_dir,
-    determine_config_dir, fetch_milestone_issues, get_blocking_qc_status,
+    GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread, QCContext,
+    QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation, archive,
+    configuration_status, create_labels_if_needed, create_staging_dir, determine_config_dir,
+    fetch_milestone_issues, get_blocking_qc_status, get_git_status,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
     unapprove_with_impact,
 };
@@ -57,6 +57,13 @@ enum Commands {
     Configuration {
         #[command(subcommand)]
         configuration_command: ConfigurationCommands,
+    },
+    #[cfg(feature = "api")]
+    /// Start the API server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "3103")]
+        port: u16,
     },
 }
 
@@ -532,11 +539,12 @@ async fn main() -> Result<()> {
                         (Some(milestone), Some(file)) => {
                             let issue =
                                 find_issue(&milestone, &file, &milestones, &git_info).await?;
-                            let checklist_summaries = analyze_issue_checklists(&issue);
+                            let checklist_summaries =
+                                analyze_issue_checklists(issue.body.as_deref());
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
-                            let git_status = git_info.status()?;
-                            let qc_status = QCStatus::determine_status(&issue_thread)?;
+                            let git_status = get_git_status(&git_info)?;
+                            let qc_status = QCStatus::determine_status(&issue_thread);
                             let file_commits = issue_thread.file_commits();
                             let blocking_qc_status = get_blocking_qc_status(
                                 &issue_thread.blocking_qcs,
@@ -548,8 +556,9 @@ async fn main() -> Result<()> {
                                 "{}",
                                 single_issue_status(
                                     &issue_thread,
-                                    &git_status,
+                                    &git_status.state,
                                     &qc_status,
+                                    &git_status.dirty,
                                     &file_commits,
                                     &checklist_summaries,
                                     &blocking_qc_status
@@ -970,6 +979,35 @@ async fn main() -> Result<()> {
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
+        #[cfg(feature = "api")]
+        Commands::Serve { port } => {
+            use ghqctoolkit::api::{AppState, create_router};
+
+            let config_dir = determine_config_dir(cli.config_dir, &env)?;
+            let mut configuration = Configuration::from_path(&config_dir);
+            configuration.load_checklists();
+            let configuration_git_info = match GitInfo::from_path(&configuration.path, &env) {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to determine configuration git info: {e}. Continuing without git status checks"
+                    );
+                    None
+                }
+            };
+
+            let git_info = GitInfo::from_path(&cli.directory, &env)?;
+            let disk_cache = DiskCache::from_git_info(&git_info).ok();
+
+            let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache);
+            let app = create_router(state);
+
+            let addr = format!("127.0.0.0:{}", port);
+            println!("Starting API server on http://{}", addr);
+
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            axum::serve(listener, app).await?;
+        }
     }
 
     Ok(())

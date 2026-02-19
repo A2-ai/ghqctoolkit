@@ -11,8 +11,8 @@ use tera::{Context, Tera};
 
 use crate::{
     ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, GitStatusOps,
-    RepoUser, get_issue_comments, get_issue_events, get_repo_users,
-    git::{GitComment, GitCommitAnalysis, GitFileOps, GitStatus},
+    RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
+    git::{GitComment, GitCommitAnalysis, GitFileOps, GitState},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
     utils::EnvProvider,
@@ -198,13 +198,15 @@ pub async fn fetch_milestone_issues(
 pub async fn get_milestone_issue_information(
     milestone_issues: &HashMap<String, Vec<Issue>>,
     cache: Option<&DiskCache>,
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps),
+    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps + GitRepository),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
     let staging_dir = staging_dir.as_ref();
     let repo_users = get_repo_users(cache, git_info).await?;
-    let git_status = git_info.status()?;
+    let git_status = get_git_status(git_info)?;
+    let git_state = git_status.state.clone();
+    let dirty_files = git_status.dirty.clone();
 
     let mut res = HashMap::new();
     for (milestone_name, issues) in milestone_issues {
@@ -213,13 +215,15 @@ pub async fn get_milestone_issue_information(
             .iter()
             .map(|issue| {
                 let repo_users_clone = repo_users.clone();
-                let git_status_clone = git_status.clone();
+                let git_status_clone = git_state.clone();
+                let dirty_files_clone = dirty_files.clone();
                 async move {
                     create_issue_information(
                         issue,
                         milestone_name,
                         &repo_users_clone,
                         &git_status_clone,
+                        &dirty_files_clone,
                         cache,
                         git_info,
                         http_downloader,
@@ -266,7 +270,8 @@ pub async fn create_issue_information(
     issue: &Issue,
     milestone_name: &str,
     repo_users: &[RepoUser],
-    git_status: &GitStatus,
+    git_status: &GitState,
+    dirty_files: &[PathBuf],
     cache: Option<&DiskCache>,
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     http_downloader: &impl images::HttpDownloader,
@@ -315,16 +320,19 @@ pub async fn create_issue_information(
     let open = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status
-    let qc_status = QCStatus::determine_status(&issue_thread)?.to_string();
+    let qc_status = QCStatus::determine_status(&issue_thread).to_string();
 
     // Checklist Summary
-    let checklist_summaries = analyze_issue_checklists(issue);
+    let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
     let checklist_summary =
         ChecklistSummary::sum(checklist_summaries.iter().map(|c| &c.1)).to_string();
 
     // Git Status for this specific file
     let file_commits = issue_thread.file_commits();
-    let git_status_str = git_status.format_for_file(&issue_thread.file, &file_commits);
+    let mut git_status_str = git_status.format_for_file(&file_commits);
+    if dirty_files.contains(&issue_thread.file) {
+        git_status_str.push_str(" (file has uncommitted local changes)");
+    }
 
     // Created by (with name lookup)
     let created_by = repo_users

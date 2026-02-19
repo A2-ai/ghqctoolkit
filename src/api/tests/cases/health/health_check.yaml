@@ -1,0 +1,18 @@
+name: "GET /api/health - success"
+description: "Health check endpoint returns OK"
+
+fixtures:
+  issues: []
+
+git_state: {}  # Use all defaults
+
+request:
+  method: GET
+  path: "/api/health"
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      status: "ok"

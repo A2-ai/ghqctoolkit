@@ -5,9 +5,10 @@ expression: result_dirty
 == Directory Information ==
 📁 directory: src/tests/custom_configuration
 📦 git repository: test-owner/test-repo
-Repository has files with uncommitted, local changes: 
-	- src/main.rs
-	- README.md
+Repository is up to date!
+⚠️ 2 files with uncommitted changes:
+  - src/main.rs
+  - README.md
 📋 Custom Quality Check available in 'my_custom_checklists': 2
 ⚠️ Logo was not found at the specified path assets/custom_logo.svg
         

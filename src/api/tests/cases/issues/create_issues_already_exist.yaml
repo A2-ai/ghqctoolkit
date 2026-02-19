@@ -1,0 +1,77 @@
+name: "POST /api/milestones/{number}/issues - issues already exist"
+description: "Reject batch creation when files already have issues in the milestone"
+
+fixtures:
+  milestones:
+    - type: mock
+      number: 1
+      title: "v1.0"
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+      milestone: 1
+    - type: mock
+      number: 2
+      title: "src/config.rs"
+      body: |
+        Quality check issue for src/config.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: feature/config-update
+        author: Jane Developer <developer@example.com>
+        
+        ## Relevant Files
+        
+        ### Gating QC
+        - [src/test.rs](https://github.com/owner/repo/issues/1) - Must be approved before this file
+        
+        ### Previous QC
+        None
+      milestone: 1
+  users:
+    - type: mock
+      login: "octocat"
+      name: "The Octocat"
+    - type: mock
+      login: "reviewer1"
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones/1/issues"
+  body:
+    # This file already has issue #1
+    - file: "src/test.rs"
+      checklist_name: "Review"
+      checklist_content: "- [ ] Check"
+      assignees: ["reviewer1"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+    # New file (no existing issue)
+    - file: "src/new_file.R"
+      checklist_name: "Review"
+      checklist_content: "- [ ] Check"
+      assignees: ["reviewer1"]
+      previous_qc: []
+      gating_qc: []
+      relevant_qc: []
+      relevant_files: []
+
+response:
+  status: 409
+
+assert_write_calls: []

@@ -1,0 +1,10 @@
+# Lefthook configuration
+# Install: brew install lefthook (or cargo install lefthook)
+# Setup: lefthook install
+
+pre-commit:
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all
+      stage_fixed: true

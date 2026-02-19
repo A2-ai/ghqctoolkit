@@ -1,5 +1,4 @@
 use gix::ObjectId;
-use octocrab::models::issues::Issue;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,7 +45,7 @@ impl std::fmt::Display for QCStatus {
 }
 
 impl QCStatus {
-    pub fn determine_status(issue_thread: &IssueThread) -> Result<Self, QCStatusError> {
+    pub fn determine_status(issue_thread: &IssueThread) -> Self {
         let commits = &issue_thread.commits;
 
         let status = if let Some(approved) = issue_thread.approved_commit() {
@@ -97,7 +96,7 @@ impl QCStatus {
             }
         };
 
-        Ok(status)
+        status
     }
 
     /// Returns true if this status represents an approved issue
@@ -117,7 +116,7 @@ impl QCStatus {
         // Get comments and build IssueThread - but we only need approval status
         // which can be determined from the comments directly
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let status = QCStatus::determine_status(&issue_thread)?;
+        let status = QCStatus::determine_status(&issue_thread);
         Ok(status)
     }
 }
@@ -175,8 +174,8 @@ impl std::fmt::Display for ChecklistSummary {
 
 /// Analyze checklists within an issue's body
 /// Returns a vector of (checklist_name, summary) tuples
-pub fn analyze_issue_checklists(issue: &Issue) -> Vec<(String, ChecklistSummary)> {
-    let body = match &issue.body {
+pub fn analyze_issue_checklists(issue_body: Option<&str>) -> Vec<(String, ChecklistSummary)> {
+    let body = match issue_body {
         Some(body) => body,
         None => return vec![],
     };
@@ -468,14 +467,12 @@ pub enum QCStatusError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use octocrab::models::issues::Issue;
     use std::str::FromStr;
 
     #[test]
     fn test_analyze_complex_issue_checklist() {
-        let issue_json = include_str!("tests/qc_status/complex_issue_checklist.json");
-        let issue: Issue = serde_json::from_str(issue_json).unwrap();
-        let result = analyze_issue_checklists(&issue);
+        let issue_body = include_str!("tests/qc_status/complex_issue_checklist.md");
+        let result = analyze_issue_checklists(Some(issue_body));
         insta::assert_debug_snapshot!(result);
     }
 
@@ -630,7 +627,7 @@ mod tests {
                 blocking_qcs: vec![],
             };
 
-            let status = QCStatus::determine_status(&issue_thread).unwrap();
+            let status = QCStatus::determine_status(&issue_thread);
             let actual_status = match status {
                 QCStatus::Approved => "Approved",
                 QCStatus::ChangesAfterApproval(_) => "ChangesAfterApproval",

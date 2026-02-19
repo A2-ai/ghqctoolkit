@@ -14,8 +14,14 @@ mod relevant_files;
 mod review;
 pub mod utils;
 
+#[cfg(test)]
+pub mod test_utils;
+
 #[cfg(feature = "cli")]
 pub mod cli;
+
+#[cfg(feature = "api")]
+pub mod api;
 
 pub use approve::{
     ApprovalError, ApprovalResult, BlockingQCCheckResult, ImpactNode, ImpactedIssues, QCApprove,
@@ -33,12 +39,13 @@ pub use configuration::{
     Checklist, Configuration, ConfigurationOptions, configuration_status, determine_config_dir,
     setup_configuration,
 };
-pub use create::QCIssue;
+pub use create::{QCEntry, QCIssue, QCRelationship, RelevantFileEntry, batch_post_qc_entries};
 pub use git::{
-    AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitCommit, GitCommitAnalysis,
-    GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
-    GitHubWriter, GitInfo, GitInfoError, GitRepository, GitRepositoryError, GitStatus,
-    GitStatusError, GitStatusOps, RepoUser, find_file_commits,
+    AuthError, GitAuthor, GitCli, GitCliError, GitCommand, GitComment, GitCommit,
+    GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
+    GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError, GitProvider, GitRepository,
+    GitRepositoryError, GitState, GitStatus, GitStatusError, GitStatusOps, RepoUser,
+    find_file_commits, get_git_status,
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,

@@ -1,0 +1,25 @@
+name: "GET /api/issues/{number} - success"
+description: "Retrieve an existing issue by number"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: GET
+  path: "/api/issues/1"
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      number: 1
+      title: "src/test.rs"
+      state: "open"

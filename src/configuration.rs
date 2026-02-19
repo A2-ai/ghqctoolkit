@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::{GitCli, GitRepository, GitStatusOps};
+use crate::git::{GitCli, GitRepository, GitStatusOps, get_git_status};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,17 +50,16 @@ impl ConfigurationOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checklist {
     pub name: String,
-    note: Option<String>,
     pub content: String,
 }
 
 impl Checklist {
-    pub fn new(name: String, note: Option<String>, content: String) -> Self {
-        Self {
-            name,
-            note,
-            content,
-        }
+    pub fn new(name: String, note: Option<&str>, content: String) -> Self {
+        let content = format!(
+            "{}{content}",
+            note.map(|n| format!("{n}\n\n")).unwrap_or_default()
+        );
+        Self { name, content }
     }
 
     fn items(&self) -> usize {
@@ -70,12 +69,7 @@ impl Checklist {
 
 impl fmt::Display for Checklist {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let note = if let Some(n) = &self.note {
-            format!("\n\n{n}")
-        } else {
-            String::new()
-        };
-        writeln!(f, "# {}{note}\n\n{}", self.name, self.content)
+        writeln!(f, "# {}\n\n{}", self.name, self.content)
     }
 }
 
@@ -83,7 +77,6 @@ impl Default for Checklist {
     fn default() -> Self {
         Self {
             name: "Custom".to_string(),
-            note: None,
             content: "- [ ] [INSERT]".to_string(),
         }
     }
@@ -168,11 +161,11 @@ impl Configuration {
                 "txt" => {
                     match extract_title_from_filename(&path) {
                         Ok(key) => {
-                            let checklist = Checklist {
-                                name: key.to_string(),
-                                note: self.options.prepended_checklist_note.clone(),
+                            let checklist = Checklist::new(
+                                key.to_string(),
+                                self.options.prepended_checklist_note.as_deref(),
                                 content,
-                            };
+                            );
                             self.checklists.insert(key, checklist);
                         }
                         Err(e) => {
@@ -187,11 +180,11 @@ impl Configuration {
                 }
                 "yaml" | "yml" => match parse_yaml_checklist(&content) {
                     Ok((title, content)) => {
-                        let checklist = Checklist {
-                            name: title.to_string(),
-                            note: self.options.prepended_checklist_note.clone(),
+                        let checklist = Checklist::new(
+                            title.to_string(),
+                            self.options.prepended_checklist_note.as_deref(),
                             content,
-                        };
+                        );
                         self.checklists.insert(title, checklist);
                     }
                     Err(e) => {
@@ -199,7 +192,7 @@ impl Configuration {
                             "Could not parse yaml at {} as valid checklist due to: {}",
                             path.display(),
                             e
-                        )
+                        );
                     }
                 },
                 _ => continue, // Skip other file types
@@ -478,15 +471,32 @@ pub fn configuration_status(
         .join(" ");
 
     let git_str = if let Some(git_info) = git_info {
+        let status = get_git_status(git_info).ok();
+        let status_detail = status
+            .as_ref()
+            .map(|s| format!("\n{}", s.state))
+            .unwrap_or_default();
+        let dirty_detail = status
+            .as_ref()
+            .filter(|s| !s.dirty.is_empty())
+            .map(|s| {
+                format!(
+                    "\n⚠️ {} files with uncommitted changes:\n  - {}",
+                    s.dirty.len(),
+                    s.dirty
+                        .iter()
+                        .map(|p| format!("{}", p.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n  - ")
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "\n📦 git repository: {}/{}{}",
+            "\n📦 git repository: {}/{}{}{}",
             git_info.owner(),
             git_info.repo(),
-            if let Ok(status) = git_info.status() {
-                format!("\n{}", status.to_string())
-            } else {
-                String::new()
-            }
+            status_detail,
+            dirty_detail
         )
     } else {
         String::new()
@@ -760,7 +770,8 @@ Second Checklist:
         struct MockGitInfo {
             owner: String,
             repo: String,
-            status: crate::git::GitStatus,
+            status: crate::git::GitState,
+            dirty_files: Vec<PathBuf>,
         }
 
         impl crate::git::GitRepository for MockGitInfo {
@@ -779,11 +790,28 @@ Second Checklist:
             fn repo(&self) -> &str {
                 &self.repo
             }
+
+            fn path(&self) -> &std::path::Path {
+                std::path::Path::new(".")
+            }
+
+            fn fetch(&self) -> Result<bool, crate::git::GitRepositoryError> {
+                Ok(false) // Mock: no changes fetched
+            }
         }
 
         impl crate::git::GitStatusOps for MockGitInfo {
-            fn status(&self) -> Result<crate::git::GitStatus, crate::git::GitStatusError> {
-                Ok(self.status.clone())
+            fn state(
+                &self,
+            ) -> Result<(gix::ObjectId, crate::git::GitState), crate::git::GitStatusError>
+            {
+                Ok((
+                    gix::ObjectId::empty_tree(gix::hash::Kind::Sha1),
+                    self.status.clone(),
+                ))
+            }
+            fn dirty(&self) -> Result<Vec<PathBuf>, crate::GitStatusError> {
+                Ok(self.dirty_files.clone())
             }
         }
 
@@ -796,7 +824,8 @@ Second Checklist:
         let git_info = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::git::GitStatus::Clean,
+            status: crate::git::GitState::Clean,
+            dirty_files: Vec::new(),
         };
 
         let result_with_git = configuration_status(&configuration, &Some(git_info));
@@ -810,10 +839,8 @@ Second Checklist:
         let git_info_dirty = MockGitInfo {
             owner: "test-owner".to_string(),
             repo: "test-repo".to_string(),
-            status: crate::GitStatus::Dirty(vec![
-                PathBuf::from("src/main.rs"),
-                PathBuf::from("README.md"),
-            ]),
+            status: crate::git::GitState::Clean,
+            dirty_files: vec![PathBuf::from("src/main.rs"), PathBuf::from("README.md")],
         };
 
         let result_dirty = configuration_status(&configuration, &Some(git_info_dirty));

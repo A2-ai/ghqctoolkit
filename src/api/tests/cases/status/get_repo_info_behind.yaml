@@ -1,0 +1,31 @@
+name: "GET /api/repo - behind status"
+description: "Repository is behind, remote_commit is the latest remote commit (first in behind list)"
+
+git_state:
+  commit: "abc1234567890abcdef1234567890abcdef12340"
+  branch: "main"
+  remote_commit: "3456789012345678901234567890abcdef123456"
+  status:
+    type: behind
+    commits:
+      - "3456789012345678901234567890abcdef123456"
+      - "7890123456789012345678901234567890abcdef"
+
+request:
+  method: GET
+  path: "/api/repo"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      owner: "test-owner"
+      repo: "test-repo"
+      branch: "main"
+      local_commit: "abc1234567890abcdef1234567890abcdef12340"
+      remote_commit: "3456789012345678901234567890abcdef123456"
+      git_status: "behind"
+      git_status_detail: "Repository is behind by 2 commits"
+
+assert_write_calls: []

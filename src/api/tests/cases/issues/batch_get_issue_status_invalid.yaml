@@ -1,0 +1,15 @@
+name: "GET /api/issues/status - no valid issue numbers"
+description: "Returns error when no valid issue numbers provided"
+
+fixtures:
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/issues/status"
+  query:
+    issues: ""
+
+response:
+  status: 400

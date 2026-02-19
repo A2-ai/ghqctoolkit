@@ -1,0 +1,18 @@
+name: "POST /api/milestones - error on missing name"
+description: "Return 422 Unprocessable Entity when name field is missing"
+
+fixtures:
+  milestones:
+
+git_state:
+  commit: "abc123"
+  branch: "main"
+
+request:
+  method: POST
+  path: "/api/milestones"
+  body:
+    description: "Missing the required name field"
+
+response:
+  status: 422

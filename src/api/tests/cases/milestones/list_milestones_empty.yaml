@@ -1,0 +1,16 @@
+name: "GET /api/milestones - empty list"
+description: "Repository with no milestones returns empty array"
+
+fixtures:
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/milestones"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value: []

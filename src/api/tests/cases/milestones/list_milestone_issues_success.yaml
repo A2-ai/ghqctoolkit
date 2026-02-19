@@ -1,0 +1,54 @@
+name: "GET /api/milestones/{number}/issues - milestone 1 filtering"
+description: "Retrieve issues for milestone 1 - should return only issue #1"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+      milestone: 1
+    - type: mock
+      number: 2
+      title: "src/config.rs"
+      body: |
+        Quality check issue for src/config.rs
+        
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: feature/config-update
+        author: Jane Developer <developer@example.com>
+      milestone: 2
+  milestones:
+    - type: mock
+      number: 1
+      title: v1.0
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/milestones/1/issues"
+
+response:
+  status: 200
+  body:
+    match_type: schema
+    schema:
+      type: array
+      exact_length: 1
+      item_fields:
+        - number
+        - title
+        - state
+        - milestone
+      first_item:
+        number: 1
+        title: "src/test.rs"
+        milestone: "v1.0"

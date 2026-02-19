@@ -1,17 +1,13 @@
-use std::{
-    fmt,
-    path::{Path, PathBuf},
-};
+use std::{fmt, path::PathBuf};
 
+use crate::GitInfo;
+use crate::git::repository::{GitRepository, GitRepositoryError};
 use gix::ObjectId;
 #[cfg(test)]
 use mockall::automock;
 
-use crate::GitInfo;
-
 #[derive(Debug, Clone, PartialEq)]
-pub enum GitStatus {
-    Dirty(Vec<PathBuf>),   // local, uncommitted changes - list of dirty files
+pub enum GitState {
     Clean,                 // up to date with remote
     Behind(Vec<ObjectId>), // remote commits not local - count of commits behind
     Ahead(Vec<ObjectId>),  // local commits not remote - count of commits ahead
@@ -21,18 +17,9 @@ pub enum GitStatus {
     }, // local commits not remote AND remote commits not local
 }
 
-impl fmt::Display for GitStatus {
+impl fmt::Display for GitState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Dirty(files) => write!(
-                f,
-                "Repository has files with uncommitted, local changes: \n\t- {}",
-                files
-                    .iter()
-                    .map(|x| x.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join("\n\t- ")
-            ),
             Self::Clean => write!(f, "Repository is up to date!"),
             Self::Behind(commits) => write!(f, "Repository is behind by {} commits", commits.len()),
             Self::Ahead(commits) => write!(f, "Repository is ahead by {} commits", commits.len()),
@@ -46,37 +33,26 @@ impl fmt::Display for GitStatus {
     }
 }
 
-impl GitStatus {
+impl GitState {
     /// Format git status for a specific file and issue thread
-    pub fn format_for_file(
-        &self,
-        issue_file: impl AsRef<Path>,
-        file_commits: &[&ObjectId],
-    ) -> String {
+    pub fn format_for_file(&self, file_commits: &[&ObjectId]) -> String {
         match self {
-            GitStatus::Clean => "Up to date".to_string(),
-            GitStatus::Dirty(files) => {
-                if files.contains(&issue_file.as_ref().to_path_buf()) {
-                    "Local changes".to_string()
-                } else {
-                    "Up to date".to_string()
-                }
-            }
-            GitStatus::Ahead(commits) => {
+            GitState::Clean => "Up to date".to_string(),
+            GitState::Ahead(commits) => {
                 if file_commits.iter().any(|c| commits.contains(c)) {
                     "Local commits".to_string()
                 } else {
                     "Up to date".to_string()
                 }
             }
-            GitStatus::Behind(commits) => {
+            GitState::Behind(commits) => {
                 if file_commits.iter().any(|c| commits.contains(c)) {
                     "Remote changes".to_string()
                 } else {
                     "Up to date".to_string()
                 }
             }
-            GitStatus::Diverged { ahead, behind } => {
+            GitState::Diverged { ahead, behind } => {
                 let is_ahead = file_commits.iter().any(|c| ahead.contains(c));
                 let is_behind = file_commits.iter().any(|c| behind.contains(c));
                 match (is_ahead, is_behind) {
@@ -87,6 +63,19 @@ impl GitStatus {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GitStatus {
+    pub remote_commit: ObjectId,
+    pub state: GitState,
+    pub dirty: Vec<PathBuf>,
+}
+
+impl fmt::Display for GitStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.state)
     }
 }
 
@@ -110,38 +99,22 @@ pub enum GitStatusError {
     TraverseError(gix::revision::walk::iter::Error),
     #[error("Failed to access repository: {0}")]
     RepositoryError(#[from] crate::git::GitInfoError),
+    #[error("Failed to fetch from remote: {0}")]
+    FetchError(#[from] GitRepositoryError),
 }
 
 /// Repository and file status operations
 #[cfg_attr(test, automock)]
 pub trait GitStatusOps {
     /// Get overall repository status
-    fn status(&self) -> Result<GitStatus, GitStatusError>;
+    fn state(&self) -> Result<(ObjectId, GitState), GitStatusError>;
+    fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError>;
 }
 
 impl GitStatusOps for GitInfo {
-    fn status(&self) -> Result<GitStatus, GitStatusError> {
+    fn state(&self) -> Result<(ObjectId, GitState), GitStatusError> {
         log::debug!("Getting git repository status");
         let repo = self.repository()?;
-
-        // Check for uncommitted changes (dirty working tree)
-        let status_platform = repo
-            .status(gix::progress::Discard)
-            .map_err(GitStatusError::StatusError)?;
-
-        let mut dirty_files = Vec::new();
-        for entry in status_platform
-            .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
-            .map_err(GitStatusError::StatusIterError)?
-        {
-            let entry = entry.map_err(GitStatusError::StatusEntryError)?;
-            dirty_files.push(PathBuf::from(entry.rela_path().to_string()));
-        }
-
-        if !dirty_files.is_empty() {
-            log::debug!("Repository has {} uncommitted changes", dirty_files.len());
-            return Ok(GitStatus::Dirty(dirty_files));
-        }
 
         // Get current branch and its upstream tracking branch
         let head = repo.head().map_err(GitStatusError::HeadError)?;
@@ -180,7 +153,12 @@ impl GitStatusOps for GitInfo {
                     current_branch_name,
                     local_commits.len()
                 );
-                return Ok(GitStatus::Ahead(local_commits));
+                let local_commit_id = head.id().ok_or_else(|| {
+                    GitStatusError::HeadError(gix::reference::find::existing::Error::NotFound {
+                        name: gix::refs::PartialName::try_from("HEAD").unwrap(),
+                    })
+                })?;
+                return Ok((local_commit_id.into(), GitState::Ahead(local_commits)));
             }
         };
 
@@ -193,7 +171,7 @@ impl GitStatusOps for GitInfo {
 
         if local_commit_id == remote_commit_id {
             log::debug!("Local and remote are in sync");
-            return Ok(GitStatus::Clean);
+            return Ok((remote_commit_id.into(), GitState::Clean));
         }
 
         // Check if local is ahead, behind, or diverged from remote
@@ -231,11 +209,11 @@ impl GitStatusOps for GitInfo {
         match (local_only.is_empty(), remote_only.is_empty()) {
             (true, false) => {
                 log::debug!("Local is behind remote by {} commits", remote_only.len());
-                Ok(GitStatus::Behind(remote_only))
+                Ok((remote_commit_id.into(), GitState::Behind(remote_only)))
             }
             (false, true) => {
                 log::debug!("Local is ahead of remote by {} commits", local_only.len());
-                Ok(GitStatus::Ahead(local_only))
+                Ok((remote_commit_id.into(), GitState::Ahead(local_only)))
             }
             (false, false) => {
                 log::debug!(
@@ -243,16 +221,85 @@ impl GitStatusOps for GitInfo {
                     local_only.len(),
                     remote_only.len()
                 );
-                Ok(GitStatus::Diverged {
-                    ahead: local_only,
-                    behind: remote_only,
-                })
+                Ok((
+                    remote_commit_id.into(),
+                    GitState::Diverged {
+                        ahead: local_only,
+                        behind: remote_only,
+                    },
+                ))
             }
             (true, true) => {
                 // This shouldn't happen since we already checked if commits are equal
                 log::debug!("Local and remote are in sync (fallback)");
-                Ok(GitStatus::Clean)
+                Ok((remote_commit_id.into(), GitState::Clean))
             }
         }
     }
+
+    fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError> {
+        let repo = self.repository()?;
+
+        // Check for uncommitted changes (dirty working tree)
+        let status_platform = repo
+            .status(gix::progress::Discard)
+            .map_err(GitStatusError::StatusError)?;
+
+        let mut dirty_files = Vec::new();
+        for entry in status_platform
+            .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
+            .map_err(GitStatusError::StatusIterError)?
+        {
+            let entry = entry.map_err(GitStatusError::StatusEntryError)?;
+            dirty_files.push(PathBuf::from(entry.rela_path().to_string()));
+        }
+
+        log::debug!("Repository has {} uncommitted changes", dirty_files.len());
+        Ok(dirty_files)
+    }
+}
+
+/// Fetch from remote and then get repository status
+///
+/// This function ensures the status check is performed against the actual remote state,
+/// not a stale local tracking branch. It first performs a git fetch to update the
+/// refs/remotes/origin/* tracking branches, then checks the status.
+///
+/// If the fetch fails (e.g., no network access, no usable origin), it falls back to
+/// checking the local status against the last-fetched remote state. This prevents hard
+/// failures for offline workflows while still providing fresh remote data when available.
+///
+/// # Arguments
+/// * `git_info` - A reference to an object implementing both GitRepository and GitStatusOps
+///
+/// # Returns
+/// * `Ok(GitStatus)` - The current status and dirty files for the repository
+/// * `Err(GitStatusError)` - If status check fails (fetch errors are logged and ignored)
+pub fn get_git_status<T>(git_info: &T) -> Result<GitStatus, GitStatusError>
+where
+    T: GitRepository + GitStatusOps,
+{
+    log::debug!("Fetching from remote before status check");
+    match git_info.fetch() {
+        Ok(changes_found) => {
+            log::debug!(
+                "Fetch complete (changes found: {}), checking status",
+                changes_found
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to fetch from remote: {}. Falling back to local status check against last-fetched remote state.",
+                e
+            );
+        }
+    }
+    let (remote_commit, state) = git_info.state()?;
+    let dirty = git_info.dirty()?;
+
+    Ok(GitStatus {
+        remote_commit,
+        state,
+        dirty,
+    })
 }
