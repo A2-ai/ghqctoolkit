@@ -155,13 +155,23 @@ paths:
           example: "1,2,3"
       responses:
         '200':
-          description: Array of issue statuses
+          description: All issues resolved successfully
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/IssueStatusResponse'
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
+        '206':
+          description: Partial success — some issues resolved, some failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
+        '500':
+          description: All issues failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
 
   /issues/{number}:
     get:
@@ -607,6 +617,34 @@ components:
         error:
           type: string
 
+    IssueStatusErrorKind:
+      type: string
+      enum: [fetch_failed, processing_failed]
+
+    IssueStatusError:
+      type: object
+      required: [issue_number, kind, error]
+      properties:
+        issue_number:
+          type: integer
+        kind:
+          $ref: '#/components/schemas/IssueStatusErrorKind'
+        error:
+          type: string
+
+    BatchIssueStatusResponse:
+      type: object
+      required: [results, errors]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueStatusResponse'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueStatusError'
+
     CreateIssueRequest:
       type: object
       required: [file, checklist_name, checklist_content]
@@ -830,6 +868,7 @@ components:
         - remote_commit
         - git_status
         - git_status_detail
+        - dirty_files
       properties:
         owner:
           type: string
@@ -851,10 +890,15 @@ components:
         git_status_detail:
           type: string
           description: Human-readable git status description
+        dirty_files:
+          type: array
+          items: string
+          description: List of files which have non-committed changes
+            
 
     Checklist:
       type: object
-      properties:
+    properties:
         name:
           type: string
         content:

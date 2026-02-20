@@ -1,5 +1,5 @@
 use crate::GitInfo;
-use gix::remote::fetch::Status;
+use crate::git::action::{GitCli, GitCommand};
 #[cfg(test)]
 use mockall::automock;
 use std::path::Path;
@@ -119,30 +119,8 @@ impl GitRepository for GitInfo {
     }
 
     fn fetch(&self) -> Result<bool, GitRepositoryError> {
-        let repo = self.repository()?;
-
-        // Find the origin remote
-        let remote_name = "origin";
-        let remote = repo
-            .find_remote(remote_name)
-            .map_err(|e| GitRepositoryError::RemoteNotFound(format!("{}: {}", remote_name, e)))?;
-
-        log::debug!("Fetching from remote: {}", remote_name);
-
-        // Connect to the remote
-        let connection = remote
-            .connect(gix::remote::Direction::Fetch)
-            .map_err(|e| GitRepositoryError::RemoteConnectionError(format!("{}", e)))?;
-
-        // Perform the fetch
-        let outcome = connection
-            .prepare_fetch(gix::progress::Discard, Default::default())
-            .map_err(|e| GitRepositoryError::FetchError(format!("Failed to prepare fetch: {}", e)))?
-            .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-            .map_err(|e| GitRepositoryError::FetchError(format!("Failed to receive: {}", e)))?;
-
-        log::debug!("Fetch completed successfully");
-
-        Ok(matches!(outcome.status, Status::Change { .. }))
+        GitCommand
+            .fetch(&self.repository_path)
+            .map_err(|e| GitRepositoryError::FetchError(e.to_string()))
     }
 }

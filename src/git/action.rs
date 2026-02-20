@@ -10,6 +10,10 @@ pub trait GitCli {
     fn clone(&self, url: Url, path: &Path) -> Result<(), GitCliError>;
 
     fn remote(&self, path: &Path) -> Result<Url, GitCliError>;
+
+    /// Fetch from origin. Returns whether any refs changed.
+    /// Sets GIT_TERMINAL_PROMPT=0 to prevent blocking credential prompts.
+    fn fetch(&self, path: &Path) -> Result<bool, GitCliError>;
 }
 
 /// Error types for git CLI operations
@@ -93,5 +97,24 @@ impl GitCli for GitCommand {
         gix::url::parse(url_str.as_bytes().into()).map_err(|e| {
             GitCliError::InvalidRemoteUrl(format!("Failed to parse '{}': {}", url_str, e))
         })
+    }
+
+    fn fetch(&self, path: &Path) -> Result<bool, GitCliError> {
+        log::debug!("Fetching from origin in {}", path.display());
+
+        let output = std::process::Command::new("git")
+            .args(["-C", &path.to_string_lossy(), "fetch", "origin"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()?;
+
+        if output.status.success() {
+            // git prints ref update lines to stderr when changes are received
+            let changed = !output.stderr.is_empty();
+            log::debug!("Fetch completed (changes: {})", changed);
+            Ok(changed)
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(GitCliError::GitCommandFailed(stderr.trim().to_string()))
+        }
     }
 }

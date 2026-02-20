@@ -8,7 +8,7 @@ fixtures:
       title: "src/test.rs"
       body: |
         Quality check issue for src/test.rs
-        
+
         ## Metadata
         initial qc commit: 456def789abc012345678901234567890123cdef
         git branch: main
@@ -19,17 +19,17 @@ fixtures:
       title: "src/config.rs"
       body: |
         Quality check issue for src/config.rs
-        
+
         ## Metadata
         initial qc commit: 456def789abc012345678901234567890123cdef
         git branch: feature/config-update
         author: Jane Developer <developer@example.com>
-        
+
         ## Relevant Files
-        
+
         ### Gating QC
         - [src/test.rs](https://github.com/owner/repo/issues/1) - Must be approved before this file
-        
+
         ### Previous QC
         None
       milestone: 1
@@ -49,13 +49,7 @@ response:
   body:
     match_type: schema
     schema:
-      type: array
-      exact_length: 1
+      type: object
       item_fields:
-        - issue
-        - blocking_qc_status
-      first_item:
-        issue:
-          number: 2
-        blocking_qc_status:
-          total: 1
+        - results
+        - errors

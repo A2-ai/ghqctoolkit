@@ -1,9 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { AppLayout } from '~/components/AppLayout'
 
 export const Route = createFileRoute('/')({
-  component: HomeRoute,
+  component: AppLayout,
 })
-
-function HomeRoute() {
-  return <h1>ghqc UI — ready for development</h1>
-}

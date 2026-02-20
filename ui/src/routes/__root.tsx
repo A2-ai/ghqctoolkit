@@ -5,8 +5,10 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from '@tanstack/react-router'
+import { MantineProvider } from '@mantine/core'
 import type { QueryClient } from '@tanstack/react-query'
 import * as React from 'react'
+import mantineCss from '@mantine/core/styles.css?url'
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient
@@ -18,6 +20,7 @@ export const Route = createRootRouteWithContext<{
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'ghqc' },
     ],
+    links: [{ rel: 'stylesheet', href: mantineCss }],
   }),
   shellComponent: RootShell,
   component: RootComponent,
@@ -38,5 +41,9 @@ function RootShell({ children }: { children: React.ReactNode }) {
 }
 
 function RootComponent() {
-  return <Outlet />
+  return (
+    <MantineProvider defaultColorScheme="light">
+      <Outlet />
+    </MantineProvider>
+  )
 }

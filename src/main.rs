@@ -1009,7 +1009,7 @@ async fn main() -> Result<()> {
             let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache);
             let app = create_router(state);
 
-            let addr = format!("127.0.0.0:{}", port);
+            let addr = format!("0.0.0.0:{}", port);
             println!("Starting API server on http://{}", addr);
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;

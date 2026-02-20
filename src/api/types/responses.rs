@@ -347,6 +347,29 @@ impl From<CreateResult> for CreateIssueResponse {
     }
 }
 
+/// Error kind for batch issue status.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueStatusErrorKind {
+    FetchFailed,
+    ProcessingFailed,
+}
+
+/// Error entry for batch issue status.
+#[derive(Debug, Serialize)]
+pub struct IssueStatusError {
+    pub issue_number: u64,
+    pub kind: IssueStatusErrorKind,
+    pub error: String,
+}
+
+/// Envelope response for batch issue status.
+#[derive(Debug, Serialize)]
+pub struct BatchIssueStatusResponse {
+    pub results: Vec<IssueStatusResponse>,
+    pub errors: Vec<IssueStatusError>,
+}
+
 /// Response for comment creation.
 #[derive(Debug, Serialize)]
 pub struct CommentResponse {
@@ -469,6 +492,7 @@ pub struct RepoInfoResponse {
     pub remote_commit: String,
     pub git_status: GitStatusEnum,
     pub git_status_detail: String,
+    pub dirty_files: Vec<String>,
 }
 
 impl RepoInfoResponse {
@@ -480,7 +504,7 @@ impl RepoInfoResponse {
         let git_info = git_info.clone();
 
         // Perform blocking git operations in a blocking task
-        let (branch, local_commit, remote_commit, git_status_enum, git_status_detail) =
+        let (branch, local_commit, remote_commit, git_status_enum, git_status_detail, dirty_files) =
             tokio::task::spawn_blocking(move || {
                 let git_status = get_git_status(&git_info)?;
                 let local_commit = git_info.commit()?;
@@ -494,6 +518,11 @@ impl RepoInfoResponse {
                     remote_commit,
                     api_git_status.status,
                     git_status.state.to_string(),
+                    git_status
+                        .dirty
+                        .into_iter()
+                        .map(|p| p.display().to_string())
+                        .collect(),
                 ))
             })
             .await
@@ -507,6 +536,7 @@ impl RepoInfoResponse {
             remote_commit,
             git_status: git_status_enum,
             git_status_detail,
+            dirty_files,
         })
     }
 }

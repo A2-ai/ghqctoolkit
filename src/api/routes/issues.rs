@@ -5,9 +5,9 @@ use crate::api::error::ApiError;
 use crate::api::fetch_helpers::{CreatedThreads, FetchedIssues, format_error_list};
 use crate::api::state::AppState;
 use crate::api::types::{
-    BlockedIssueStatus, BlockingQCError, BlockingQCItem, BlockingQCItemWithStatus,
-    BlockingQCStatus, CreateIssueRequest, CreateIssueResponse, Issue, IssueStatusResponse,
-    QCStatusEnum,
+    BatchIssueStatusResponse, BlockedIssueStatus, BlockingQCError, BlockingQCItem,
+    BlockingQCItemWithStatus, BlockingQCStatus, CreateIssueRequest, CreateIssueResponse, Issue,
+    IssueStatusError, IssueStatusErrorKind, IssueStatusResponse, QCStatusEnum,
 };
 use crate::create::QCIssueError;
 use crate::{GitProvider, QCEntry, batch_post_qc_entries, get_repo_users};
@@ -17,7 +17,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
@@ -139,8 +139,8 @@ pub async fn create_issues<G: GitProvider + 'static>(
 pub async fn batch_get_issue_status<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Query(query): Query<IssueStatusQuery>,
-) -> Result<Json<Vec<IssueStatusResponse>>, ApiError> {
-    // Parse comma-separated issue numbers, validating all inputs
+) -> Result<(StatusCode, Json<BatchIssueStatusResponse>), ApiError> {
+    // Parse comma-separated issue numbers — bad input is a caller mistake, return early.
     let parts: Vec<&str> = query.issues.split(',').map(|s| s.trim()).collect();
     let mut issue_numbers = Vec::new();
     let mut invalid_parts = Vec::new();
@@ -172,12 +172,7 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
         let mut fetched_issues =
             FetchedIssues::fetch_issues(&issue_numbers, state.git_info(), &cache_read).await;
 
-        if !fetched_issues.errors.is_empty() {
-            return Err(ApiError::GitHubApi(format!(
-                "Failed to fetch all issues:\n  -{}",
-                format_error_list(&fetched_issues.errors)
-            )));
-        }
+        // Don't return early on fetch errors — accumulate them as FetchFailed entries.
 
         fetched_issues
             .fetch_blocking_qcs(state.git_info(), &cache_read)
@@ -186,6 +181,7 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
         fetched_issues
     }; // cache_read lock released here
 
+    // Only create threads for successfully fetched issues.
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, &state).await;
 
     fetched_issues
@@ -198,11 +194,12 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
             .map(|(n, e)| (n, e.to_string())),
     );
 
-    let mut errors = HashMap::new();
-    let mut responses = Vec::new();
+    let mut errors: Vec<IssueStatusError> = Vec::new();
+    let mut responses: Vec<IssueStatusResponse> = Vec::new();
 
-    for issue_number in issue_numbers {
-        if let Some(entry) = fetched_issues.cached_entries.get(&issue_number) {
+    // Preserve request ordering.
+    for issue_number in &issue_numbers {
+        if let Some(entry) = fetched_issues.cached_entries.get(issue_number) {
             let mut response = IssueStatusResponse::from_cache_entry(entry.clone(), &dirty);
             determine_blocking_qc_status(
                 &mut response.blocking_qc_status,
@@ -211,23 +208,46 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
             );
             responses.push(response);
         } else {
-            let error = fetched_issues
-                .errors
-                .get(&issue_number)
-                .cloned()
-                .unwrap_or("Failed to determine issue status".to_string());
-            errors.insert(issue_number, error);
+            // Distinguish between fetch failures and processing failures.
+            let (kind, error) = if fetched_issues.issues.iter().any(|i| i.number == *issue_number)
+            {
+                // Issue was fetched but thread/cache creation failed → processing error.
+                let msg = fetched_issues
+                    .errors
+                    .get(issue_number)
+                    .cloned()
+                    .unwrap_or_else(|| "Failed to determine issue status".to_string());
+                (IssueStatusErrorKind::ProcessingFailed, msg)
+            } else {
+                // Issue was never fetched successfully → fetch error.
+                let msg = fetched_issues
+                    .errors
+                    .get(issue_number)
+                    .cloned()
+                    .unwrap_or_else(|| "Failed to fetch issue".to_string());
+                (IssueStatusErrorKind::FetchFailed, msg)
+            };
+            errors.push(IssueStatusError {
+                issue_number: *issue_number,
+                kind,
+                error,
+            });
         }
     }
 
-    if !errors.is_empty() {
-        return Err(ApiError::Internal(format!(
-            "Failed to determine status for all issues:\n  -{}",
-            format_error_list(&errors)
-        )));
-    }
+    let status = match (responses.is_empty(), errors.is_empty()) {
+        (_, true) => StatusCode::OK,
+        (false, _) => StatusCode::PARTIAL_CONTENT,
+        (true, _) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
 
-    Ok(Json(responses))
+    Ok((
+        status,
+        Json(BatchIssueStatusResponse {
+            results: responses,
+            errors,
+        }),
+    ))
 }
 
 pub(crate) fn determine_blocking_qc_status(
