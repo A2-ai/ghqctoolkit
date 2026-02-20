@@ -15,8 +15,15 @@ export interface RepoInfo {
 
 async function fetchRepoInfo(): Promise<RepoInfo> {
   const res = await fetch('/api/repo')
-  if (!res.ok) throw new Error(`Failed to fetch repo info: ${res.status}`)
-  return res.json() 
+  if (!res.ok) {
+    let message = `Failed to fetch repo info: ${res.status}`
+    try {
+      const data = await res.json()
+      if (typeof data.error === 'string') message = data.error
+    } catch {}
+    throw new Error(message)
+  }
+  return res.json()
 }
 
 export function useRepoInfo() {

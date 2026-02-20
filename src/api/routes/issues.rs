@@ -209,7 +209,10 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
             responses.push(response);
         } else {
             // Distinguish between fetch failures and processing failures.
-            let (kind, error) = if fetched_issues.issues.iter().any(|i| i.number == *issue_number)
+            let (kind, error) = if fetched_issues
+                .issues
+                .iter()
+                .any(|i| i.number == *issue_number)
             {
                 // Issue was fetched but thread/cache creation failed → processing error.
                 let msg = fetched_issues

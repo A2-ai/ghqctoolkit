@@ -1,4 +1,5 @@
 import { Anchor, Stack, Text, Tooltip } from '@mantine/core'
+import { IconAsterisk } from '@tabler/icons-react'
 import type { IssueStatusResponse } from '~/api/issues'
 
 interface Props {
@@ -16,20 +17,22 @@ export function IssueCard({ status, currentBranch }: Props) {
       style={{
         opacity: isWrongBranch ? 0.45 : 1,
         filter: isWrongBranch ? 'grayscale(0.4)' : 'none',
+        position: 'relative',
       }}
     >
-      {/* File link + dirty indicator */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center', gap: 4 }}>
+      {dirty && (
+        <Tooltip label="This file has uncommitted local changes" withArrow position="top">
+          <span style={{ position: 'absolute', top: 0, right: 0, color: '#c92a2a', display: 'flex', lineHeight: 1 }}>
+            <IconAsterisk size={16} stroke={3} />
+          </span>
+        </Tooltip>
+      )}
+
+      {/* File link */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
         <Anchor href={issue.html_url} target="_blank" size="md" fw={700} style={{ lineHeight: 1.3, textAlign: 'center' }}>
           {issue.title}
         </Anchor>
-        {dirty && (
-          <Tooltip label="This file has uncommitted local changes" withArrow position="top">
-            <span style={{ color: '#c92a2a', fontWeight: 700, fontSize: 14, lineHeight: 1, flexShrink: 0 }}>
-              *
-            </span>
-          </Tooltip>
-        )}
       </div>
 
       {/* Milestone */}
