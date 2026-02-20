@@ -31,9 +31,19 @@ function noop(_: DropResult) {}
 interface Props {
   statuses: IssueStatusResponse[]
   currentBranch: string
+  remoteCommit: string
 }
 
-export function SwimLanes({ statuses, currentBranch }: Props) {
+// Commits are newest-first; commits before the approved index are temporally later.
+function postApprovalFileCommit(s: IssueStatusResponse): string | undefined {
+  const { approved_commit } = s.qc_status
+  if (!approved_commit) return undefined
+  const approvedIdx = s.commits.findIndex((c) => c.hash === approved_commit)
+  if (approvedIdx <= 0) return undefined
+  return s.commits.slice(0, approvedIdx).find((c) => c.file_changed)?.hash
+}
+
+export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
   const byLane: Record<string, IssueStatusResponse[]> = Object.fromEntries(
     LANES.map((l) => [l.id, []])
   )
@@ -75,8 +85,9 @@ export function SwimLanes({ statuses, currentBranch }: Props) {
                                 withBorder
                                 mb={8}
                                 p={10}
+                                style={postApprovalFileCommit(s) ? { backgroundColor: '#ffedd5' } : undefined}
                               >
-                                <IssueCard status={s} currentBranch={currentBranch} />
+                                <IssueCard status={s} currentBranch={currentBranch} remoteCommit={remoteCommit} postApprovalCommit={postApprovalFileCommit(s)} />
                               </Card>
                             )}
                           </Draggable>

@@ -1,15 +1,53 @@
 import { Anchor, Stack, Text, Tooltip } from '@mantine/core'
 import { IconAsterisk } from '@tabler/icons-react'
+import type { ReactNode } from 'react'
 import type { IssueStatusResponse } from '~/api/issues'
 
 interface Props {
   status: IssueStatusResponse
   currentBranch: string
+  remoteCommit: string
+  postApprovalCommit?: string
 }
 
-export function IssueCard({ status, currentBranch }: Props) {
-  const { issue, qc_status: _, dirty, branch, checklist_summary, blocking_qc_status } = status
+export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCommit }: Props) {
+  const { issue, qc_status, dirty, branch, checklist_summary, blocking_qc_status } = status
   const isWrongBranch = branch !== currentBranch
+
+  // Per-lane commit rows (commits array is newest-first)
+  let commitRows: ReactNode = null
+  switch (qc_status.status) {
+    case 'awaiting_review':
+    case 'approval_required':
+      commitRows = <CommitRow label="Latest" hash={qc_status.latest_commit} />
+      break
+    case 'change_requested':
+      commitRows = (
+        <>
+          <CommitRow label="Reviewed" hash={qc_status.latest_commit} />
+          {remoteCommit && <CommitRow label="Remote" hash={remoteCommit} />}
+        </>
+      )
+      break
+    case 'in_progress':
+    case 'changes_to_comment':
+      commitRows = (
+        <>
+          <CommitRow label="Last Posted" hash={qc_status.latest_commit} />
+          {remoteCommit && <CommitRow label="Remote" hash={remoteCommit} />}
+        </>
+      )
+      break
+    case 'approved':
+    case 'changes_after_approval':
+      commitRows = (
+        <>
+          {qc_status.approved_commit && <CommitRow label="Approved" hash={qc_status.approved_commit} />}
+          {postApprovalCommit && <CommitRow label="Changed" hash={postApprovalCommit} />}
+        </>
+      )
+      break
+  }
 
   return (
     <Stack
@@ -45,6 +83,9 @@ export function IssueCard({ status, currentBranch }: Props) {
         <b>Branch:</b> {branch}{isWrongBranch ? ' (different branch)' : ''}
       </Text>
 
+      {/* Commit info */}
+      {commitRows}
+
       {/* Checklist progress */}
       {checklist_summary.total > 0 && (
         <InlineProgress
@@ -67,6 +108,12 @@ export function IssueCard({ status, currentBranch }: Props) {
         />
       )}
     </Stack>
+  )
+}
+
+function CommitRow({ label, hash }: { label: string; hash: string }) {
+  return (
+    <Text size="sm" c="black"><b>{label}:</b> <span style={{ fontFamily: 'monospace' }}>{hash.slice(0, 7)}</span></Text>
   )
 }
 

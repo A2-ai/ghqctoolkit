@@ -89,7 +89,7 @@ export function AppLayout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        <SwimLanes statuses={statuses} currentBranch={repoData?.branch ?? ''} />
+        <SwimLanes statuses={statuses} currentBranch={repoData?.branch ?? ''} remoteCommit={repoData?.remote_commit ?? ''} />
       </AppShell.Main>
     </AppShell>
   )
