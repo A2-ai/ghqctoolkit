@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "bunx --bun vite dev --port 3103",
     "build": "bunx --bun vite build && bun run scripts/gen-index-html.ts",
-    "preview": "bunx --bun vite preview"
+    "preview": "bunx --bun vite preview",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18",

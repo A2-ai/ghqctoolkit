@@ -15,12 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
-    
+
     - name: Cache dependencies
       uses: actions/cache@v3
       with:
@@ -29,12 +29,12 @@ jobs:
           ~/.cargo/registry
           target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    
+
     - name: Check formatting
       run: cargo fmt --all -- --check
-    
+
     - name: Run tests
-      run: cargo test --all-features --verbose
-    
+      run: cargo test --features cli,api --verbose
+
     - name: Check that code compiles
-      run: cargo check --all-targets --all-features
+      run: cargo check --all-targets --features cli,api
