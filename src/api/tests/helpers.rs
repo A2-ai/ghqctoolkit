@@ -284,6 +284,20 @@ impl GitFileOps for MockGitInfo {
     ) -> Result<Vec<u8>, GitFileOpsError> {
         Ok(vec![])
     }
+
+    fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+        match path {
+            "" => Ok(vec![
+                ("src".to_string(), true),
+                ("Cargo.toml".to_string(), false),
+            ]),
+            "src" => Ok(vec![
+                ("main.rs".to_string(), false),
+                ("lib.rs".to_string(), false),
+            ]),
+            _ => Err(GitFileOpsError::DirectoryNotFound(path.to_string())),
+        }
+    }
 }
 
 impl GitCommitAnalysis for MockGitInfo {
@@ -405,6 +419,10 @@ impl GitHubReader for MockGitInfo {
         _issue: &Issue,
     ) -> Result<Vec<serde_json::Value>, GitHubApiError> {
         Ok(vec![])
+    }
+
+    async fn get_current_user(&self) -> Result<Option<String>, GitHubApiError> {
+        Ok(Some("test-user".to_string()))
     }
 
     async fn get_blocked_issues(&self, issue_number: u64) -> Result<Vec<Issue>, GitHubApiError> {

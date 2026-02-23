@@ -464,6 +464,37 @@ components:
           type: string
           format: date-time
           nullable: true
+        created_by:
+          type: string
+          description: GitHub login of the user who created the issue
+        branch:
+          type: string
+          nullable: true
+          description: Git branch parsed from issue body
+        checklist_name:
+          type: string
+          nullable: true
+          description: Checklist name parsed from issue body
+        relevant_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelevantFileInfo'
+
+    RelevantFileInfo:
+      type: object
+      required: [file_name, kind]
+      properties:
+        file_name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/RelevantFileKind'
+        issue_url:
+          type: string
+          nullable: true
+
+    RelevantFileKind:
+      type: string
+      enum: [blocking_qc, relevant_qc, file]
 
     IssueStatusResponse:
       type: object

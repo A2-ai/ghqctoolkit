@@ -2,6 +2,7 @@ import { AppShell, Menu, Text } from '@mantine/core'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { SwimLanes } from './SwimLanes'
+import { CreateTab } from './CreateTab'
 import { useRepoInfo } from '~/api/repo'
 import { RepoStatus } from './RepoStatus'
 import { MilestoneFilter } from './MilestoneFilter'
@@ -341,13 +342,22 @@ export function AppLayout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        {activeTab === 'status' ? (
+        {activeTab === 'status' && (
           <SwimLanes
             statuses={statuses}
             currentBranch={repoData?.branch ?? ''}
             remoteCommit={repoData?.remote_commit ?? ''}
           />
-        ) : (
+        )}
+        {activeTab === 'create' && (
+          <div style={{
+            margin: 'calc(-1 * var(--mantine-spacing-md))',
+            height: 'calc(100vh - 88px)',
+          }}>
+            <CreateTab />
+          </div>
+        )}
+        {activeTab !== 'status' && activeTab !== 'create' && (
           <PlaceholderTab tab={activeTab} />
         )}
       </AppShell.Main>

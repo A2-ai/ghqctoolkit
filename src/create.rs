@@ -76,6 +76,29 @@ impl QCIssue {
         &self.branch
     }
 
+    /// Construct a QCIssue from pre-resolved fields (no git I/O).
+    pub(crate) fn new_without_git(
+        file: impl AsRef<Path>,
+        milestone_id: u64,
+        commit: String,
+        branch: String,
+        authors: Vec<GitAuthor>,
+        assignees: Vec<String>,
+        checklist: Checklist,
+        relevant_files: Vec<RelevantFile>,
+    ) -> Self {
+        Self {
+            milestone_id,
+            title: file.as_ref().to_path_buf(),
+            commit,
+            branch,
+            authors,
+            checklist,
+            assignees,
+            relevant_files,
+        }
+    }
+
     pub fn new(
         file: impl AsRef<Path>,
         git_info: &(impl GitRepository + GitFileOps),
@@ -84,16 +107,16 @@ impl QCIssue {
         checklist: Checklist,
         relevant_files: Vec<RelevantFile>,
     ) -> Result<Self, QCIssueError> {
-        Ok(Self {
-            title: file.as_ref().to_path_buf(),
-            commit: git_info.commit()?,
-            branch: git_info.branch()?,
-            authors: git_info.authors(file.as_ref())?,
-            checklist,
-            assignees,
+        Ok(Self::new_without_git(
+            file.as_ref(),
             milestone_id,
+            git_info.commit()?,
+            git_info.branch()?,
+            git_info.authors(file.as_ref())?,
+            assignees,
+            checklist,
             relevant_files,
-        })
+        ))
     }
 
     /// Returns the blocking issues (GatingQC and PreviousQC) with their issue numbers and IDs.
@@ -1047,6 +1070,13 @@ mod tests {
             Output = Result<Vec<octocrab::models::issues::Issue>, GitHubApiError>,
         > + Send {
             async move { Err(GitHubApiError::NoApi) }
+        }
+
+        fn get_current_user(
+            &self,
+        ) -> impl std::future::Future<Output = Result<Option<String>, GitHubApiError>> + Send
+        {
+            async move { Ok(None) }
         }
     }
 

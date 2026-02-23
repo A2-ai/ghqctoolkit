@@ -96,7 +96,7 @@ export function MilestoneFilter({ selected, onSelect, includeClosedIssues, onInc
             {!isLoading && !isError && filtered.length === 0 && (
               <Combobox.Empty>No milestones found</Combobox.Empty>
             )}
-            {filtered.map((m) => (
+            {[...filtered].reverse().map((m) => (
               <Combobox.Option key={m.number} value={String(m.number)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Text size="sm">{m.title}</Text>
@@ -221,7 +221,7 @@ function SelectedMilestoneCard({
           )}
           {isPartial && errorLines && (
             <Tooltip label={errorLines} withArrow multiline>
-              <span style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+              <span data-testid="partial-warning" style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                 <IconAlertTriangle size={14} />
                 {statusInfo.statusErrorCount}
               </span>

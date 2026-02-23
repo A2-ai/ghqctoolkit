@@ -217,8 +217,14 @@ mod test_runner {
         let json1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
         let json2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
 
-        assert!(json1.is_object(), "First request should return an envelope object");
-        assert!(json2.is_object(), "Second request should return an envelope object");
+        assert!(
+            json1.is_object(),
+            "First request should return an envelope object"
+        );
+        assert!(
+            json2.is_object(),
+            "Second request should return an envelope object"
+        );
         assert_eq!(
             json1["results"].as_array().unwrap().len(),
             2,

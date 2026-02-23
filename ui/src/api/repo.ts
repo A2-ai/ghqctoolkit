@@ -11,6 +11,7 @@ export interface RepoInfo {
   git_status: GitStatus
   git_status_detail: string
   dirty_files: string[]
+  current_user: string | null
 }
 
 async function fetchRepoInfo(): Promise<RepoInfo> {
@@ -30,6 +31,7 @@ export function useRepoInfo() {
   return useQuery({
     queryKey: ['repo'],
     queryFn: fetchRepoInfo,
-    refetchInterval: 45_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   })
 }
