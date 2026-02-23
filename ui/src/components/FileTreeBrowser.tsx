@@ -15,6 +15,7 @@ interface Props {
   selectedFile: string | null
   onSelect: (file: string | null) => void
   claimedFiles?: Set<string>
+  fileAnnotations?: Map<string, string[]>
 }
 
 function injectChildren(
@@ -44,13 +45,14 @@ function findNode(nodes: FileNode[], targetId: string): FileNode | null {
   return null
 }
 
-export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set() }: Props) {
+export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set(), fileAnnotations }: Props) {
   const [data, setData] = useState<FileNode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   function NodeRenderer({ node, style, dragHandle }: NodeRendererProps<FileNode>) {
     const claimed = !node.isInternal && claimedFiles.has(node.id)
+    const annotations = !node.isInternal ? (fileAnnotations?.get(node.id) ?? []) : []
     return (
       <div
         style={{
@@ -83,13 +85,18 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
         <Text size="sm" style={{ userSelect: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {node.data.name}
         </Text>
+        {annotations.map((a, i) => (
+          <span key={i} style={{ fontSize: 10, background: '#e7f5ff', color: '#1864ab', borderRadius: 3, padding: '1px 4px', flexShrink: 0 }}>{a}</span>
+        ))}
       </div>
     )
   }
 
   useEffect(() => {
+    console.log('[FileTreeBrowser] mounting, starting file tree fetch')
     fetchFileTree('')
       .then((res) => {
+        console.log('[FileTreeBrowser] file tree loaded, entries:', res.entries.length)
         const nodes: FileNode[] = res.entries.map((entry) => ({
           id: entry.name,
           name: entry.name,
@@ -99,6 +106,7 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
         setLoading(false)
       })
       .catch((err: Error) => {
+        console.error('[FileTreeBrowser] file tree fetch failed:', err.message)
         setError(err.message)
         setLoading(false)
       })
@@ -121,7 +129,10 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
     }
   }
 
-  if (loading) return <Loader size="sm" />
+  if (loading) {
+    console.log('[FileTreeBrowser] rendering loader (file tree not yet loaded)')
+    return <Loader size="sm" />
+  }
   if (error) return <Alert color="red">{error}</Alert>
 
   return (
@@ -138,7 +149,7 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
       disableEdit
       rowHeight={28}
       width="100%"
-      height={360}
+      height={400}
     >
       {NodeRenderer}
     </Tree>

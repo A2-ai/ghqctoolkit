@@ -1,4 +1,4 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 
 export type RelevantFileKind = 'blocking_qc' | 'relevant_qc' | 'file'
 
@@ -244,4 +244,32 @@ export function useIssuesForMilestone(milestoneNumber: number | null) {
     queryFn: () => fetchMilestoneIssues(milestoneNumber!),
     enabled: milestoneNumber !== null,
   })
+}
+
+/**
+ * Returns a function that forces a fresh fetch for a specific milestone's issue list.
+ * Call after creating or closing issues to keep the cache in sync.
+ *
+ * Usage:
+ *   const invalidate = useInvalidateMilestoneIssues()
+ *   await invalidate(milestoneNumber)
+ */
+export function useInvalidateMilestoneIssues() {
+  const queryClient = useQueryClient()
+  return (milestoneNumber: number) =>
+    queryClient.invalidateQueries({ queryKey: ['milestones', milestoneNumber, 'issues'] })
+}
+
+export function useAllMilestoneIssues(milestoneNumbers: number[], enabled = true) {
+  const queries = useQueries({
+    queries: milestoneNumbers.map((n) => ({
+      queryKey: ['milestones', n, 'issues'],
+      queryFn: () => fetchMilestoneIssues(n),
+      enabled,
+    })),
+  })
+  return {
+    issues: queries.flatMap((q) => q.data ?? []),
+    isLoading: enabled && queries.some((q) => q.isPending && q.fetchStatus !== 'idle'),
+  }
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Select, Text, TextInput, Textarea, Stack, Loader } from '@mantine/core'
+import { Button, Select, Text, TextInput, Textarea, Stack, Loader, Tooltip } from '@mantine/core'
 import { useMilestones } from '~/api/milestones'
 import { useIssuesForMilestone } from '~/api/issues'
 import { ResizableSidebar } from './ResizableSidebar'
@@ -17,6 +17,7 @@ export function CreateTab() {
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [queuedItems, setQueuedItems] = useState<QueuedItem[]>([])
   const { data: milestones = [], isLoading } = useMilestones()
   const { data: milestoneIssues = [], isLoading: issuesLoading } =
@@ -25,6 +26,37 @@ export function CreateTab() {
   const openMilestones = milestones.filter(m => m.state === 'open')
   const nameConflict = newName.trim().length > 0
     && milestones.some(m => m.title.toLowerCase() === newName.trim().toLowerCase())
+  const milestoneTitle = mode === 'select'
+    ? (milestones.find(m => m.number === selectedMilestone)?.title ?? null)
+    : (newName.trim() || null)
+
+  // Conflict detection
+  const existingFiles = new Set(mode === 'select' ? milestoneIssues.map(i => i.title) : [])
+  const queuedFileCounts = queuedItems.reduce<Map<string, number>>((acc, item) => {
+    acc.set(item.file, (acc.get(item.file) ?? 0) + 1)
+    return acc
+  }, new Map())
+
+  function getConflictReason(item: QueuedItem): string | undefined {
+    if (existingFiles.has(item.file))
+      return `"${item.file}" already has an issue in milestone "${milestoneTitle}"`
+    if ((queuedFileCounts.get(item.file) ?? 0) > 1)
+      return `"${item.file}" is queued more than once`
+    return undefined
+  }
+
+  const milestoneReady = (mode === 'select' && selectedMilestone !== null) ||
+    (mode === 'new' && newName.trim().length > 0 && !nameConflict)
+  const hasConflicts = queuedItems.some(item => getConflictReason(item) !== undefined)
+  const canCreate = milestoneReady && !hasConflicts && queuedItems.length > 0
+
+  function createBlockReason(): string | undefined {
+    if (!milestoneReady) return 'Select or name a milestone first'
+    if (hasConflicts) return 'Resolve all conflicts before creating'
+    if (queuedItems.length === 0) return 'Queue at least one issue'
+    return undefined
+  }
+  const blockReason = createBlockReason()
 
   return (
     <div style={{ display: 'flex', height: '100%' }}>
@@ -113,14 +145,30 @@ export function CreateTab() {
               </Text>
             </>
           )}
+          <div style={{ marginTop: 8 }}>
+            <Tooltip label={blockReason ?? ''} withArrow disabled={!blockReason} multiline maw={220}>
+              <Button
+                fullWidth
+                size="sm"
+                disabled={!canCreate}
+              >
+                Create QC Issues
+              </Button>
+            </Tooltip>
+          </div>
         </Stack>
       </ResizableSidebar>
 
       <CreateIssueModal
         opened={modalOpen}
-        onClose={() => setModalOpen(false)}
-        milestoneNumber={selectedMilestone}
+        onClose={() => { setModalOpen(false); setEditingIndex(null) }}
+        milestoneNumber={mode === 'select' ? selectedMilestone : null}
+        milestoneTitle={milestoneTitle}
         onQueue={(item) => setQueuedItems((prev) => [...prev, item])}
+        onUpdate={(index, item) => setQueuedItems((prev) => prev.map((q, i) => i === index ? item : q))}
+        queuedItems={queuedItems}
+        editItem={editingIndex !== null ? (queuedItems[editingIndex] ?? null) : null}
+        editIndex={editingIndex}
       />
 
       {/* Right main panel */}
@@ -139,7 +187,13 @@ export function CreateTab() {
                 disabled={mode === 'select' && selectedMilestone === null}
               />
               {queuedItems.map((item, i) => (
-                <QueuedIssueCard key={i} item={item} />
+                <QueuedIssueCard
+                  key={i}
+                  item={item}
+                  onEdit={() => { setEditingIndex(i); setModalOpen(true) }}
+                  onRemove={() => setQueuedItems((prev) => prev.filter((_, idx) => idx !== i))}
+                  conflictReason={getConflictReason(item)}
+                />
               ))}
               {mode === 'select' && milestoneIssues.map(issue => (
                 <ExistingIssueCard key={issue.number} issue={issue} />

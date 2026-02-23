@@ -1,4 +1,6 @@
 import { Stack, Text } from '@mantine/core'
+import { IconFile, IconLink, IconLock } from '@tabler/icons-react'
+import type { RelevantFileDraft } from './CreateIssueModal'
 
 interface Props {
   file: string | null
@@ -6,6 +8,7 @@ interface Props {
   createdBy: string | null
   checklistName?: string | null
   assignees?: string[]
+  relevantFiles?: RelevantFileDraft[]
 }
 
 function PlaceholderRow({ label, value }: { label: string; value: string | null }) {
@@ -22,6 +25,7 @@ export function IssuePreviewCard({
   createdBy,
   checklistName = null,
   assignees = [],
+  relevantFiles = [],
 }: Props) {
   const title = file ? `${file}` : null
 
@@ -62,6 +66,26 @@ export function IssuePreviewCard({
         <Text size="xs" c="gray.4">
           <b>Reviewers:</b> —
         </Text>
+      )}
+
+      {relevantFiles.length > 0 && (
+        <>
+          <Text size="xs" fw={600} c="dimmed" mt={2}>Relevant Files</Text>
+          {relevantFiles.map((rf, i) => {
+            const icon =
+              rf.kind === 'blocking_qc' ? <IconLock size={12} color="#c92a2a" /> :
+              rf.kind === 'relevant_qc' ? <IconLink size={12} color="#666" /> :
+              <IconFile size={12} color="#666" />
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                {icon}
+                <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
+                  {rf.file}{rf.issueNumber !== null ? ` #${rf.issueNumber}` : ''}
+                </Text>
+              </div>
+            )
+          })}
+        </>
       )}
     </Stack>
   )

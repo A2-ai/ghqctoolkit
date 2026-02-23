@@ -18,9 +18,10 @@ interface TabEntry {
 interface Props {
   onChange: (draft: ChecklistDraft) => void
   onSelect?: () => void
+  initialDraft?: ChecklistDraft | null
 }
 
-export function ChecklistTab({ onChange, onSelect }: Props) {
+export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
   const counter = useRef(0)
 
   const [tabs, setTabs] = useState<TabEntry[]>([])
@@ -50,6 +51,35 @@ export function ChecklistTab({ onChange, onSelect }: Props) {
           originalName: t.name,
           originalContent: t.content,
         }))
+        // When editing, pre-select the matching tab (or create a custom one)
+        if (initialDraft) {
+          const match = entries.find((e) => e.savedName === initialDraft.name)
+          if (match) {
+            setTabs(entries)
+            setActiveKey(match.key)
+            setEditorName(match.savedName)
+            setEditorContent(match.savedContent)
+            onChange({ name: match.savedName, content: match.savedContent })
+          } else {
+            const customKey = 'edit-custom'
+            const customTab: TabEntry = {
+              key: customKey,
+              savedName: initialDraft.name,
+              savedContent: initialDraft.content,
+              originalName: initialDraft.name,
+              originalContent: initialDraft.content,
+            }
+            const allEntries = [...entries, customTab]
+            setTabs(allEntries)
+            setActiveKey(customKey)
+            setEditorName(initialDraft.name)
+            setEditorContent(initialDraft.content)
+            onChange({ name: initialDraft.name, content: initialDraft.content })
+          }
+          setLoading(false)
+          return
+        }
+
         setTabs(entries)
         setLoading(false)
 
@@ -67,6 +97,34 @@ export function ChecklistTab({ onChange, onSelect }: Props) {
         setLoading(false)
       })
   }, [])
+
+  // When the component stays mounted across modal opens (keepMounted on Modal),
+  // respond to initialDraft changes to select the right tab for editing.
+  useEffect(() => {
+    if (loading || !initialDraft) return
+    const match = tabs.find((t) => t.savedName === initialDraft.name)
+    if (match) {
+      if (match.key !== activeKey) loadTab(match.key)
+    } else {
+      const key = 'edit-custom'
+      const customTab: TabEntry = {
+        key,
+        savedName: initialDraft.name,
+        savedContent: initialDraft.content,
+        originalName: initialDraft.name,
+        originalContent: initialDraft.content,
+      }
+      setTabs((prev) => {
+        const idx = prev.findIndex((t) => t.key === 'edit-custom')
+        return idx >= 0 ? prev.map((t) => t.key === 'edit-custom' ? customTab : t) : [...prev, customTab]
+      })
+      setActiveKey(key)
+      setEditorName(initialDraft.name)
+      setEditorContent(initialDraft.content)
+      onChange({ name: initialDraft.name, content: initialDraft.content })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDraft?.name, initialDraft?.content])
 
   function loadTab(key: string, entries = tabs) {
     const tab = entries.find((t) => t.key === key)
