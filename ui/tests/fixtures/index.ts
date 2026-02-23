@@ -6,6 +6,10 @@ import type {
   BatchIssueStatusResponse,
   QCStatus,
 } from '../../src/api/issues'
+import type { Assignee } from '../../src/api/assignees'
+import type { Checklist } from '../../src/api/checklists'
+import type { FileTreeResponse } from '../../src/api/files'
+import type { CreateIssueResponse } from '../../src/api/create'
 
 export const defaultRepoInfo: RepoInfo = {
   owner: 'test-owner',
@@ -122,3 +126,57 @@ export const partialBatchResponse: BatchIssueStatusResponse = {
   results: [partialStatus1, partialStatus2],
   errors: [{ issue_number: 52, kind: 'fetch_failed', error: 'not found' }],
 }
+
+// ── Create tab fixtures ───────────────────────────────────────────────────────
+
+export const defaultAssignees: Assignee[] = [
+  { login: 'reviewer1', name: 'Reviewer One' },
+]
+
+export const defaultChecklists: Checklist[] = [
+  { name: 'Code Review', content: '- [ ] Review logic\n- [ ] Check tests' },
+  { name: 'Custom', content: '' },
+]
+
+export const rootFileTree: FileTreeResponse = {
+  path: '',
+  entries: [{ name: 'src', kind: 'directory' }],
+}
+
+export const srcFileTree: FileTreeResponse = {
+  path: 'src',
+  entries: [
+    { name: 'main.rs', kind: 'file' },
+    { name: 'lib.rs', kind: 'file' },
+    { name: 'utils.rs', kind: 'file' },
+    { name: 'external.rs', kind: 'file' },
+  ],
+}
+
+// Issues used by rel-file picker (src/utils.rs is intentionally absent → hasIssues=false)
+export const libIssue = makeIssue({ number: 10, title: 'src/lib.rs' })
+export const externalIssue = makeIssue({ number: 11, title: 'src/external.rs' })
+
+export const createdMilestone: Milestone = {
+  number: 100,
+  title: 'My Milestone',
+  state: 'open',
+  description: null,
+  open_issues: 0,
+  closed_issues: 0,
+}
+
+export const createIssueResponses: CreateIssueResponse[] = [
+  {
+    issue_url: 'https://github.com/test-owner/test-repo/issues/201',
+    issue_number: 201,
+    blocking_created: [],
+    blocking_errors: [],
+  },
+  {
+    issue_url: 'https://github.com/test-owner/test-repo/issues/202',
+    issue_number: 202,
+    blocking_created: [],
+    blocking_errors: [],
+  },
+]
