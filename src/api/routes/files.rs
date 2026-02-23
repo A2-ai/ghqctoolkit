@@ -37,20 +37,18 @@ pub async fn list_tree<G: GitProvider + 'static>(
     let git_info = state.git_info().clone();
     let path_for_task = path.clone();
 
-    let entries = tokio::task::spawn_blocking(move || {
-        git_info.list_tree_entries(&path_for_task)
-    })
-    .await
-    .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))?
-    .map_err(|e| match e {
-        GitFileOpsError::DirectoryNotFound(p) => {
-            ApiError::NotFound(format!("Directory not found: {}", p))
-        }
-        GitFileOpsError::NotADirectory(p) => {
-            ApiError::BadRequest(format!("Not a directory: {}", p))
-        }
-        other => ApiError::Internal(other.to_string()),
-    })?;
+    let entries = tokio::task::spawn_blocking(move || git_info.list_tree_entries(&path_for_task))
+        .await
+        .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))?
+        .map_err(|e| match e {
+            GitFileOpsError::DirectoryNotFound(p) => {
+                ApiError::NotFound(format!("Directory not found: {}", p))
+            }
+            GitFileOpsError::NotADirectory(p) => {
+                ApiError::BadRequest(format!("Not a directory: {}", p))
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?;
 
     let response = FileTreeResponse {
         path,

@@ -1,7 +1,9 @@
 //! Axum server setup and router assembly.
 
 use crate::GitProvider;
-use crate::api::routes::{comments, configuration, files, health, issues, milestones, preview, status};
+use crate::api::routes::{
+    comments, configuration, files, health, issues, milestones, preview, status,
+};
 use crate::api::state::AppState;
 use axum::{
     Router,

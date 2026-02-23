@@ -105,9 +105,14 @@ impl From<octocrab::models::issues::Issue> for Issue {
             updated_at: issue.updated_at,
             closed_at: issue.closed_at,
             created_by: issue.user.login.clone(),
-            branch: issue.body.as_deref().and_then(parse_branch_from_body_simple),
+            branch: issue
+                .body
+                .as_deref()
+                .and_then(parse_branch_from_body_simple),
             checklist_name: issue.body.as_deref().and_then(parse_checklist_name),
-            relevant_files: issue.body.as_deref()
+            relevant_files: issue
+                .body
+                .as_deref()
                 .map(parse_relevant_file_infos)
                 .unwrap_or_default(),
         }
@@ -566,7 +571,11 @@ fn parse_branch_from_body_simple(body: &str) -> Option<String> {
         return Some(line[a + 1..b].trim().to_string());
     }
     let plain = line.trim();
-    if plain.is_empty() { None } else { Some(plain.to_string()) }
+    if plain.is_empty() {
+        None
+    } else {
+        Some(plain.to_string())
+    }
 }
 
 /// Parse all entries from the "## Relevant Files" section.
@@ -575,22 +584,24 @@ fn parse_relevant_file_infos(body: &str) -> Vec<RelevantFileInfo> {
     use std::sync::LazyLock;
     static LINK: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap());
-    static BOLD: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
+    static BOLD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
 
     let rf_start = match body.find("## Relevant Files") {
         Some(p) => p,
         None => return vec![],
     };
     let section = &body[rf_start..];
-    let end = section[17..].find("\n## ").map(|p| p + 17).unwrap_or(section.len());
+    let end = section[17..]
+        .find("\n## ")
+        .map(|p| p + 17)
+        .unwrap_or(section.len());
     let section = &section[..end];
 
     let mut result = Vec::new();
 
     for (sub, kind) in [
         ("### Previous QC", RelevantFileKind::BlockingQc),
-        ("### Gating QC",   RelevantFileKind::BlockingQc),
+        ("### Gating QC", RelevantFileKind::BlockingQc),
         ("### Relevant QC", RelevantFileKind::RelevantQc),
         ("### Relevant File", RelevantFileKind::File),
     ] {

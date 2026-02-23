@@ -613,8 +613,7 @@ impl GitHubReader for GitInfo {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
 
-            let result: Result<serde_json::Value, _> =
-                octocrab.get("/user", None::<&()>).await;
+            let result: Result<serde_json::Value, _> = octocrab.get("/user", None::<&()>).await;
 
             match result {
                 Ok(data) => Ok(data

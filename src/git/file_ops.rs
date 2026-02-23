@@ -301,7 +301,9 @@ impl GitFileOps for GitInfo {
                 Some(file_str.as_ref().to_string())
             } else {
                 let prefix = format!("{}/", path);
-                file_str.strip_prefix(prefix.as_str()).map(|s| s.to_string())
+                file_str
+                    .strip_prefix(prefix.as_str())
+                    .map(|s| s.to_string())
             };
 
             if let Some(rest) = remainder {
@@ -323,11 +325,13 @@ impl GitFileOps for GitInfo {
         }
 
         let mut result: Vec<(String, bool)> = components.into_iter().collect();
-        result.sort_by(|(name_a, is_dir_a), (name_b, is_dir_b)| match (is_dir_a, is_dir_b) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => name_a.cmp(name_b),
-        });
+        result.sort_by(
+            |(name_a, is_dir_a), (name_b, is_dir_b)| match (is_dir_a, is_dir_b) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => name_a.cmp(name_b),
+            },
+        );
 
         Ok(result)
     }
