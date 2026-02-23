@@ -17,9 +17,10 @@ interface TabEntry {
 
 interface Props {
   onChange: (draft: ChecklistDraft) => void
+  onSelect?: () => void
 }
 
-export function ChecklistTab({ onChange }: Props) {
+export function ChecklistTab({ onChange, onSelect }: Props) {
   const counter = useRef(0)
 
   const [tabs, setTabs] = useState<TabEntry[]>([])
@@ -118,6 +119,7 @@ export function ChecklistTab({ onChange }: Props) {
       loadTab(key, next)
       return next
     })
+    onSelect?.()
   }
 
   if (loading) return <Loader size="sm" />
@@ -132,7 +134,7 @@ export function ChecklistTab({ onChange }: Props) {
           return (
             <button
               key={tab.key}
-              onClick={() => loadTab(tab.key)}
+              onClick={() => { loadTab(tab.key); onSelect?.() }}
               style={{
                 textAlign: 'left',
                 padding: '6px 10px',

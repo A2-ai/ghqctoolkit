@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Group, Modal, Tabs } from '@mantine/core'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Group, Modal, Tabs } from '@mantine/core'
 import { FileTreeBrowser } from './FileTreeBrowser'
 import { IssuePreviewCard } from './IssuePreviewCard'
 import { ChecklistTab } from './ChecklistTab'
@@ -7,17 +7,36 @@ import type { ChecklistDraft } from './ChecklistTab'
 import { useRepoInfo } from '~/api/repo'
 import { useIssuesForMilestone } from '~/api/issues'
 
+export interface QueuedItem {
+  file: string
+  checklistName: string
+  checklistContent: string
+  branch: string | null
+  createdBy: string | null
+}
+
 interface Props {
   opened: boolean
   onClose: () => void
   milestoneNumber: number | null
+  onQueue: (item: QueuedItem) => void
 }
 
-export function CreateIssueModal({ opened, onClose, milestoneNumber }: Props) {
+export function CreateIssueModal({ opened, onClose, milestoneNumber, onQueue }: Props) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '', content: '' })
+  const [checklistSelected, setChecklistSelected] = useState(false)
   const { data: repoInfo } = useRepoInfo()
   const { data: milestoneIssues = [] } = useIssuesForMilestone(milestoneNumber)
+
+  // Reset state each time the modal opens
+  useEffect(() => {
+    if (opened) {
+      setSelectedFile(null)
+      setChecklistSelected(false)
+      setChecklistDraft({ name: '', content: '' })
+    }
+  }, [opened])
 
   // Issue titles ARE the file path (e.g. "scripts/file_b.R"); build a set for O(1) lookup
   const claimedFiles = useMemo<Set<string>>(
@@ -51,7 +70,10 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber }: Props) {
               />
             </Tabs.Panel>
             <Tabs.Panel value="checklist">
-              <ChecklistTab onChange={setChecklistDraft} />
+              <ChecklistTab
+                onChange={setChecklistDraft}
+                onSelect={() => setChecklistSelected(true)}
+              />
             </Tabs.Panel>
             <Tabs.Panel value="relevant">{null}</Tabs.Panel>
             <Tabs.Panel value="reviewers">{null}</Tabs.Panel>
@@ -65,6 +87,24 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber }: Props) {
               checklistName={checklistDraft.name || null}
             />
           </div>
+        </Group>
+
+        <Group justify="flex-end" pt="sm">
+          <Button
+            disabled={!selectedFile || (!checklistSelected && !(checklistDraft.name.trim() && checklistDraft.content.trim()))}
+            onClick={() => {
+              onQueue({
+                file: selectedFile!,
+                checklistName: checklistDraft.name,
+                checklistContent: checklistDraft.content,
+                branch: repoInfo?.branch ?? null,
+                createdBy: repoInfo?.current_user ?? null,
+              })
+              onClose()
+            }}
+          >
+            Queue
+          </Button>
         </Group>
       </Tabs>
     </Modal>

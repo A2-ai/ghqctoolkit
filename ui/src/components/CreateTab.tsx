@@ -6,6 +6,8 @@ import { ResizableSidebar } from './ResizableSidebar'
 import { ExistingIssueCard } from './ExistingIssueCard'
 import { AddFileCard } from './AddFileCard'
 import { CreateIssueModal } from './CreateIssueModal'
+import type { QueuedItem } from './CreateIssueModal'
+import { QueuedIssueCard } from './QueuedIssueCard'
 
 type MilestoneMode = 'select' | 'new'
 
@@ -15,6 +17,7 @@ export function CreateTab() {
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [queuedItems, setQueuedItems] = useState<QueuedItem[]>([])
   const { data: milestones = [], isLoading } = useMilestones()
   const { data: milestoneIssues = [], isLoading: issuesLoading } =
     useIssuesForMilestone(mode === 'select' ? selectedMilestone : null)
@@ -117,6 +120,7 @@ export function CreateTab() {
         opened={modalOpen}
         onClose={() => setModalOpen(false)}
         milestoneNumber={selectedMilestone}
+        onQueue={(item) => setQueuedItems((prev) => [...prev, item])}
       />
 
       {/* Right main panel */}
@@ -134,6 +138,9 @@ export function CreateTab() {
                 onClick={() => setModalOpen(true)}
                 disabled={mode === 'select' && selectedMilestone === null}
               />
+              {queuedItems.map((item, i) => (
+                <QueuedIssueCard key={i} item={item} />
+              ))}
               {mode === 'select' && milestoneIssues.map(issue => (
                 <ExistingIssueCard key={issue.number} issue={issue} />
               ))}
