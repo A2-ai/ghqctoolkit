@@ -60,7 +60,7 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
     >
       {dirty && (
         <Tooltip label="This file has uncommitted local changes" withArrow position="top">
-          <span style={{ position: 'absolute', top: 0, right: 0, color: '#c92a2a', display: 'flex', lineHeight: 1 }}>
+          <span data-testid="dirty-indicator" style={{ position: 'absolute', top: 0, right: 0, color: '#c92a2a', display: 'flex', lineHeight: 1 }}>
             <IconAsterisk size={16} stroke={3} />
           </span>
         </Tooltip>

@@ -221,7 +221,7 @@ function SelectedMilestoneCard({
           )}
           {isPartial && errorLines && (
             <Tooltip label={errorLines} withArrow multiline>
-              <span style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+              <span data-testid="partial-warning" style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                 <IconAlertTriangle size={14} />
                 {statusInfo.statusErrorCount}
               </span>
