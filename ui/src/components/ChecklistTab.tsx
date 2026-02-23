@@ -243,6 +243,19 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
           <Textarea
             value={editorContent}
             onChange={(e) => handleContentChange(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Tab') {
+                e.preventDefault()
+                const el = e.currentTarget
+                const start = el.selectionStart
+                const end = el.selectionEnd
+                const next = editorContent.slice(0, start) + '  ' + editorContent.slice(end)
+                handleContentChange(next)
+                requestAnimationFrame(() => {
+                  el.selectionStart = el.selectionEnd = start + 2
+                })
+              }
+            }}
             autosize
             minRows={8}
             maxRows={14}
