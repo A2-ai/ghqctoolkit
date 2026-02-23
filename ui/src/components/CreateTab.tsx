@@ -12,6 +12,8 @@ import type { QueuedItem } from './CreateIssueModal'
 import { QueuedIssueCard } from './QueuedIssueCard'
 import { CreateResultModal } from './CreateResultModal'
 import type { CreateOutcome } from './CreateResultModal'
+import { BatchRelevantFilesModal } from './BatchRelevantFilesModal'
+import type { RelevantFileDraft } from './CreateIssueModal'
 
 type MilestoneMode = 'select' | 'new'
 
@@ -26,6 +28,7 @@ export function CreateTab() {
   const [isCreating, setIsCreating] = useState(false)
   const [createOutcome, setCreateOutcome] = useState<CreateOutcome | null>(null)
   const [resultOpen, setResultOpen] = useState(false)
+  const [batchOpen, setBatchOpen] = useState(false)
   const queryClient = useQueryClient()
   const { data: milestones = [], isLoading } = useMilestones()
   const { data: milestoneIssues = [], isLoading: issuesLoading } =
@@ -65,6 +68,14 @@ export function CreateTab() {
     return undefined
   }
   const blockReason = createBlockReason()
+
+  function handleBatchApply(indices: number[], draft: RelevantFileDraft) {
+    setQueuedItems(prev => prev.map((item, i) => {
+      if (!indices.includes(i)) return item
+      if (item.relevantFiles.some(rf => rf.file === draft.file)) return item
+      return { ...item, relevantFiles: [...item.relevantFiles, draft] }
+    }))
+  }
 
   async function handleCreate() {
     setIsCreating(true)
@@ -195,7 +206,18 @@ export function CreateTab() {
               </Text>
             </>
           )}
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Tooltip label={queuedItems.length === 0 ? 'Queue at least one issue' : ''} withArrow disabled={queuedItems.length > 0} multiline maw={220}>
+              <Button
+                fullWidth
+                size="sm"
+                variant="default"
+                disabled={queuedItems.length === 0}
+                onClick={() => setBatchOpen(true)}
+              >
+                Batch Relevant Files
+              </Button>
+            </Tooltip>
             <Tooltip label={blockReason ?? ''} withArrow disabled={!blockReason} multiline maw={220}>
               <Button
                 fullWidth
@@ -210,6 +232,13 @@ export function CreateTab() {
           </div>
         </Stack>
       </ResizableSidebar>
+
+      <BatchRelevantFilesModal
+        opened={batchOpen}
+        onClose={() => setBatchOpen(false)}
+        queuedItems={queuedItems}
+        onApply={handleBatchApply}
+      />
 
       <CreateResultModal
         opened={resultOpen}

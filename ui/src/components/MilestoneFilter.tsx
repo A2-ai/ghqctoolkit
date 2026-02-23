@@ -96,7 +96,7 @@ export function MilestoneFilter({ selected, onSelect, includeClosedIssues, onInc
             {!isLoading && !isError && filtered.length === 0 && (
               <Combobox.Empty>No milestones found</Combobox.Empty>
             )}
-            {filtered.map((m) => (
+            {[...filtered].reverse().map((m) => (
               <Combobox.Option key={m.number} value={String(m.number)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Text size="sm">{m.title}</Text>
