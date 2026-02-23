@@ -11,6 +11,7 @@ export interface RepoInfo {
   git_status: GitStatus
   git_status_detail: string
   dirty_files: string[]
+  current_user: string | null
 }
 
 async function fetchRepoInfo(): Promise<RepoInfo> {

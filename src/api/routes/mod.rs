@@ -2,6 +2,7 @@
 
 pub mod comments;
 pub mod configuration;
+pub mod files;
 pub mod health;
 pub mod issues;
 pub mod milestones;

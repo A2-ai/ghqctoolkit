@@ -60,6 +60,12 @@ pub trait GitHubReader {
         &self,
         issue_number: u64,
     ) -> impl Future<Output = Result<Vec<Issue>, GitHubApiError>> + Send;
+
+    /// Get the login of the currently authenticated GitHub user.
+    /// Returns `Ok(None)` when unauthenticated or the request fails.
+    fn get_current_user(
+        &self,
+    ) -> impl Future<Output = Result<Option<String>, GitHubApiError>> + Send;
 }
 
 impl GitHubReader for GitInfo {
@@ -594,6 +600,32 @@ impl GitHubReader for GitInfo {
                 issue_number
             );
             Ok(all_blocked_issues)
+        }
+    }
+
+    fn get_current_user(
+        &self,
+    ) -> impl Future<Output = Result<Option<String>, GitHubApiError>> + Send {
+        let base_url = self.base_url.clone();
+        let auth_token = self.auth_token.clone();
+
+        async move {
+            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+                .map_err(GitHubApiError::ClientCreation)?;
+
+            let result: Result<serde_json::Value, _> =
+                octocrab.get("/user", None::<&()>).await;
+
+            match result {
+                Ok(data) => Ok(data
+                    .get("login")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())),
+                Err(e) => {
+                    log::debug!("Could not fetch current user (unauthenticated?): {}", e);
+                    Ok(None)
+                }
+            }
         }
     }
 }

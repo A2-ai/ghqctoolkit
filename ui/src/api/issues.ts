@@ -1,4 +1,12 @@
-import { useQueries } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
+
+export type RelevantFileKind = 'blocking_qc' | 'relevant_qc' | 'file'
+
+export interface RelevantFileInfo {
+  file_name: string
+  kind: RelevantFileKind
+  issue_url: string | null
+}
 
 export interface Issue {
   number: number
@@ -11,6 +19,10 @@ export interface Issue {
   created_at: string
   updated_at: string
   closed_at: string | null
+  created_by: string
+  branch: string | null
+  checklist_name: string | null
+  relevant_files: RelevantFileInfo[]
 }
 
 export interface IssueCommit {
@@ -224,4 +236,12 @@ export function useMilestoneIssues(milestoneNumbers: number[], includeClosedIssu
     isLoadingStatuses: statusQueries.some((q) => q.isPending && q.fetchStatus !== 'idle'),
     isError: milestoneQueries.some((q) => q.isError) || statusQueries.some((q) => q.isError),
   }
+}
+
+export function useIssuesForMilestone(milestoneNumber: number | null) {
+  return useQuery({
+    queryKey: ['milestones', milestoneNumber, 'issues'],
+    queryFn: () => fetchMilestoneIssues(milestoneNumber!),
+    enabled: milestoneNumber !== null,
+  })
 }

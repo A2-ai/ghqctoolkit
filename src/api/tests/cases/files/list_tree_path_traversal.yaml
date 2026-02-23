@@ -1,0 +1,17 @@
+name: "GET /api/files/tree - path traversal rejected"
+description: "Returns 400 when the path contains .. segments"
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/files/tree"
+  query:
+    path: "../etc"
+
+response:
+  status: 400
+  body:
+    match_type: partial
+    fields:
+      error: "Invalid path segment: '..'"

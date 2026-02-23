@@ -1048,6 +1048,13 @@ mod tests {
         > + Send {
             async move { Err(GitHubApiError::NoApi) }
         }
+
+        fn get_current_user(
+            &self,
+        ) -> impl std::future::Future<Output = Result<Option<String>, GitHubApiError>> + Send
+        {
+            async move { Ok(None) }
+        }
     }
 
     fn load_issue(issue_file: &str) -> octocrab::models::issues::Issue {

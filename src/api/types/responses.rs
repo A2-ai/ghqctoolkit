@@ -46,6 +46,27 @@ impl From<octocrab::models::Milestone> for Milestone {
     }
 }
 
+/// Kind of a relevant file entry in an issue body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelevantFileKind {
+    /// Gating QC or Previous QC — must be approved before this issue
+    BlockingQc,
+    /// Relevant QC — informational only
+    RelevantQc,
+    /// Plain file with no associated issue
+    File,
+}
+
+/// A single entry from the "## Relevant Files" section of an issue body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelevantFileInfo {
+    pub file_name: String,
+    pub kind: RelevantFileKind,
+    /// GitHub issue URL — present for BlockingQc and RelevantQc kinds, None for File
+    pub issue_url: Option<String>,
+}
+
 /// Issue information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
@@ -59,6 +80,10 @@ pub struct Issue {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
+    pub created_by: String,
+    pub branch: Option<String>,
+    pub checklist_name: Option<String>,
+    pub relevant_files: Vec<RelevantFileInfo>,
 }
 
 impl From<octocrab::models::issues::Issue> for Issue {
@@ -79,6 +104,12 @@ impl From<octocrab::models::issues::Issue> for Issue {
             created_at: issue.created_at,
             updated_at: issue.updated_at,
             closed_at: issue.closed_at,
+            created_by: issue.user.login.clone(),
+            branch: issue.body.as_deref().and_then(parse_branch_from_body_simple),
+            checklist_name: issue.body.as_deref().and_then(parse_checklist_name),
+            relevant_files: issue.body.as_deref()
+                .map(parse_relevant_file_infos)
+                .unwrap_or_default(),
         }
     }
 }
@@ -493,6 +524,106 @@ pub struct RepoInfoResponse {
     pub git_status: GitStatusEnum,
     pub git_status_detail: String,
     pub dirty_files: Vec<String>,
+    pub current_user: Option<String>,
+}
+
+/// Kind of a file tree entry.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TreeEntryKind {
+    File,
+    Directory,
+}
+
+/// A single entry in a file tree listing.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TreeEntry {
+    pub name: String,
+    pub kind: TreeEntryKind,
+}
+
+/// Response for a file tree listing at a given path.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileTreeResponse {
+    pub path: String,
+    pub entries: Vec<TreeEntry>,
+}
+
+/// Extract the checklist name from the first h1 heading (e.g. "# Code Review").
+fn parse_checklist_name(body: &str) -> Option<String> {
+    body.lines()
+        .find(|l| l.starts_with("# ") && !l.starts_with("## "))
+        .map(|l| l[2..].trim().to_string())
+}
+
+/// Minimal branch parser — handles plain text and markdown links.
+fn parse_branch_from_body_simple(body: &str) -> Option<String> {
+    let pattern = "git branch: ";
+    let start = body.find(pattern)?;
+    let line = body[start + pattern.len()..].lines().next()?;
+    // strip markdown/html links to just the link text
+    if let (Some(a), Some(b)) = (line.find('['), line.find("](")) {
+        return Some(line[a + 1..b].trim().to_string());
+    }
+    let plain = line.trim();
+    if plain.is_empty() { None } else { Some(plain.to_string()) }
+}
+
+/// Parse all entries from the "## Relevant Files" section.
+fn parse_relevant_file_infos(body: &str) -> Vec<RelevantFileInfo> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static LINK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap());
+    static BOLD: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
+
+    let rf_start = match body.find("## Relevant Files") {
+        Some(p) => p,
+        None => return vec![],
+    };
+    let section = &body[rf_start..];
+    let end = section[17..].find("\n## ").map(|p| p + 17).unwrap_or(section.len());
+    let section = &section[..end];
+
+    let mut result = Vec::new();
+
+    for (sub, kind) in [
+        ("### Previous QC", RelevantFileKind::BlockingQc),
+        ("### Gating QC",   RelevantFileKind::BlockingQc),
+        ("### Relevant QC", RelevantFileKind::RelevantQc),
+        ("### Relevant File", RelevantFileKind::File),
+    ] {
+        let sub_start = match section.find(sub) {
+            Some(p) => p,
+            None => continue,
+        };
+        let sub_section = &section[sub_start..];
+        let sub_end = sub_section[sub.len()..]
+            .find("\n### ")
+            .map(|p| p + sub.len())
+            .unwrap_or(sub_section.len());
+        let sub_section = &sub_section[..sub_end];
+
+        if kind == RelevantFileKind::File {
+            for cap in BOLD.captures_iter(sub_section) {
+                result.push(RelevantFileInfo {
+                    file_name: cap[1].to_string(),
+                    kind: RelevantFileKind::File,
+                    issue_url: None,
+                });
+            }
+        } else {
+            for cap in LINK.captures_iter(sub_section) {
+                result.push(RelevantFileInfo {
+                    file_name: cap[1].to_string(),
+                    kind: kind.clone(),
+                    issue_url: Some(cap[2].to_string()),
+                });
+            }
+        }
+    }
+    result
 }
 
 impl RepoInfoResponse {
@@ -501,6 +632,10 @@ impl RepoInfoResponse {
     ) -> Result<Self, ApiError> {
         let owner = git_info.owner().to_string();
         let repo = git_info.repo().to_string();
+
+        // Async GitHub call — non-fatal, falls back to None
+        let current_user = git_info.get_current_user().await.ok().flatten();
+
         let git_info = git_info.clone();
 
         // Perform blocking git operations in a blocking task
@@ -537,6 +672,7 @@ impl RepoInfoResponse {
             git_status: git_status_enum,
             git_status_detail,
             dirty_files,
+            current_user,
         })
     }
 }

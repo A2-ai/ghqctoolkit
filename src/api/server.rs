@@ -1,7 +1,7 @@
 //! Axum server setup and router assembly.
 
 use crate::GitProvider;
-use crate::api::routes::{comments, configuration, health, issues, milestones, status};
+use crate::api::routes::{comments, configuration, files, health, issues, milestones, status};
 use crate::api::state::AppState;
 use axum::{
     Router,
@@ -51,6 +51,8 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
             post(comments::unapprove_issue),
         )
         .route("/api/issues/{number}/review", post(comments::review_issue))
+        // Files
+        .route("/api/files/tree", get(files::list_tree))
         // Supporting Data
         .route("/api/assignees", get(status::list_assignees))
         .route("/api/repo", get(status::repo_info))
