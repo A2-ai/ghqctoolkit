@@ -7,17 +7,21 @@ interface Props {
   onEdit?: () => void
   onRemove?: () => void
   conflictReason?: string
+  dirty?: boolean
 }
 
-export function QueuedIssueCard({ item, onEdit, onRemove, conflictReason }: Props) {
+export function QueuedIssueCard({ item, onEdit, onRemove, conflictReason, dirty }: Props) {
   const conflict = !!conflictReason
-  const baseBorder = conflict ? '#e03131' : '#22b8cf'
-  const baseBg = conflict ? '#fff5f5' : '#f0fafb'
-  const hoverBorder = conflict ? '#c92a2a' : '#0c8599'
-  const hoverBg = conflict ? '#ffe3e3' : '#e0f5f8'
+  const baseBorder = conflict ? '#e03131' : dirty ? '#f59f00' : '#22b8cf'
+  const baseBg    = conflict ? '#fff5f5' : dirty ? '#fff9db' : '#f0fafb'
+  const hoverBorder = conflict ? '#c92a2a' : dirty ? '#e67700' : '#0c8599'
+  const hoverBg     = conflict ? '#ffe3e3' : dirty ? '#fff3bf' : '#e0f5f8'
+
+  const tooltipLabel = conflictReason ?? (dirty ? 'This file has uncommitted local changes' : '')
+  const tooltipColor = conflict ? 'red' : 'yellow'
 
   return (
-    <Tooltip label={conflictReason ?? ''} withArrow color="red" disabled={!conflict} multiline maw={260}>
+    <Tooltip label={tooltipLabel} withArrow color={tooltipColor} disabled={!conflict && !dirty} multiline maw={260}>
     <Stack
       gap={5}
       onClick={onEdit}

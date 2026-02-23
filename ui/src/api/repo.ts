@@ -31,6 +31,7 @@ export function useRepoInfo() {
   return useQuery({
     queryKey: ['repo'],
     queryFn: fetchRepoInfo,
-    refetchInterval: 45_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   })
 }

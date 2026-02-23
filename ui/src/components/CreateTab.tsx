@@ -3,6 +3,7 @@ import { Button, Select, Text, TextInput, Textarea, Stack, Loader, Tooltip } fro
 import { useQueryClient } from '@tanstack/react-query'
 import { useMilestones } from '~/api/milestones'
 import { useIssuesForMilestone } from '~/api/issues'
+import { useRepoInfo } from '~/api/repo'
 import { postCreateMilestone, postCreateIssues, toCreateIssueRequest } from '~/api/create'
 import { ResizableSidebar } from './ResizableSidebar'
 import { ExistingIssueCard } from './ExistingIssueCard'
@@ -30,6 +31,17 @@ export function CreateTab() {
   const [resultOpen, setResultOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const queryClient = useQueryClient()
+  const { data: repoInfo } = useRepoInfo()
+  const dirtyFiles = new Set(repoInfo?.dirty_files ?? [])
+  const gitStatus = repoInfo?.git_status ?? 'clean'
+  const createWarning: { color: string; tooltip: string } | null = (() => {
+    if (gitStatus === 'diverged') return { color: 'red',    tooltip: 'Resolve divergence before creating issues' }
+    if (gitStatus === 'ahead')    return { color: 'orange', tooltip: 'Push to synchronize with remote before creating issues' }
+    if (gitStatus === 'behind')   return { color: 'orange', tooltip: 'Pull to synchronize with remote before creating issues' }
+    if (queuedItems.some(item => dirtyFiles.has(item.file)))
+      return { color: 'yellow', tooltip: 'Recommended to be in a clean git state before creating issues' }
+    return null
+  })()
   const { data: milestones = [], isLoading } = useMilestones()
   const { data: milestoneIssues = [], isLoading: issuesLoading } =
     useIssuesForMilestone(mode === 'select' ? selectedMilestone : null)
@@ -218,10 +230,18 @@ export function CreateTab() {
                 Batch Relevant Files
               </Button>
             </Tooltip>
-            <Tooltip label={blockReason ?? ''} withArrow disabled={!blockReason} multiline maw={220}>
+            <Tooltip
+              label={blockReason ?? createWarning?.tooltip ?? ''}
+              withArrow
+              color={!blockReason && createWarning ? createWarning.color : undefined}
+              disabled={!blockReason && !createWarning}
+              multiline
+              maw={220}
+            >
               <Button
                 fullWidth
                 size="sm"
+                color={canCreate ? (createWarning?.color ?? '#2f9e44') : undefined}
                 disabled={!canCreate || isCreating}
                 loading={isCreating}
                 onClick={handleCreate}
@@ -288,6 +308,7 @@ export function CreateTab() {
                   onEdit={() => { setEditingIndex(i); setModalOpen(true) }}
                   onRemove={() => setQueuedItems((prev) => prev.filter((_, idx) => idx !== i))}
                   conflictReason={getConflictReason(item)}
+                  dirty={dirtyFiles.has(item.file)}
                 />
               ))}
               {mode === 'select' && milestoneIssues.map(issue => (
