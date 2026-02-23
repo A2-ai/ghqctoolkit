@@ -154,6 +154,7 @@ export const srcFileTree: FileTreeResponse = {
 }
 
 // Issues used by rel-file picker (src/utils.rs is intentionally absent → hasIssues=false)
+export const mainRsIssue = makeIssue({ number: 5, title: 'src/main.rs' })
 export const libIssue = makeIssue({ number: 10, title: 'src/lib.rs' })
 export const externalIssue = makeIssue({ number: 11, title: 'src/external.rs' })
 
