@@ -4,7 +4,8 @@ export interface Checklist {
 }
 
 export async function fetchChecklists(): Promise<Checklist[]> {
-  const res = await fetch('/api/configuration/checklists')
+  const res = await fetch('/api/configuration')
   if (!res.ok) throw new Error(`Failed to fetch checklists: ${res.status}`)
-  return res.json()
+  const data = await res.json()
+  return data.checklists
 }

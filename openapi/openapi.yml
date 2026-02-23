@@ -244,7 +244,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ApproveRequest'
       responses:
-        '200':
+        '201':
           description: Issue approved
           content:
             application/json:
@@ -271,7 +271,7 @@ paths:
             schema:
               $ref: '#/components/schemas/UnapproveRequest'
       responses:
-        '200':
+        '201':
           description: Issue unapproved
           content:
             application/json:
@@ -363,33 +363,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/RepoInfo'
 
-  /configuration/checklists:
+  /configuration:
     get:
-      summary: List available checklists
-      operationId: listChecklists
+      summary: Get configuration status and checklists
+      operationId: getConfiguration
       tags: [configuration]
       responses:
         '200':
-          description: List of checklists
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Checklist'
-
-  /configuration/status:
-    get:
-      summary: Get configuration status
-      operationId: getConfigurationStatus
-      tags: [configuration]
-      responses:
-        '200':
-          description: Configuration status
+          description: Configuration status with full checklist content
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigurationStatusResponse'
+    post:
+      summary: Clone and register a configuration repository
+      operationId: setupConfiguration
+      tags: [configuration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupConfigurationRequest'
+      responses:
+        '200':
+          description: Configuration repository cloned and loaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationStatusResponse'
+        '409':
+          description: Configuration repository already set up
+        '500':
+          description: Clone or configuration load failed
 
 components:
   schemas:
@@ -840,7 +846,7 @@ components:
           items:
             $ref: '#/components/schemas/BlockingQCError'
         closed:
-          type: bool
+          type: boolean
           description: "Whether the issue was successfully closed"
 
     UnapproveRequest:
@@ -856,7 +862,7 @@ components:
         unapproval_url:
           type: string
         opened:
-          type: bool
+          type: boolean
           description: "Whether the issue was successfully re-opened"
     BlockedIssueStatus:
       type: object
@@ -923,31 +929,30 @@ components:
           description: Human-readable git status description
         dirty_files:
           type: array
-          items: string
+          items:
+            type: string
           description: List of files which have non-committed changes
-            
+        current_user:
+          type: string
+          nullable: true
+          description: GitHub login of the authenticated user, if available
+
 
     Checklist:
-      type: object
-    properties:
-        name:
-          type: string
-        content:
-          type: string
-
-    ChecklistInfo:
       type: object
       properties:
         name:
           type: string
-        item_count:
-          type: integer
+        content:
+          type: string
 
     ConfigurationStatusResponse:
       type: object
       properties:
         directory:
           type: string
+        exists:
+          type: boolean
         git_repository:
           $ref: '#/components/schemas/ConfigGitRepository'
         options:
@@ -955,7 +960,11 @@ components:
         checklists:
           type: array
           items:
-            $ref: '#/components/schemas/ChecklistInfo'
+            $ref: '#/components/schemas/Checklist'
+        config_repo_env:
+          type: string
+          nullable: true
+          description: Value of GHQC_CONFIG_REPO env var, if set
 
     ConfigGitRepository:
       type: object
@@ -972,6 +981,15 @@ components:
           type: array
           items:
             type: string
+
+    SetupConfigurationRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: Git URL of the configuration repository to clone
+          example: "https://github.com/owner/config-repo"
 
     ConfigurationOptions:
       type: object

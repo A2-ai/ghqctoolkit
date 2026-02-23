@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 
 export type GitStatus = 'clean' | 'ahead' | 'behind' | 'diverged'
 
@@ -27,11 +28,39 @@ async function fetchRepoInfo(): Promise<RepoInfo> {
   return res.json()
 }
 
+const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const
+const INACTIVE_MS = 5 * 60 * 1000
+
+let lastActivityAt = Date.now()
+
 export function useRepoInfo() {
-  return useQuery({
+  const queryClient = useQueryClient()
+
+  const query = useQuery({
     queryKey: ['repo'],
     queryFn: fetchRepoInfo,
-    refetchInterval: 30_000,
+    refetchInterval: () => (Date.now() - lastActivityAt < INACTIVE_MS ? 30_000 : false),
     refetchOnWindowFocus: true,
   })
+
+  useEffect(() => {
+    function onActivity() {
+      const wasInactive = Date.now() - lastActivityAt >= INACTIVE_MS
+      lastActivityAt = Date.now()
+      if (wasInactive) {
+        queryClient.invalidateQueries({ queryKey: ['repo'] })
+      }
+    }
+
+    for (const event of ACTIVITY_EVENTS) {
+      window.addEventListener(event, onActivity, { passive: true })
+    }
+    return () => {
+      for (const event of ACTIVITY_EVENTS) {
+        window.removeEventListener(event, onActivity)
+      }
+    }
+  }, [queryClient])
+
+  return query
 }
