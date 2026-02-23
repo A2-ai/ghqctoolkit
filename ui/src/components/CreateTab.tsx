@@ -1,13 +1,17 @@
 import { useState } from 'react'
 import { Button, Select, Text, TextInput, Textarea, Stack, Loader, Tooltip } from '@mantine/core'
+import { useQueryClient } from '@tanstack/react-query'
 import { useMilestones } from '~/api/milestones'
 import { useIssuesForMilestone } from '~/api/issues'
+import { postCreateMilestone, postCreateIssues, toCreateIssueRequest } from '~/api/create'
 import { ResizableSidebar } from './ResizableSidebar'
 import { ExistingIssueCard } from './ExistingIssueCard'
 import { AddFileCard } from './AddFileCard'
 import { CreateIssueModal } from './CreateIssueModal'
 import type { QueuedItem } from './CreateIssueModal'
 import { QueuedIssueCard } from './QueuedIssueCard'
+import { CreateResultModal } from './CreateResultModal'
+import type { CreateOutcome } from './CreateResultModal'
 
 type MilestoneMode = 'select' | 'new'
 
@@ -19,6 +23,10 @@ export function CreateTab() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [queuedItems, setQueuedItems] = useState<QueuedItem[]>([])
+  const [isCreating, setIsCreating] = useState(false)
+  const [createOutcome, setCreateOutcome] = useState<CreateOutcome | null>(null)
+  const [resultOpen, setResultOpen] = useState(false)
+  const queryClient = useQueryClient()
   const { data: milestones = [], isLoading } = useMilestones()
   const { data: milestoneIssues = [], isLoading: issuesLoading } =
     useIssuesForMilestone(mode === 'select' ? selectedMilestone : null)
@@ -58,6 +66,48 @@ export function CreateTab() {
   }
   const blockReason = createBlockReason()
 
+  async function handleCreate() {
+    setIsCreating(true)
+    try {
+      let milestoneNumber: number
+      let resolvedTitle: string
+      let milestoneCreated = false
+      if (mode === 'select') {
+        milestoneNumber = selectedMilestone!
+        resolvedTitle = milestoneTitle ?? ''
+      } else {
+        const ms = await postCreateMilestone(newName.trim(), newDesc.trim() || null)
+        milestoneNumber = ms.number
+        resolvedTitle = ms.title
+        milestoneCreated = true
+        queryClient.invalidateQueries({ queryKey: ['milestones'] })
+      }
+
+      const batchFiles = new Set(queuedItems.map((q) => q.file))
+      const requests = queuedItems.map((item) => toCreateIssueRequest(item, batchFiles))
+      const responses = await postCreateIssues(milestoneNumber, requests)
+
+      queryClient.invalidateQueries({ queryKey: ['milestones', milestoneNumber, 'issues'] })
+
+      setCreateOutcome({
+        ok: true,
+        milestoneNumber,
+        milestoneTitle: resolvedTitle,
+        milestoneCreated,
+        created: responses.map((r, i) => ({
+          file: queuedItems[i].file,
+          issueUrl: r.issue_url,
+          issueNumber: r.issue_number,
+        })),
+      })
+    } catch (err) {
+      setCreateOutcome({ ok: false, error: (err as Error).message })
+    } finally {
+      setIsCreating(false)
+      setResultOpen(true)
+    }
+  }
+
   return (
     <div style={{ display: 'flex', height: '100%' }}>
       <ResizableSidebar>
@@ -95,7 +145,7 @@ export function CreateTab() {
               placeholder={isLoading ? 'Loading…' : 'Select a milestone'}
               size="xs"
               disabled={isLoading}
-              data={openMilestones.map(ms => ({
+              data={[...openMilestones].reverse().map(ms => ({
                 value: String(ms.number),
                 label: ms.title,
                 openIssues: ms.open_issues,
@@ -150,14 +200,30 @@ export function CreateTab() {
               <Button
                 fullWidth
                 size="sm"
-                disabled={!canCreate}
+                disabled={!canCreate || isCreating}
+                loading={isCreating}
+                onClick={handleCreate}
               >
-                Create QC Issues
+                {`Create ${queuedItems.length} QC Issue${queuedItems.length !== 1 ? 's' : ''}`}
               </Button>
             </Tooltip>
           </div>
         </Stack>
       </ResizableSidebar>
+
+      <CreateResultModal
+        opened={resultOpen}
+        outcome={createOutcome}
+        onClose={() => setResultOpen(false)}
+        onDone={(milestoneNumber) => {
+          setResultOpen(false)
+          setQueuedItems([])
+          setMode('select')
+          setSelectedMilestone(milestoneNumber)
+          setNewName('')
+          setNewDesc('')
+        }}
+      />
 
       <CreateIssueModal
         opened={modalOpen}

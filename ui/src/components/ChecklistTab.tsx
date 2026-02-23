@@ -157,9 +157,9 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
   function handleReset() {
     const tab = tabs.find((t) => t.key === activeKey)
     if (!tab) return
-    setEditorName(tab.originalName)
-    setEditorContent(tab.originalContent)
-    onChange({ name: tab.originalName, content: tab.originalContent })
+    setEditorName(tab.savedName)
+    setEditorContent(tab.savedContent)
+    onChange({ name: tab.savedName, content: tab.savedContent })
   }
 
   function handleNew() {

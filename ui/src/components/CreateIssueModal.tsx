@@ -49,12 +49,14 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const [checklistSelected, setChecklistSelected] = useState(false)
   const [assignees, setAssignees] = useState<string[]>([])
   const [relevantFiles, setRelevantFiles] = useState<RelevantFileDraft[]>([])
+  const [activeTab, setActiveTab] = useState<string | null>('file')
   const { data: repoInfo } = useRepoInfo()
   const { data: milestoneIssues = [] } = useIssuesForMilestone(milestoneNumber)
 
   // Populate state each time the modal opens (fresh create or edit)
   useEffect(() => {
     if (opened) {
+      setActiveTab('file')
       if (editItem) {
         setSelectedFile(editItem.file)
         setChecklistDraft({ name: editItem.checklistName, content: editItem.checklistContent })
@@ -89,7 +91,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       centered
       keepMounted
     >
-      <Tabs defaultValue="file" keepMounted={false}>
+      <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
         <Tabs.List grow>
           <Tabs.Tab value="file">Select a File</Tabs.Tab>
           <Tabs.Tab value="checklist">Select a Checklist</Tabs.Tab>
