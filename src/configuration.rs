@@ -341,7 +341,7 @@ fn format_header(name: &str, level: usize) -> String {
 pub async fn setup_configuration(
     config_dir: impl AsRef<Path>,
     git: Url,
-    git_action: impl GitCli,
+    git_action: &(impl GitCli + ?Sized),
 ) -> Result<(), ConfigurationError> {
     let config_dir = config_dir.as_ref();
 

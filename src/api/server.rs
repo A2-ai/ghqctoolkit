@@ -70,6 +70,10 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
             "/api/configuration/status",
             get(configuration::get_configuration_status),
         )
+        .route(
+            "/api/configuration/setup",
+            post(configuration::setup_configuration_repo),
+        )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

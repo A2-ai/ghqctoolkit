@@ -33,6 +33,20 @@ pub enum GitCliError {
     InvalidRemoteUrl(String),
 }
 
+impl<T: GitCli + ?Sized> GitCli for &T {
+    fn clone(&self, url: Url, path: &Path) -> Result<(), GitCliError> {
+        (**self).clone(url, path)
+    }
+
+    fn remote(&self, path: &Path) -> Result<Url, GitCliError> {
+        (**self).remote(path)
+    }
+
+    fn fetch(&self, path: &Path) -> Result<bool, GitCliError> {
+        (**self).fetch(path)
+    }
+}
+
 /// Default implementation of GitCli using the git command line
 #[derive(Debug, Clone, Default)]
 pub struct GitCommand;

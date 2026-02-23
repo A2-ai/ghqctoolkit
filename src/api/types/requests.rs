@@ -183,3 +183,8 @@ pub struct ReviewRequest {
 fn default_true() -> bool {
     true
 }
+
+#[derive(serde::Deserialize)]
+pub struct SetupConfigurationRequest {
+    pub url: String,
+}

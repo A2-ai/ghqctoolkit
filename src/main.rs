@@ -967,7 +967,7 @@ async fn main() -> Result<()> {
 
                 let git_action = GitCommand;
 
-                setup_configuration(&config_dir, url, git_action)
+                setup_configuration(&config_dir, url, &git_action)
                     .await
                     .map_err(|e| anyhow!("{e}"))?;
 
@@ -1006,7 +1006,8 @@ async fn main() -> Result<()> {
             let git_info = GitInfo::from_path(&cli.directory, &env)?;
             let disk_cache = DiskCache::from_git_info(&git_info).ok();
 
-            let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache);
+            let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache)
+                .with_creator(|path| GitInfo::from_path(path, &StdEnvProvider).ok());
             let app = create_router(state);
 
             let addr = format!("0.0.0.0:{}", port);
@@ -1035,7 +1036,8 @@ async fn main() -> Result<()> {
             let git_info = GitInfo::from_path(&cli.directory, &env)?;
             let disk_cache = DiskCache::from_git_info(&git_info).ok();
 
-            let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache);
+            let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache)
+                .with_creator(|path| GitInfo::from_path(path, &StdEnvProvider).ok());
             ghqctoolkit::ui::run(port, state).await?;
         }
     }
