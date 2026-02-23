@@ -1,9 +1,11 @@
-import { AppShell, Menu, Text } from '@mantine/core'
+import { AppShell, Menu, Text, Tooltip } from '@mantine/core'
+import { ConfigurationTab } from './ConfigurationTab'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { SwimLanes } from './SwimLanes'
 import { CreateTab } from './CreateTab'
 import { useRepoInfo } from '~/api/repo'
+import { useConfigurationStatus } from '~/api/configuration'
 import { RepoStatus } from './RepoStatus'
 import { MilestoneFilter } from './MilestoneFilter'
 import { useMilestoneIssues } from '~/api/issues'
@@ -14,6 +16,7 @@ import {
   IconArchive,
   IconSettings,
   IconDots,
+  IconInfoCircle,
 } from '@tabler/icons-react'
 
 type Tab = 'status' | 'create' | 'record' | 'archive' | 'configuration'
@@ -34,34 +37,57 @@ function TabButton({
   active,
   onClick,
   showIcon,
+  warning,
 }: {
   tab: typeof TABS[number]
   active: boolean
   onClick: () => void
   showIcon: boolean
+  warning?: string
 }) {
+  const color = active ? '#2f7a3b' : '#333'
   return (
-    <button
-      onClick={onClick}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 5,
-        padding: '0 12px',
-        height: '100%',
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        borderBottom: active ? '2px solid #2f7a3b' : '2px solid transparent',
-        fontWeight: active ? 600 : 400,
-        fontSize: 14,
-        color: active ? '#2f7a3b' : '#333',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {showIcon && tab.icon}
-      {tab.label}
-    </button>
+    <Tooltip label={warning ?? ''} disabled={!warning}>
+      <button
+        onClick={onClick}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '0 12px',
+          height: '100%',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          borderBottom: active ? `2px solid ${color}` : '2px solid transparent',
+          fontWeight: active ? 600 : 400,
+          fontSize: 14,
+          color,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {warning ? (
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            backgroundColor: '#fff3bf',
+            border: '1px solid #f59f00',
+            borderRadius: 10,
+            padding: '1px 7px',
+          }}>
+            {showIcon && tab.icon}
+            {tab.label}
+            <IconInfoCircle size={12} color="#e67700" style={{ flexShrink: 0 }} />
+          </span>
+        ) : (
+          <>
+            {showIcon && tab.icon}
+            {tab.label}
+          </>
+        )}
+      </button>
+    </Tooltip>
   )
 }
 
@@ -69,12 +95,15 @@ function MoreMenu({
   tabs,
   activeTab,
   setActiveTab,
+  warnings,
 }: {
   tabs: typeof TABS
   activeTab: Tab
   setActiveTab: (t: Tab) => void
+  warnings: Partial<Record<Tab, string>>
 }) {
   const anyActive = tabs.some((t) => t.id === activeTab)
+  const menuColor = anyActive ? '#2f7a3b' : '#333'
   return (
     <Menu shadow="md">
       <Menu.Target>
@@ -88,10 +117,10 @@ function MoreMenu({
             background: 'none',
             border: 'none',
             cursor: 'pointer',
-            borderBottom: anyActive ? '2px solid #2f7a3b' : '2px solid transparent',
+            borderBottom: anyActive ? `2px solid ${menuColor}` : '2px solid transparent',
             fontWeight: anyActive ? 600 : 400,
             fontSize: 14,
-            color: anyActive ? '#2f7a3b' : '#333',
+            color: menuColor,
             whiteSpace: 'nowrap',
           }}
         >
@@ -100,15 +129,29 @@ function MoreMenu({
         </button>
       </Menu.Target>
       <Menu.Dropdown>
-        {tabs.map((tab) => (
-          <Menu.Item
-            key={tab.id}
-            leftSection={tab.icon}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </Menu.Item>
-        ))}
+        {tabs.map((tab) => {
+          const warn = warnings[tab.id]
+          return (
+            <Tooltip key={tab.id} label={warn ?? ''} disabled={!warn} position="right">
+              <Menu.Item leftSection={tab.icon} onClick={() => setActiveTab(tab.id)}>
+                {warn ? (
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    backgroundColor: '#fff3bf',
+                    border: '1px solid #f59f00',
+                    borderRadius: 10,
+                    padding: '1px 7px',
+                  }}>
+                    {tab.label}
+                    <IconInfoCircle size={12} color="#e67700" style={{ flexShrink: 0 }} />
+                  </span>
+                ) : tab.label}
+              </Menu.Item>
+            </Tooltip>
+          )
+        })}
       </Menu.Dropdown>
     </Menu>
   )
@@ -133,6 +176,7 @@ function PlaceholderTab({ tab }: { tab: string }) {
 
 export function AppLayout() {
   const { data: repoData, isError: repoIsError, error: repoError } = useRepoInfo()
+  const { data: configStatus } = useConfigurationStatus()
   const [selectedMilestones, setSelectedMilestones] = useState<number[]>([])
   const [includeClosedIssues, setIncludeClosedIssues] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('status')
@@ -182,6 +226,11 @@ export function AppLayout() {
 
   const showIcons = headerWidth > 820
   const showMore = headerWidth < 600
+
+  const tabWarnings: Partial<Record<Tab, string>> = {}
+  if (configStatus && !configStatus.exists && configStatus.git_repository === null) {
+    tabWarnings.configuration = 'Configuration repository is not set up'
+  }
 
   const { statuses: rawStatuses, milestoneStatusByMilestone } = useMilestoneIssues(
     selectedMilestones,
@@ -284,6 +333,7 @@ export function AppLayout() {
                   active={activeTab === tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   showIcon={showIcons}
+                  warning={tabWarnings[tab.id]}
                 />
               ))}
 
@@ -292,6 +342,7 @@ export function AppLayout() {
                   tabs={MORE_TABS}
                   activeTab={activeTab}
                   setActiveTab={setActiveTab}
+                  warnings={tabWarnings}
                 />
               ) : (
                 MORE_TABS.map((tab) => (
@@ -301,6 +352,7 @@ export function AppLayout() {
                     active={activeTab === tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     showIcon={showIcons}
+                    warning={tabWarnings[tab.id]}
                   />
                 ))
               )}
@@ -357,7 +409,8 @@ export function AppLayout() {
             <CreateTab />
           </div>
         )}
-        {activeTab !== 'status' && activeTab !== 'create' && (
+        {activeTab === 'configuration' && <ConfigurationTab />}
+        {activeTab !== 'status' && activeTab !== 'create' && activeTab !== 'configuration' && (
           <PlaceholderTab tab={activeTab} />
         )}
       </AppShell.Main>

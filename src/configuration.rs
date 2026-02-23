@@ -412,9 +412,9 @@ pub fn determine_config_dir(
         .map_err(|e| ConfigurationError::ConfigDir(e.to_string()))?;
     let config_dir = strategy.data_dir().join("ghqc");
 
-    match env.var("GHQC_CONFIG_HOME") {
+    match env.var("GHQC_CONFIG_REPO") {
         Ok(url_str) => {
-            log::debug!("GHQC_CONFIG_HOME found: {url_str}");
+            log::debug!("GHQC_CONFIG_REPO found: {url_str}");
             let url = gix::url::parse(url_str.as_str().into()).map_err(|error| {
                 ConfigurationError::InvalidGitUrl {
                     url: url_str,
@@ -443,7 +443,7 @@ pub fn determine_config_dir(
             // No env var set, use default path with no URL
             let dir = config_dir.join("config");
             log::debug!(
-                "GHQC_CONFIG_HOME not set. Using default dir: {}",
+                "GHQC_CONFIG_REPO not set. Using default dir: {}",
                 dir.display()
             );
             Ok(dir)
@@ -601,7 +601,7 @@ mod tests {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
-            .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
+            .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
             .times(1)
             .returning(|_| Ok("https://github.com/owner/my-config-repo.git".to_string()));
 
@@ -617,7 +617,7 @@ mod tests {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
-            .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
+            .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
             .times(1)
             .returning(|_| Err(std::env::VarError::NotPresent));
 
@@ -633,7 +633,7 @@ mod tests {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
-            .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
+            .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
             .times(1)
             .returning(|_| Ok("://invalid-url-scheme".to_string()));
 
@@ -650,7 +650,7 @@ mod tests {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
-            .with(mockall::predicate::eq("GHQC_CONFIG_HOME"))
+            .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
             .times(1)
             .returning(|_| Ok("https://github.com".to_string()));
 

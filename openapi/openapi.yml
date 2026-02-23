@@ -363,35 +363,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/RepoInfo'
 
-  /configuration/checklists:
+  /configuration:
     get:
-      summary: List available checklists
-      operationId: listChecklists
+      summary: Get configuration status and checklists
+      operationId: getConfiguration
       tags: [configuration]
       responses:
         '200':
-          description: List of checklists
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Checklist'
-
-  /configuration/status:
-    get:
-      summary: Get configuration status
-      operationId: getConfigurationStatus
-      tags: [configuration]
-      responses:
-        '200':
-          description: Configuration status
+          description: Configuration status with full checklist content
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigurationStatusResponse'
-
-  /configuration/setup:
     post:
       summary: Clone and register a configuration repository
       operationId: setupConfiguration
@@ -963,19 +946,13 @@ components:
         content:
           type: string
 
-    ChecklistInfo:
-      type: object
-      properties:
-        name:
-          type: string
-        item_count:
-          type: integer
-
     ConfigurationStatusResponse:
       type: object
       properties:
         directory:
           type: string
+        exists:
+          type: boolean
         git_repository:
           $ref: '#/components/schemas/ConfigGitRepository'
         options:
@@ -983,7 +960,11 @@ components:
         checklists:
           type: array
           items:
-            $ref: '#/components/schemas/ChecklistInfo'
+            $ref: '#/components/schemas/Checklist'
+        config_repo_env:
+          type: string
+          nullable: true
+          description: Value of GHQC_CONFIG_REPO env var, if set
 
     ConfigGitRepository:
       type: object

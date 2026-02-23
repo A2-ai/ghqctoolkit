@@ -63,16 +63,9 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .route("/api/repo", get(status::repo_info))
         // Configuration
         .route(
-            "/api/configuration/checklists",
-            get(configuration::list_checklists),
-        )
-        .route(
-            "/api/configuration/status",
-            get(configuration::get_configuration_status),
-        )
-        .route(
-            "/api/configuration/setup",
-            post(configuration::setup_configuration_repo),
+            "/api/configuration",
+            get(configuration::get_configuration)
+                .post(configuration::setup_configuration_repo),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http())

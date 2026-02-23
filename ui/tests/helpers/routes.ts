@@ -30,7 +30,7 @@ export interface RouteOverrides {
   issueStatuses: BatchIssueStatusResponse
   /** HTTP status code for /api/issues/status (default 200) */
   issueStatusesCode: number
-  /** Checklists returned by /api/configuration/checklists */
+  /** Checklists returned by GET /api/configuration */
   checklists: Checklist[]
   /** Assignees returned by /api/assignees */
   assignees: Assignee[]
@@ -116,11 +116,26 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
-  await page.route('/api/configuration/checklists', (route) => {
+  await page.route('/api/configuration', (route, request) => {
+    const configStatus = {
+      directory: '/mock/config',
+      exists: true,
+      git_repository: null,
+      options: {
+        prepended_checklist_note: null,
+        checklist_display_name: 'Code Review',
+        logo_path: 'logo.png',
+        logo_found: false,
+        checklist_directory: 'checklists/',
+        record_path: 'records/',
+      },
+      checklists: cfg.checklists,
+      config_repo_env: null,
+    }
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(cfg.checklists),
+      body: JSON.stringify(configStatus),
     })
   })
 

@@ -952,13 +952,13 @@ async fn main() -> Result<()> {
                     gix::url::parse(git.as_str().into())
                         .map_err(|e| anyhow!("provided url {git} is not a valid git url: {e}"))?
                 } else {
-                    if let Ok(git) = std::env::var("GHQC_CONFIG_HOME") {
+                    if let Ok(git) = std::env::var("GHQC_CONFIG_REPO") {
                         gix::url::parse(git.as_str().into()).map_err(|e| {
-                            anyhow!("GHQC_CONFIG_HOME value {git} is not a valid git url: {e}")
+                            anyhow!("GHQC_CONFIG_REPO value {git} is not a valid git url: {e}")
                         })?
                     } else {
                         bail!(
-                            "Must provide `git` flag or have the environment variable `GHQC_CONFIG_HOME` set"
+                            "Must provide `git` flag or have the environment variable `GHQC_CONFIG_REPO` set"
                         );
                     }
                 };

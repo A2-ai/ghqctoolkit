@@ -451,13 +451,6 @@ impl From<crate::Checklist> for Checklist {
     }
 }
 
-/// Checklist summary information (name and item count).
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChecklistInfo {
-    pub name: String,
-    pub item_count: u32,
-}
-
 /// Git repository configuration status.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigGitRepository {
@@ -514,9 +507,11 @@ pub struct ConfigurationOptions {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigurationStatusResponse {
     pub directory: String,
+    pub exists: bool,
     pub git_repository: Option<ConfigGitRepository>,
     pub options: ConfigurationOptions,
-    pub checklists: Vec<ChecklistInfo>,
+    pub checklists: Vec<Checklist>,
+    pub config_repo_env: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

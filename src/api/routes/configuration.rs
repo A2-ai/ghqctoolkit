@@ -3,44 +3,25 @@
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{
-    Checklist, ChecklistInfo, ConfigGitRepository, ConfigurationOptions,
-    ConfigurationStatusResponse, SetupConfigurationRequest,
+    Checklist, ConfigGitRepository, ConfigurationOptions, ConfigurationStatusResponse,
+    SetupConfigurationRequest,
 };
 use crate::configuration::ConfigurationError;
 use crate::{Configuration, GitProvider, setup_configuration};
 use axum::{Json, extract::State};
 
-/// GET /api/configuration/checklists
-pub async fn list_checklists<G: GitProvider + 'static>(
-    State(state): State<AppState<G>>,
-) -> Result<Json<Vec<Checklist>>, ApiError> {
-    let response: Vec<Checklist> = state
-        .configuration
-        .read()
-        .await
-        .checklists
-        .values()
-        .cloned()
-        .map(Into::into)
-        .collect();
-
-    Ok(Json(response))
-}
-
-/// GET /api/configuration/status
-pub async fn get_configuration_status<G: GitProvider + 'static>(
+/// GET /api/configuration
+pub async fn get_configuration<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
 ) -> Result<Json<ConfigurationStatusResponse>, ApiError> {
     let config = state.configuration.read().await;
     let options = &config.options;
 
-    let checklists: Vec<ChecklistInfo> = config
+    let checklists: Vec<Checklist> = config
         .checklists
         .values()
-        .map(|c| ChecklistInfo {
-            name: c.name.clone(),
-            item_count: c.content.matches("- [ ]").count() as u32,
-        })
+        .cloned()
+        .map(Into::into)
         .collect();
 
     let git_repository = match state.configuration_git_info().await {
@@ -48,8 +29,11 @@ pub async fn get_configuration_status<G: GitProvider + 'static>(
         None => None,
     };
 
+    let config_repo_env = std::env::var("GHQC_CONFIG_REPO").ok();
+
     let response = ConfigurationStatusResponse {
         directory: config.path.to_string_lossy().to_string(),
+        exists: config.path.exists(),
         git_repository,
         options: ConfigurationOptions {
             prepended_checklist_note: options.prepended_checklist_note.clone(),
@@ -60,11 +44,13 @@ pub async fn get_configuration_status<G: GitProvider + 'static>(
             record_path: options.record_path.to_string_lossy().to_string(),
         },
         checklists,
+        config_repo_env,
     };
 
     Ok(Json(response))
 }
 
+/// POST /api/configuration
 pub async fn setup_configuration_repo<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Json(body): Json<SetupConfigurationRequest>,
@@ -107,7 +93,7 @@ pub async fn setup_configuration_repo<G: GitProvider + 'static>(
 
     state.update_config_git_info(&config_dir).await;
 
-    get_configuration_status(State(state)).await
+    get_configuration(State(state)).await
 }
 
 #[cfg(test)]
@@ -127,7 +113,7 @@ mod tests {
         app.oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/configuration/setup")
+                .uri("/api/configuration")
                 .header("content-type", "application/json")
                 .body(Body::from(body))
                 .unwrap(),
