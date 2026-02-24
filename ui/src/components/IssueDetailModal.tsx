@@ -15,7 +15,7 @@ import {
   Textarea,
   Tooltip,
 } from '@mantine/core'
-import { IconX } from '@tabler/icons-react'
+import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { IssueStatusResponse, QCStatus } from '~/api/issues'
 import { fetchSingleIssueStatus, postComment } from '~/api/issues'
@@ -275,10 +275,17 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
         style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}
       >
         <Stack gap="xs">
-          <div style={{ textAlign: 'center' }}>
+          <div style={{ textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
             <Anchor href={issue.html_url} target="_blank" fw={700}>
               {issue.title}
             </Anchor>
+            {status.dirty && (
+              <Tooltip label="This file has uncommitted local changes" withArrow position="top">
+                <span data-testid="dirty-indicator" style={{ color: '#c92a2a', display: 'flex', lineHeight: 1 }}>
+                  <IconAsterisk size={14} stroke={3} />
+                </span>
+              </Tooltip>
+            )}
           </div>
           <Text size="sm"><b>Branch:</b> {branch}</Text>
           <Text size="sm"><b>Reviewers:</b> {issue.assignees.join(', ') || 'None'}</Text>

@@ -8,6 +8,9 @@ import {
   multiCommitStatus,
   notifOnNonFileIssue,
   notifOnNonFileStatus,
+  dirtyModalIssue,
+  dirtyModalStatus,
+  cleanModalStatus,
 } from '../fixtures/index'
 
 // ---------------------------------------------------------------------------
@@ -193,7 +196,28 @@ test('post comment shows success modal with GitHub link', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 14. Post comment failure: error modal shown with error message
+// 14. Dirty indicator shown in modal status card when issue is dirty
+// ---------------------------------------------------------------------------
+test('dirty asterisk shown in modal when issue is dirty', async ({ page }) => {
+  await setupAndOpenModal(page, dirtyModalIssue, dirtyModalStatus)
+
+  const notifyPanel = page.getByRole('tabpanel', { name: 'Notify' })
+  await notifyPanel.getByTestId('dirty-indicator').hover()
+  await expect(page.getByText('This file has uncommitted local changes')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 15. Dirty indicator not present in modal when issue is clean
+// ---------------------------------------------------------------------------
+test('dirty asterisk not shown in modal when issue is clean', async ({ page }) => {
+  await setupAndOpenModal(page, dirtyModalIssue, cleanModalStatus)
+
+  const notifyPanel = page.getByRole('tabpanel', { name: 'Notify' })
+  await expect(notifyPanel.getByTestId('dirty-indicator')).not.toBeAttached()
+})
+
+// ---------------------------------------------------------------------------
+// 16. Post comment failure: error modal shown with error message
 // ---------------------------------------------------------------------------
 test('post comment failure shows error modal', async ({ page }) => {
   await setupRoutes(page, {

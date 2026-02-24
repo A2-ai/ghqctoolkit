@@ -188,6 +188,19 @@ export const notifOnNonFileStatus: IssueStatusResponse = {
   blocking_qc_status: emptyBlockingQCStatus,
 }
 
+// Dirty modal issue — used to test the asterisk in the modal status card
+export const dirtyModalIssue = makeIssue({ number: 73, title: 'src/dirty-modal.rs' })
+export const dirtyModalStatus: IssueStatusResponse = {
+  ...singleCommitStatus,
+  issue: dirtyModalIssue,
+  dirty: true,
+}
+export const cleanModalStatus: IssueStatusResponse = {
+  ...singleCommitStatus,
+  issue: dirtyModalIssue,
+  dirty: false,
+}
+
 // ── Create tab fixtures ───────────────────────────────────────────────────────
 
 export const defaultAssignees: Assignee[] = [
