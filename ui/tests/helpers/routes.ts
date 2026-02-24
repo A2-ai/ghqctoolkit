@@ -45,6 +45,8 @@ export interface RouteOverrides {
   postCommentResponse: CommentResponse | null
   /** Response for POST /api/issues/:n/review; null → 500 error */
   postReviewResponse: CommentResponse | null
+  /** Response for POST /api/issues/:n/approve; null → 500 error */
+  postApproveResponse: { approval_url: string; skipped_unapproved: number[]; skipped_errors: unknown[]; closed: boolean } | null
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -65,6 +67,7 @@ const defaultOverrides: RouteOverrides = {
   createIssues: createIssueResponses,
   postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
   postReviewResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888' },
+  postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -197,6 +200,14 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
+  await page.route(/\/api\/preview\/\d+\/approve/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Approve preview</p>',
+    })
+  })
+
   await page.route(/\/api\/issues\/\d+\/comment/, (route, request) => {
     if (request.method() === 'POST') {
       if (cfg.postCommentResponse) {
@@ -204,6 +215,26 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify(cfg.postCommentResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/approve/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postApproveResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postApproveResponse),
         })
       } else {
         route.fulfill({

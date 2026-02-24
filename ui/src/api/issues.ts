@@ -101,6 +101,18 @@ export interface ReviewRequest {
   include_diff: boolean
 }
 
+export interface ApproveRequest {
+  commit: string
+  note: string | null
+}
+
+export interface ApprovalResponse {
+  approval_url: string
+  skipped_unapproved: number[]
+  skipped_errors: BlockingQCError[]
+  closed: boolean
+}
+
 export interface CommentResponse {
   comment_url: string
 }
@@ -168,6 +180,19 @@ export async function postReview(issueNumber: number, request: ReviewRequest): P
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to post review: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function postApprove(issueNumber: number, request: ApproveRequest): Promise<ApprovalResponse> {
+  const res = await fetch(`/api/issues/${issueNumber}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to approve: ${res.status}`)
   }
   return res.json()
 }

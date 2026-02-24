@@ -10,12 +10,12 @@ use serde::Deserialize;
 use std::{path::PathBuf, str::FromStr};
 
 use crate::api::state::AppState;
-use crate::api::types::{CreateIssueRequest, RelevantIssueClass, ReviewRequest};
+use crate::api::types::{ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest};
 use crate::configuration::Checklist;
 use crate::create::QCIssue;
 use crate::relevant_files::{RelevantFile, RelevantFileClass};
 use crate::{CommentBody, api::error::ApiError};
-use crate::{GitProvider, QCComment, QCReview, api::types::CreateCommentRequest};
+use crate::{GitProvider, QCApprove, QCComment, QCReview, api::types::CreateCommentRequest};
 
 #[derive(Deserialize)]
 pub struct FileContentQuery {
@@ -178,6 +178,32 @@ pub async fn preview_review<G: GitProvider + 'static>(
     };
 
     let markdown = review.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
+}
+
+/// POST /api/preview/{number}/approve
+///
+/// Generates the approval comment body as HTML without posting to GitHub.
+pub async fn preview_approve<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<ApproveRequest>,
+) -> Result<Html<String>, ApiError> {
+    let commit = ObjectId::from_str(&request.commit)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid commit format: {e}")))?;
+
+    let issue = state.git_info().get_issue(number).await?;
+
+    let approval = QCApprove {
+        file: PathBuf::from(&issue.title),
+        commit,
+        issue,
+        note: request.note,
+    };
+
+    let markdown = approval.generate_body(state.git_info());
     let html = markdown_to_html(&markdown);
 
     Ok(Html(html))

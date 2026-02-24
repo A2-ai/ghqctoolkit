@@ -68,6 +68,7 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .route("/api/preview/issue", post(preview::preview_issue))
         .route("/api/preview/{number}/comment", post(preview::preview_comment))
         .route("/api/preview/{number}/review", post(preview::preview_review))
+        .route("/api/preview/{number}/approve", post(preview::preview_approve))
         // Supporting Data
         .route("/api/assignees", get(status::list_assignees))
         .route("/api/repo", get(status::repo_info))
