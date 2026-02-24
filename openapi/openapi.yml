@@ -303,6 +303,50 @@ paths:
               schema:
                 $ref: '#/components/schemas/CommentResponse'
 
+  /preview/issue:
+    post:
+      summary: Preview issue body as HTML
+      operationId: previewIssue
+      tags: [issues]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIssueRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the issue
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/comment/:
+    post:
+      summary: Preview comment body as HTML
+      operationId: previewComment
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the comment
+          content:
+            text/html:
+              schema:
+                type: string
+
   /issues/{number}/blocked:
     get:
       summary: Get issues blocked by this issue

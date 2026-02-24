@@ -72,14 +72,30 @@ impl QCStatus {
             if !issue_thread.open {
                 Self::ApprovalRequired
             } else {
-                // Find the latest commit that affects the file
-                let latest_file_commit = commits.iter().find(|commit| commit.file_changed);
+                // Find the newest (lowest index) file-changing commit.
+                // Commits are stored newest-first, so lower index = more recent.
+                let latest_file_entry = commits
+                    .iter()
+                    .enumerate()
+                    .find(|(_, c)| c.file_changed);
 
-                match latest_file_commit {
-                    Some(latest_commit) => {
-                        if latest_commit.hash == issue_thread.latest_commit().hash {
-                            // Check if the latest commit has been reviewed
-                            if latest_commit
+                match latest_file_entry {
+                    Some((file_idx, latest_fc)) => {
+                        // Find the newest commit that carries any status.
+                        // A status commit "covers" the file change if it is at the same
+                        // position or newer (index ≤ file_idx).
+                        let latest_status_entry = commits
+                            .iter()
+                            .enumerate()
+                            .find(|(_, c)| !c.statuses.is_empty());
+
+                        let covered = latest_status_entry
+                            .map(|(si, _)| si <= file_idx)
+                            .unwrap_or(false);
+
+                        if covered {
+                            let status_commit = latest_status_entry.unwrap().1;
+                            if status_commit
                                 .statuses
                                 .contains(&crate::issue::CommitStatus::Reviewed)
                             {
@@ -88,7 +104,7 @@ impl QCStatus {
                                 Self::AwaitingReview
                             }
                         } else {
-                            Self::ChangesToComment(latest_commit.hash)
+                            Self::ChangesToComment(latest_fc.hash)
                         }
                     }
                     None => Self::InProgress,
@@ -578,6 +594,34 @@ mod tests {
                     ),
                     (make_statuses(&[CommitStatus::Notification]), true), // latest comment
                     (make_statuses(&[]), true), // new file changes, not commented or reviewed
+                ],
+                true,
+                "ChangesToComment",
+            ),
+            (
+                "I -> C_nofile: AwaitingReview (notification on non-file-changing commit after last file change)",
+                vec![
+                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change with initial
+                    (make_statuses(&[CommitStatus::Notification]), false), // newest: notification, no file change
+                ],
+                true,
+                "AwaitingReview",
+            ),
+            (
+                "I -> R_nofile: ChangeRequested (review on non-file-changing commit after last file change)",
+                vec![
+                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change
+                    (make_statuses(&[CommitStatus::Reviewed]), false), // newest: reviewed, no file change
+                ],
+                true,
+                "ChangeRequested",
+            ),
+            (
+                "I -> C_nofile -> nofile_nostatuses: ChangesToComment (uncommitted changes after notification-on-non-file-commit)",
+                vec![
+                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change
+                    (make_statuses(&[CommitStatus::Notification]), false), // middle: notification, no file change
+                    (make_statuses(&[]), true), // newest: new file change, no status
                 ],
                 true,
                 "ChangesToComment",

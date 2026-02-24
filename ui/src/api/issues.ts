@@ -53,10 +53,29 @@ export interface QCStatus {
   latest_commit: string
 }
 
+export interface BlockingQCItem {
+  issue_number: number
+  file_name: string
+}
+
+export interface BlockingQCItemWithStatus {
+  issue_number: number
+  file_name: string
+  status: string
+}
+
+export interface BlockingQCError {
+  issue_number: number
+  error: string
+}
+
 export interface BlockingQCStatus {
   total: number
   approved_count: number
   summary: string
+  approved: BlockingQCItem[]
+  not_approved: BlockingQCItemWithStatus[]
+  errors: BlockingQCError[]
 }
 
 export interface IssueStatusResponse {
@@ -66,7 +85,31 @@ export interface IssueStatusResponse {
   branch: string
   commits: IssueCommit[]
   checklist_summary: ChecklistSummary
-  blocking_qc_status?: BlockingQCStatus
+  blocking_qc_status: BlockingQCStatus
+}
+
+export interface CreateCommentRequest {
+  current_commit: string
+  previous_commit: string | null
+  note: string | null
+  include_diff: boolean
+}
+
+export interface CommentResponse {
+  comment_url: string
+}
+
+export async function postComment(issueNumber: number, request: CreateCommentRequest): Promise<CommentResponse> {
+  const res = await fetch(`/api/issues/${issueNumber}/comment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to post comment: ${res.status}`)
+  }
+  return res.json()
 }
 
 export type IssueStatusErrorKind = 'fetch_failed' | 'processing_failed'
@@ -108,6 +151,14 @@ async function fetchIssueStatuses(issueNumbers: number[]): Promise<BatchIssueSta
   const data = await res.json()
   if ('results' in data && 'errors' in data) return data as BatchIssueStatusResponse
   throw new Error(`Failed to fetch issue statuses: ${res.status}`)
+}
+
+export async function fetchSingleIssueStatus(issueNumber: number): Promise<IssueStatusResponse> {
+  const batch = await fetchIssueStatuses([issueNumber])
+  const result = batch.results.find((r) => r.issue.number === issueNumber)
+  if (result) return result
+  const err = batch.errors.find((e) => e.issue_number === issueNumber)
+  throw new Error(err?.error ?? `No status returned for issue ${issueNumber}`)
 }
 
 // Module-level tick batcher. All batcher.load() calls within a single synchronous

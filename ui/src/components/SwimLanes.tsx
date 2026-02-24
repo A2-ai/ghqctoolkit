@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Card, Stack, Text, Title } from '@mantine/core'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import type { IssueStatusResponse, QCStatus } from '~/api/issues'
 import { IssueCard } from './IssueCard'
+import { IssueDetailModal } from './IssueDetailModal'
 
 const LANES: { id: string; title: string; headerColor: string }[] = [
   { id: 'ready-for-review',    title: 'Ready for Review',    headerColor: '#dbeafe' },
@@ -44,6 +46,8 @@ function postApprovalFileCommit(s: IssueStatusResponse): string | undefined {
 }
 
 export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
+  const [selected, setSelected] = useState<IssueStatusResponse | null>(null)
+
   const byLane: Record<string, IssueStatusResponse[]> = Object.fromEntries(
     LANES.map((l) => [l.id, []])
   )
@@ -52,6 +56,7 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
   }
 
   return (
+    <>
     <DragDropContext onDragEnd={noop}>
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         {LANES.map((lane) => {
@@ -85,7 +90,11 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                                 withBorder
                                 mb={8}
                                 p={10}
-                                style={postApprovalFileCommit(s) ? { backgroundColor: '#ffedd5' } : undefined}
+                                onClick={() => setSelected(s)}
+                                style={{
+                                  cursor: 'pointer',
+                                  ...(postApprovalFileCommit(s) ? { backgroundColor: '#ffedd5' } : undefined),
+                                }}
                               >
                                 <IssueCard status={s} currentBranch={currentBranch} remoteCommit={remoteCommit} postApprovalCommit={postApprovalFileCommit(s)} />
                               </Card>
@@ -106,5 +115,7 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
         })}
       </div>
     </DragDropContext>
+    <IssueDetailModal status={selected} onClose={() => setSelected(null)} onStatusUpdate={setSelected} />
+    </>
   )
 }
