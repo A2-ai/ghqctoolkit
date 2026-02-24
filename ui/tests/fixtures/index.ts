@@ -188,6 +188,20 @@ export const notifOnNonFileStatus: IssueStatusResponse = {
   blocking_qc_status: emptyBlockingQCStatus,
 }
 
+// Approved modal issue — used to test the unapprove tab (defaults to 'unapprove' tab)
+export const approvedModalIssue = makeIssue({ number: 74, title: 'src/approved-modal.rs', branch: 'feature-branch' })
+export const approvedModalStatus: IssueStatusResponse = {
+  issue: approvedModalIssue,
+  qc_status: { status: 'approved', status_detail: 'Approved', approved_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+  dirty: false,
+  branch: 'feature-branch',
+  commits: [
+    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
+  ],
+  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+}
+
 // Dirty modal issue — used to test the asterisk in the modal status card
 export const dirtyModalIssue = makeIssue({ number: 73, title: 'src/dirty-modal.rs' })
 export const dirtyModalStatus: IssueStatusResponse = {

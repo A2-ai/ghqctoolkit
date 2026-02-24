@@ -113,6 +113,15 @@ export interface ApprovalResponse {
   closed: boolean
 }
 
+export interface UnapproveRequest {
+  reason: string
+}
+
+export interface UnapprovalResponse {
+  unapproval_url: string
+  opened: boolean
+}
+
 export interface CommentResponse {
   comment_url: string
 }
@@ -180,6 +189,19 @@ export async function postReview(issueNumber: number, request: ReviewRequest): P
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to post review: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function postUnapprove(issueNumber: number, request: UnapproveRequest): Promise<UnapprovalResponse> {
+  const res = await fetch(`/api/issues/${issueNumber}/unapprove`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to unapprove: ${res.status}`)
   }
   return res.json()
 }

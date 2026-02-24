@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ActionIcon,
+  Alert,
   Anchor,
   Badge,
   Button,
@@ -17,9 +18,9 @@ import {
 } from '@mantine/core'
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { ApproveRequest, IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
-import { fetchSingleIssueStatus, postApprove, postComment, postReview } from '~/api/issues'
-import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
+import type { ApproveRequest, IssueStatusResponse, QCStatus, ReviewRequest, UnapproveRequest } from '~/api/issues'
+import { fetchSingleIssueStatus, postApprove, postComment, postReview, postUnapprove } from '~/api/issues'
+import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview, fetchUnapprovePreview } from '~/api/preview'
 
 function wrapInGithubStyles(body: string): string {
   return `<!DOCTYPE html>
@@ -91,7 +92,7 @@ export function IssueDetailModal({ status, onClose, onStatusUpdate }: Props) {
       onClose={onClose}
       size="xl"
       withCloseButton={false}
-      styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }, content: { height: 610, display: 'flex', flexDirection: 'column' } }}
+      styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }, content: { minHeight: 560, display: 'flex', flexDirection: 'column' } }}
     >
       <ModalContent status={status} onClose={onClose} onStatusUpdate={onStatusUpdate} />
     </Modal>
@@ -128,17 +129,17 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
         </ActionIcon>
       </Group>
 
-      <Tabs.Panel value="notify" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Tabs.Panel value="notify" pt="md" px="md" pb="md" style={{ flex: 1, overflowY: 'auto' }}>
         <NotifyTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
-      <Tabs.Panel value="review" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Tabs.Panel value="review" pt="md" px="md" pb="md" style={{ flex: 1, overflowY: 'auto' }}>
         <ReviewTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
-      <Tabs.Panel value="approve" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Tabs.Panel value="approve" pt="md" px="md" pb="md" style={{ flex: 1, overflowY: 'auto' }}>
         <ApproveTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
-      <Tabs.Panel value="unapprove" pt="md" px="md" pb={0}>
-        <Text c="dimmed">Coming soon</Text>
+      <Tabs.Panel value="unapprove" pt="md" px="md" pb={0} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <UnapproveTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
     </Tabs>
   )
@@ -278,120 +279,112 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
   return (
     <>
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      <div style={{ flex: 1, overflowY: 'auto', paddingTop: 16, paddingLeft: 16, paddingRight: 16 }}>
-        <Stack gap="md">
-          <StatusCard status={status} />
+    <Stack gap="md">
+      <StatusCard status={status} />
 
-          {/* Commit range slider */}
-          {visibleCommits.length > 0 && (
-            <Stack gap="xs">
-              {/* Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text size="sm" fw={700}>Select Commits to Compare</Text>
-                <Checkbox
-                  label="Show all commits"
-                  checked={showAll}
-                  onChange={(e) => setShowAll(e.currentTarget.checked)}
+      {/* Commit range slider */}
+      {visibleCommits.length > 0 && (
+        <Stack gap="xs">
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text size="sm" fw={700}>Select Commits to Compare</Text>
+            <Checkbox
+              label="Show all commits"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.currentTarget.checked)}
+            />
+          </div>
+
+          {/* Dots row + two independent overlaid sliders */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
+            <div style={{ position: 'relative', height: 8 }}>
+              {visibleCommits.map((c, i) => {
+                const n = visibleCommits.length
+                const pct = n > 1 ? i / (n - 1) : 0.5
+                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                return (
+                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
+                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
+                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Slider A (in flow — renders track + marks) */}
+            <div style={{ position: 'relative' }}>
+              <Slider
+                min={0}
+                max={Math.max(0, visibleCommits.length - 1)}
+                step={1}
+                value={snapA}
+                onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
+                marks={visibleCommits.map((c, i) => ({
+                  value: i,
+                  label: (
+                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                      {c.hash.slice(0, 7)}
+                    </span>
+                  ),
+                }))}
+                label={null}
+                mb={40}
+                styles={{ bar: { display: 'none' } }}
+              />
+              {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
+                <Slider
+                  min={0}
+                  max={Math.max(0, visibleCommits.length - 1)}
+                  step={1}
+                  value={snapB}
+                  onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
+                  label={null}
+                  styles={{
+                    bar: { display: 'none' },
+                    root: { pointerEvents: 'none' },
+                    thumb: { pointerEvents: 'auto', zIndex: 3 },
+                    track: { backgroundColor: 'transparent' },
+                    mark: { display: 'none' },
+                    markLabel: { display: 'none' },
+                  }}
                 />
               </div>
+            </div>
+          </div>
 
-              {/* Dots row + two independent overlaid sliders */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
-                <div style={{ position: 'relative', height: 8 }}>
-                  {visibleCommits.map((c, i) => {
-                    const n = visibleCommits.length
-                    const pct = n > 1 ? i / (n - 1) : 0.5
-                    const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                    return (
-                      <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                        {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                          <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                        ))}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {/* Slider A (in flow — renders track + marks) */}
-                <div style={{ position: 'relative' }}>
-                  <Slider
-                    min={0}
-                    max={Math.max(0, visibleCommits.length - 1)}
-                    step={1}
-                    value={snapA}
-                    onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
-                    marks={visibleCommits.map((c, i) => ({
-                      value: i,
-                      label: (
-                        <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                          {c.hash.slice(0, 7)}
-                        </span>
-                      ),
-                    }))}
-                    label={null}
-                    mb={40}
-                    styles={{ bar: { display: 'none' } }}
-                  />
-                  {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
-                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
-                    <Slider
-                      min={0}
-                      max={Math.max(0, visibleCommits.length - 1)}
-                      step={1}
-                      value={snapB}
-                      onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
-                      label={null}
-                      styles={{
-                        bar: { display: 'none' },
-                        root: { pointerEvents: 'none' },
-                        thumb: { pointerEvents: 'auto', zIndex: 3 },
-                        track: { backgroundColor: 'transparent' },
-                        mark: { display: 'none' },
-                        markLabel: { display: 'none' },
-                      }}
-                    />
-                  </div>
-                </div>
+          {/* Legend */}
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+            {STATUS_ORDER.map((s) => (
+              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
               </div>
+            ))}
+          </div>
 
-              {/* Legend */}
-              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
-                {STATUS_ORDER.map((s) => (
-                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                    <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
-                  </div>
-                ))}
-              </div>
+          {/* From / To / Include diff */}
+          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+            {fromCommit && <CommitBlock label="From" commit={fromCommit} />}
+            {toCommit && <CommitBlock label="To" commit={toCommit} />}
+            <Tooltip
+              label="No changes between selected commits"
+              disabled={fileChangedInRange}
+              withArrow
+              position="right"
+            >
+              <span style={{ display: 'inline-flex' }}>
+                <Checkbox
+                  label="Include diff"
+                  checked={fileChangedInRange ? includeDiff : false}
+                  disabled={!fileChangedInRange}
+                  onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                />
+              </span>
+            </Tooltip>
+          </Stack>
 
-              {/* From / To / Include diff — left-aligned, matching status card width */}
-              <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-                {fromCommit && <CommitBlock label="From" commit={fromCommit} />}
-                {toCommit && <CommitBlock label="To" commit={toCommit} />}
-                <Tooltip
-                  label="No changes between selected commits"
-                  disabled={fileChangedInRange}
-                  withArrow
-                  position="right"
-                >
-                  <span style={{ display: 'inline-flex' }}>
-                    <Checkbox
-                      label="Include diff"
-                      checked={fileChangedInRange ? includeDiff : false}
-                      disabled={!fileChangedInRange}
-                      onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
-                    />
-                  </span>
-                </Tooltip>
-              </Stack>
-            </Stack>
-          )}
-        </Stack>
-      </div>
-
-      {visibleCommits.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--mantine-color-gray-3)', padding: '12px 16px' }}>
           <Textarea
             label="Comment"
             placeholder="Optional"
@@ -400,7 +393,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
             resize="vertical"
             minRows={3}
           />
-          <Group justify="flex-end" mt="sm">
+          <Group justify="flex-end">
             <Button
               variant="default"
               loading={previewLoading}
@@ -417,9 +410,9 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               Post
             </Button>
           </Group>
-        </div>
+        </Stack>
       )}
-    </div>
+    </Stack>
 
     {/* Comment preview */}
     <Modal
@@ -636,92 +629,84 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
   return (
     <>
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      <div style={{ flex: 1, overflowY: 'auto', paddingTop: 16, paddingLeft: 16, paddingRight: 16 }}>
-        <Stack gap="md">
-          <StatusCard status={status} />
-
-          {visibleCommits.length > 0 && (
-            <Stack gap="xs">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text size="sm" fw={700}>Select Commit</Text>
-                <Checkbox
-                  label="Show all commits"
-                  checked={showAll}
-                  onChange={(e) => setShowAll(e.currentTarget.checked)}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
-                <div style={{ position: 'relative', height: 8 }}>
-                  {visibleCommits.map((c, i) => {
-                    const n = visibleCommits.length
-                    const pct = n > 1 ? i / (n - 1) : 0.5
-                    const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                    return (
-                      <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                        {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                          <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                        ))}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                <Slider
-                  min={0}
-                  max={Math.max(0, visibleCommits.length - 1)}
-                  step={1}
-                  value={sliderIdx}
-                  onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-                  marks={visibleCommits.map((c, i) => ({
-                    value: i,
-                    label: (
-                      <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                        {c.hash.slice(0, 7)}
-                      </span>
-                    ),
-                  }))}
-                  label={null}
-                  mb={40}
-                  styles={{ bar: { display: 'none' } }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
-                {STATUS_ORDER.map((s) => (
-                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                    <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
-                  </div>
-                ))}
-              </div>
-
-              <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-                {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
-                <Tooltip
-                  label="No local changes for this file"
-                  disabled={status.dirty}
-                  withArrow
-                  position="right"
-                >
-                  <span style={{ display: 'inline-flex' }}>
-                    <Checkbox
-                      label="Include diff"
-                      checked={status.dirty ? includeDiff : false}
-                      disabled={!status.dirty}
-                      onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
-                    />
-                  </span>
-                </Tooltip>
-              </Stack>
-            </Stack>
-          )}
-        </Stack>
-      </div>
+    <Stack gap="md">
+      <StatusCard status={status} />
 
       {visibleCommits.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--mantine-color-gray-3)', padding: '12px 16px' }}>
+        <Stack gap="xs">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text size="sm" fw={700}>Select Commit</Text>
+            <Checkbox
+              label="Show all commits"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.currentTarget.checked)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
+            <div style={{ position: 'relative', height: 8 }}>
+              {visibleCommits.map((c, i) => {
+                const n = visibleCommits.length
+                const pct = n > 1 ? i / (n - 1) : 0.5
+                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                return (
+                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
+                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
+                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+
+            <Slider
+              min={0}
+              max={Math.max(0, visibleCommits.length - 1)}
+              step={1}
+              value={sliderIdx}
+              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+              marks={visibleCommits.map((c, i) => ({
+                value: i,
+                label: (
+                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                    {c.hash.slice(0, 7)}
+                  </span>
+                ),
+              }))}
+              label={null}
+              mb={40}
+              styles={{ bar: { display: 'none' } }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+            {STATUS_ORDER.map((s) => (
+              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
+              </div>
+            ))}
+          </div>
+
+          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+            {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
+            <Tooltip
+              label="No local changes for this file"
+              disabled={status.dirty}
+              withArrow
+              position="right"
+            >
+              <span style={{ display: 'inline-flex' }}>
+                <Checkbox
+                  label="Include diff"
+                  checked={status.dirty ? includeDiff : false}
+                  disabled={!status.dirty}
+                  onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                />
+              </span>
+            </Tooltip>
+          </Stack>
+
           <Textarea
             label="Comment"
             placeholder="Optional"
@@ -730,7 +715,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
             resize="vertical"
             minRows={3}
           />
-          <Group justify="flex-end" mt="sm">
+          <Group justify="flex-end">
             <Button
               variant="default"
               loading={previewLoading}
@@ -747,9 +732,9 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               Post
             </Button>
           </Group>
-        </div>
+        </Stack>
       )}
-    </div>
+    </Stack>
 
     <Modal
       opened={previewOpen}
@@ -806,6 +791,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 
   const [showAll, setShowAll] = useState(false)
   const [commitOrigIdx, setCommitOrigIdx] = useState(defaultCommitOrigIdx)
+  const [overrideBlocking, setOverrideBlocking] = useState(false)
   const [note, setNote] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -819,12 +805,16 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
   useEffect(() => {
     setCommitOrigIdx(defaultCommitOrigIdx)
     setShowAll(false)
+    setOverrideBlocking(false)
     setNote('')
     setPreviewOpen(false)
     setPostResultOpen(false)
     setPostResultUrl(null)
     setPostError(null)
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const bqs = status.blocking_qc_status
+  const hasBlockingIssues = bqs.total > 0 && (bqs.not_approved.length > 0 || bqs.errors.length > 0)
 
   const visibleCommits = orderedCommits
     .map((c, i) => ({ ...c, origIdx: i }))
@@ -845,6 +835,11 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 
   const sliderIdx = snapToVisible(commitOrigIdx)
   const selectedCommit = visibleCommits[sliderIdx]
+
+  const canApprove =
+    !!selectedCommit &&
+    (!hasBlockingIssues || overrideBlocking) &&
+    (!overrideBlocking || note.trim() !== '')
 
   const approveRequest: ApproveRequest = {
     commit: selectedCommit?.hash ?? '',
@@ -885,86 +880,104 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 
   return (
     <>
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      <div style={{ flex: 1, overflowY: 'auto', paddingTop: 16, paddingLeft: 16, paddingRight: 16 }}>
-        <Stack gap="md">
-          <StatusCard status={status} />
+    <Stack gap="md">
+      <StatusCard status={status} />
 
-          {visibleCommits.length > 0 && (
-            <Stack gap="xs">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text size="sm" fw={700}>Select Commit</Text>
-                <Checkbox
-                  label="Show all commits"
-                  checked={showAll}
-                  onChange={(e) => setShowAll(e.currentTarget.checked)}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
-                <div style={{ position: 'relative', height: 8 }}>
-                  {visibleCommits.map((c, i) => {
-                    const n = visibleCommits.length
-                    const pct = n > 1 ? i / (n - 1) : 0.5
-                    const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                    return (
-                      <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                        {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                          <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                        ))}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                <Slider
-                  min={0}
-                  max={Math.max(0, visibleCommits.length - 1)}
-                  step={1}
-                  value={sliderIdx}
-                  onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-                  marks={visibleCommits.map((c, i) => ({
-                    value: i,
-                    label: (
-                      <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                        {c.hash.slice(0, 7)}
-                      </span>
-                    ),
-                  }))}
-                  label={null}
-                  mb={40}
-                  styles={{ bar: { display: 'none' } }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
-                {STATUS_ORDER.map((s) => (
-                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                    <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
-                  </div>
-                ))}
-              </div>
-
-              <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-                {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
-              </Stack>
-            </Stack>
-          )}
-        </Stack>
-      </div>
+      {hasBlockingIssues && (
+        <Alert color="orange">
+          <Stack gap={4}>
+            <Text size="sm" fw={600}>Blocking QCs are not fully approved</Text>
+            {bqs.not_approved.map((item) => (
+              <Text key={`${item.issue_number}-${item.file_name}`} size="xs">
+                {item.file_name} (#{item.issue_number}) — {item.status}
+              </Text>
+            ))}
+            {bqs.errors.map((item) => (
+              <Text key={item.issue_number} size="xs" c="red">
+                #{item.issue_number}: {item.error}
+              </Text>
+            ))}
+          </Stack>
+          <Checkbox
+            mt="xs"
+            label="Override and approve anyway"
+            checked={overrideBlocking}
+            onChange={(e) => setOverrideBlocking(e.currentTarget.checked)}
+          />
+        </Alert>
+      )}
 
       {visibleCommits.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--mantine-color-gray-3)', padding: '12px 16px' }}>
+        <Stack gap="xs">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text size="sm" fw={700}>Select Commit</Text>
+            <Checkbox
+              label="Show all commits"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.currentTarget.checked)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
+            <div style={{ position: 'relative', height: 8 }}>
+              {visibleCommits.map((c, i) => {
+                const n = visibleCommits.length
+                const pct = n > 1 ? i / (n - 1) : 0.5
+                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                return (
+                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
+                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
+                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+
+            <Slider
+              min={0}
+              max={Math.max(0, visibleCommits.length - 1)}
+              step={1}
+              value={sliderIdx}
+              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+              marks={visibleCommits.map((c, i) => ({
+                value: i,
+                label: (
+                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                    {c.hash.slice(0, 7)}
+                  </span>
+                ),
+              }))}
+              label={null}
+              mb={40}
+              styles={{ bar: { display: 'none' } }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+            {STATUS_ORDER.map((s) => (
+              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
+              </div>
+            ))}
+          </div>
+
+          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+            {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
+          </Stack>
+
           <Textarea
-            label="Comment"
-            placeholder="Optional"
+            label={overrideBlocking ? 'Note (required)' : 'Comment'}
+            placeholder={overrideBlocking ? 'Required' : 'Optional'}
+            required={overrideBlocking}
+            error={overrideBlocking && note.trim() === '' ? 'A note is required when overriding blocking QCs' : undefined}
             value={note}
             onChange={(e) => setNote(e.currentTarget.value)}
             resize="vertical"
             minRows={3}
           />
-          <Group justify="flex-end" mt="sm">
+          <Group justify="flex-end">
             <Button
               variant="default"
               loading={previewLoading}
@@ -976,15 +989,15 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
             <Button
               color="green"
               loading={postLoading}
-              disabled={!selectedCommit}
+              disabled={!canApprove}
               onClick={handlePost}
             >
               Approve
             </Button>
           </Group>
-        </div>
+        </Stack>
       )}
-    </div>
+    </Stack>
 
     <Modal
       opened={previewOpen}
@@ -1015,6 +1028,145 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
       ) : (
         <Text size="sm">
           Issue approved and closed.{' '}
+          <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
+        </Text>
+      )}
+    </Modal>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Unapprove tab — reason required, no commit selector
+// ---------------------------------------------------------------------------
+function UnapproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
+  const { issue } = status
+
+  const [reason, setReason] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [postLoading, setPostLoading] = useState(false)
+  const [postResultOpen, setPostResultOpen] = useState(false)
+  const [postResultUrl, setPostResultUrl] = useState<string | null>(null)
+  const [postOpened, setPostOpened] = useState<boolean | null>(null)
+  const [postError, setPostError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    setReason('')
+    setPreviewOpen(false)
+    setPostResultOpen(false)
+    setPostResultUrl(null)
+    setPostOpened(null)
+    setPostError(null)
+  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const canPost = reason.trim() !== ''
+
+  const unapproveRequest: UnapproveRequest = {
+    reason: reason.trim(),
+  }
+
+  async function handlePreview() {
+    setPreviewLoading(true)
+    try {
+      const html = await fetchUnapprovePreview(issue.number, unapproveRequest)
+      setPreviewHtml(html)
+      setPreviewOpen(true)
+    } catch (err) {
+      setPreviewHtml(`<pre>Error: ${(err as Error).message}</pre>`)
+      setPreviewOpen(true)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  async function handlePost() {
+    setPostLoading(true)
+    setPostError(null)
+    setPostResultUrl(null)
+    setPostOpened(null)
+    try {
+      const result = await postUnapprove(issue.number, unapproveRequest)
+      setPostResultUrl(result.unapproval_url)
+      setPostOpened(result.opened)
+      void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
+      const fresh = await fetchSingleIssueStatus(issue.number)
+      onStatusUpdate(fresh)
+    } catch (err) {
+      setPostError((err as Error).message)
+    } finally {
+      setPostLoading(false)
+      setPostResultOpen(true)
+    }
+  }
+
+  return (
+    <>
+    <div style={{ flex: 1, overflowY: 'auto' }}>
+      <Stack gap="md">
+        <StatusCard status={status} />
+
+        <Textarea
+          label="Reason (required)"
+          placeholder="Required"
+          required
+          value={reason}
+          onChange={(e) => setReason(e.currentTarget.value)}
+          resize="vertical"
+          minRows={3}
+        />
+      </Stack>
+    </div>
+    <div style={{ borderTop: '1px solid var(--mantine-color-gray-3)', paddingTop: 12, paddingBottom: 12, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+      <Button
+        variant="default"
+        loading={previewLoading}
+        disabled={!canPost}
+        onClick={handlePreview}
+      >
+        Preview
+      </Button>
+      <Button
+        color="red"
+        loading={postLoading}
+        disabled={!canPost}
+        onClick={handlePost}
+      >
+        Unapprove
+      </Button>
+    </div>
+
+    <Modal
+      opened={previewOpen}
+      onClose={() => setPreviewOpen(false)}
+      title="Comment Preview"
+      size={800}
+      centered
+      withinPortal={false}
+      styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
+    >
+      <iframe
+        srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
+        style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
+        title="Comment Preview"
+      />
+    </Modal>
+
+    <Modal
+      opened={postResultOpen}
+      onClose={() => setPostResultOpen(false)}
+      title={postError ? 'Unapprove Failed' : 'Unapproved'}
+      size="sm"
+      centered
+      withinPortal={false}
+    >
+      {postError ? (
+        <Text c="red" size="sm">{postError}</Text>
+      ) : (
+        <Text size="sm">
+          Issue unapproved{postOpened ? ' and reopened' : ''}.{' '}
           <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
         </Text>
       )}

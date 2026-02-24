@@ -10,12 +10,12 @@ use serde::Deserialize;
 use std::{path::PathBuf, str::FromStr};
 
 use crate::api::state::AppState;
-use crate::api::types::{ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest};
+use crate::api::types::{ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest};
 use crate::configuration::Checklist;
 use crate::create::QCIssue;
 use crate::relevant_files::{RelevantFile, RelevantFileClass};
 use crate::{CommentBody, api::error::ApiError};
-use crate::{GitProvider, QCApprove, QCComment, QCReview, api::types::CreateCommentRequest};
+use crate::{GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, api::types::CreateCommentRequest};
 
 #[derive(Deserialize)]
 pub struct FileContentQuery {
@@ -204,6 +204,27 @@ pub async fn preview_approve<G: GitProvider + 'static>(
     };
 
     let markdown = approval.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
+}
+
+/// POST /api/preview/{number}/unapprove
+///
+/// Generates the unapproval comment body as HTML without posting to GitHub.
+pub async fn preview_unapprove<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<UnapproveRequest>,
+) -> Result<Html<String>, ApiError> {
+    let issue = state.git_info().get_issue(number).await?;
+
+    let unapprove = QCUnapprove {
+        issue,
+        reason: request.reason,
+    };
+
+    let markdown = unapprove.generate_body(state.git_info());
     let html = markdown_to_html(&markdown);
 
     Ok(Html(html))

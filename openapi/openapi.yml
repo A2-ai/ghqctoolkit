@@ -322,6 +322,31 @@ paths:
               schema:
                 type: string
 
+  /preview/{number}/unapprove:
+    post:
+      summary: Preview unapproval comment body as HTML
+      operationId: previewUnapprove
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnapproveRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the unapproval comment
+          content:
+            text/html:
+              schema:
+                type: string
+
   /preview/{number}/comment/:
     post:
       summary: Preview comment body as HTML

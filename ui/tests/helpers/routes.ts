@@ -20,7 +20,7 @@ import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
-import type { CommentResponse } from '../../src/api/issues'
+import type { CommentResponse, UnapprovalResponse } from '../../src/api/issues'
 
 export interface RouteOverrides {
   repo: RepoInfo
@@ -47,6 +47,8 @@ export interface RouteOverrides {
   postReviewResponse: CommentResponse | null
   /** Response for POST /api/issues/:n/approve; null → 500 error */
   postApproveResponse: { approval_url: string; skipped_unapproved: number[]; skipped_errors: unknown[]; closed: boolean } | null
+  /** Response for POST /api/issues/:n/unapprove; null → 500 error */
+  postUnapproveResponse: UnapprovalResponse | null
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -68,6 +70,7 @@ const defaultOverrides: RouteOverrides = {
   postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
   postReviewResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888' },
   postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
+  postUnapproveResponse: { unapproval_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-66666', opened: true },
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -208,6 +211,14 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
+  await page.route(/\/api\/preview\/\d+\/unapprove/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Unapprove preview</p>',
+    })
+  })
+
   await page.route(/\/api\/issues\/\d+\/comment/, (route, request) => {
     if (request.method() === 'POST') {
       if (cfg.postCommentResponse) {
@@ -235,6 +246,26 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify(cfg.postApproveResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/unapprove/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postUnapproveResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postUnapproveResponse),
         })
       } else {
         route.fulfill({

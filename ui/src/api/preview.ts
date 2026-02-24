@@ -1,5 +1,5 @@
 import type { CreateIssueRequest } from './create'
-import type { ApproveRequest, CreateCommentRequest, ReviewRequest } from './issues'
+import type { ApproveRequest, CreateCommentRequest, ReviewRequest, UnapproveRequest } from './issues'
 
 export async function fetchFileContent(path: string): Promise<string> {
   const res = await fetch(`/api/files/content?path=${encodeURIComponent(path)}`)
@@ -45,6 +45,19 @@ export async function fetchApprovePreview(issueNumber: number, request: ApproveR
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to fetch approve preview: ${res.status}`)
+  }
+  return res.text()
+}
+
+export async function fetchUnapprovePreview(issueNumber: number, request: UnapproveRequest): Promise<string> {
+  const res = await fetch(`/api/preview/${issueNumber}/unapprove`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to fetch unapprove preview: ${res.status}`)
   }
   return res.text()
 }

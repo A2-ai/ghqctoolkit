@@ -11,6 +11,8 @@ import {
   dirtyModalIssue,
   dirtyModalStatus,
   cleanModalStatus,
+  approvedModalIssue,
+  approvedModalStatus,
 } from '../fixtures/index'
 
 // ---------------------------------------------------------------------------
@@ -82,19 +84,6 @@ test('status card shows branch, assignees, and status pill', async ({ page }) =>
   await expect(notifyPanel.getByText(/Branch:.*feature-branch/).first()).toBeVisible()
   await expect(notifyPanel.getByText(/Reviewers:.*alice/).first()).toBeVisible()
   await expect(notifyPanel.getByText('awaiting review', { exact: false }).first()).toBeVisible()
-})
-
-// ---------------------------------------------------------------------------
-// 5. Review / Approve / Unapprove tabs show "Coming soon"
-// ---------------------------------------------------------------------------
-test('non-Notify tabs show Coming soon', async ({ page }) => {
-  await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
-
-  for (const tab of ['Unapprove']) {
-    await page.getByRole('tab', { name: tab, exact: true }).click()
-    // Scope to this tab's panel to avoid strict-mode violation across all rendered panels
-    await expect(page.getByLabel(tab, { exact: true }).getByText('Coming soon')).toBeVisible()
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -348,6 +337,60 @@ test('approve post shows success modal', async ({ page }) => {
   await approvePanel.getByRole('button', { name: 'Approve' }).click()
 
   await expect(page.getByRole('heading', { name: 'Approved' })).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 28. Unapprove tab: shows status card (defaults to unapprove for approved issues)
+// ---------------------------------------------------------------------------
+test('unapprove tab shows status card', async ({ page }) => {
+  await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
+  // defaultTab for 'approved' is 'unapprove'
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
+  await expect(unapprovePanel.getByText(/Branch:.*feature-branch/).first()).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 29. Unapprove button disabled when reason is empty
+// ---------------------------------------------------------------------------
+test('unapprove button disabled when reason is empty', async ({ page }) => {
+  await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
+  await expect(unapprovePanel.getByRole('button', { name: 'Unapprove' })).toBeDisabled()
+  await expect(unapprovePanel.getByRole('button', { name: 'Preview' })).toBeDisabled()
+})
+
+// ---------------------------------------------------------------------------
+// 30. Unapprove button enabled when reason is provided
+// ---------------------------------------------------------------------------
+test('unapprove button enabled when reason is provided', async ({ page }) => {
+  await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
+  await unapprovePanel.getByLabel('Reason (required)').fill('Rolling back due to regression')
+  await expect(unapprovePanel.getByRole('button', { name: 'Unapprove' })).not.toBeDisabled()
+  await expect(unapprovePanel.getByRole('button', { name: 'Preview' })).not.toBeDisabled()
+})
+
+// ---------------------------------------------------------------------------
+// 31. Unapprove preview button opens preview modal
+// ---------------------------------------------------------------------------
+test('unapprove preview button opens preview modal', async ({ page }) => {
+  await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
+  await unapprovePanel.getByLabel('Reason (required)').fill('Need to fix something')
+  await unapprovePanel.getByRole('button', { name: 'Preview' }).click()
+  await expect(page.getByTitle('Comment Preview')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 32. Unapprove post shows success modal with GitHub link
+// ---------------------------------------------------------------------------
+test('unapprove post shows success modal', async ({ page }) => {
+  await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
+  await unapprovePanel.getByLabel('Reason (required)').fill('Rolling back approval')
+  await unapprovePanel.getByRole('button', { name: 'Unapprove' }).click()
+  await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'View on GitHub' })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
