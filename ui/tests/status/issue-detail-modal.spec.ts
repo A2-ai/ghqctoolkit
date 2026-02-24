@@ -91,7 +91,7 @@ test('status card shows branch, assignees, and status pill', async ({ page }) =>
 test('non-Notify tabs show Coming soon', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
 
-  for (const tab of ['Review', 'Approve', 'Unapprove']) {
+  for (const tab of ['Approve', 'Unapprove']) {
     await page.getByRole('tab', { name: tab, exact: true }).click()
     // Scope to this tab's panel to avoid strict-mode violation across all rendered panels
     await expect(page.getByLabel(tab, { exact: true }).getByText('Coming soon')).toBeVisible()
@@ -214,6 +214,77 @@ test('dirty asterisk not shown in modal when issue is clean', async ({ page }) =
 
   const notifyPanel = page.getByRole('tabpanel', { name: 'Notify' })
   await expect(notifyPanel.getByTestId('dirty-indicator')).not.toBeAttached()
+})
+
+// ---------------------------------------------------------------------------
+// 17. Review tab shows status card
+// ---------------------------------------------------------------------------
+test('review tab shows status card', async ({ page }) => {
+  await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
+
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
+  await expect(reviewPanel.getByText(/Branch:.*feature-branch/).first()).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 18. Review tab has single commit selector, no From/To labels
+// ---------------------------------------------------------------------------
+test('review tab: single commit selector, no From/To labels', async ({ page }) => {
+  await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
+
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
+
+  // Commit hash shown (may appear in slider mark and CommitBlock)
+  await expect(reviewPanel.getByText('aaaaaaa').first()).toBeVisible()
+  // No From: or To: in this panel
+  await expect(reviewPanel.getByText('From:', { exact: true })).not.toBeAttached()
+  await expect(reviewPanel.getByText('To:', { exact: true })).not.toBeAttached()
+})
+
+// ---------------------------------------------------------------------------
+// 19. Review include diff enabled when dirty, disabled when clean
+// ---------------------------------------------------------------------------
+test('review include diff enabled when dirty', async ({ page }) => {
+  await setupAndOpenModal(page, dirtyModalIssue, dirtyModalStatus)
+
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
+  await expect(reviewPanel.getByRole('checkbox', { name: 'Include diff' })).not.toBeDisabled()
+})
+
+test('review include diff disabled when clean', async ({ page }) => {
+  await setupAndOpenModal(page, dirtyModalIssue, cleanModalStatus)
+
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
+  await expect(reviewPanel.getByRole('checkbox', { name: 'Include diff' })).toBeDisabled()
+})
+
+// ---------------------------------------------------------------------------
+// 21. Review preview button opens preview modal
+// ---------------------------------------------------------------------------
+test('review preview button opens preview modal', async ({ page }) => {
+  await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
+
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
+  await reviewPanel.getByRole('button', { name: 'Preview' }).click()
+  await expect(page.getByTitle('Comment Preview')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 22. Review post shows success modal
+// ---------------------------------------------------------------------------
+test('review post shows success modal', async ({ page }) => {
+  await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
+
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
+  await reviewPanel.getByRole('button', { name: 'Post' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Comment Posted' })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------

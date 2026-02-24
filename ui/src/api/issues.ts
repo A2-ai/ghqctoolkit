@@ -95,6 +95,12 @@ export interface CreateCommentRequest {
   include_diff: boolean
 }
 
+export interface ReviewRequest {
+  commit: string
+  note: string | null
+  include_diff: boolean
+}
+
 export interface CommentResponse {
   comment_url: string
 }
@@ -151,6 +157,19 @@ async function fetchIssueStatuses(issueNumbers: number[]): Promise<BatchIssueSta
   const data = await res.json()
   if ('results' in data && 'errors' in data) return data as BatchIssueStatusResponse
   throw new Error(`Failed to fetch issue statuses: ${res.status}`)
+}
+
+export async function postReview(issueNumber: number, request: ReviewRequest): Promise<CommentResponse> {
+  const res = await fetch(`/api/issues/${issueNumber}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to post review: ${res.status}`)
+  }
+  return res.json()
 }
 
 export async function fetchSingleIssueStatus(issueNumber: number): Promise<IssueStatusResponse> {

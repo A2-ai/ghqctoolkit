@@ -10,12 +10,12 @@ use serde::Deserialize;
 use std::{path::PathBuf, str::FromStr};
 
 use crate::api::state::AppState;
-use crate::api::types::{CreateIssueRequest, RelevantIssueClass};
+use crate::api::types::{CreateIssueRequest, RelevantIssueClass, ReviewRequest};
 use crate::configuration::Checklist;
 use crate::create::QCIssue;
 use crate::relevant_files::{RelevantFile, RelevantFileClass};
 use crate::{CommentBody, api::error::ApiError};
-use crate::{GitProvider, QCComment, api::types::CreateCommentRequest};
+use crate::{GitProvider, QCComment, QCReview, api::types::CreateCommentRequest};
 
 #[derive(Deserialize)]
 pub struct FileContentQuery {
@@ -151,6 +151,36 @@ fn resolve_issue_class(class: &RelevantIssueClass) -> (u64, Option<u64>) {
         } => (*issue_number, *issue_id),
         RelevantIssueClass::New(_) => (0, None),
     }
+}
+
+/// POST /api/preview/{number}/review
+///
+/// Accepts a `ReviewRequest`, generates the review body markdown using `QCReview::generate_body()`,
+/// converts it to HTML, and returns the HTML string. The diff compares the given commit
+/// against the current working directory.
+pub async fn preview_review<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<ReviewRequest>,
+) -> Result<Html<String>, ApiError> {
+    let commit = ObjectId::from_str(&request.commit)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid commit format: {e}")))?;
+
+    let issue = state.git_info().get_issue(number).await?;
+
+    let review = QCReview {
+        file: PathBuf::from(&issue.title),
+        issue,
+        commit,
+        note: request.note,
+        no_diff: !request.include_diff,
+        working_dir: state.git_info().path().to_path_buf(),
+    };
+
+    let markdown = review.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
 }
 
 fn markdown_to_html(markdown: &str) -> String {

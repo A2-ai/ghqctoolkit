@@ -9,6 +9,7 @@ import {
   Group,
   Modal,
   RangeSlider,
+  Slider,
   Stack,
   Tabs,
   Text,
@@ -17,9 +18,9 @@ import {
 } from '@mantine/core'
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { IssueStatusResponse, QCStatus } from '~/api/issues'
-import { fetchSingleIssueStatus, postComment } from '~/api/issues'
-import { fetchCommentPreview } from '~/api/preview'
+import type { IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
+import { fetchSingleIssueStatus, postComment, postReview } from '~/api/issues'
+import { fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
 
 function wrapInGithubStyles(body: string): string {
   return `<!DOCTYPE html>
@@ -98,15 +99,30 @@ export function IssueDetailModal({ status, onClose, onStatusUpdate }: Props) {
   )
 }
 
+function defaultTab(status: IssueStatusResponse): string {
+  switch (status.qc_status.status) {
+    case 'awaiting_review':
+    case 'approval_required':
+      return status.dirty ? 'review' : 'approve'
+    case 'change_requested':
+    case 'in_progress':
+    case 'changes_to_comment':
+      return 'notify'
+    case 'approved':
+    case 'changes_after_approval':
+      return 'unapprove'
+  }
+}
+
 function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatusResponse; onClose: () => void; onStatusUpdate: (status: IssueStatusResponse) => void }) {
   return (
-    <Tabs defaultValue="notify">
+    <Tabs key={status.issue.number} defaultValue={defaultTab(status)}>
       <Group justify="space-between" align="center" px="md" pt="sm" style={{ borderBottom: '1px solid var(--mantine-color-gray-3)' }}>
         <Tabs.List style={{ borderBottom: 'none' }}>
-          <Tabs.Tab value="notify">Notify</Tabs.Tab>
-          <Tabs.Tab value="review">Review</Tabs.Tab>
-          <Tabs.Tab value="approve">Approve</Tabs.Tab>
-          <Tabs.Tab value="unapprove">Unapprove</Tabs.Tab>
+          <Tabs.Tab value="notify" color="yellow">Notify</Tabs.Tab>
+          <Tabs.Tab value="review" color="orange">Review</Tabs.Tab>
+          <Tabs.Tab value="approve" color="green">Approve</Tabs.Tab>
+          <Tabs.Tab value="unapprove" color="red">Unapprove</Tabs.Tab>
         </Tabs.List>
         <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close">
           <IconX size={16} />
@@ -117,7 +133,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
         <NotifyTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
       <Tabs.Panel value="review" pt="md" px="md" pb={0}>
-        <Text c="dimmed">Coming soon</Text>
+        <ReviewTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
       <Tabs.Panel value="approve" pt="md" px="md" pb={0}>
         <Text c="dimmed">Coming soon</Text>
@@ -130,7 +146,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
 }
 
 function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
-  const { issue, qc_status, branch, checklist_summary, blocking_qc_status } = status
+  const { issue } = status
 
   // Build oldest-first commit list
   const orderedCommits = [...status.commits].reverse()
@@ -262,79 +278,10 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     }
   }
 
-  const laneColor = STATUS_LANE_COLOR[qc_status.status]
-  const formattedStatus = qc_status.status.replace(/_/g, ' ')
-
   return (
     <>
     <Stack gap="md" pb="md">
-      {/* Status section — centered card */}
-      <Card
-        withBorder
-        p="md"
-        style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}
-      >
-        <Stack gap="xs">
-          <div style={{ textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-            <Anchor href={issue.html_url} target="_blank" fw={700}>
-              {issue.title}
-            </Anchor>
-            {status.dirty && (
-              <Tooltip label="This file has uncommitted local changes" withArrow position="top">
-                <span data-testid="dirty-indicator" style={{ color: '#c92a2a', display: 'flex', lineHeight: 1 }}>
-                  <IconAsterisk size={14} stroke={3} />
-                </span>
-              </Tooltip>
-            )}
-          </div>
-          <Text size="sm"><b>Branch:</b> {branch}</Text>
-          <Text size="sm"><b>Reviewers:</b> {issue.assignees.join(', ') || 'None'}</Text>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Text size="sm" fw={700}>Status:</Text>
-            <Badge
-              style={{
-                backgroundColor: laneColor,
-                color: '#333',
-                textTransform: 'capitalize',
-                border: '1px solid rgba(0,0,0,0.12)',
-              }}
-            >
-              {formattedStatus}
-            </Badge>
-          </div>
-
-          {checklist_summary.total > 0 && (
-            <InlineProgress
-              label="Checklist"
-              value={(checklist_summary.completed / checklist_summary.total) * 100}
-              completed={checklist_summary.completed}
-              total={checklist_summary.total}
-              color="#5a9e6f"
-            />
-          )}
-
-          {blocking_qc_status.total > 0 && (
-            <Stack gap={4}>
-              <Text size="sm" fw={700}>Blocking QC</Text>
-              {blocking_qc_status.approved.map((item) => (
-                <Text key={item.issue_number} size="sm" c="green">
-                  ✓ {item.file_name} (#{item.issue_number})
-                </Text>
-              ))}
-              {blocking_qc_status.not_approved.map((item) => (
-                <Text key={item.issue_number} size="sm" c="orange">
-                  ✗ {item.file_name} (#{item.issue_number}) — {item.status}
-                </Text>
-              ))}
-              {blocking_qc_status.errors.map((item) => (
-                <Text key={item.issue_number} size="sm" c="red">
-                  ! #{item.issue_number}: {item.error}
-                </Text>
-              ))}
-            </Stack>
-          )}
-        </Stack>
-      </Card>
+      <StatusCard status={status} />
 
       {/* Commit range slider */}
       {visibleCommits.length > 0 && (
@@ -376,6 +323,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
                   </span>
                 )}]}
                 mb={40}
+                styles={{ bar: { display: 'none' } }}
               />
             ) : (
               <RangeSlider
@@ -390,6 +338,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
                   ),
                 }))}
                 mb={40}
+                styles={{ bar: { display: 'none' } }}
               />
             )}
           </div>
@@ -490,6 +439,326 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
           </Text>
         )}
       </Modal>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Shared status card (used by both Notify and Review tabs)
+// ---------------------------------------------------------------------------
+function StatusCard({ status }: { status: IssueStatusResponse }) {
+  const { issue, qc_status, branch, checklist_summary, blocking_qc_status } = status
+  const laneColor = STATUS_LANE_COLOR[qc_status.status]
+  const formattedStatus = qc_status.status.replace(/_/g, ' ')
+
+  return (
+    <Card
+      withBorder
+      p="md"
+      style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}
+    >
+      <Stack gap="xs">
+        <div style={{ textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          <Anchor href={issue.html_url} target="_blank" fw={700}>
+            {issue.title}
+          </Anchor>
+          {status.dirty && (
+            <Tooltip label="This file has uncommitted local changes" withArrow position="top">
+              <span data-testid="dirty-indicator" style={{ color: '#c92a2a', display: 'flex', lineHeight: 1 }}>
+                <IconAsterisk size={14} stroke={3} />
+              </span>
+            </Tooltip>
+          )}
+        </div>
+        <Text size="sm"><b>Branch:</b> {branch}</Text>
+        <Text size="sm"><b>Reviewers:</b> {issue.assignees.join(', ') || 'None'}</Text>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Text size="sm" fw={700}>Status:</Text>
+          <Badge
+            style={{
+              backgroundColor: laneColor,
+              color: '#333',
+              textTransform: 'capitalize',
+              border: '1px solid rgba(0,0,0,0.12)',
+            }}
+          >
+            {formattedStatus}
+          </Badge>
+        </div>
+
+        {checklist_summary.total > 0 && (
+          <InlineProgress
+            label="Checklist"
+            value={(checklist_summary.completed / checklist_summary.total) * 100}
+            completed={checklist_summary.completed}
+            total={checklist_summary.total}
+            color="#5a9e6f"
+          />
+        )}
+
+        {blocking_qc_status.total > 0 && (
+          <Stack gap={4}>
+            <Text size="sm" fw={700}>Blocking QC</Text>
+            {blocking_qc_status.approved.map((item) => (
+              <Text key={item.issue_number} size="sm" c="green">
+                ✓ {item.file_name} (#{item.issue_number})
+              </Text>
+            ))}
+            {blocking_qc_status.not_approved.map((item) => (
+              <Text key={item.issue_number} size="sm" c="orange">
+                ✗ {item.file_name} (#{item.issue_number}) — {item.status}
+              </Text>
+            ))}
+            {blocking_qc_status.errors.map((item) => (
+              <Text key={item.issue_number} size="sm" c="red">
+                ! #{item.issue_number}: {item.error}
+              </Text>
+            ))}
+          </Stack>
+        )}
+      </Stack>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Review tab — single commit selector, diff against working directory
+// ---------------------------------------------------------------------------
+function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
+  const { issue } = status
+
+  const orderedCommits = [...status.commits].reverse()
+
+  // Default: newest commit (last in orderedCommits = latest)
+  const defaultCommitOrigIdx = orderedCommits.length - 1
+
+  // Newest commit is always visible (exception) so default is reachable without showAll
+  const exceptionIdx = orderedCommits.length - 1
+
+  const [showAll, setShowAll] = useState(false)
+  const [commitOrigIdx, setCommitOrigIdx] = useState(defaultCommitOrigIdx)
+  const [includeDiff, setIncludeDiff] = useState(true)
+  const [note, setNote] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [postLoading, setPostLoading] = useState(false)
+  const [postResultOpen, setPostResultOpen] = useState(false)
+  const [postResultUrl, setPostResultUrl] = useState<string | null>(null)
+  const [postError, setPostError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    setCommitOrigIdx(defaultCommitOrigIdx)
+    setShowAll(false)
+    setIncludeDiff(true)
+    setNote('')
+    setPreviewOpen(false)
+    setPostResultOpen(false)
+    setPostResultUrl(null)
+    setPostError(null)
+  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const visibleCommits = orderedCommits
+    .map((c, i) => ({ ...c, origIdx: i }))
+    .filter(({ file_changed, statuses, origIdx }) =>
+      showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
+    )
+
+  const snapToVisible = (targetOrigIdx: number): number => {
+    const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
+    if (exact >= 0) return exact
+    let best = 0, bestDist = Infinity
+    for (let i = 0; i < visibleCommits.length; i++) {
+      const dist = Math.abs(visibleCommits[i].origIdx - targetOrigIdx)
+      if (dist < bestDist) { bestDist = dist; best = i }
+    }
+    return best
+  }
+
+  const sliderIdx = snapToVisible(commitOrigIdx)
+  const selectedCommit = visibleCommits[sliderIdx]
+
+  const reviewRequest: ReviewRequest = {
+    commit: selectedCommit?.hash ?? '',
+    note: note.trim() || null,
+    include_diff: status.dirty ? includeDiff : false,
+  }
+
+  async function handlePreview() {
+    setPreviewLoading(true)
+    try {
+      const html = await fetchReviewPreview(issue.number, reviewRequest)
+      setPreviewHtml(html)
+      setPreviewOpen(true)
+    } catch (err) {
+      setPreviewHtml(`<pre>Error: ${(err as Error).message}</pre>`)
+      setPreviewOpen(true)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  async function handlePost() {
+    setPostLoading(true)
+    setPostError(null)
+    setPostResultUrl(null)
+    try {
+      const result = await postReview(issue.number, reviewRequest)
+      setPostResultUrl(result.comment_url)
+      void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
+      const fresh = await fetchSingleIssueStatus(issue.number)
+      onStatusUpdate(fresh)
+    } catch (err) {
+      setPostError((err as Error).message)
+    } finally {
+      setPostLoading(false)
+      setPostResultOpen(true)
+    }
+  }
+
+  return (
+    <>
+    <Stack gap="md" pb="md">
+      <StatusCard status={status} />
+
+      {visibleCommits.length > 0 && (
+        <Stack gap="xs">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text size="sm" fw={700}>Commit</Text>
+            <Checkbox
+              label="Show all commits"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.currentTarget.checked)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
+            <div style={{ position: 'relative', height: 8 }}>
+              {visibleCommits.map((c, i) => {
+                const n = visibleCommits.length
+                const pct = n > 1 ? i / (n - 1) : 0.5
+                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                return (
+                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
+                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
+                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+
+            <Slider
+              min={0}
+              max={Math.max(0, visibleCommits.length - 1)}
+              step={1}
+              value={sliderIdx}
+              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+              marks={visibleCommits.map((c, i) => ({
+                value: i,
+                label: (
+                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                    {c.hash.slice(0, 7)}
+                  </span>
+                ),
+              }))}
+              label={null}
+              mb={40}
+              styles={{ bar: { display: 'none' } }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+            {STATUS_ORDER.map((s) => (
+              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
+              </div>
+            ))}
+          </div>
+
+          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+            {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
+            <Tooltip
+              label="No local changes for this file"
+              disabled={status.dirty}
+              withArrow
+              position="right"
+            >
+              <span style={{ display: 'inline-flex' }}>
+                <Checkbox
+                  label="Include diff"
+                  checked={status.dirty ? includeDiff : false}
+                  disabled={!status.dirty}
+                  onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                />
+              </span>
+            </Tooltip>
+          </Stack>
+
+          <Textarea
+            label="Comment"
+            placeholder="Optional"
+            value={note}
+            onChange={(e) => setNote(e.currentTarget.value)}
+            resize="vertical"
+            minRows={3}
+          />
+
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              loading={previewLoading}
+              disabled={!selectedCommit}
+              onClick={handlePreview}
+            >
+              Preview
+            </Button>
+            <Button
+              loading={postLoading}
+              disabled={!selectedCommit}
+              onClick={handlePost}
+            >
+              Post
+            </Button>
+          </Group>
+        </Stack>
+      )}
+    </Stack>
+
+    <Modal
+      opened={previewOpen}
+      onClose={() => setPreviewOpen(false)}
+      title="Comment Preview"
+      size={800}
+      centered
+      withinPortal={false}
+    >
+      <iframe
+        srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
+        style={{ width: '100%', height: 500, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
+        title="Comment Preview"
+      />
+    </Modal>
+
+    <Modal
+      opened={postResultOpen}
+      onClose={() => setPostResultOpen(false)}
+      title={postError ? 'Post Failed' : 'Comment Posted'}
+      size="sm"
+      centered
+      withinPortal={false}
+    >
+      {postError ? (
+        <Text c="red" size="sm">{postError}</Text>
+      ) : (
+        <Text size="sm">
+          Comment posted successfully.{' '}
+          <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
+        </Text>
+      )}
+    </Modal>
     </>
   )
 }

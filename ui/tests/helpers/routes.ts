@@ -43,6 +43,8 @@ export interface RouteOverrides {
   createIssues: CreateIssueResponse[]
   /** Response for POST /api/issues/:n/comment; null → 500 error */
   postCommentResponse: CommentResponse | null
+  /** Response for POST /api/issues/:n/review; null → 500 error */
+  postReviewResponse: CommentResponse | null
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -62,6 +64,7 @@ const defaultOverrides: RouteOverrides = {
   createMilestone: createdMilestone,
   createIssues: createIssueResponses,
   postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
+  postReviewResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888' },
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -186,6 +189,14 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
+  await page.route(/\/api\/preview\/\d+\/review/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Review preview</p>',
+    })
+  })
+
   await page.route(/\/api\/issues\/\d+\/comment/, (route, request) => {
     if (request.method() === 'POST') {
       if (cfg.postCommentResponse) {
@@ -193,6 +204,26 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify(cfg.postCommentResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/review/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postReviewResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postReviewResponse),
         })
       } else {
         route.fulfill({
