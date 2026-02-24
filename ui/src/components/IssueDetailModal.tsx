@@ -8,7 +8,6 @@ import {
   Checkbox,
   Group,
   Modal,
-  RangeSlider,
   Slider,
   Stack,
   Tabs,
@@ -129,7 +128,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
         </ActionIcon>
       </Group>
 
-      <Tabs.Panel value="notify" pt="md" px="md" pb={0} style={{ flex: 1, overflowY: 'auto' }}>
+      <Tabs.Panel value="notify" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <NotifyTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
       <Tabs.Panel value="review" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -178,10 +177,10 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       : -1
 
   const [showAll, setShowAll] = useState(false)
-  // Source of truth: origIdx values (positions in orderedCommits), not slider indices.
-  // This means showAll toggling never loses track of which commits are selected.
-  const [fromOrigIdx, setFromOrigIdx] = useState(fromDefault)
-  const [toOrigIdx, setToOrigIdx] = useState(toDefault)
+  // Two independent handle positions (origIdx in orderedCommits).
+  // Either handle can be dragged past the other; from = min, to = max.
+  const [sliderAOrigIdx, setSliderAOrigIdx] = useState(fromDefault)
+  const [sliderBOrigIdx, setSliderBOrigIdx] = useState(toDefault)
   const [includeDiff, setIncludeDiff] = useState(true)
   const [note, setNote] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -195,8 +194,8 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
   // Reset when the status prop changes (different issue opened)
   useEffect(() => {
-    setFromOrigIdx(fromDefault)
-    setToOrigIdx(toDefault)
+    setSliderAOrigIdx(fromDefault)
+    setSliderBOrigIdx(toDefault)
     setShowAll(false)
     setIncludeDiff(true)
     setNote('')
@@ -212,7 +211,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
     )
 
-  // Derive slider indices from origIdx — snap to nearest if not currently visible
+  // Snap origIdx to nearest visible slider position
   const snapToVisible = (targetOrigIdx: number): number => {
     const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
     if (exact >= 0) return exact
@@ -224,15 +223,14 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     return best
   }
 
-  const range: [number, number] = [snapToVisible(fromOrigIdx), snapToVisible(toOrigIdx)]
+  const snapA = snapToVisible(sliderAOrigIdx)
+  const snapB = snapToVisible(sliderBOrigIdx)
 
-  const handleRangeChange = ([f, t]: [number, number]) => {
-    setFromOrigIdx(visibleCommits[f]?.origIdx ?? fromOrigIdx)
-    setToOrigIdx(visibleCommits[t]?.origIdx ?? toOrigIdx)
-  }
-
-  const fromCommit = visibleCommits[range[0]]
-  const toCommit = visibleCommits[range[1]]
+  // from = earlier handle, to = later handle — handles can freely cross
+  const fromCommit = visibleCommits[Math.min(snapA, snapB)]
+  const toCommit   = visibleCommits[Math.max(snapA, snapB)]
+  const fromOrigIdx = fromCommit?.origIdx ?? 0
+  const toOrigIdx   = toCommit?.origIdx ?? 0
 
   // File changed: any commit strictly after from, up to and including to
   const fileChangedInRange =
@@ -280,100 +278,120 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
   return (
     <>
-    <Stack gap="md" pb="md">
-      <StatusCard status={status} />
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflowY: 'auto', paddingTop: 16, paddingLeft: 16, paddingRight: 16 }}>
+        <Stack gap="md">
+          <StatusCard status={status} />
 
-      {/* Commit range slider */}
-      {visibleCommits.length > 0 && (
-        <Stack gap="xs">
-          {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text size="sm" fw={700}>Commit Range</Text>
-            <Checkbox
-              label="Show all commits"
-              checked={showAll}
-              onChange={(e) => setShowAll(e.currentTarget.checked)}
-            />
-          </div>
-
-          {/* Dots row + slider — single commit uses symmetric [-1,1] range so thumb centers */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
-            <div style={{ position: 'relative', height: 8 }}>
-              {visibleCommits.map((c, i) => {
-                const n = visibleCommits.length
-                const pct = n > 1 ? i / (n - 1) : 0.5
-                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                return (
-                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
-
-            {visibleCommits.length === 1 ? (
-              <RangeSlider
-                min={-1} max={1} step={1} minRange={0} label={null}
-                value={[0, 0]} onChange={() => {}}
-                marks={[{ value: 0, label: (
-                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: visibleCommits[0].file_changed ? '#111' : '#999' }}>
-                    {visibleCommits[0].hash.slice(0, 7)}
-                  </span>
-                )}]}
-                mb={40}
-                styles={{ bar: { display: 'none' } }}
-              />
-            ) : (
-              <RangeSlider
-                min={0} max={visibleCommits.length - 1} step={1} minRange={0} label={null}
-                value={range} onChange={handleRangeChange}
-                marks={visibleCommits.map((c, i) => ({
-                  value: i,
-                  label: (
-                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                      {c.hash.slice(0, 7)}
-                    </span>
-                  ),
-                }))}
-                mb={40}
-                styles={{ bar: { display: 'none' } }}
-              />
-            )}
-          </div>
-
-          {/* Legend */}
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
-            {STATUS_ORDER.map((s) => (
-              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
-              </div>
-            ))}
-          </div>
-
-          {/* From / To / Include diff — left-aligned, matching status card width */}
-          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-            {fromCommit && <CommitBlock label="From" commit={fromCommit} />}
-            {toCommit && <CommitBlock label="To" commit={toCommit} />}
-            <Tooltip
-              label="No changes between selected commits"
-              disabled={fileChangedInRange}
-              withArrow
-              position="right"
-            >
-              <span style={{ display: 'inline-flex' }}>
+          {/* Commit range slider */}
+          {visibleCommits.length > 0 && (
+            <Stack gap="xs">
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text size="sm" fw={700}>Select Commits to Compare</Text>
                 <Checkbox
-                  label="Include diff"
-                  checked={fileChangedInRange ? includeDiff : false}
-                  disabled={!fileChangedInRange}
-                  onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                  label="Show all commits"
+                  checked={showAll}
+                  onChange={(e) => setShowAll(e.currentTarget.checked)}
                 />
-              </span>
-            </Tooltip>
-          </Stack>
+              </div>
 
+              {/* Dots row + two independent overlaid sliders */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
+                <div style={{ position: 'relative', height: 8 }}>
+                  {visibleCommits.map((c, i) => {
+                    const n = visibleCommits.length
+                    const pct = n > 1 ? i / (n - 1) : 0.5
+                    const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                    return (
+                      <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
+                        {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
+                          <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Slider A (in flow — renders track + marks) */}
+                <div style={{ position: 'relative' }}>
+                  <Slider
+                    min={0}
+                    max={Math.max(0, visibleCommits.length - 1)}
+                    step={1}
+                    value={snapA}
+                    onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
+                    marks={visibleCommits.map((c, i) => ({
+                      value: i,
+                      label: (
+                        <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                          {c.hash.slice(0, 7)}
+                        </span>
+                      ),
+                    }))}
+                    label={null}
+                    mb={40}
+                    styles={{ bar: { display: 'none' } }}
+                  />
+                  {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
+                    <Slider
+                      min={0}
+                      max={Math.max(0, visibleCommits.length - 1)}
+                      step={1}
+                      value={snapB}
+                      onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
+                      label={null}
+                      styles={{
+                        bar: { display: 'none' },
+                        root: { pointerEvents: 'none' },
+                        thumb: { pointerEvents: 'auto', zIndex: 3 },
+                        track: { backgroundColor: 'transparent' },
+                        mark: { display: 'none' },
+                        markLabel: { display: 'none' },
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Legend */}
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+                {STATUS_ORDER.map((s) => (
+                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                    <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
+                  </div>
+                ))}
+              </div>
+
+              {/* From / To / Include diff — left-aligned, matching status card width */}
+              <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+                {fromCommit && <CommitBlock label="From" commit={fromCommit} />}
+                {toCommit && <CommitBlock label="To" commit={toCommit} />}
+                <Tooltip
+                  label="No changes between selected commits"
+                  disabled={fileChangedInRange}
+                  withArrow
+                  position="right"
+                >
+                  <span style={{ display: 'inline-flex' }}>
+                    <Checkbox
+                      label="Include diff"
+                      checked={fileChangedInRange ? includeDiff : false}
+                      disabled={!fileChangedInRange}
+                      onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                    />
+                  </span>
+                </Tooltip>
+              </Stack>
+            </Stack>
+          )}
+        </Stack>
+      </div>
+
+      {visibleCommits.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--mantine-color-gray-3)', padding: '12px 16px' }}>
           <Textarea
             label="Comment"
             placeholder="Optional"
@@ -382,8 +400,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
             resize="vertical"
             minRows={3}
           />
-
-          <Group justify="flex-end">
+          <Group justify="flex-end" mt="sm">
             <Button
               variant="default"
               loading={previewLoading}
@@ -400,46 +417,45 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               Post
             </Button>
           </Group>
-        </Stack>
+        </div>
       )}
+    </div>
 
-    </Stack>
-
-      {/* Comment preview */}
-      <Modal
-        opened={previewOpen}
-        onClose={() => setPreviewOpen(false)}
+    {/* Comment preview */}
+    <Modal
+      opened={previewOpen}
+      onClose={() => setPreviewOpen(false)}
+      title="Comment Preview"
+      size={800}
+      centered
+      withinPortal={false}
+      styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
+    >
+      <iframe
+        srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
+        style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
         title="Comment Preview"
-        size={800}
-        centered
-        withinPortal={false}
-        styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
-      >
-        <iframe
-          srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
-          style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
-          title="Comment Preview"
-        />
-      </Modal>
+      />
+    </Modal>
 
-      {/* Post result */}
-      <Modal
-        opened={postResultOpen}
-        onClose={() => setPostResultOpen(false)}
-        title={postError ? 'Post Failed' : 'Comment Posted'}
-        size="sm"
-        centered
-        withinPortal={false}
-      >
-        {postError ? (
-          <Text c="red" size="sm">{postError}</Text>
-        ) : (
-          <Text size="sm">
-            Comment posted successfully.{' '}
-            <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
-          </Text>
-        )}
-      </Modal>
+    {/* Post result */}
+    <Modal
+      opened={postResultOpen}
+      onClose={() => setPostResultOpen(false)}
+      title={postError ? 'Post Failed' : 'Comment Posted'}
+      size="sm"
+      centered
+      withinPortal={false}
+    >
+      {postError ? (
+        <Text c="red" size="sm">{postError}</Text>
+      ) : (
+        <Text size="sm">
+          Comment posted successfully.{' '}
+          <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
+        </Text>
+      )}
+    </Modal>
     </>
   )
 }
@@ -628,7 +644,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
           {visibleCommits.length > 0 && (
             <Stack gap="xs">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text size="sm" fw={700}>Commit</Text>
+                <Text size="sm" fw={700}>Select Commit</Text>
                 <Checkbox
                   label="Show all commits"
                   checked={showAll}
@@ -877,7 +893,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
           {visibleCommits.length > 0 && (
             <Stack gap="xs">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text size="sm" fw={700}>Commit</Text>
+                <Text size="sm" fw={700}>Select Commit</Text>
                 <Checkbox
                   label="Show all commits"
                   checked={showAll}

@@ -57,7 +57,7 @@ test('modal has 4 tabs; Notify panel shows Commit Range', async ({ page }) => {
   await expect(tablist.getByRole('tab', { name: 'Unapprove', exact: true })).toBeVisible()
 
   await page.getByRole('tab', { name: 'Notify', exact: true }).click()
-  await expect(page.getByRole('tabpanel', { name: 'Notify' }).getByText('Commit Range')).toBeVisible()
+  await expect(page.getByRole('tabpanel', { name: 'Notify' }).getByText('Select Commits to Compare')).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
