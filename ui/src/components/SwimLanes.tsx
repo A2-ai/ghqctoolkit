@@ -91,6 +91,7 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                                 mb={8}
                                 p={10}
                                 onClick={() => setSelected(s)}
+                                data-testid={`issue-card-${s.issue.number}`}
                                 style={{
                                   cursor: 'pointer',
                                   ...(postApprovalFileCommit(s) ? { backgroundColor: '#ffedd5' } : undefined),

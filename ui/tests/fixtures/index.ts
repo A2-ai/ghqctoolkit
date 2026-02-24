@@ -127,6 +127,67 @@ export const partialBatchResponse: BatchIssueStatusResponse = {
   errors: [{ issue_number: 52, kind: 'fetch_failed', error: 'not found' }],
 }
 
+// ── IssueDetailModal fixtures ─────────────────────────────────────────────────
+
+const emptyBlockingQCStatus = {
+  total: 0, approved_count: 0, summary: '-',
+  approved: [], not_approved: [], errors: [],
+}
+
+// Single commit: one file-changing initial commit. Slider should center it.
+export const singleCommitIssue = makeIssue({ number: 70, title: 'src/single.rs', branch: 'feature-branch', assignees: ['alice'] })
+export const singleCommitStatus: IssueStatusResponse = {
+  issue: singleCommitIssue,
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+  dirty: false,
+  branch: 'feature-branch',
+  commits: [
+    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  ],
+  checklist_summary: { completed: 2, total: 7, percentage: 28.6 },
+  blocking_qc_status: emptyBlockingQCStatus,
+}
+
+// Multi-commit: 4 commits, one hidden by default (ccccccc: no file change, no statuses).
+// Newest-first order as the API returns them.
+//   ddddddd – file_changed=true,  statuses=[]             ← latest, TO default
+//   ccccccc – file_changed=false, statuses=[]             ← hidden unless showAll
+//   bbbbbbb – file_changed=true,  statuses=['notification'] ← FROM default
+//   aaaaaaa – file_changed=true,  statuses=['initial']
+export const multiCommitIssue = makeIssue({ number: 71, title: 'src/multi.rs' })
+export const multiCommitStatus: IssueStatusResponse = {
+  issue: multiCommitIssue,
+  qc_status: { status: 'changes_to_comment', status_detail: 'New changes since last notification', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'ddddddddddddddddddddddddddddddddddddddd1' },
+  dirty: false,
+  branch: 'main',
+  commits: [
+    { hash: 'ddddddddddddddddddddddddddddddddddddddd1', message: 'new changes', statuses: [], file_changed: true },
+    { hash: 'ccccccccccccccccccccccccccccccccccccccc1', message: 'bump version', statuses: [], file_changed: false },
+    { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'push notification', statuses: ['notification'], file_changed: true },
+    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  ],
+  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  blocking_qc_status: emptyBlockingQCStatus,
+}
+
+// Notification landed on a non-file-changing commit after the last file change.
+// FROM and TO both default to bbbbbbb (FROM is already the last commit).
+//   bbbbbbb – file_changed=false, statuses=['notification'] ← FROM=TO default, also exceptionIdx
+//   aaaaaaa – file_changed=true,  statuses=['initial']
+export const notifOnNonFileIssue = makeIssue({ number: 72, title: 'src/notif-nofile.rs' })
+export const notifOnNonFileStatus: IssueStatusResponse = {
+  issue: notifOnNonFileIssue,
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1' },
+  dirty: false,
+  branch: 'main',
+  commits: [
+    { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'notification on non-file commit', statuses: ['notification'], file_changed: false },
+    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  ],
+  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  blocking_qc_status: emptyBlockingQCStatus,
+}
+
 // ── Create tab fixtures ───────────────────────────────────────────────────────
 
 export const defaultAssignees: Assignee[] = [

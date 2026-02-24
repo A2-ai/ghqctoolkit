@@ -20,6 +20,7 @@ import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
+import type { CommentResponse } from '../../src/api/issues'
 
 export interface RouteOverrides {
   repo: RepoInfo
@@ -40,6 +41,8 @@ export interface RouteOverrides {
   createMilestone: Milestone
   /** Issue responses returned by POST /api/milestones/:n/issues */
   createIssues: CreateIssueResponse[]
+  /** Response for POST /api/issues/:n/comment; null → 500 error */
+  postCommentResponse: CommentResponse | null
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -58,6 +61,7 @@ const defaultOverrides: RouteOverrides = {
   fileTree: { '': rootFileTree, src: srcFileTree },
   createMilestone: createdMilestone,
   createIssues: createIssueResponses,
+  postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -172,5 +176,33 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       contentType: 'text/html',
       body: '<p>Preview</p>',
     })
+  })
+
+  await page.route(/\/api\/preview\/\d+\/comment/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Comment preview</p>',
+    })
+  })
+
+  await page.route(/\/api\/issues\/\d+\/comment/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postCommentResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postCommentResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
   })
 }
