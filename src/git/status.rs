@@ -240,22 +240,91 @@ impl GitStatusOps for GitInfo {
     fn dirty(&self) -> Result<Vec<PathBuf>, GitStatusError> {
         let repo = self.repository()?;
 
-        // Check for uncommitted changes (dirty working tree)
+        let mut dirty_files: std::collections::BTreeSet<PathBuf> =
+            std::collections::BTreeSet::new();
+
+        // Unstaged changes: index vs worktree
         let status_platform = repo
             .status(gix::progress::Discard)
             .map_err(GitStatusError::StatusError)?;
 
-        let mut dirty_files = Vec::new();
         for entry in status_platform
             .into_index_worktree_iter(std::iter::empty::<gix::bstr::BString>())
             .map_err(GitStatusError::StatusIterError)?
         {
             let entry = entry.map_err(GitStatusError::StatusEntryError)?;
-            dirty_files.push(PathBuf::from(entry.rela_path().to_string()));
+            dirty_files.insert(PathBuf::from(entry.rela_path().to_string()));
         }
 
-        log::debug!("Repository has {} uncommitted changes", dirty_files.len());
-        Ok(dirty_files)
+        // Staged changes: HEAD tree vs index
+        // Any file whose index entry differs from HEAD is staged and therefore dirty.
+        'staged: {
+            let head_commit = match repo.head_commit() {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("Could not read HEAD commit for staged check: {e}");
+                    break 'staged;
+                }
+            };
+            let head_tree_id = match head_commit.tree_id() {
+                Ok(id) => id,
+                Err(e) => {
+                    log::warn!("Could not read HEAD tree for staged check: {e}");
+                    break 'staged;
+                }
+            };
+            let head_index = match repo.index_from_tree(&head_tree_id) {
+                Ok(idx) => idx,
+                Err(e) => {
+                    log::warn!("Could not build HEAD index for staged check: {e}");
+                    break 'staged;
+                }
+            };
+            let work_index = match repo.open_index() {
+                Ok(idx) => idx,
+                Err(e) => {
+                    log::warn!("Could not open working index for staged check: {e}");
+                    break 'staged;
+                }
+            };
+
+            // Build path→id map for HEAD tree entries
+            let head_backing = head_index.path_backing();
+            let head_map: std::collections::HashMap<String, gix::ObjectId> = head_index
+                .entries()
+                .iter()
+                .map(|e| (String::from_utf8_lossy(&*e.path_in(head_backing)).into_owned(), e.id))
+                .collect();
+
+            let work_backing = work_index.path_backing();
+            let mut work_paths: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+
+            // Files in the working index that are new or modified relative to HEAD
+            for entry in work_index.entries() {
+                let path = String::from_utf8_lossy(&*entry.path_in(work_backing)).into_owned();
+                work_paths.insert(path.clone());
+                match head_map.get(&path) {
+                    Some(head_id) if *head_id == entry.id => {} // unchanged
+                    _ => {
+                        dirty_files.insert(PathBuf::from(&path));
+                    }
+                }
+            }
+
+            // Files in HEAD that are absent from the working index → staged deletion
+            for path in head_map.keys() {
+                if !work_paths.contains(path) {
+                    dirty_files.insert(PathBuf::from(path));
+                }
+            }
+        }
+
+        log::debug!(
+            "Repository has {} dirty files (staged or unstaged)",
+            dirty_files.len()
+        );
+        Ok(dirty_files.into_iter().collect())
     }
 }
 
