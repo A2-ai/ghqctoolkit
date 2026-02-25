@@ -2,6 +2,7 @@ use crate::utils::EnvProvider;
 use octocrab::Octocrab;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 #[derive(thiserror::Error, Debug)]
 pub enum AuthError {
@@ -18,6 +19,9 @@ pub enum AuthError {
     #[error("YAML parsing error: {0}")]
     Yaml(#[from] serde_yaml::Error),
 }
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(25);
 
 pub fn create_authenticated_client(
     base_url: &str,
@@ -82,25 +86,30 @@ pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
 }
 
 fn build_client_with_token(base_url: &str, token: String) -> Result<Octocrab, AuthError> {
-    // Assume we're already in a proper tokio runtime context (called from API functions)
     log::debug!("Creating Octocrab client (assuming proper runtime context)");
+    let builder = Octocrab::builder()
+        .set_connect_timeout(Some(CONNECT_TIMEOUT))
+        .set_read_timeout(Some(READ_TIMEOUT))
+        .personal_token(token);
     if base_url == "https://github.com" {
-        Octocrab::builder().personal_token(token).build()
+        builder.build()
     } else {
-        Octocrab::builder()
+        builder
             .base_uri(format!("{}/api/v3", base_url))
-            .and_then(|b| b.personal_token(token).build())
+            .and_then(|b| b.build())
     }
     .map_err(AuthError::ClientBuild)
 }
 
 fn build_unauthenticated_client(base_url: &str) -> Result<Octocrab, AuthError> {
-    // Assume we're already in a proper tokio runtime context (called from API functions)
     log::debug!("Creating unauthenticated Octocrab client (assuming proper runtime context)");
+    let builder = Octocrab::builder()
+        .set_connect_timeout(Some(CONNECT_TIMEOUT))
+        .set_read_timeout(Some(READ_TIMEOUT));
     if base_url == "https://github.com" {
-        Octocrab::builder().build()
+        builder.build()
     } else {
-        Octocrab::builder()
+        builder
             .base_uri(format!("{}/api/v3", base_url))
             .and_then(|b| b.build())
     }
@@ -234,25 +243,42 @@ fn get_gh_auth_token(base_url: &str) -> Option<String> {
 }
 
 fn validate_github_token(token: &str) -> Option<String> {
-    // GitHub tokens should start with specific prefixes and meet length requirements
-    let is_valid = token.starts_with("ghp_")       // Personal access tokens
-        || token.starts_with("github_pat_")        // Fine-grained personal access tokens
-        || token.starts_with("gho_")               // OAuth tokens
-        || token.starts_with("ghu_")               // User-to-server tokens
-        || token.starts_with("ghs_")               // GitHub App tokens
-        || token.starts_with("ghr_"); // Refresh tokens
-
-    if is_valid && token.len() >= 20 {
-        // Basic length check
-        Some(token.to_string())
-    } else {
-        log::debug!(
-            "Invalid GitHub token format or length: {} chars, starts with: {}",
-            token.len(),
-            token.chars().take(4).collect::<String>()
-        );
-        None
+    let token = token.trim();
+    if token.is_empty() || token.contains(char::is_whitespace) {
+        return None;
     }
+
+    // Standard GitHub.com token prefixes
+    let has_known_prefix = token.starts_with("ghp_")
+        || token.starts_with("github_pat_")
+        || token.starts_with("gho_")
+        || token.starts_with("ghu_")
+        || token.starts_with("ghs_")
+        || token.starts_with("ghr_");
+
+    if has_known_prefix && token.len() >= 20 {
+        return Some(token.to_string());
+    }
+
+    // GHE classic tokens: 40-char hex strings (no prefix)
+    if token.len() >= 20
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        log::debug!(
+            "Accepting non-prefixed token ({} chars) — likely GHE classic PAT",
+            token.len()
+        );
+        return Some(token.to_string());
+    }
+
+    log::debug!(
+        "Rejected token: {} chars, starts with: {}",
+        token.len(),
+        token.chars().take(6).collect::<String>()
+    );
+    None
 }
 
 fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<String> {

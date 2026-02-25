@@ -18,9 +18,10 @@ import {
 } from '@mantine/core'
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { ApproveRequest, IssueStatusResponse, QCStatus, ReviewRequest, UnapproveRequest } from '~/api/issues'
-import { fetchSingleIssueStatus, postApprove, postComment, postReview, postUnapprove } from '~/api/issues'
-import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview, fetchUnapprovePreview } from '~/api/preview'
+import type { ApproveRequest, IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
+import { fetchSingleIssueStatus, postApprove, postComment, postReview } from '~/api/issues'
+import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
+import { UnapproveSwimLanes } from '~/components/UnapproveSwimLanes'
 
 function wrapInGithubStyles(body: string): string {
   return `<!DOCTYPE html>
@@ -314,43 +315,68 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
             {/* Slider A (in flow — renders track + marks) */}
             <div style={{ position: 'relative' }}>
-              <Slider
-                min={0}
-                max={Math.max(0, visibleCommits.length - 1)}
-                step={1}
-                value={snapA}
-                onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
-                marks={visibleCommits.map((c, i) => ({
-                  value: i,
-                  label: (
-                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                      {c.hash.slice(0, 7)}
-                    </span>
-                  ),
-                }))}
-                label={null}
-                mb={40}
-                styles={{ bar: { display: 'none' } }}
-              />
-              {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
+              {visibleCommits.length === 1 ? (
+                // Single commit: use min=0,max=2,value=1 so Mantine positions the mark at
+                // exactly 50% of the track, matching the dot formula's pct=0.5 above.
                 <Slider
                   min={0}
-                  max={Math.max(0, visibleCommits.length - 1)}
+                  max={2}
                   step={1}
-                  value={snapB}
-                  onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
+                  value={1}
+                  onChange={() => {}}
+                  marks={[{
+                    value: 1,
+                    label: (
+                      <span style={{ fontFamily: 'monospace', fontSize: 10, color: visibleCommits[0].file_changed ? '#111' : '#999' }}>
+                        {visibleCommits[0].hash.slice(0, 7)}
+                      </span>
+                    ),
+                  }]}
                   label={null}
-                  styles={{
-                    bar: { display: 'none' },
-                    root: { pointerEvents: 'none' },
-                    thumb: { pointerEvents: 'auto', zIndex: 3 },
-                    track: { backgroundColor: 'transparent' },
-                    mark: { display: 'none' },
-                    markLabel: { display: 'none' },
-                  }}
+                  mb={40}
+                  styles={{ bar: { display: 'none' } }}
                 />
-              </div>
+              ) : (
+                <>
+                  <Slider
+                    min={0}
+                    max={Math.max(0, visibleCommits.length - 1)}
+                    step={1}
+                    value={snapA}
+                    onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
+                    marks={visibleCommits.map((c, i) => ({
+                      value: i,
+                      label: (
+                        <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                          {c.hash.slice(0, 7)}
+                        </span>
+                      ),
+                    }))}
+                    label={null}
+                    mb={40}
+                    styles={{ bar: { display: 'none' } }}
+                  />
+                  {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
+                    <Slider
+                      min={0}
+                      max={Math.max(0, visibleCommits.length - 1)}
+                      step={1}
+                      value={snapB}
+                      onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
+                      label={null}
+                      styles={{
+                        bar: { display: 'none' },
+                        root: { pointerEvents: 'none' },
+                        thumb: { pointerEvents: 'auto', zIndex: 3 },
+                        track: { backgroundColor: 'transparent' },
+                        mark: { display: 'none' },
+                        markLabel: { display: 'none' },
+                      }}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -542,8 +568,13 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
   // Default: newest commit (last in orderedCommits = latest)
   const defaultCommitOrigIdx = orderedCommits.length - 1
 
-  // Newest commit is always visible (exception) so default is reachable without showAll
-  const exceptionIdx = orderedCommits.length - 1
+  // Exception: make the latest commit visible even when it has no statuses and didn't
+  // change the file. If it already qualifies via those conditions, no exception needed.
+  const latestCommit = orderedCommits[defaultCommitOrigIdx]
+  const exceptionIdx =
+    latestCommit && !latestCommit.file_changed && latestCommit.statuses.length === 0
+      ? defaultCommitOrigIdx
+      : -1
 
   const [showAll, setShowAll] = useState(false)
   const [commitOrigIdx, setCommitOrigIdx] = useState(defaultCommitOrigIdx)
@@ -659,24 +690,47 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               })}
             </div>
 
-            <Slider
-              min={0}
-              max={Math.max(0, visibleCommits.length - 1)}
-              step={1}
-              value={sliderIdx}
-              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-              marks={visibleCommits.map((c, i) => ({
-                value: i,
-                label: (
-                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                    {c.hash.slice(0, 7)}
-                  </span>
-                ),
-              }))}
-              label={null}
-              mb={40}
-              styles={{ bar: { display: 'none' } }}
-            />
+            {visibleCommits.length === 1 ? (
+              // Single commit: use min=0,max=2,value=1 so Mantine positions the mark at
+              // exactly 50% of the track, matching the dot formula's pct=0.5 above.
+              <Slider
+                min={0}
+                max={2}
+                step={1}
+                value={1}
+                onChange={() => {}}
+                marks={[{
+                  value: 1,
+                  label: (
+                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: visibleCommits[0].file_changed ? '#111' : '#999' }}>
+                      {visibleCommits[0].hash.slice(0, 7)}
+                    </span>
+                  ),
+                }]}
+                label={null}
+                mb={40}
+                styles={{ bar: { display: 'none' } }}
+              />
+            ) : (
+              <Slider
+                min={0}
+                max={Math.max(0, visibleCommits.length - 1)}
+                step={1}
+                value={sliderIdx}
+                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+                marks={visibleCommits.map((c, i) => ({
+                  value: i,
+                  label: (
+                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                      {c.hash.slice(0, 7)}
+                    </span>
+                  ),
+                }))}
+                label={null}
+                mb={40}
+                styles={{ bar: { display: 'none' } }}
+              />
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
@@ -781,13 +835,19 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 
   const orderedCommits = [...status.commits].reverse()
 
-  // Default: last commit with non-empty statuses
-  let defaultCommitOrigIdx = 0
+  // Default: last commit with non-empty statuses; fall back to latest
+  let defaultCommitOrigIdx = orderedCommits.length - 1
   for (let i = orderedCommits.length - 1; i >= 0; i--) {
     if (orderedCommits[i].statuses.length > 0) { defaultCommitOrigIdx = i; break }
   }
 
-  const exceptionIdx = defaultCommitOrigIdx
+  // Exception: only needed when the default commit wouldn't otherwise be visible
+  // (i.e., it has no statuses and didn't change the file)
+  const defaultCommit = orderedCommits[defaultCommitOrigIdx]
+  const exceptionIdx =
+    defaultCommit && !defaultCommit.file_changed && defaultCommit.statuses.length === 0
+      ? defaultCommitOrigIdx
+      : -1
 
   const [showAll, setShowAll] = useState(false)
   const [commitOrigIdx, setCommitOrigIdx] = useState(defaultCommitOrigIdx)
@@ -934,24 +994,47 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
               })}
             </div>
 
-            <Slider
-              min={0}
-              max={Math.max(0, visibleCommits.length - 1)}
-              step={1}
-              value={sliderIdx}
-              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-              marks={visibleCommits.map((c, i) => ({
-                value: i,
-                label: (
-                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                    {c.hash.slice(0, 7)}
-                  </span>
-                ),
-              }))}
-              label={null}
-              mb={40}
-              styles={{ bar: { display: 'none' } }}
-            />
+            {visibleCommits.length === 1 ? (
+              // Single commit: use min=0,max=2,value=1 so Mantine positions the mark at
+              // exactly 50% of the track, matching the dot formula's pct=0.5 above.
+              <Slider
+                min={0}
+                max={2}
+                step={1}
+                value={1}
+                onChange={() => {}}
+                marks={[{
+                  value: 1,
+                  label: (
+                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: visibleCommits[0].file_changed ? '#111' : '#999' }}>
+                      {visibleCommits[0].hash.slice(0, 7)}
+                    </span>
+                  ),
+                }]}
+                label={null}
+                mb={40}
+                styles={{ bar: { display: 'none' } }}
+              />
+            ) : (
+              <Slider
+                min={0}
+                max={Math.max(0, visibleCommits.length - 1)}
+                step={1}
+                value={sliderIdx}
+                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+                marks={visibleCommits.map((c, i) => ({
+                  value: i,
+                  label: (
+                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+                      {c.hash.slice(0, 7)}
+                    </span>
+                  ),
+                }))}
+                label={null}
+                mb={40}
+                styles={{ bar: { display: 'none' } }}
+              />
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
@@ -1037,140 +1120,15 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 }
 
 // ---------------------------------------------------------------------------
-// Unapprove tab — reason required, no commit selector
+// Unapprove tab — swim lane layout with cascade impact
 // ---------------------------------------------------------------------------
 function UnapproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
-  const { issue } = status
-
-  const [reason, setReason] = useState('')
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
-  const [postLoading, setPostLoading] = useState(false)
-  const [postResultOpen, setPostResultOpen] = useState(false)
-  const [postResultUrl, setPostResultUrl] = useState<string | null>(null)
-  const [postOpened, setPostOpened] = useState<boolean | null>(null)
-  const [postError, setPostError] = useState<string | null>(null)
-  const queryClient = useQueryClient()
-
-  useEffect(() => {
-    setReason('')
-    setPreviewOpen(false)
-    setPostResultOpen(false)
-    setPostResultUrl(null)
-    setPostOpened(null)
-    setPostError(null)
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const canPost = reason.trim() !== ''
-
-  const unapproveRequest: UnapproveRequest = {
-    reason: reason.trim(),
-  }
-
-  async function handlePreview() {
-    setPreviewLoading(true)
-    try {
-      const html = await fetchUnapprovePreview(issue.number, unapproveRequest)
-      setPreviewHtml(html)
-      setPreviewOpen(true)
-    } catch (err) {
-      setPreviewHtml(`<pre>Error: ${(err as Error).message}</pre>`)
-      setPreviewOpen(true)
-    } finally {
-      setPreviewLoading(false)
-    }
-  }
-
-  async function handlePost() {
-    setPostLoading(true)
-    setPostError(null)
-    setPostResultUrl(null)
-    setPostOpened(null)
-    try {
-      const result = await postUnapprove(issue.number, unapproveRequest)
-      setPostResultUrl(result.unapproval_url)
-      setPostOpened(result.opened)
-      void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
-      const fresh = await fetchSingleIssueStatus(issue.number)
-      onStatusUpdate(fresh)
-    } catch (err) {
-      setPostError((err as Error).message)
-    } finally {
-      setPostLoading(false)
-      setPostResultOpen(true)
-    }
-  }
-
   return (
     <>
-    <div style={{ flex: 1, overflowY: 'auto' }}>
-      <Stack gap="md">
+      <div style={{ flexShrink: 0, paddingBottom: 12 }}>
         <StatusCard status={status} />
-
-        <Textarea
-          label="Reason (required)"
-          placeholder="Required"
-          required
-          value={reason}
-          onChange={(e) => setReason(e.currentTarget.value)}
-          resize="vertical"
-          minRows={3}
-        />
-      </Stack>
-    </div>
-    <div style={{ borderTop: '1px solid var(--mantine-color-gray-3)', paddingTop: 12, paddingBottom: 12, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-      <Button
-        variant="default"
-        loading={previewLoading}
-        disabled={!canPost}
-        onClick={handlePreview}
-      >
-        Preview
-      </Button>
-      <Button
-        color="red"
-        loading={postLoading}
-        disabled={!canPost}
-        onClick={handlePost}
-      >
-        Unapprove
-      </Button>
-    </div>
-
-    <Modal
-      opened={previewOpen}
-      onClose={() => setPreviewOpen(false)}
-      title="Comment Preview"
-      size={800}
-      centered
-      withinPortal={false}
-      styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
-    >
-      <iframe
-        srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
-        style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
-        title="Comment Preview"
-      />
-    </Modal>
-
-    <Modal
-      opened={postResultOpen}
-      onClose={() => setPostResultOpen(false)}
-      title={postError ? 'Unapprove Failed' : 'Unapproved'}
-      size="sm"
-      centered
-      withinPortal={false}
-    >
-      {postError ? (
-        <Text c="red" size="sm">{postError}</Text>
-      ) : (
-        <Text size="sm">
-          Issue unapproved{postOpened ? ' and reopened' : ''}.{' '}
-          <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
-        </Text>
-      )}
-    </Modal>
+      </div>
+      <UnapproveSwimLanes status={status} onStatusUpdate={onStatusUpdate} />
     </>
   )
 }

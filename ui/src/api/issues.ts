@@ -377,6 +377,20 @@ export function useInvalidateMilestoneIssues() {
     queryClient.invalidateQueries({ queryKey: ['milestones', milestoneNumber, 'issues'] })
 }
 
+export interface BlockedIssueStatus {
+  issue: Issue
+  qc_status: QCStatus
+}
+
+export async function fetchBlockedIssues(issueNumber: number): Promise<BlockedIssueStatus[]> {
+  const res = await fetch(`/api/issues/${issueNumber}/blocked`)
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to fetch blocked issues: ${res.status}`)
+  }
+  return res.json()
+}
+
 export function useAllMilestoneIssues(milestoneNumbers: number[], enabled = true) {
   const queries = useQueries({
     queries: milestoneNumbers.map((n) => ({
