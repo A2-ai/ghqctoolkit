@@ -32,7 +32,11 @@ async fn static_handler(uri: Uri) -> Response {
 }
 
 /// Start the embedded server (API + SPA) and open the browser.
-pub async fn run<G: GitProvider + 'static>(port: u16, state: AppState<G>) -> anyhow::Result<()> {
+pub async fn run<G: GitProvider + 'static>(
+    port: u16,
+    state: AppState<G>,
+    open: bool,
+) -> anyhow::Result<String> {
     let app = crate::api::create_router(state).fallback(static_handler);
 
     let addr = format!("0.0.0.0:{port}");
@@ -42,8 +46,10 @@ pub async fn run<G: GitProvider + 'static>(port: u16, state: AppState<G>) -> any
     log::info!("ghqc UI running at {url}");
 
     // Open the browser (non-blocking, ignore errors)
-    let _ = open::that(&url);
+    if open {
+        let _ = open::that(&url);
+    }
 
     axum::serve(listener, app).await?;
-    Ok(())
+    Ok(url)
 }

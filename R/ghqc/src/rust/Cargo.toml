@@ -1,0 +1,20 @@
+[package]
+name = 'ghqc'
+publish = false
+version = '0.1.0'
+edition = '2021'
+rust-version = '1.65'
+
+[lib]
+crate-type = [ 'staticlib' ]
+name = 'ghqc'
+path = 'lib.rs'
+
+[dependencies]
+extendr-api = '0.8.1'
+ghqctoolkit = { path = "../../../../.", features = ["ui"] }
+tokio = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1

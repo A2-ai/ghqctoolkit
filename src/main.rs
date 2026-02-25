@@ -1038,7 +1038,7 @@ async fn main() -> Result<()> {
 
             let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache)
                 .with_creator(|path| GitInfo::from_path(path, &StdEnvProvider).ok());
-            ghqctoolkit::ui::run(port, state).await?;
+            ghqctoolkit::ui::run(port, state, true).await?;
         }
     }
 
