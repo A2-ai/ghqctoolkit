@@ -21,53 +21,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { ApproveRequest, IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
 import { fetchSingleIssueStatus, postApprove, postComment, postReview } from '~/api/issues'
 import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
+import { CommitSlider } from '~/components/CommitSlider'
 import { UnapproveSwimLanes } from '~/components/UnapproveSwimLanes'
-
-function wrapInGithubStyles(body: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    font-size: 14px; line-height: 1.6; color: #1f2328;
-    padding: 16px 20px; margin: 0; word-wrap: break-word;
-  }
-  h1,h2,h3,h4,h5,h6 { margin-top: 20px; margin-bottom: 8px; font-weight: 600; line-height: 1.25; }
-  h2 { padding-bottom: 6px; border-bottom: 1px solid #d0d7de; font-size: 1.3em; }
-  h3 { font-size: 1.1em; }
-  a { color: #0969da; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  p { margin-top: 0; margin-bottom: 12px; }
-  ul,ol { padding-left: 2em; margin-top: 0; margin-bottom: 12px; }
-  li { margin-bottom: 2px; }
-  li:has(> input[type="checkbox"]) { list-style: none; }
-  li:has(> input[type="checkbox"]) input[type="checkbox"] { margin: 0 0.3em 0.2em -1.4em; vertical-align: middle; }
-  code { font-family: ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace; font-size: 85%; background: rgba(175,184,193,0.2); padding: 2px 5px; border-radius: 4px; }
-  pre { background: #f6f8fa; border-radius: 6px; padding: 12px 16px; overflow: auto; font-size: 85%; line-height: 1.45; }
-  pre code { background: none; padding: 0; }
-  blockquote { margin: 0 0 12px; padding: 0 12px; color: #57606a; border-left: 4px solid #d0d7de; }
-  hr { border: none; border-top: 1px solid #d0d7de; margin: 16px 0; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
-  th,td { border: 1px solid #d0d7de; padding: 6px 12px; }
-  th { background: #f6f8fa; font-weight: 600; }
-</style>
-</head>
-<body>${body}</body>
-</html>`
-}
-
-// Swimlane header colors keyed by QC status
-const STATUS_LANE_COLOR: Record<QCStatus['status'], string> = {
-  approved:               '#dcfce7',
-  changes_after_approval: '#dcfce7',
-  awaiting_review:        '#dbeafe',
-  approval_required:      '#dbeafe',
-  change_requested:       '#fee2e2',
-  in_progress:            '#fef9c3',
-  changes_to_comment:     '#fef9c3',
-}
+import { wrapInGithubStyles } from '~/utils/github'
+import { STATUS_LANE_COLOR } from '~/utils/statusColors'
 
 // Commit status dot colors (rendered oldest→newest, lowest→highest)
 const STATUS_DOT_COLORS: Record<string, string> = {
@@ -321,67 +278,31 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
             {/* Slider A (in flow — renders track + marks) */}
             <div style={{ position: 'relative' }}>
-              {visibleCommits.length === 1 ? (
-                // Single commit: use min=0,max=2,value=1 so Mantine positions the mark at
-                // exactly 50% of the track, matching the dot formula's pct=0.5 above.
-                <Slider
-                  min={0}
-                  max={2}
-                  step={1}
-                  value={1}
-                  onChange={() => {}}
-                  marks={[{
-                    value: 1,
-                    label: (
-                      <span style={{ fontFamily: 'monospace', fontSize: 10, color: visibleCommits[0].file_changed ? '#111' : '#999' }}>
-                        {visibleCommits[0].hash.slice(0, 7)}
-                      </span>
-                    ),
-                  }]}
-                  label={null}
-                  mb={40}
-                  styles={{ bar: { display: 'none' } }}
-                />
-              ) : (
-                <>
+              <CommitSlider
+                commits={visibleCommits}
+                value={snapA}
+                onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
+              />
+              {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
+              {visibleCommits.length > 1 && (
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
                   <Slider
                     min={0}
                     max={Math.max(0, visibleCommits.length - 1)}
                     step={1}
-                    value={snapA}
-                    onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
-                    marks={visibleCommits.map((c, i) => ({
-                      value: i,
-                      label: (
-                        <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                          {c.hash.slice(0, 7)}
-                        </span>
-                      ),
-                    }))}
+                    value={snapB}
+                    onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
                     label={null}
-                    mb={40}
-                    styles={{ bar: { display: 'none' } }}
+                    styles={{
+                      bar: { display: 'none' },
+                      root: { pointerEvents: 'none' },
+                      thumb: { pointerEvents: 'auto', zIndex: 3 },
+                      track: { backgroundColor: 'transparent' },
+                      mark: { display: 'none' },
+                      markLabel: { display: 'none' },
+                    }}
                   />
-                  {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
-                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
-                    <Slider
-                      min={0}
-                      max={Math.max(0, visibleCommits.length - 1)}
-                      step={1}
-                      value={snapB}
-                      onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
-                      label={null}
-                      styles={{
-                        bar: { display: 'none' },
-                        root: { pointerEvents: 'none' },
-                        thumb: { pointerEvents: 'auto', zIndex: 3 },
-                        track: { backgroundColor: 'transparent' },
-                        mark: { display: 'none' },
-                        markLabel: { display: 'none' },
-                      }}
-                    />
-                  </div>
-                </>
+                </div>
               )}
             </div>
           </div>
@@ -488,8 +409,11 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 // ---------------------------------------------------------------------------
 // Shared status card (used by both Notify and Review tabs)
 // ---------------------------------------------------------------------------
+const EMPTY_BLOCKING_QC_STATUS = { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] }
+
 function StatusCard({ status }: { status: IssueStatusResponse }) {
-  const { issue, qc_status, branch, checklist_summary, blocking_qc_status } = status
+  const { issue, qc_status, branch, checklist_summary } = status
+  const blocking_qc_status = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const laneColor = STATUS_LANE_COLOR[qc_status.status]
   const formattedStatus = qc_status.status.replace(/_/g, ' ')
 
@@ -696,47 +620,11 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               })}
             </div>
 
-            {visibleCommits.length === 1 ? (
-              // Single commit: use min=0,max=2,value=1 so Mantine positions the mark at
-              // exactly 50% of the track, matching the dot formula's pct=0.5 above.
-              <Slider
-                min={0}
-                max={2}
-                step={1}
-                value={1}
-                onChange={() => {}}
-                marks={[{
-                  value: 1,
-                  label: (
-                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: visibleCommits[0].file_changed ? '#111' : '#999' }}>
-                      {visibleCommits[0].hash.slice(0, 7)}
-                    </span>
-                  ),
-                }]}
-                label={null}
-                mb={40}
-                styles={{ bar: { display: 'none' } }}
-              />
-            ) : (
-              <Slider
-                min={0}
-                max={Math.max(0, visibleCommits.length - 1)}
-                step={1}
-                value={sliderIdx}
-                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-                marks={visibleCommits.map((c, i) => ({
-                  value: i,
-                  label: (
-                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                      {c.hash.slice(0, 7)}
-                    </span>
-                  ),
-                }))}
-                label={null}
-                mb={40}
-                styles={{ bar: { display: 'none' } }}
-              />
-            )}
+            <CommitSlider
+              commits={visibleCommits}
+              value={sliderIdx}
+              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+            />
           </div>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
@@ -879,7 +767,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     setPostError(null)
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const bqs = status.blocking_qc_status
+  const bqs = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const hasBlockingIssues = bqs.total > 0 && (bqs.not_approved.length > 0 || bqs.errors.length > 0)
 
   const visibleCommits = orderedCommits
@@ -931,7 +819,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     setPostError(null)
     setPostResultUrl(null)
     try {
-      const result = await postApprove(issue.number, approveRequest)
+      const result = await postApprove(issue.number, approveRequest, overrideBlocking)
       setPostResultUrl(result.approval_url)
       void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
       const fresh = await fetchSingleIssueStatus(issue.number)
@@ -1000,47 +888,11 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
               })}
             </div>
 
-            {visibleCommits.length === 1 ? (
-              // Single commit: use min=0,max=2,value=1 so Mantine positions the mark at
-              // exactly 50% of the track, matching the dot formula's pct=0.5 above.
-              <Slider
-                min={0}
-                max={2}
-                step={1}
-                value={1}
-                onChange={() => {}}
-                marks={[{
-                  value: 1,
-                  label: (
-                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: visibleCommits[0].file_changed ? '#111' : '#999' }}>
-                      {visibleCommits[0].hash.slice(0, 7)}
-                    </span>
-                  ),
-                }]}
-                label={null}
-                mb={40}
-                styles={{ bar: { display: 'none' } }}
-              />
-            ) : (
-              <Slider
-                min={0}
-                max={Math.max(0, visibleCommits.length - 1)}
-                step={1}
-                value={sliderIdx}
-                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-                marks={visibleCommits.map((c, i) => ({
-                  value: i,
-                  label: (
-                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-                      {c.hash.slice(0, 7)}
-                    </span>
-                  ),
-                }))}
-                label={null}
-                mb={40}
-                styles={{ bar: { display: 'none' } }}
-              />
-            )}
+            <CommitSlider
+              commits={visibleCommits}
+              value={sliderIdx}
+              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+            />
           </div>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>

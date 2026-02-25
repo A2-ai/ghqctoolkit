@@ -323,7 +323,7 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
     // creation failure) stay as 502 since they indicate a real infrastructure problem.
     let blocking_issues = match state.git_info().get_blocked_issues(number).await {
         Ok(issues) => issues,
-        Err(GitHubApiError::APIError(_)) | Err(GitHubApiError::NoApi) => {
+        Err(GitHubApiError::NoApi) => {
             return Err(ApiError::NotImplemented(
                 "Blocked issues API is not available on this GitHub instance".to_string(),
             ));

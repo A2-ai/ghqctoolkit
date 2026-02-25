@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ActionIcon, Anchor, Badge, Button, Group, Loader, Modal, Stack, Text, Textarea, TextInput, Tooltip } from '@mantine/core'
 import type { DropResult } from '@hello-pangea/dnd'
@@ -8,54 +8,11 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { BlockedIssueStatus, IssueStatusResponse, QCStatus } from '~/api/issues'
 import { fetchSingleIssueStatus, postUnapprove } from '~/api/issues'
 import { fetchUnapprovePreview } from '~/api/preview'
-
-const STATUS_LANE_COLOR: Record<QCStatus['status'], string> = {
-  approved:               '#dcfce7',
-  changes_after_approval: '#dcfce7',
-  awaiting_review:        '#dbeafe',
-  approval_required:      '#dbeafe',
-  change_requested:       '#fee2e2',
-  in_progress:            '#fef9c3',
-  changes_to_comment:     '#fef9c3',
-}
+import { wrapInGithubStyles } from '~/utils/github'
+import { STATUS_LANE_COLOR } from '~/utils/statusColors'
 
 function isApprovedStatus(s: QCStatus['status']): boolean {
   return s === 'approved' || s === 'changes_after_approval'
-}
-
-function wrapInGithubStyles(body: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    font-size: 14px; line-height: 1.6; color: #1f2328;
-    padding: 16px 20px; margin: 0; word-wrap: break-word;
-  }
-  h1,h2,h3,h4,h5,h6 { margin-top: 20px; margin-bottom: 8px; font-weight: 600; line-height: 1.25; }
-  h2 { padding-bottom: 6px; border-bottom: 1px solid #d0d7de; font-size: 1.3em; }
-  h3 { font-size: 1.1em; }
-  a { color: #0969da; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  p { margin-top: 0; margin-bottom: 12px; }
-  ul,ol { padding-left: 2em; margin-top: 0; margin-bottom: 12px; }
-  li { margin-bottom: 2px; }
-  li:has(> input[type="checkbox"]) { list-style: none; }
-  li:has(> input[type="checkbox"]) input[type="checkbox"] { margin: 0 0.3em 0.2em -1.4em; vertical-align: middle; }
-  code { font-family: ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace; font-size: 85%; background: rgba(175,184,193,0.2); padding: 2px 5px; border-radius: 4px; }
-  pre { background: #f6f8fa; border-radius: 6px; padding: 12px 16px; overflow: auto; font-size: 85%; line-height: 1.45; }
-  pre code { background: none; padding: 0; }
-  blockquote { margin: 0 0 12px; padding: 0 12px; color: #57606a; border-left: 4px solid #d0d7de; }
-  hr { border: none; border-top: 1px solid #d0d7de; margin: 16px 0; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
-  th,td { border: 1px solid #d0d7de; padding: 6px 12px; }
-  th { background: #f6f8fa; font-weight: 600; }
-</style>
-</head>
-<body>${body}</body>
-</html>`
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +137,9 @@ interface Props {
 export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailable }: Props) {
   const { issue } = status
   const [state, dispatch] = useReducer(swimReducer, undefined, initialState)
+  // Tracks in-flight fetches synchronously to prevent duplicate requests from
+  // rapid calls before the reducer state update lands (stale-closure guard).
+  const fetchingRef = useRef(new Set<number>())
   const [fallbackReason, setFallbackReason] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -197,8 +157,11 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
   }, [issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function doFetch(issueNumber: number) {
-    if (state.loadingSet.has(issueNumber)) return
+    // Use a ref for the in-flight guard so rapid calls see the latest value
+    // even before the reducer state update from LOAD_START lands.
+    if (fetchingRef.current.has(issueNumber)) return
     if (state.loadedChildren.has(issueNumber)) return
+    fetchingRef.current.add(issueNumber)
     dispatch({ type: 'LOAD_START', issueNumber })
     try {
       const res = await fetch(`/api/issues/${issueNumber}/blocked`)
@@ -216,6 +179,8 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
       dispatch({ type: 'LOAD_SUCCESS', issueNumber, children })
     } catch (err) {
       dispatch({ type: 'LOAD_ERROR', issueNumber, error: (err as Error).message })
+    } finally {
+      fetchingRef.current.delete(issueNumber)
     }
   }
 
@@ -291,9 +256,15 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
       )
       setPostResults(results)
       setPostErrors(errors)
-      void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
-      const fresh = await fetchSingleIssueStatus(issue.number)
-      onStatusUpdate(fresh)
+      if (results.length > 0) {
+        void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
+        try {
+          const fresh = await fetchSingleIssueStatus(issue.number)
+          onStatusUpdate(fresh)
+        } catch {
+          // Status refresh failure is non-fatal — result modal still shows
+        }
+      }
     } finally {
       setPostLoading(false)
       setPostResultOpen(true)

@@ -85,7 +85,7 @@ export interface IssueStatusResponse {
   branch: string
   commits: IssueCommit[]
   checklist_summary: ChecklistSummary
-  blocking_qc_status: BlockingQCStatus
+  blocking_qc_status?: BlockingQCStatus
 }
 
 export interface CreateCommentRequest {
@@ -206,8 +206,9 @@ export async function postUnapprove(issueNumber: number, request: UnapproveReque
   return res.json()
 }
 
-export async function postApprove(issueNumber: number, request: ApproveRequest): Promise<ApprovalResponse> {
-  const res = await fetch(`/api/issues/${issueNumber}/approve`, {
+export async function postApprove(issueNumber: number, request: ApproveRequest, force = false): Promise<ApprovalResponse> {
+  const url = force ? `/api/issues/${issueNumber}/approve?force=true` : `/api/issues/${issueNumber}/approve`
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

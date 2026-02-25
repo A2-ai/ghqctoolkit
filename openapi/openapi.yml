@@ -322,6 +322,56 @@ paths:
               schema:
                 type: string
 
+  /preview/{number}/review:
+    post:
+      summary: Preview review comment body as HTML
+      operationId: previewReview
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the review comment
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/approve:
+    post:
+      summary: Preview approval comment body as HTML
+      operationId: previewApprove
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the approval comment
+          content:
+            text/html:
+              schema:
+                type: string
+
   /preview/{number}/unapprove:
     post:
       summary: Preview unapproval comment body as HTML
@@ -347,7 +397,7 @@ paths:
               schema:
                 type: string
 
-  /preview/{number}/comment/:
+  /preview/{number}/comment:
     post:
       summary: Preview comment body as HTML
       operationId: previewComment

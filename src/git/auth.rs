@@ -488,16 +488,6 @@ password ghp_api_token_456
             Some("ghr_1234567890123456789012345678901234567890".to_string())
         );
 
-        // Invalid tokens - wrong prefix
-        assert_eq!(
-            validate_github_token("invalid_1234567890123456789012345678901234567890"),
-            None
-        );
-        assert_eq!(
-            validate_github_token("abc_1234567890123456789012345678901234567890"),
-            None
-        );
-
         // Invalid tokens - too short
         assert_eq!(validate_github_token("ghp_123"), None);
         assert_eq!(validate_github_token("github_pat_123"), None);

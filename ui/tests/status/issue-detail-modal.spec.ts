@@ -87,7 +87,7 @@ test('status card shows branch, assignees, and status pill', async ({ page }) =>
 })
 
 // ---------------------------------------------------------------------------
-// 6. Single commit: slider renders without crashing; From and To show same hash
+// 5. Single commit: slider renders without crashing; From and To show same hash
 // ---------------------------------------------------------------------------
 test('single commit: slider renders and From/To show the same hash', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -103,7 +103,7 @@ test('single commit: slider renders and From/To show the same hash', async ({ pa
 })
 
 // ---------------------------------------------------------------------------
-// 7. Multi-commit: default FROM is the last notification commit (bbbbbbb),
+// 6. Multi-commit: default FROM is the last notification commit (bbbbbbb),
 //    default TO is the last file-changed commit after FROM (ddddddd)
 // ---------------------------------------------------------------------------
 test('multi-commit: default From/To are set correctly', async ({ page }) => {
@@ -115,7 +115,7 @@ test('multi-commit: default From/To are set correctly', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 8. Show all commits toggle reveals the hidden commit (ccccccc)
+// 7. Show all commits toggle reveals the hidden commit (ccccccc)
 // ---------------------------------------------------------------------------
 test('show all commits toggle reveals hidden commits', async ({ page }) => {
   await setupAndOpenModal(page, multiCommitIssue, multiCommitStatus)
@@ -129,7 +129,7 @@ test('show all commits toggle reveals hidden commits', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 9. Include diff checkbox is shown when file is changed in the From→To range
+// 8. Include diff checkbox is shown when file is changed in the From→To range
 // ---------------------------------------------------------------------------
 test('include diff shown when file changed in range', async ({ page }) => {
   // multi-commit: FROM=bbbbbbb TO=ddddddd; ddddddd is file_changed=true → include diff visible
@@ -138,7 +138,7 @@ test('include diff shown when file changed in range', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 10. Include diff NOT shown when no file change between From and To
+// 9. Include diff NOT shown when no file change between From and To
 //     (notification on non-file-changing commit: FROM == TO, no change in range)
 // ---------------------------------------------------------------------------
 test('include diff hidden when no file change in range', async ({ page }) => {
@@ -150,7 +150,7 @@ test('include diff hidden when no file change in range', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 11. Notification on non-file-changing commit: both From and To default to
+// 10. Notification on non-file-changing commit: both From and To default to
 //     that commit (bbbbbbb), which is the last notification
 // ---------------------------------------------------------------------------
 test('notification on non-file-changing commit: From and To both default to that commit', async ({ page }) => {
@@ -163,7 +163,7 @@ test('notification on non-file-changing commit: From and To both default to that
 })
 
 // ---------------------------------------------------------------------------
-// 12. Preview button opens the preview modal
+// 11. Preview button opens the preview modal
 // ---------------------------------------------------------------------------
 test('preview button opens preview modal', async ({ page }) => {
   await setupAndOpenModal(page, multiCommitIssue, multiCommitStatus)
@@ -173,7 +173,7 @@ test('preview button opens preview modal', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 13. Post comment: success modal appears with a GitHub link
+// 12. Post comment: success modal appears with a GitHub link
 // ---------------------------------------------------------------------------
 test('post comment shows success modal with GitHub link', async ({ page }) => {
   await setupAndOpenModal(page, multiCommitIssue, multiCommitStatus)
@@ -185,7 +185,7 @@ test('post comment shows success modal with GitHub link', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 14. Dirty indicator shown in modal status card when issue is dirty
+// 13. Dirty indicator shown in modal status card when issue is dirty
 // ---------------------------------------------------------------------------
 test('dirty asterisk shown in modal when issue is dirty', async ({ page }) => {
   await setupAndOpenModal(page, dirtyModalIssue, dirtyModalStatus)
@@ -197,7 +197,7 @@ test('dirty asterisk shown in modal when issue is dirty', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 15. Dirty indicator not present in modal when issue is clean
+// 14. Dirty indicator not present in modal when issue is clean
 // ---------------------------------------------------------------------------
 test('dirty asterisk not shown in modal when issue is clean', async ({ page }) => {
   await setupAndOpenModal(page, dirtyModalIssue, cleanModalStatus)
@@ -207,7 +207,28 @@ test('dirty asterisk not shown in modal when issue is clean', async ({ page }) =
 })
 
 // ---------------------------------------------------------------------------
-// 17. Review tab shows status card
+// 15. Post comment failure: error modal shown with error message
+// ---------------------------------------------------------------------------
+test('post comment failure shows error modal', async ({ page }) => {
+  await setupRoutes(page, {
+    milestones: [openMilestone],
+    milestoneIssues: { 1: [multiCommitIssue] },
+    issueStatuses: { results: [multiCommitStatus], errors: [] },
+    postCommentResponse: null,  // triggers 500
+  })
+  await page.goto('/')
+  await page.getByPlaceholder('Search milestones…').click()
+  await page.getByRole('option', { name: /Sprint 1/ }).click()
+  await page.getByTestId(`issue-card-${multiCommitIssue.number}`).click()
+  await expect(page.getByRole('tablist')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Post' }).click()
+
+  await expect(page.getByText('Post Failed')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 16. Review tab shows status card
 // ---------------------------------------------------------------------------
 test('review tab shows status card', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -218,7 +239,7 @@ test('review tab shows status card', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 18. Review tab has single commit selector, no From/To labels
+// 17. Review tab has single commit selector, no From/To labels
 // ---------------------------------------------------------------------------
 test('review tab: single commit selector, no From/To labels', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -234,7 +255,7 @@ test('review tab: single commit selector, no From/To labels', async ({ page }) =
 })
 
 // ---------------------------------------------------------------------------
-// 19. Review include diff enabled when dirty, disabled when clean
+// 18. Review include diff enabled when dirty, disabled when clean
 // ---------------------------------------------------------------------------
 test('review include diff enabled when dirty', async ({ page }) => {
   await setupAndOpenModal(page, dirtyModalIssue, dirtyModalStatus)
@@ -244,6 +265,9 @@ test('review include diff enabled when dirty', async ({ page }) => {
   await expect(reviewPanel.getByRole('checkbox', { name: 'Include diff' })).not.toBeDisabled()
 })
 
+// ---------------------------------------------------------------------------
+// 19. Review include diff disabled when clean
+// ---------------------------------------------------------------------------
 test('review include diff disabled when clean', async ({ page }) => {
   await setupAndOpenModal(page, dirtyModalIssue, cleanModalStatus)
 
@@ -253,7 +277,7 @@ test('review include diff disabled when clean', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 21. Review preview button opens preview modal
+// 20. Review preview button opens preview modal
 // ---------------------------------------------------------------------------
 test('review preview button opens preview modal', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -265,7 +289,7 @@ test('review preview button opens preview modal', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 22. Review post shows success modal
+// 21. Review post shows success modal
 // ---------------------------------------------------------------------------
 test('review post shows success modal', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -278,7 +302,7 @@ test('review post shows success modal', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 23. Approve tab shows status card
+// 22. Approve tab shows status card
 // ---------------------------------------------------------------------------
 test('approve tab shows status card', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -289,7 +313,7 @@ test('approve tab shows status card', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 24. Approve tab: single commit selector, no From/To, no Include diff
+// 23. Approve tab: single commit selector, no From/To, no Include diff
 // ---------------------------------------------------------------------------
 test('approve tab: single commit selector, no Include diff', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -302,7 +326,7 @@ test('approve tab: single commit selector, no Include diff', async ({ page }) =>
 })
 
 // ---------------------------------------------------------------------------
-// 25. Approve tab: default commit is the last non-empty status commit
+// 24. Approve tab: default commit is the last non-empty status commit
 // ---------------------------------------------------------------------------
 test('approve tab: default commit is last notification commit', async ({ page }) => {
   await setupAndOpenModal(page, multiCommitIssue, multiCommitStatus)
@@ -315,7 +339,7 @@ test('approve tab: default commit is last notification commit', async ({ page })
 })
 
 // ---------------------------------------------------------------------------
-// 26. Approve preview button opens preview modal
+// 25. Approve preview button opens preview modal
 // ---------------------------------------------------------------------------
 test('approve preview button opens preview modal', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -327,7 +351,7 @@ test('approve preview button opens preview modal', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 27. Approve post shows success modal
+// 26. Approve post shows success modal
 // ---------------------------------------------------------------------------
 test('approve post shows success modal', async ({ page }) => {
   await setupAndOpenModal(page, singleCommitIssue, singleCommitStatus)
@@ -340,7 +364,7 @@ test('approve post shows success modal', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 28. Unapprove tab: shows status card (defaults to unapprove for approved issues)
+// 27. Unapprove tab: shows status card (defaults to unapprove for approved issues)
 // ---------------------------------------------------------------------------
 test('unapprove tab shows status card', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
@@ -350,7 +374,7 @@ test('unapprove tab shows status card', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 29. Unapprove button disabled when reason is empty
+// 28. Unapprove button disabled when reason is empty
 // ---------------------------------------------------------------------------
 test('unapprove button disabled when reason is empty', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
@@ -359,7 +383,7 @@ test('unapprove button disabled when reason is empty', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 30. Unapprove button enabled when reason is provided
+// 29. Unapprove button enabled when reason is provided
 // ---------------------------------------------------------------------------
 test('unapprove button enabled when reason is provided', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
@@ -369,7 +393,7 @@ test('unapprove button enabled when reason is provided', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 31. Unapprove preview button opens preview modal
+// 30. Unapprove preview button opens preview modal
 // ---------------------------------------------------------------------------
 // Preview is only available in fallback mode (when /blocked returns 501)
 test('unapprove preview button opens preview modal (fallback mode)', async ({ page }) => {
@@ -391,7 +415,7 @@ test('unapprove preview button opens preview modal (fallback mode)', async ({ pa
 })
 
 // ---------------------------------------------------------------------------
-// 32. Unapprove post shows success modal with GitHub link
+// 31. Unapprove post shows success modal with GitHub link
 // ---------------------------------------------------------------------------
 test('unapprove post shows success modal', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
@@ -401,25 +425,4 @@ test('unapprove post shows success modal', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
   // Result modal links by issue title, not generic "View on GitHub"
   await expect(page.getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
-})
-
-// ---------------------------------------------------------------------------
-// 16. Post comment failure: error modal shown with error message
-// ---------------------------------------------------------------------------
-test('post comment failure shows error modal', async ({ page }) => {
-  await setupRoutes(page, {
-    milestones: [openMilestone],
-    milestoneIssues: { 1: [multiCommitIssue] },
-    issueStatuses: { results: [multiCommitStatus], errors: [] },
-    postCommentResponse: null,  // triggers 500
-  })
-  await page.goto('/')
-  await page.getByPlaceholder('Search milestones…').click()
-  await page.getByRole('option', { name: /Sprint 1/ }).click()
-  await page.getByTestId(`issue-card-${multiCommitIssue.number}`).click()
-  await expect(page.getByRole('tablist')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Post' }).click()
-
-  await expect(page.getByText('Post Failed')).toBeVisible()
 })

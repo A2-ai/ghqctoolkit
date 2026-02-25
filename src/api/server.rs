@@ -16,7 +16,12 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 async fn log_request(req: Request, next: Next) -> Response {
-    log::info!("{} {}", req.method(), req.uri().path());
+    let path = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or_else(|| req.uri().path());
+    log::info!("{} {}", req.method(), path);
     next.run(req).await
 }
 
