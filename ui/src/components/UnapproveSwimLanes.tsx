@@ -350,7 +350,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'start', minHeight: 200 }}>
 
             {/* Lane 1: Not Approved */}
-            <div>
+            <div data-testid="not-approved-lane">
               <LaneHeader color="#f1f3f5" title="Not Approved" count={notApproved.length + (rootIsApproved ? 0 : 1)} />
               <Stack gap="xs" p="xs" style={{ minHeight: 120 }}>
                 {!rootIsApproved && (
@@ -376,7 +376,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
             {/* Lane 2: Impacted Approvals */}
             <Droppable droppableId="impacted-approvals">
               {(provided) => (
-                <div ref={provided.innerRef} {...provided.droppableProps}>
+                <div ref={provided.innerRef} {...provided.droppableProps} data-testid="impacted-approvals-lane">
                   <LaneHeader color="#dcfce7" title="Impacted Approvals" count={impactedApprovals.length} />
                   <Stack gap="xs" p="xs" style={{ minHeight: 120 }}>
                     {isRootLoading && (
@@ -433,6 +433,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
                 <div
                   ref={provided.innerRef}
                   {...provided.droppableProps}
+                  data-testid="to-unapprove-lane"
                   style={{
                     backgroundColor: snapshot.isDraggingOver ? 'rgba(224,49,49,0.08)' : undefined,
                     borderRadius: 6,

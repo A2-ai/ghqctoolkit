@@ -424,5 +424,5 @@ test('unapprove post shows success modal', async ({ page }) => {
   await unapprovePanel.getByRole('button', { name: 'Unapprove' }).click()
   await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
   // Result modal links by issue title, not generic "View on GitHub"
-  await expect(page.getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+  await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })

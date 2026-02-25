@@ -70,7 +70,7 @@ test('approved root appears in To Unapprove lane with reason input', async ({ pa
   const panel = page.getByRole('tabpanel', { name: 'Unapprove' })
 
   await expect(panel.getByText('To Unapprove')).toBeVisible()
-  await expect(panel.getByText(approvedModalIssue.title)).toBeVisible()
+  await expect(panel.locator('[data-testid="to-unapprove-lane"]').getByText(approvedModalIssue.title)).toBeVisible()
   await expect(panel.getByPlaceholder('Reason (required)')).toBeVisible()
 })
 
@@ -80,7 +80,7 @@ test('not-approved root shows Nothing to unapprove and root in Not Approved lane
   const panel = page.getByRole('tabpanel', { name: 'Unapprove' })
 
   await expect(panel.getByText('Nothing to unapprove')).toBeVisible()
-  await expect(panel.getByText(inProgressModalIssue.title)).toBeVisible()
+  await expect(panel.locator('[data-testid="not-approved-lane"]').getByText(inProgressModalIssue.title)).toBeVisible()
   await expect(panel.getByPlaceholder('Reason (required)')).not.toBeAttached()
 })
 
@@ -93,7 +93,7 @@ test('approved child appears in Impacted Approvals lane', async ({ page }) => {
   await expect(panel.getByText('Impacted Approvals')).toBeVisible()
   await expect(panel.getByText(approvedChildIssue.title)).toBeVisible()
   // Impacted card has expand button
-  await expect(panel.getByRole('button', { name: 'Expand children' })).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Expand children', exact: true })).toBeVisible()
 })
 
 test('not-approved child appears in Not Approved lane', async ({ page }) => {
@@ -129,7 +129,7 @@ test('post unapprove shows result modal with issue link', async ({ page }) => {
   await panel.getByRole('button', { name: 'Unapprove' }).click()
 
   await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
-  await expect(page.getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+  await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })
 
 test('expand children button loads grandchildren into lanes', async ({ page }) => {
@@ -142,7 +142,7 @@ test('expand children button loads grandchildren into lanes', async ({ page }) =
   const panel = page.getByRole('tabpanel', { name: 'Unapprove' })
 
   await expect(panel.getByText(approvedChildIssue.title)).toBeVisible()
-  await panel.getByRole('button', { name: 'Expand children' }).click()
+  await panel.getByRole('button', { name: 'Expand children', exact: true }).click()
   await expect(panel.getByText(grandchildIssue.title)).toBeVisible()
 })
 
@@ -193,5 +193,5 @@ test('fallback: post unapprove shows result modal', async ({ page }) => {
   await panel.getByRole('button', { name: 'Unapprove' }).click()
 
   await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
-  await expect(page.getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+  await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })
