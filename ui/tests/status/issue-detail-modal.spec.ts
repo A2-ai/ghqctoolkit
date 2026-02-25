@@ -356,7 +356,6 @@ test('unapprove button disabled when reason is empty', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
   const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await expect(unapprovePanel.getByRole('button', { name: 'Unapprove' })).toBeDisabled()
-  await expect(unapprovePanel.getByRole('button', { name: 'Preview' })).toBeDisabled()
 })
 
 // ---------------------------------------------------------------------------
@@ -365,20 +364,30 @@ test('unapprove button disabled when reason is empty', async ({ page }) => {
 test('unapprove button enabled when reason is provided', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
   const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
-  await unapprovePanel.getByLabel('Reason (required)').fill('Rolling back due to regression')
+  await unapprovePanel.getByPlaceholder('Reason (required)').fill('Rolling back due to regression')
   await expect(unapprovePanel.getByRole('button', { name: 'Unapprove' })).not.toBeDisabled()
-  await expect(unapprovePanel.getByRole('button', { name: 'Preview' })).not.toBeDisabled()
 })
 
 // ---------------------------------------------------------------------------
 // 31. Unapprove preview button opens preview modal
 // ---------------------------------------------------------------------------
-test('unapprove preview button opens preview modal', async ({ page }) => {
-  await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
+// Preview is only available in fallback mode (when /blocked returns 501)
+test('unapprove preview button opens preview modal (fallback mode)', async ({ page }) => {
+  await setupRoutes(page, {
+    milestones: [openMilestone],
+    milestoneIssues: { 1: [approvedModalIssue] },
+    issueStatuses: { results: [approvedModalStatus], errors: [] },
+    blockedResponse: 501,
+  })
+  await page.goto('/')
+  await page.getByPlaceholder('Search milestones…').click()
+  await page.getByRole('option', { name: /Sprint 1/ }).click()
+  await page.getByTestId(`issue-card-${approvedModalIssue.number}`).click()
+  await expect(page.getByRole('tablist')).toBeVisible()
+
   const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
-  await unapprovePanel.getByLabel('Reason (required)').fill('Need to fix something')
   await unapprovePanel.getByRole('button', { name: 'Preview' }).click()
-  await expect(page.getByTitle('Comment Preview')).toBeVisible()
+  await expect(page.getByTitle('Unapprove Preview')).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -387,10 +396,11 @@ test('unapprove preview button opens preview modal', async ({ page }) => {
 test('unapprove post shows success modal', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
   const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
-  await unapprovePanel.getByLabel('Reason (required)').fill('Rolling back approval')
+  await unapprovePanel.getByPlaceholder('Reason (required)').fill('Rolling back approval')
   await unapprovePanel.getByRole('button', { name: 'Unapprove' }).click()
   await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'View on GitHub' })).toBeVisible()
+  // Result modal links by issue title, not generic "View on GitHub"
+  await expect(page.getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------

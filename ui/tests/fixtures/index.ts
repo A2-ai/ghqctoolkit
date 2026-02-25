@@ -4,6 +4,7 @@ import type {
   Issue,
   IssueStatusResponse,
   BatchIssueStatusResponse,
+  BlockedIssueStatus,
   QCStatus,
 } from '../../src/api/issues'
 import type { Assignee } from '../../src/api/assignees'
@@ -213,6 +214,67 @@ export const cleanModalStatus: IssueStatusResponse = {
   ...singleCommitStatus,
   issue: dirtyModalIssue,
   dirty: false,
+}
+
+// ── Unapprove / blocked fixtures ─────────────────────────────────────────────
+
+// Approved child issue blocked by approvedModalIssue (#74)
+export const approvedChildIssue = makeIssue({ number: 80, title: 'src/child-approved.rs', state: 'closed', milestone: 'Sprint 1' })
+export const approvedChildBlocked: BlockedIssueStatus = {
+  issue: approvedChildIssue,
+  qc_status: {
+    status: 'approved',
+    status_detail: 'Approved',
+    approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    initial_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    latest_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+  },
+}
+
+// Not-approved child issue blocked by approvedModalIssue (#74)
+export const notApprovedChildIssue = makeIssue({ number: 81, title: 'src/child-pending.rs', milestone: 'Sprint 1' })
+export const notApprovedChildBlocked: BlockedIssueStatus = {
+  issue: notApprovedChildIssue,
+  qc_status: {
+    status: 'awaiting_review',
+    status_detail: 'Awaiting review',
+    approved_commit: null,
+    initial_commit: 'dddddddddddddddddddddddddddddddddddddddd',
+    latest_commit: 'dddddddddddddddddddddddddddddddddddddddd',
+  },
+}
+
+// Grandchild — returned when approvedChildIssue's /blocked is fetched
+export const grandchildIssue = makeIssue({ number: 83, title: 'src/grandchild.rs', milestone: 'Sprint 1' })
+export const grandchildBlocked: BlockedIssueStatus = {
+  issue: grandchildIssue,
+  qc_status: {
+    status: 'awaiting_review',
+    status_detail: 'Awaiting review',
+    approved_commit: null,
+    initial_commit: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    latest_commit: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+  },
+}
+
+// Non-approved issue for tab-disabled tests (defaults to Notify tab)
+export const inProgressModalIssue = makeIssue({ number: 82, title: 'src/in-progress-modal.rs', branch: 'feature-branch' })
+export const inProgressModalStatus: IssueStatusResponse = {
+  issue: inProgressModalIssue,
+  qc_status: {
+    status: 'in_progress',
+    status_detail: 'In progress',
+    approved_commit: null,
+    initial_commit: 'ffffffffffffffffffffffffffffffffffffffff',
+    latest_commit: 'ffffffffffffffffffffffffffffffffffffffff',
+  },
+  dirty: false,
+  branch: 'feature-branch',
+  commits: [
+    { hash: 'ffffffffffffffffffffffffffffffffffffffff', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  ],
+  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
 }
 
 // ── Create tab fixtures ───────────────────────────────────────────────────────
