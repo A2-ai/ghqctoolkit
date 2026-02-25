@@ -1,12 +1,13 @@
 import { useEffect, useReducer, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ActionIcon, Anchor, Badge, Button, Loader, Modal, Stack, Text, TextInput, Tooltip } from '@mantine/core'
+import { ActionIcon, Anchor, Badge, Button, Group, Loader, Modal, Stack, Text, Textarea, TextInput, Tooltip } from '@mantine/core'
 import type { DropResult } from '@hello-pangea/dnd'
 import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd'
 import { IconMinus, IconPlus, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { BlockedIssueStatus, IssueStatusResponse, QCStatus } from '~/api/issues'
 import { fetchSingleIssueStatus, postUnapprove } from '~/api/issues'
+import { fetchUnapprovePreview } from '~/api/preview'
 
 const STATUS_LANE_COLOR: Record<QCStatus['status'], string> = {
   approved:               '#dcfce7',
@@ -20,6 +21,41 @@ const STATUS_LANE_COLOR: Record<QCStatus['status'], string> = {
 
 function isApprovedStatus(s: QCStatus['status']): boolean {
   return s === 'approved' || s === 'changes_after_approval'
+}
+
+function wrapInGithubStyles(body: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px; line-height: 1.6; color: #1f2328;
+    padding: 16px 20px; margin: 0; word-wrap: break-word;
+  }
+  h1,h2,h3,h4,h5,h6 { margin-top: 20px; margin-bottom: 8px; font-weight: 600; line-height: 1.25; }
+  h2 { padding-bottom: 6px; border-bottom: 1px solid #d0d7de; font-size: 1.3em; }
+  h3 { font-size: 1.1em; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  p { margin-top: 0; margin-bottom: 12px; }
+  ul,ol { padding-left: 2em; margin-top: 0; margin-bottom: 12px; }
+  li { margin-bottom: 2px; }
+  li:has(> input[type="checkbox"]) { list-style: none; }
+  li:has(> input[type="checkbox"]) input[type="checkbox"] { margin: 0 0.3em 0.2em -1.4em; vertical-align: middle; }
+  code { font-family: ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace; font-size: 85%; background: rgba(175,184,193,0.2); padding: 2px 5px; border-radius: 4px; }
+  pre { background: #f6f8fa; border-radius: 6px; padding: 12px 16px; overflow: auto; font-size: 85%; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  blockquote { margin: 0 0 12px; padding: 0 12px; color: #57606a; border-left: 4px solid #d0d7de; }
+  hr { border: none; border-top: 1px solid #d0d7de; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+  th,td { border: 1px solid #d0d7de; padding: 6px 12px; }
+  th { background: #f6f8fa; font-weight: 600; }
+</style>
+</head>
+<body>${body}</body>
+</html>`
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +180,9 @@ export function UnapproveSwimLanes({ status, onStatusUpdate }: Props) {
   const { issue } = status
   const [state, dispatch] = useReducer(swimReducer, undefined, initialState)
   const [fallbackReason, setFallbackReason] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
   const [postLoading, setPostLoading] = useState(false)
   const [postResultOpen, setPostResultOpen] = useState(false)
   const [postResults, setPostResults] = useState<Array<{ issueNumber: number; url: string; opened: boolean }>>([])
@@ -216,6 +255,20 @@ export function UnapproveSwimLanes({ status, onStatusUpdate }: Props) {
     ? fallbackReason.trim() !== ''
     : state.toUnapprove.length > 0 && state.toUnapprove.every((n) => (state.reasons.get(n) ?? '').trim() !== '')
 
+  async function handleFallbackPreview() {
+    setPreviewLoading(true)
+    try {
+      const html = await fetchUnapprovePreview(issue.number, { reason: fallbackReason.trim() || '' })
+      setPreviewHtml(html)
+      setPreviewOpen(true)
+    } catch (err) {
+      setPreviewHtml(`<pre>Error: ${(err as Error).message}</pre>`)
+      setPreviewOpen(true)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
   async function handlePost() {
     setPostLoading(true)
     const results: typeof postResults = []
@@ -266,23 +319,46 @@ export function UnapproveSwimLanes({ status, onStatusUpdate }: Props) {
   if (state.blockedUnavailable) {
     return (
       <>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
-          <Stack gap="xs" style={{ maxWidth: 380, margin: '0 auto' }}>
-            <Text size="xs" c="dimmed">Unable to retrieve impacted issues — unapproving this issue only.</Text>
-            <TextInput
+        <Stack gap="md" style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
+          <Stack gap="md" style={{ maxWidth: 380, margin: '0 auto', width: '100%' }}>
+            <Text size="xs" c="dimmed" ta="center">
+              Impact analysis is unavailable for this GitHub instance — only this issue will be unapproved.
+            </Text>
+            <Textarea
               label="Reason (required)"
               placeholder="Required"
+              required
               value={fallbackReason}
               onChange={(e) => setFallbackReason(e.currentTarget.value)}
-              styles={{ input: { borderColor: fallbackReason.trim() === '' ? '#e03131' : undefined } }}
+              error={fallbackReason.trim() === '' ? 'Reason is required' : undefined}
+              resize="vertical"
+              minRows={3}
             />
+            <Group justify="flex-end">
+              <Button variant="default" loading={previewLoading} onClick={() => void handleFallbackPreview()}>
+                Preview
+              </Button>
+              <Button color="red" loading={postLoading} disabled={!canPost} onClick={() => void handlePost()}>
+                Unapprove
+              </Button>
+            </Group>
           </Stack>
-        </div>
-        <div style={{ borderTop: '1px solid var(--mantine-color-gray-3)', paddingTop: 12, paddingBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
-          <Button color="red" loading={postLoading} disabled={!canPost} onClick={() => void handlePost()}>
-            Unapprove
-          </Button>
-        </div>
+        </Stack>
+        <Modal
+          opened={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          title="Unapprove Preview"
+          size={800}
+          centered
+          withinPortal={false}
+          styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
+        >
+          <iframe
+            srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
+            style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
+            title="Unapprove Preview"
+          />
+        </Modal>
         <ResultModal
           opened={postResultOpen}
           onClose={() => setPostResultOpen(false)}

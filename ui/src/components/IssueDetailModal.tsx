@@ -123,7 +123,13 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
           <Tabs.Tab value="notify" color="yellow">Notify</Tabs.Tab>
           <Tabs.Tab value="review" color="orange">Review</Tabs.Tab>
           <Tabs.Tab value="approve" color="green">Approve</Tabs.Tab>
-          <Tabs.Tab value="unapprove" color="red">Unapprove</Tabs.Tab>
+          <Tabs.Tab
+            value="unapprove"
+            color="red"
+            disabled={status.qc_status.status !== 'approved' && status.qc_status.status !== 'changes_after_approval'}
+          >
+            Unapprove
+          </Tabs.Tab>
         </Tabs.List>
         <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close">
           <IconX size={16} />
