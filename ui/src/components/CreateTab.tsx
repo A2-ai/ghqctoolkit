@@ -111,6 +111,7 @@ export function CreateTab() {
       const responses = await postCreateIssues(milestoneNumber, requests)
 
       queryClient.invalidateQueries({ queryKey: ['milestones', milestoneNumber, 'issues'] })
+      queryClient.invalidateQueries({ queryKey: ['milestones'] })
 
       setCreateOutcome({
         ok: true,

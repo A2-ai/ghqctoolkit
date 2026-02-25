@@ -580,6 +580,14 @@ impl GitHubReader for GitInfo {
                                 issue_number,
                                 e
                             );
+                            // A 404 means the endpoint doesn't exist on this instance.
+                            let is_not_found = matches!(&e,
+                                octocrab::Error::GitHub { source, .. }
+                                if source.status_code == http::StatusCode::NOT_FOUND
+                            );
+                            if is_not_found {
+                                return Err(GitHubApiError::NoApi);
+                            }
                             return Err(GitHubApiError::APIError(e));
                         }
                         // If we already have some results, log warning and return what we have

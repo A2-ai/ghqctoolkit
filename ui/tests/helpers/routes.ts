@@ -20,6 +20,7 @@ import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
+import type { BlockedIssueStatus, CommentResponse, UnapprovalResponse } from '../../src/api/issues'
 
 export interface RouteOverrides {
   repo: RepoInfo
@@ -40,6 +41,18 @@ export interface RouteOverrides {
   createMilestone: Milestone
   /** Issue responses returned by POST /api/milestones/:n/issues */
   createIssues: CreateIssueResponse[]
+  /** Response for POST /api/issues/:n/comment; null → 500 error */
+  postCommentResponse: CommentResponse | null
+  /** Response for POST /api/issues/:n/review; null → 500 error */
+  postReviewResponse: CommentResponse | null
+  /** Response for POST /api/issues/:n/approve; null → 500 error */
+  postApproveResponse: { approval_url: string; skipped_unapproved: number[]; skipped_errors: unknown[]; closed: boolean } | null
+  /** Response for POST /api/issues/:n/unapprove; null → 500 error */
+  postUnapproveResponse: UnapprovalResponse | null
+  /** Default response for GET /api/issues/:n/blocked; 501 → not implemented; null → 500 */
+  blockedResponse: BlockedIssueStatus[] | 501 | null
+  /** Per-issue overrides for GET /api/issues/:n/blocked (takes precedence over blockedResponse) */
+  blockedResponseByIssue: Record<number, BlockedIssueStatus[] | 501 | null>
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -58,6 +71,12 @@ const defaultOverrides: RouteOverrides = {
   fileTree: { '': rootFileTree, src: srcFileTree },
   createMilestone: createdMilestone,
   createIssues: createIssueResponses,
+  postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
+  postReviewResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888' },
+  postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
+  postUnapproveResponse: { unapproval_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-66666', opened: true },
+  blockedResponse: [],
+  blockedResponseByIssue: {},
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -172,5 +191,133 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       contentType: 'text/html',
       body: '<p>Preview</p>',
     })
+  })
+
+  await page.route(/\/api\/preview\/\d+\/comment/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Comment preview</p>',
+    })
+  })
+
+  await page.route(/\/api\/preview\/\d+\/review/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Review preview</p>',
+    })
+  })
+
+  await page.route(/\/api\/preview\/\d+\/approve/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Approve preview</p>',
+    })
+  })
+
+  await page.route(/\/api\/preview\/\d+\/unapprove/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<p>Unapprove preview</p>',
+    })
+  })
+
+  await page.route(/\/api\/issues\/\d+\/blocked/, (route, request) => {
+    if (request.method() !== 'GET') { void route.continue(); return }
+    const match = request.url().match(/\/api\/issues\/(\d+)\/blocked/)
+    const issueNum = match ? Number(match[1]) : -1
+    const response = issueNum in cfg.blockedResponseByIssue
+      ? cfg.blockedResponseByIssue[issueNum]
+      : cfg.blockedResponse
+    if (response === 501) {
+      route.fulfill({ status: 501, contentType: 'application/json', body: JSON.stringify({ error: 'Not implemented' }) })
+    } else if (response === null) {
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Internal error' }) })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response) })
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/comment/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postCommentResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postCommentResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/approve/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postApproveResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postApproveResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/unapprove/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postUnapproveResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postUnapproveResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/review/, (route, request) => {
+    if (request.method() === 'POST') {
+      if (cfg.postReviewResponse) {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(cfg.postReviewResponse),
+        })
+      } else {
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Internal server error' }),
+        })
+      }
+    } else {
+      route.continue()
+    }
   })
 }
