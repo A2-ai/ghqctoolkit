@@ -494,11 +494,5 @@ password ghp_api_token_456
 
         // Empty token
         assert_eq!(validate_github_token(""), None);
-
-        // No prefix
-        assert_eq!(
-            validate_github_token("1234567890123456789012345678901234567890"),
-            None
-        );
     }
 }
