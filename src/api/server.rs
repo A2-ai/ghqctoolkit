@@ -66,10 +66,22 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .route("/api/files/content", get(preview::get_file_content))
         // Previews
         .route("/api/preview/issue", post(preview::preview_issue))
-        .route("/api/preview/{number}/comment", post(preview::preview_comment))
-        .route("/api/preview/{number}/review", post(preview::preview_review))
-        .route("/api/preview/{number}/approve", post(preview::preview_approve))
-        .route("/api/preview/{number}/unapprove", post(preview::preview_unapprove))
+        .route(
+            "/api/preview/{number}/comment",
+            post(preview::preview_comment),
+        )
+        .route(
+            "/api/preview/{number}/review",
+            post(preview::preview_review),
+        )
+        .route(
+            "/api/preview/{number}/approve",
+            post(preview::preview_approve),
+        )
+        .route(
+            "/api/preview/{number}/unapprove",
+            post(preview::preview_unapprove),
+        )
         // Supporting Data
         .route("/api/assignees", get(status::list_assignees))
         .route("/api/repo", get(status::repo_info))

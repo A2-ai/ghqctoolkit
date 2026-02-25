@@ -326,7 +326,7 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
         Err(GitHubApiError::APIError(_)) | Err(GitHubApiError::NoApi) => {
             return Err(ApiError::NotImplemented(
                 "Blocked issues API is not available on this GitHub instance".to_string(),
-            ))
+            ));
         }
         Err(e) => return Err(ApiError::from(e)),
     };

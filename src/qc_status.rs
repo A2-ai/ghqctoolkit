@@ -74,10 +74,7 @@ impl QCStatus {
             } else {
                 // Find the newest (lowest index) file-changing commit.
                 // Commits are stored newest-first, so lower index = more recent.
-                let latest_file_entry = commits
-                    .iter()
-                    .enumerate()
-                    .find(|(_, c)| c.file_changed);
+                let latest_file_entry = commits.iter().enumerate().find(|(_, c)| c.file_changed);
 
                 match latest_file_entry {
                     Some((file_idx, latest_fc)) => {

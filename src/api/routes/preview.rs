@@ -10,12 +10,16 @@ use serde::Deserialize;
 use std::{path::PathBuf, str::FromStr};
 
 use crate::api::state::AppState;
-use crate::api::types::{ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest};
+use crate::api::types::{
+    ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest,
+};
 use crate::configuration::Checklist;
 use crate::create::QCIssue;
 use crate::relevant_files::{RelevantFile, RelevantFileClass};
 use crate::{CommentBody, api::error::ApiError};
-use crate::{GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, api::types::CreateCommentRequest};
+use crate::{
+    GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, api::types::CreateCommentRequest,
+};
 
 #[derive(Deserialize)]
 pub struct FileContentQuery {

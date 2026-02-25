@@ -293,7 +293,12 @@ impl GitStatusOps for GitInfo {
             let head_map: std::collections::HashMap<String, gix::ObjectId> = head_index
                 .entries()
                 .iter()
-                .map(|e| (String::from_utf8_lossy(&*e.path_in(head_backing)).into_owned(), e.id))
+                .map(|e| {
+                    (
+                        String::from_utf8_lossy(&*e.path_in(head_backing)).into_owned(),
+                        e.id,
+                    )
+                })
                 .collect();
 
             let work_backing = work_index.path_backing();
