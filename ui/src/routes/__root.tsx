@@ -20,7 +20,10 @@ export const Route = createRootRouteWithContext<{
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'ghqc' },
     ],
-    links: [{ rel: 'stylesheet', href: mantineCss }],
+    links: [
+      { rel: 'stylesheet', href: mantineCss },
+      { rel: 'icon', type: 'image/png', href: '/logo.png' },
+    ],
   }),
   shellComponent: RootShell,
   component: RootComponent,

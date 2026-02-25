@@ -2,19 +2,24 @@
 
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     response::Html,
 };
+use gix::ObjectId;
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
-use crate::GitProvider;
-use crate::api::error::ApiError;
 use crate::api::state::AppState;
-use crate::api::types::{CreateIssueRequest, RelevantIssueClass};
+use crate::api::types::{
+    ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest,
+};
 use crate::configuration::Checklist;
 use crate::create::QCIssue;
 use crate::relevant_files::{RelevantFile, RelevantFileClass};
+use crate::{CommentBody, api::error::ApiError};
+use crate::{
+    GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, api::types::CreateCommentRequest,
+};
 
 #[derive(Deserialize)]
 pub struct FileContentQuery {
@@ -152,10 +157,122 @@ fn resolve_issue_class(class: &RelevantIssueClass) -> (u64, Option<u64>) {
     }
 }
 
+/// POST /api/preview/{number}/review
+///
+/// Accepts a `ReviewRequest`, generates the review body markdown using `QCReview::generate_body()`,
+/// converts it to HTML, and returns the HTML string. The diff compares the given commit
+/// against the current working directory.
+pub async fn preview_review<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<ReviewRequest>,
+) -> Result<Html<String>, ApiError> {
+    let commit = ObjectId::from_str(&request.commit)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid commit format: {e}")))?;
+
+    let issue = state.git_info().get_issue(number).await?;
+
+    let review = QCReview {
+        file: PathBuf::from(&issue.title),
+        issue,
+        commit,
+        note: request.note,
+        no_diff: !request.include_diff,
+        working_dir: state.git_info().path().to_path_buf(),
+    };
+
+    let markdown = review.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
+}
+
+/// POST /api/preview/{number}/approve
+///
+/// Generates the approval comment body as HTML without posting to GitHub.
+pub async fn preview_approve<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<ApproveRequest>,
+) -> Result<Html<String>, ApiError> {
+    let commit = ObjectId::from_str(&request.commit)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid commit format: {e}")))?;
+
+    let issue = state.git_info().get_issue(number).await?;
+
+    let approval = QCApprove {
+        file: PathBuf::from(&issue.title),
+        commit,
+        issue,
+        note: request.note,
+    };
+
+    let markdown = approval.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
+}
+
+/// POST /api/preview/{number}/unapprove
+///
+/// Generates the unapproval comment body as HTML without posting to GitHub.
+pub async fn preview_unapprove<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<UnapproveRequest>,
+) -> Result<Html<String>, ApiError> {
+    let issue = state.git_info().get_issue(number).await?;
+
+    let unapprove = QCUnapprove {
+        issue,
+        reason: request.reason,
+    };
+
+    let markdown = unapprove.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
+}
+
 fn markdown_to_html(markdown: &str) -> String {
     use pulldown_cmark::{Options, Parser, html};
     let parser = Parser::new_ext(markdown, Options::all());
     let mut output = String::new();
     html::push_html(&mut output, parser);
     output
+}
+
+/// POST /api/preview/{number}/comment
+///
+/// Accepts a `CreateCommentRequest`, generates the issue body markdown using `QCIssue::body()`,
+/// converts it to HTML, and returns the HTML string.
+pub async fn preview_comment<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<CreateCommentRequest>,
+) -> Result<Html<String>, ApiError> {
+    let issue = state.git_info().get_issue(number).await?;
+
+    let current_commit = ObjectId::from_str(&request.current_commit)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid current commit format: {e}")))?;
+    let previous_commit = request
+        .previous_commit
+        .as_deref()
+        .map(ObjectId::from_str)
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid previous commit format: {e}")))?;
+
+    let qc_comment = QCComment {
+        file: PathBuf::from(&issue.title),
+        issue,
+        current_commit,
+        previous_commit,
+        note: request.note,
+        no_diff: !request.include_diff,
+    };
+
+    let markdown = qc_comment.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
 }

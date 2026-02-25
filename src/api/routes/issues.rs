@@ -10,6 +10,7 @@ use crate::api::types::{
     IssueStatusError, IssueStatusErrorKind, IssueStatusResponse, QCStatusEnum,
 };
 use crate::create::QCIssueError;
+use crate::git::GitHubApiError;
 use crate::{GitProvider, QCEntry, batch_post_qc_entries, get_repo_users};
 use axum::{
     Json,
@@ -317,7 +318,18 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
 ) -> Result<Json<Vec<BlockedIssueStatus>>, ApiError> {
     let git_info = state.git_info();
 
-    let blocking_issues = state.git_info().get_blocked_issues(number).await?;
+    // APIError / NoApi mean the endpoint doesn't exist on this GitHub instance → 501 so
+    // the client can fall back to the simple unapprove UI.  Other errors (e.g. client
+    // creation failure) stay as 502 since they indicate a real infrastructure problem.
+    let blocking_issues = match state.git_info().get_blocked_issues(number).await {
+        Ok(issues) => issues,
+        Err(GitHubApiError::NoApi) => {
+            return Err(ApiError::NotImplemented(
+                "Blocked issues API is not available on this GitHub instance".to_string(),
+            ));
+        }
+        Err(e) => return Err(ApiError::from(e)),
+    };
 
     let mut blocked_statuses = Vec::new();
     let mut need_to_fetch = Vec::new();
