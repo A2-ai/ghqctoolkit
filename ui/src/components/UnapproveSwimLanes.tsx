@@ -174,9 +174,10 @@ function initialState(): SwimState {
 interface Props {
   status: IssueStatusResponse
   onStatusUpdate: (status: IssueStatusResponse) => void
+  onBlockedUnavailable?: () => void
 }
 
-export function UnapproveSwimLanes({ status, onStatusUpdate }: Props) {
+export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailable }: Props) {
   const { issue } = status
   const [state, dispatch] = useReducer(swimReducer, undefined, initialState)
   const [fallbackReason, setFallbackReason] = useState('')
@@ -203,6 +204,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate }: Props) {
       const res = await fetch(`/api/issues/${issueNumber}/blocked`)
       if (res.status === 501) {
         dispatch({ type: 'BLOCKED_UNAVAILABLE', issueNumber })
+        onBlockedUnavailable?.()
         return
       }
       if (!res.ok) {

@@ -116,6 +116,12 @@ function defaultTab(status: IssueStatusResponse): string {
 }
 
 function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatusResponse; onClose: () => void; onStatusUpdate: (status: IssueStatusResponse) => void }) {
+  const [blockedUnavailable, setBlockedUnavailable] = useState(false)
+  useEffect(() => { setBlockedUnavailable(false) }, [status.issue.number])
+
+  const isApproved = status.qc_status.status === 'approved' || status.qc_status.status === 'changes_after_approval'
+  const unapproveDisabled = blockedUnavailable && !isApproved
+
   return (
     <Tabs key={status.issue.number} defaultValue={defaultTab(status)} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Group justify="space-between" align="center" px="md" pt="sm" style={{ borderBottom: '1px solid var(--mantine-color-gray-3)' }}>
@@ -123,13 +129,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
           <Tabs.Tab value="notify" color="yellow">Notify</Tabs.Tab>
           <Tabs.Tab value="review" color="orange">Review</Tabs.Tab>
           <Tabs.Tab value="approve" color="green">Approve</Tabs.Tab>
-          <Tabs.Tab
-            value="unapprove"
-            color="red"
-            disabled={status.qc_status.status !== 'approved' && status.qc_status.status !== 'changes_after_approval'}
-          >
-            Unapprove
-          </Tabs.Tab>
+          <Tabs.Tab value="unapprove" color="red" disabled={unapproveDisabled}>Unapprove</Tabs.Tab>
         </Tabs.List>
         <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close">
           <IconX size={16} />
@@ -146,7 +146,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
         <ApproveTab status={status} onStatusUpdate={onStatusUpdate} />
       </Tabs.Panel>
       <Tabs.Panel value="unapprove" pt="md" px="md" pb={0} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <UnapproveTab status={status} onStatusUpdate={onStatusUpdate} />
+        <UnapproveTab status={status} onStatusUpdate={onStatusUpdate} onBlockedUnavailable={() => setBlockedUnavailable(true)} />
       </Tabs.Panel>
     </Tabs>
   )
@@ -1128,13 +1128,13 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 // ---------------------------------------------------------------------------
 // Unapprove tab — swim lane layout with cascade impact
 // ---------------------------------------------------------------------------
-function UnapproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
+function UnapproveTab({ status, onStatusUpdate, onBlockedUnavailable }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; onBlockedUnavailable: () => void }) {
   return (
     <>
       <div style={{ flexShrink: 0, paddingBottom: 12 }}>
         <StatusCard status={status} />
       </div>
-      <UnapproveSwimLanes status={status} onStatusUpdate={onStatusUpdate} />
+      <UnapproveSwimLanes status={status} onStatusUpdate={onStatusUpdate} onBlockedUnavailable={onBlockedUnavailable} />
     </>
   )
 }
