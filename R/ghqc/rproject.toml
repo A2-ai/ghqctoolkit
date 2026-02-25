@@ -17,5 +17,6 @@ repositories = [
 dependencies = [
     "rextendr",
     "devtools",
-    { name = "ghqc", path = ".", dependencies_only = false, install_suggestions = true },
+    #{ name = "ghqc", path = ".", dependencies_only = false, install_suggestions = true },
+    { name = "ghqc", git = "https://github.com/a2-ai/ghqctoolkit", directory = "R/ghqc", branch = "r_pkg" },
 ]
