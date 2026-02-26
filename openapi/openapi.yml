@@ -27,6 +27,8 @@ tags:
     description: Supporting data queries
   - name: configuration
     description: Configuration management
+  - name: record
+    description: PDF record generation
 
 paths:
   /health:
@@ -481,6 +483,109 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RepoInfo'
+
+  /record/upload:
+    post:
+      summary: Upload a context PDF
+      description: |
+        Accepts a multipart/form-data request with a single `file` field containing a PDF.
+        The file is saved to a server temp directory and its path is returned for use
+        in subsequent preview/generate requests.
+      operationId: uploadContextFile
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF file to upload (must have content-type application/pdf)
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordUploadResponse'
+        '400':
+          description: Missing file field or content-type is not application/pdf
+
+  /record/preview:
+    post:
+      summary: Generate a record PDF preview
+      description: |
+        Runs the full record pipeline for the given milestones and returns a session key.
+        The rendered PDF can be retrieved with `GET /record/preview.pdf?key=<key>`.
+        Each call produces an independent key — concurrent sessions never share PDFs.
+      operationId: previewRecord
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordRequest'
+      responses:
+        '200':
+          description: Preview rendered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordPreviewResponse'
+        '400':
+          description: No matching milestones found or invalid request
+        '500':
+          description: Record generation or render failed
+
+  /record/preview.pdf:
+    get:
+      summary: Serve a previously generated preview PDF
+      operationId: servePreviewPdf
+      tags: [record]
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: Preview key returned by POST /record/preview
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The rendered PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Key not found (expired or never created)
+
+  /record/generate:
+    post:
+      summary: Generate and save a record PDF to disk
+      description: |
+        Runs the full record pipeline and writes the PDF to `output_path` on the server.
+        The parent directory is created automatically if it does not exist.
+      operationId: generateRecord
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordRequest'
+      responses:
+        '200':
+          description: PDF written to output_path successfully
+        '400':
+          description: output_path is empty or request is invalid
+        '500':
+          description: Record generation or render failed
 
   /configuration:
     get:
@@ -1126,3 +1231,58 @@ components:
           type: string
         record_path:
           type: string
+
+    RecordContextFileRequest:
+      type: object
+      required: [server_path, position]
+      properties:
+        server_path:
+          type: string
+          description: Absolute path on the server (use the temp_path from POST /record/upload for locally uploaded files)
+          example: "/tmp/ghqc-uploads/abc123.pdf"
+        position:
+          type: string
+          enum: [prepend, append]
+          description: Whether to insert this PDF before or after the QC Record in the output
+
+    RecordRequest:
+      type: object
+      required: [milestone_numbers]
+      properties:
+        milestone_numbers:
+          type: array
+          items:
+            type: integer
+          description: GitHub milestone numbers to include in the record
+          example: [1, 2]
+        tables_only:
+          type: boolean
+          default: false
+          description: When true, only emit summary tables without full issue details
+        output_path:
+          type: string
+          description: Destination path for the generated PDF (required for generate, ignored for preview)
+          example: "/path/to/output/record.pdf"
+        context_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecordContextFileRequest'
+          description: Optional PDF files to merge before/after the QC Record
+
+    RecordUploadResponse:
+      type: object
+      required: [temp_path]
+      properties:
+        temp_path:
+          type: string
+          description: Absolute server path where the uploaded PDF was saved
+          example: "/tmp/ghqc-uploads/abc123def456.pdf"
+
+    RecordPreviewResponse:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          description: Opaque session key — pass to GET /record/preview.pdf?key=<key> to retrieve the PDF
+          example: "a1b2c3d4e5f6"
