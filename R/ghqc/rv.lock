@@ -320,13 +320,13 @@ dependencies = [
 [[packages]]
 name = "ghqc"
 version = "0.0.0.9000"
-source = { git = "https://github.com/a2-ai/ghqctoolkit", sha = "8d99afa14d0656198f6ab5c1e26177cd14289d67", directory = "R/ghqc", branch = "r_pkg" }
+source = { path = "." }
 force_source = true
 dependencies = [
-    "httpuv",
     "glue",
     "here",
     "callr",
+    "later",
 ]
 
 [[packages]]

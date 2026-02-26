@@ -1,5 +1,3 @@
-.ghqc_env <- new.env(parent = emptyenv())
-
 #' @export
 ghqc <- function(directory = ".", port = NULL) {
   ghqc_stop()

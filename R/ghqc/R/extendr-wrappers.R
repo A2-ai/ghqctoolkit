@@ -12,5 +12,7 @@ NULL
 
 run <- function(port, directory) .Call(wrap__run, port, directory)
 
+init_logger <- function() .Call(wrap__init_logger)
+
 
 # nolint end
