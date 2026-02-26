@@ -1,9 +1,11 @@
+.ghqc_env <- new.env(parent = emptyenv())
+
 #' @export
 ghqc <- function(directory = ".", port = NULL) {
   ghqc_stop()
 
   directory <- here::here(directory)
-  port <- if (is.null(port)) httpuv::randomPort()
+  port <- if (is.null(port)) random_port()
 
   proc <- callr::r_bg(
     function(port, directory) ghqc:::run(port, directory),
@@ -46,7 +48,6 @@ wait_for_server <- function(port, timeout = 15) {
   invisible(FALSE)
 }
 
-.ghqc_env <- new.env(parent = emptyenv())
 
 #' Stop a running ghqc background server
 #' @export
