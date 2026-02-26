@@ -634,21 +634,21 @@ function RecordMilestoneCard({
           {/* Open milestone indicator */}
           {milestone.state !== 'closed' && (
             <Tooltip label="Milestone is not yet closed — record may be incomplete" withArrow>
-              <IconLockOpen size={14} color="#e67700" style={{ flexShrink: 0 }} />
+              <IconLockOpen data-testid="open-milestone-indicator" size={14} color="#e67700" style={{ flexShrink: 0 }} />
             </Tooltip>
           )}
 
           {/* List fetch error */}
           {statusInfo.listFailed && statusInfo.listError && (
             <Tooltip label={`${statusInfo.listError} — excluded from record`} withArrow>
-              <IconExclamationMark size={14} color="#c92a2a" style={{ flexShrink: 0 }} />
+              <IconExclamationMark data-testid="list-error-indicator" size={14} color="#c92a2a" style={{ flexShrink: 0 }} />
             </Tooltip>
           )}
 
           {/* Status fetch errors — any count → red + excluded */}
           {statusInfo.statusErrorCount > 0 && errorLines && (
             <Tooltip label={errorLines} withArrow multiline>
-              <span style={{ color: '#c92a2a', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+              <span data-testid="status-error-count" style={{ color: '#c92a2a', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                 <IconAlertCircle size={14} />
                 {statusInfo.statusErrorCount}
               </span>
@@ -661,7 +661,7 @@ function RecordMilestoneCard({
               label={`${unapprovedCount} issue${unapprovedCount !== 1 ? 's' : ''} not yet approved`}
               withArrow
             >
-              <span style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+              <span data-testid="unapproved-warning" style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                 <IconAlertTriangle size={14} />
                 {unapprovedCount}
               </span>
