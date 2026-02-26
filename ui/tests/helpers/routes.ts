@@ -53,6 +53,12 @@ export interface RouteOverrides {
   blockedResponse: BlockedIssueStatus[] | 501 | null
   /** Per-issue overrides for GET /api/issues/:n/blocked (takes precedence over blockedResponse) */
   blockedResponseByIssue: Record<number, BlockedIssueStatus[] | 501 | null>
+  /** Response for POST /api/record/preview; null → 500 */
+  recordPreviewResponse: { key: string } | null
+  /** Whether POST /api/record/generate succeeds (false → 500) */
+  recordGenerateSuccess: boolean
+  /** Response for POST /api/record/upload; null → 400 */
+  recordUploadResponse: { temp_path: string } | null
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -77,6 +83,9 @@ const defaultOverrides: RouteOverrides = {
   postUnapproveResponse: { unapproval_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-66666', opened: true },
   blockedResponse: [],
   blockedResponseByIssue: {},
+  recordPreviewResponse: { key: 'preview-test-key' },
+  recordGenerateSuccess: true,
+  recordUploadResponse: { temp_path: '/tmp/ghqc-uploads/test123.pdf' },
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -298,6 +307,35 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       }
     } else {
       route.continue()
+    }
+  })
+
+  // Record PDF endpoints — preview.pdf must be registered before preview to avoid substring match
+  await page.route(/\/api\/record\/preview\.pdf/, (route) => {
+    route.fulfill({ status: 200, contentType: 'application/pdf', body: '' })
+  })
+
+  await page.route(/\/api\/record\/preview$/, (route) => {
+    if (cfg.recordPreviewResponse) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(cfg.recordPreviewResponse) })
+    } else {
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Preview failed' }) })
+    }
+  })
+
+  await page.route(/\/api\/record\/generate/, (route) => {
+    if (cfg.recordGenerateSuccess) {
+      route.fulfill({ status: 200 })
+    } else {
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Generate failed' }) })
+    }
+  })
+
+  await page.route(/\/api\/record\/upload/, (route) => {
+    if (cfg.recordUploadResponse) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(cfg.recordUploadResponse) })
+    } else {
+      route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'Upload failed' }) })
     }
   })
 

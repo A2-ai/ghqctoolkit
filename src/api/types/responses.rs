@@ -549,6 +549,18 @@ pub struct FileTreeResponse {
     pub entries: Vec<TreeEntry>,
 }
 
+/// Response for context PDF upload.
+#[derive(Debug, Serialize)]
+pub struct RecordUploadResponse {
+    pub temp_path: String,
+}
+
+/// Response for record preview generation.
+#[derive(Debug, Serialize)]
+pub struct RecordPreviewResponse {
+    pub key: String,
+}
+
 /// Extract the checklist name from the first h1 heading (e.g. "# Code Review").
 fn parse_checklist_name(body: &str) -> Option<String> {
     body.lines()

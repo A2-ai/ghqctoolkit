@@ -16,6 +16,8 @@ interface Props {
   onSelect: (file: string | null) => void
   claimedFiles?: Set<string>
   fileAnnotations?: Map<string, string[]>
+  /** When provided, file nodes whose name fails this test are hidden. Directories always show. */
+  filterFile?: (name: string) => boolean
 }
 
 function injectChildren(
@@ -45,7 +47,7 @@ function findNode(nodes: FileNode[], targetId: string): FileNode | null {
   return null
 }
 
-export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set(), fileAnnotations }: Props) {
+export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set(), fileAnnotations, filterFile }: Props) {
   const [data, setData] = useState<FileNode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -97,11 +99,13 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
     fetchFileTree('')
       .then((res) => {
         console.log('[FileTreeBrowser] file tree loaded, entries:', res.entries.length)
-        const nodes: FileNode[] = res.entries.map((entry) => ({
-          id: entry.name,
-          name: entry.name,
-          children: entry.kind === 'directory' ? null : undefined,
-        }))
+        const nodes: FileNode[] = res.entries
+          .filter((entry) => entry.kind === 'directory' || !filterFile || filterFile(entry.name))
+          .map((entry) => ({
+            id: entry.name,
+            name: entry.name,
+            children: entry.kind === 'directory' ? null : undefined,
+          }))
         setData(nodes)
         setLoading(false)
       })
@@ -118,11 +122,13 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
     if (!node || node.children !== null) return
     try {
       const res = await fetchFileTree(nodeId)
-      const children: FileNode[] = res.entries.map((entry) => ({
-        id: `${nodeId}/${entry.name}`,
-        name: entry.name,
-        children: entry.kind === 'directory' ? null : undefined,
-      }))
+      const children: FileNode[] = res.entries
+        .filter((entry) => entry.kind === 'directory' || !filterFile || filterFile(entry.name))
+        .map((entry) => ({
+          id: `${nodeId}/${entry.name}`,
+          name: entry.name,
+          children: entry.kind === 'directory' ? null : undefined,
+        }))
       setData((prev) => injectChildren(prev, nodeId, children))
     } catch {
       // Silently ignore sub-directory load failures

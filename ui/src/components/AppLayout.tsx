@@ -1,5 +1,6 @@
 import { AppShell, Menu, Text, Tooltip } from '@mantine/core'
 import { ConfigurationTab } from './ConfigurationTab'
+import { RecordTab } from './RecordTab'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { SwimLanes } from './SwimLanes'
@@ -410,9 +411,15 @@ export function AppLayout() {
           </div>
         )}
         {activeTab === 'configuration' && <ConfigurationTab />}
-        {activeTab !== 'status' && activeTab !== 'create' && activeTab !== 'configuration' && (
-          <PlaceholderTab tab={activeTab} />
+        {activeTab === 'record' && (
+          <div style={{
+            margin: 'calc(-1 * var(--mantine-spacing-md))',
+            height: 'calc(100vh - 88px)',
+          }}>
+            <RecordTab />
+          </div>
         )}
+        {activeTab === 'archive' && <PlaceholderTab tab="archive" />}
       </AppShell.Main>
     </AppShell>
   )

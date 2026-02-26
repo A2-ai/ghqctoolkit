@@ -2,9 +2,10 @@
 
 use crate::api::cache::StatusCache;
 use crate::{Configuration, DiskCache, GitCli, GitCommand, GitProvider};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Application state shared across all request handlers.
 ///
@@ -26,6 +27,8 @@ pub struct AppState<G: GitProvider> {
     pub config_git_info_creator: Arc<dyn Fn(&Path) -> Option<G> + Send + Sync + 'static>,
     /// Git Cli trait
     git_cli: Arc<dyn GitCli + Send + Sync>,
+    /// Preview PDF store: UUID key → temp file path
+    preview_store: Arc<Mutex<HashMap<String, PathBuf>>>,
 }
 
 impl<G: GitProvider> AppState<G> {
@@ -44,6 +47,7 @@ impl<G: GitProvider> AppState<G> {
             status_cache: Arc::new(RwLock::new(StatusCache::new())),
             config_git_info_creator: Arc::new(|_| None),
             git_cli: Arc::new(GitCommand),
+            preview_store: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -80,5 +84,9 @@ impl<G: GitProvider> AppState<G> {
 
     pub fn git_cli(&self) -> &(dyn GitCli + Send + Sync) {
         self.git_cli.as_ref()
+    }
+
+    pub async fn preview_store(&self) -> tokio::sync::MutexGuard<'_, HashMap<String, PathBuf>> {
+        self.preview_store.lock().await
     }
 }
