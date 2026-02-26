@@ -92,8 +92,14 @@ async function goToRecord(page: import('playwright/test').Page) {
   await page.getByRole('button', { name: 'Record' }).click()
 }
 
+// The Status tab's MilestoneFilter navbar stays in the DOM when collapsed,
+// so we scope all selectors to <main> to avoid strict-mode violations.
+function main(page: import('playwright/test').Page) {
+  return page.locator('main')
+}
+
 async function selectMilestone(page: import('playwright/test').Page, title: string) {
-  await page.getByPlaceholder('Search milestones…').click()
+  await main(page).getByPlaceholder('Search milestones…').click()
   await page.getByRole('option', { name: new RegExp(title) }).click()
 }
 
@@ -108,19 +114,20 @@ test('record tab renders core elements', async ({ page }) => {
   await setup(page)
   await goToRecord(page)
 
-  await expect(page.getByText('Milestones')).toBeVisible()
-  await expect(page.getByPlaceholder('Search milestones…')).toBeVisible()
-  await expect(page.getByText('Record Structure')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Add File' })).toBeVisible()
-  await expect(page.getByLabel('Output Path')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Generate' })).toBeVisible()
+  const m = main(page)
+  await expect(m.getByText('Milestones', { exact: true })).toBeVisible()
+  await expect(m.getByPlaceholder('Search milestones…')).toBeVisible()
+  await expect(m.getByText('Record Structure', { exact: true })).toBeVisible()
+  await expect(m.getByRole('button', { name: 'Add File' })).toBeVisible()
+  await expect(m.getByLabel('Output Path')).toBeVisible()
+  await expect(m.getByRole('button', { name: 'Generate' })).toBeVisible()
 })
 
 test('only closed milestones shown by default', async ({ page }) => {
   await setup(page, { milestones: [closedMilestone, openMilestone] })
   await goToRecord(page)
 
-  await page.getByPlaceholder('Search milestones…').click()
+  await main(page).getByPlaceholder('Search milestones…').click()
   await expect(page.getByRole('option', { name: /Sprint 0/ })).toBeVisible()
   await expect(page.getByRole('option', { name: /Sprint 1/ })).not.toBeVisible()
 })
@@ -129,8 +136,8 @@ test('open milestone visible after toggling show open milestones', async ({ page
   await setup(page, { milestones: [closedMilestone, openMilestone] })
   await goToRecord(page)
 
-  await page.getByLabel('Show open milestones').click()
-  await page.getByPlaceholder('Search milestones…').click()
+  await main(page).getByLabel('Show open milestones').click()
+  await main(page).getByPlaceholder('Search milestones…').click()
   await expect(page.getByRole('option', { name: /Sprint 1/ })).toBeVisible()
 })
 
@@ -189,7 +196,7 @@ test('open milestone shows unlock icon in card', async ({ page }) => {
   })
   await goToRecord(page)
 
-  await page.getByLabel('Show open milestones').click()
+  await main(page).getByLabel('Show open milestones').click()
   await selectMilestone(page, 'Sprint 1')
   await waitForCardLoaded(page)
 
@@ -214,7 +221,7 @@ test('output path auto-populates from repo and milestone name', async ({ page })
   await waitForCardLoaded(page)
 
   // repo=test-repo, milestone title=Sprint 0 → spaces become hyphens
-  await expect(page.getByLabel('Output Path')).toHaveValue('test-repo-Sprint-0.pdf')
+  await expect(main(page).getByLabel('Output Path')).toHaveValue('test-repo-Sprint-0.pdf')
 })
 
 test('output path appends -tables when tables only is toggled', async ({ page }) => {
@@ -223,9 +230,9 @@ test('output path appends -tables when tables only is toggled', async ({ page })
   await selectMilestone(page, 'Sprint 0')
   await waitForCardLoaded(page)
 
-  await page.getByLabel('Tables only').click()
+  await main(page).getByLabel('Tables only').click()
 
-  await expect(page.getByLabel('Output Path')).toHaveValue('test-repo-Sprint-0-tables.pdf')
+  await expect(main(page).getByLabel('Output Path')).toHaveValue('test-repo-Sprint-0-tables.pdf')
 })
 
 test('output path excludes errored milestones', async ({ page }) => {
@@ -249,12 +256,12 @@ test('output path excludes errored milestones', async ({ page }) => {
 
   // Select Sprint 0 (errors), then Sprint 1 (ok — needs open toggle)
   await selectMilestone(page, 'Sprint 0')
-  await page.getByLabel('Show open milestones').click()
+  await main(page).getByLabel('Show open milestones').click()
   await selectMilestone(page, 'Sprint 1')
   await waitForCardLoaded(page)
 
   // Sprint 0 is errored → excluded; output path contains only Sprint 1
-  const outputPath = page.getByLabel('Output Path')
+  const outputPath = main(page).getByLabel('Output Path')
   await expect(outputPath).not.toHaveValue(/Sprint-0/)
   await expect(outputPath).toHaveValue(/Sprint-1/)
 })
@@ -302,10 +309,10 @@ test('generate button fires and shows success', async ({ page }) => {
   await waitForCardLoaded(page)
 
   // Output path auto-filled; Generate button enabled
-  await expect(page.getByRole('button', { name: 'Generate' })).toBeEnabled({ timeout: 10_000 })
-  await page.getByRole('button', { name: 'Generate' }).click()
+  await expect(main(page).getByRole('button', { name: 'Generate' })).toBeEnabled({ timeout: 10_000 })
+  await main(page).getByRole('button', { name: 'Generate' }).click()
 
-  await expect(page.getByText(/PDF written to/)).toBeVisible({ timeout: 10_000 })
+  await expect(main(page).getByText(/PDF written to/)).toBeVisible({ timeout: 10_000 })
 })
 
 test('generate button shows error on failure', async ({ page }) => {
@@ -314,10 +321,10 @@ test('generate button shows error on failure', async ({ page }) => {
   await selectMilestone(page, 'Sprint 0')
   await waitForCardLoaded(page)
 
-  await expect(page.getByRole('button', { name: 'Generate' })).toBeEnabled({ timeout: 10_000 })
-  await page.getByRole('button', { name: 'Generate' }).click()
+  await expect(main(page).getByRole('button', { name: 'Generate' })).toBeEnabled({ timeout: 10_000 })
+  await main(page).getByRole('button', { name: 'Generate' }).click()
 
-  await expect(page.getByText(/Generate failed/)).toBeVisible({ timeout: 10_000 })
+  await expect(main(page).getByText(/Generate failed/)).toBeVisible({ timeout: 10_000 })
 })
 
 test('generate button disabled without output path', async ({ page }) => {
@@ -327,41 +334,42 @@ test('generate button disabled without output path', async ({ page }) => {
   await waitForCardLoaded(page)
 
   // Clear the auto-filled output path
-  await page.getByLabel('Output Path').fill('')
+  await main(page).getByLabel('Output Path').fill('')
 
-  await expect(page.getByRole('button', { name: 'Generate' })).toBeDisabled()
+  await expect(main(page).getByRole('button', { name: 'Generate' })).toBeDisabled()
 })
 
 test('preview does not re-fire when only errored milestone changes', async ({ page }) => {
-  // Track how many times /api/record/preview is called
+  // Sprint 0 is all approved; Sprint 1's single issue has a status error → excluded
+  const sprint1Issue: Issue = { ...issue90, number: 92, milestone: 'Sprint 1' }
   let previewCallCount = 0
-  await setup(page)
+
+  await setupRoutes(page, {
+    milestones: [closedMilestone, openMilestone],
+    milestoneIssues: { 2: [issue90, issue91], 1: [sprint1Issue] },
+    issueStatuses: {
+      results: [makeStatus(issue90, 'approved'), makeStatus(issue91, 'approved')],
+      errors: [{ issue_number: 92, kind: 'fetch_failed', error: 'Not found' }],
+    },
+    fileTree: { '': rootFileTreeWithPdf, src: srcFileTree },
+  })
+  // Override the preview route to count calls
   await page.route(/\/api\/record\/preview$/, (route) => {
     previewCallCount++
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: `key-${previewCallCount}` }) })
   })
   await goToRecord(page)
 
-  // Select Sprint 0 → all approved → preview fires once
+  // Select Sprint 0 (all approved) → preview fires once
   await selectMilestone(page, 'Sprint 0')
   await waitForCardLoaded(page)
   await expect(page.locator('iframe[src*="preview.pdf"]')).toBeVisible({ timeout: 10_000 })
   expect(previewCallCount).toBe(1)
 
-  // Now add a second milestone that errors — the included set doesn't change → no re-fire
-  await setupRoutes(page, {
-    milestones: [closedMilestone, openMilestone],
-    milestoneIssues: { 2: [issue90, issue91], 1: [] },
-    issueStatuses: allApprovedBatch,
-  })
-  // Route the status for the new milestone to error
-  await page.route(/\/api\/milestones\/1\/issues/, (route) => {
-    route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Failed' }) })
-  })
-  await page.getByLabel('Show open milestones').click()
+  // Select Sprint 1 (errors → excluded); included set is still just Sprint 0 → no re-fire
+  await main(page).getByLabel('Show open milestones').click()
   await selectMilestone(page, 'Sprint 1')
   await waitForCardLoaded(page)
 
-  // Sprint 1 errored and is excluded — preview count must remain 1
   expect(previewCallCount).toBe(1)
 })
