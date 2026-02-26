@@ -93,8 +93,7 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         // Record PDF generation
         .route(
             "/api/record/upload",
-            post(record::upload_context_file)
-                .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+            post(record::upload_context_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
         .route("/api/record/preview", post(record::preview_record))
         .route("/api/record/preview.pdf", get(record::serve_preview_pdf))

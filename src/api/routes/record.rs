@@ -18,7 +18,9 @@ use std::{
 
 use crate::{
     ContextPosition, GitProvider, QCContext, UreqDownloader,
-    api::types::{RecordContextPosition, RecordPreviewResponse, RecordRequest, RecordUploadResponse},
+    api::types::{
+        RecordContextPosition, RecordPreviewResponse, RecordRequest, RecordUploadResponse,
+    },
     api::{error::ApiError, state::AppState},
     create_staging_dir, fetch_milestone_issues, get_milestone_issue_information, record, render,
     utils::StdEnvProvider,
