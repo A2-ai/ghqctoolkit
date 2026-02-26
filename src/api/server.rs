@@ -7,7 +7,7 @@ use crate::api::routes::{
 use crate::api::state::AppState;
 use axum::{
     Router,
-    extract::Request,
+    extract::{DefaultBodyLimit, Request},
     middleware::{self, Next},
     response::Response,
     routing::{get, post},
@@ -91,7 +91,11 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .route("/api/assignees", get(status::list_assignees))
         .route("/api/repo", get(status::repo_info))
         // Record PDF generation
-        .route("/api/record/upload", post(record::upload_context_file))
+        .route(
+            "/api/record/upload",
+            post(record::upload_context_file)
+                .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         .route("/api/record/preview", post(record::preview_record))
         .route("/api/record/preview.pdf", get(record::serve_preview_pdf))
         .route("/api/record/generate", post(record::generate_record))

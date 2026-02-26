@@ -58,6 +58,7 @@ export function RecordTab() {
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewRetryCounter, setPreviewRetryCounter] = useState(0)
   const [generateLoading, setGenerateLoading] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [generateSuccess, setGenerateSuccess] = useState(false)
@@ -166,7 +167,7 @@ export function RecordTab() {
       return
     }
 
-    // Deduplicate: skip if the effective request is identical to what was last fired
+    // Deduplicate: skip if identical to the last SUCCESSFULLY completed request
     const qcIndex = contextItems.findIndex((i) => i.type === 'qc-record')
     const contextFiles = contextItems
       .filter((i): i is Extract<ContextItem, { type: 'file' }> => i.type === 'file')
@@ -176,7 +177,6 @@ export function RecordTab() {
       }))
     const signature = JSON.stringify({ includedMilestones, tablesOnly, contextFiles })
     if (signature === lastPreviewSignatureRef.current) return
-    lastPreviewSignatureRef.current = signature
 
     const id = ++previewRequestId.current
     setPreviewLoading(true)
@@ -185,6 +185,8 @@ export function RecordTab() {
     previewRecord({ milestone_numbers: includedMilestones, tables_only: tablesOnly, output_path: '', context_files: contextFiles })
       .then((result) => {
         if (id !== previewRequestId.current) return
+        // Only store signature on success — failed requests leave it unset so retries can fire
+        lastPreviewSignatureRef.current = signature
         setPreviewKey(result.key)
       })
       .catch((err: Error) => {
@@ -195,7 +197,7 @@ export function RecordTab() {
         if (id !== previewRequestId.current) return
         setPreviewLoading(false)
       })
-  }, [selectedMilestones, isLoadingIssues, isLoadingStatuses, tablesOnly, contextItems])
+  }, [selectedMilestones, isLoadingIssues, isLoadingStatuses, tablesOnly, contextItems, previewRetryCounter])
 
   async function handleGenerate() {
     setGenerateError(null)
@@ -483,7 +485,15 @@ export function RecordTab() {
             padding: 32,
           }}>
             <Alert color="red" style={{ maxWidth: 480 }}>
-              <Text size="sm">{previewError}</Text>
+              <Text size="sm" mb={8}>{previewError}</Text>
+              <Button
+                size="xs"
+                color="red"
+                variant="light"
+                onClick={() => setPreviewRetryCounter((c) => c + 1)}
+              >
+                Retry
+              </Button>
             </Alert>
           </div>
         )}
@@ -708,17 +718,9 @@ function RecordMilestoneCard({
         </Text>
 
         {statusInfo.loadingCount > 0 && (
-          <>
-            <style>{`
-              @keyframes glisten {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.35; }
-              }
-            `}</style>
-            <Text size="xs" c="dimmed" style={{ animation: 'glisten 1.4s ease-in-out infinite' }}>
-              {statusInfo.loadingCount} {statusInfo.loadingCount === 1 ? 'issue' : 'issues'} loading…
-            </Text>
-          </>
+          <Text size="xs" c="dimmed" style={{ animation: 'glisten 1.4s ease-in-out infinite' }}>
+            {statusInfo.loadingCount} {statusInfo.loadingCount === 1 ? 'issue' : 'issues'} loading…
+          </Text>
         )}
       </div>
 

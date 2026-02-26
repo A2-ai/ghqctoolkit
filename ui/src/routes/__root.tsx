@@ -9,6 +9,7 @@ import { MantineProvider } from '@mantine/core'
 import type { QueryClient } from '@tanstack/react-query'
 import * as React from 'react'
 import mantineCss from '@mantine/core/styles.css?url'
+import '../styles/animations.css'
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient

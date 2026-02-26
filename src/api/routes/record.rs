@@ -18,19 +18,25 @@ use std::{
 
 use crate::{
     ContextPosition, GitProvider, QCContext, UreqDownloader,
-    api::types::{RecordPreviewResponse, RecordRequest, RecordUploadResponse},
+    api::types::{RecordContextPosition, RecordPreviewResponse, RecordRequest, RecordUploadResponse},
     api::{error::ApiError, state::AppState},
     create_staging_dir, fetch_milestone_issues, get_milestone_issue_information, record, render,
     utils::StdEnvProvider,
 };
+
+/// Maximum size accepted for uploaded context PDFs (50 MB).
+const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+
+static KEY_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn generate_key() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    let count = KEY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut hasher = DefaultHasher::new();
-    timestamp.hash(&mut hasher);
+    (timestamp, count).hash(&mut hasher);
     format!("{:x}", hasher.finish())
 }
 
@@ -57,6 +63,12 @@ pub async fn upload_context_file<G: GitProvider + 'static>(
                 .bytes()
                 .await
                 .map_err(|e| ApiError::BadRequest(format!("Failed to read file bytes: {e}")))?;
+            if data.len() > MAX_UPLOAD_BYTES {
+                return Err(ApiError::BadRequest(format!(
+                    "PDF exceeds {} MB size limit",
+                    MAX_UPLOAD_BYTES / (1024 * 1024)
+                )));
+            }
             file_bytes = Some(data.to_vec());
         }
     }
@@ -148,10 +160,9 @@ async fn run_record_pipeline<G: GitProvider + 'static>(
         .context_files
         .iter()
         .map(|f| {
-            let pos = if f.position == "prepend" {
-                ContextPosition::Prepend
-            } else {
-                ContextPosition::Append
+            let pos = match f.position {
+                RecordContextPosition::Prepend => ContextPosition::Prepend,
+                RecordContextPosition::Append => ContextPosition::Append,
             };
             QCContext::new(&f.server_path, pos)
         })
@@ -217,6 +228,10 @@ pub async fn serve_preview_pdf<G: GitProvider + 'static>(
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to read preview PDF: {e}")))?;
+
+    // Remove from store and delete temp file — one-shot serve
+    state.preview_store().await.remove(&query.key);
+    tokio::fs::remove_file(&path).await.ok();
 
     let response = (
         StatusCode::OK,
