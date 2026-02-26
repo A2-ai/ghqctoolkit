@@ -257,13 +257,25 @@ mod tests {
 
         // Issue 1 (50%, In Progress): not approved → U; not 100% → C
         let issue1_part = row.issues.split("Test Issue 2").next().unwrap_or("");
-        assert!(issue1_part.contains("#text(fill: red)[U]"), "unapproved issue should get U");
-        assert!(issue1_part.contains("#text(fill: red)[C]"), "incomplete checklist should get C");
+        assert!(
+            issue1_part.contains("#text(fill: red)[U]"),
+            "unapproved issue should get U"
+        );
+        assert!(
+            issue1_part.contains("#text(fill: red)[C]"),
+            "incomplete checklist should get C"
+        );
 
         // Issue 2 (100%, Approved): approved → no U; 100% → no C
         let issue2_part = row.issues.split("Test Issue 2").nth(1).unwrap_or("");
-        assert!(!issue2_part.contains("#text(fill: red)[U]"), "approved issue must not get U");
-        assert!(!issue2_part.contains("#text(fill: red)[C]"), "complete checklist must not get C");
+        assert!(
+            !issue2_part.contains("#text(fill: red)[U]"),
+            "approved issue must not get U"
+        );
+        assert!(
+            !issue2_part.contains("#text(fill: red)[C]"),
+            "complete checklist must not get C"
+        );
     }
 
     #[test]

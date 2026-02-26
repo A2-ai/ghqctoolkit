@@ -1,5 +1,6 @@
 //! Record PDF generation endpoints.
 
+use axum::extract::Multipart;
 use axum::{
     Json,
     body::Bytes,
@@ -7,7 +8,6 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::IntoResponse,
 };
-use axum::extract::Multipart;
 use serde::Deserialize;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -17,11 +17,10 @@ use std::{
 };
 
 use crate::{
-    ContextPosition, GitProvider, QCContext, UreqDownloader, create_staging_dir,
-    fetch_milestone_issues, get_milestone_issue_information, record,
-    api::{error::ApiError, state::AppState},
+    ContextPosition, GitProvider, QCContext, UreqDownloader,
     api::types::{RecordPreviewResponse, RecordRequest, RecordUploadResponse},
-    render,
+    api::{error::ApiError, state::AppState},
+    create_staging_dir, fetch_milestone_issues, get_milestone_issue_information, record, render,
     utils::StdEnvProvider,
 };
 
@@ -212,7 +211,8 @@ pub async fn serve_preview_pdf<G: GitProvider + 'static>(
         store.get(&query.key).cloned()
     };
 
-    let path = path.ok_or_else(|| ApiError::NotFound(format!("Preview key not found: {}", query.key)))?;
+    let path =
+        path.ok_or_else(|| ApiError::NotFound(format!("Preview key not found: {}", query.key)))?;
 
     let bytes = tokio::fs::read(&path)
         .await
