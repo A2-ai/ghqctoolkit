@@ -23,6 +23,7 @@ import {
 import {
   IconAlertCircle,
   IconAlertTriangle,
+  IconArrowBackUp,
   IconExclamationMark,
   IconGripVertical,
   IconLock,
@@ -67,6 +68,8 @@ export function RecordTab() {
   const previewRequestId = useRef(0)
   // True once the user has manually edited the output path field
   const outputPathUserEdited = useRef(false)
+  // Drives the reset button visibility (state so it triggers a re-render)
+  const [outputPathIsCustom, setOutputPathIsCustom] = useState(false)
 
   // Fetch issue lists + statuses for all selected milestones (include closed issues for record)
   const { statuses, milestoneStatusByMilestone, isLoadingIssues, isLoadingStatuses } =
@@ -95,6 +98,20 @@ export function RecordTab() {
   function hasErrors(n: number): boolean {
     const info = milestoneStatusRef.current[n]
     return !info || info.listFailed || info.statusErrorCount > 0
+  }
+
+  // Revert output path to the auto-generated default
+  function resetOutputPath() {
+    outputPathUserEdited.current = false
+    setOutputPathIsCustom(false)
+    if (!repoData) { setOutputPath(''); return }
+    const includedNumbers = selectedMilestones.filter((n) => !hasErrors(n))
+    if (includedNumbers.length === 0) { setOutputPath(''); return }
+    const names = includedNumbers
+      .map((n) => (milestonesData ?? []).find((m) => m.number === n)?.title ?? String(n))
+      .join('-')
+      .replace(/\s+/g, '-')
+    setOutputPath(`${repoData.repo}-${names}${tablesOnly ? '-tables' : ''}.pdf`)
   }
 
   // Stable string of errored milestone numbers — lets output path effect react to error changes
@@ -383,8 +400,22 @@ export function RecordTab() {
             onChange={(e) => {
               const val = e.currentTarget.value
               outputPathUserEdited.current = val !== ''
+              setOutputPathIsCustom(val !== '')
               setOutputPath(val)
             }}
+            rightSection={outputPathIsCustom && selectedMilestones.length > 0 ? (
+              <Tooltip label="Reset to default" withArrow position="top">
+                <ActionIcon
+                  size="xs"
+                  variant="transparent"
+                  color="gray"
+                  onClick={resetOutputPath}
+                  aria-label="Reset output path to default"
+                >
+                  <IconArrowBackUp size={13} />
+                </ActionIcon>
+              </Tooltip>
+            ) : undefined}
           />
 
           {generateError && (
