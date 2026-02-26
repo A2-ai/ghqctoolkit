@@ -13,9 +13,11 @@ interface Props {
   opened: boolean
   onClose: () => void
   onAdd: (item: AddItem) => void
+  /** Increment to force the file tree to re-fetch (e.g. after generating a new PDF) */
+  fileTreeKey?: number
 }
 
-export function AddContextFileModal({ opened, onClose, onAdd }: Props) {
+export function AddContextFileModal({ opened, onClose, onAdd, fileTreeKey = 0 }: Props) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -58,6 +60,7 @@ export function AddContextFileModal({ opened, onClose, onAdd }: Props) {
         <Tabs.Panel value="browse" pt="md">
           <Stack gap="md">
             <FileTreeBrowser
+              key={fileTreeKey}
               selectedFile={selectedFile}
               onSelect={setSelectedFile}
               filterFile={(name) => name.toLowerCase().endsWith('.pdf')}

@@ -62,6 +62,7 @@ export function RecordTab() {
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [generateSuccess, setGenerateSuccess] = useState(false)
   const [addModalOpen, setAddModalOpen] = useState(false)
+  const [fileTreeKey, setFileTreeKey] = useState(0)
 
   const { data: repoData } = useRepoInfo()
   const { data: milestonesData } = useMilestones()
@@ -215,6 +216,7 @@ export function RecordTab() {
       }
       await generateRecord(req)
       setGenerateSuccess(true)
+      setFileTreeKey((k) => k + 1)
     } catch (err) {
       setGenerateError((err as Error).message)
     } finally {
@@ -504,6 +506,7 @@ export function RecordTab() {
         opened={addModalOpen}
         onClose={() => setAddModalOpen(false)}
         onAdd={addContextItem}
+        fileTreeKey={fileTreeKey}
       />
     </div>
   )

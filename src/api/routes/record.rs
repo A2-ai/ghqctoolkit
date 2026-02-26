@@ -241,7 +241,14 @@ pub async fn generate_record<G: GitProvider + 'static>(
         return Err(ApiError::BadRequest("output_path is required".to_string()));
     }
 
-    let output_path = PathBuf::from(&request.output_path);
+    // Resolve relative paths against the repository root so the file lands
+    // in the project directory rather than wherever the server was invoked from.
+    let raw = PathBuf::from(&request.output_path);
+    let output_path = if raw.is_absolute() {
+        raw
+    } else {
+        state.git_info().path().join(&raw)
+    };
 
     // Ensure parent directory exists
     if let Some(parent) = output_path.parent() {
