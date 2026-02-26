@@ -549,6 +549,12 @@ pub struct FileTreeResponse {
     pub entries: Vec<TreeEntry>,
 }
 
+/// Response for archive generation.
+#[derive(Debug, Serialize)]
+pub struct ArchiveGenerateResponse {
+    pub output_path: String,
+}
+
 /// Response for context PDF upload.
 #[derive(Debug, Serialize)]
 pub struct RecordUploadResponse {

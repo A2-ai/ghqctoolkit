@@ -1,4 +1,5 @@
-import { AppShell, Menu, Text, Tooltip } from '@mantine/core'
+import { ActionIcon, AppShell, Menu, Text, Tooltip } from '@mantine/core'
+import { ArchiveTab } from './ArchiveTab'
 import { ConfigurationTab } from './ConfigurationTab'
 import { RecordTab } from './RecordTab'
 import { useEffect, useRef, useState } from 'react'
@@ -18,6 +19,8 @@ import {
   IconSettings,
   IconDots,
   IconInfoCircle,
+  IconChevronLeft,
+  IconChevronRight,
 } from '@tabler/icons-react'
 
 type Tab = 'status' | 'create' | 'record' | 'archive' | 'configuration'
@@ -182,7 +185,9 @@ export function AppLayout() {
   const [includeClosedIssues, setIncludeClosedIssues] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('status')
   const [headerWidth, setHeaderWidth] = useState(window.innerWidth)
-  const [navWidth, setNavWidth] = useState(240)
+  const [navWidth, setNavWidth] = useState(320)
+  const [navCollapsed, setNavCollapsed] = useState(false)
+  const lastNavWidthRef = useRef(320)
   const headerInnerRef = useRef<HTMLDivElement>(null)
   const isDragging = useRef(false)
   const dragStartX = useRef(0)
@@ -283,7 +288,7 @@ export function AppLayout() {
     <AppShell
       header={{ height: 88 }}
       navbar={{
-        width: navWidth,
+        width: navCollapsed ? 28 : navWidth,
         breakpoint: 'sm',
         collapsed: { desktop: activeTab !== 'status' },
       }}
@@ -378,19 +383,41 @@ export function AppLayout() {
 
       <AppShell.Navbar style={{ padding: 0 }}>
         <div style={{ display: 'flex', height: '100%' }}>
-          <div style={{ flex: 1, padding: 'var(--mantine-spacing-md)', overflowY: 'auto' }}>
-            <MilestoneFilter
-              selected={selectedMilestones}
-              onSelect={setSelectedMilestones}
-              includeClosedIssues={includeClosedIssues}
-              onIncludeClosedIssuesChange={setIncludeClosedIssues}
-              milestoneStatusByMilestone={milestoneStatusByMilestone}
-            />
+          {!navCollapsed && (
+            <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+              <MilestoneFilter
+                selected={selectedMilestones}
+                onSelect={setSelectedMilestones}
+                includeClosedIssues={includeClosedIssues}
+                onIncludeClosedIssuesChange={setIncludeClosedIssues}
+                milestoneStatusByMilestone={milestoneStatusByMilestone}
+              />
+            </div>
+          )}
+          <div style={{ width: 28, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <ActionIcon
+              variant="subtle"
+              size="sm"
+              onClick={() => {
+                if (navCollapsed) {
+                  setNavWidth(lastNavWidthRef.current)
+                } else {
+                  lastNavWidthRef.current = navWidth
+                }
+                setNavCollapsed((c) => !c)
+              }}
+              style={{ marginTop: 8 }}
+              title={navCollapsed ? 'Expand' : 'Collapse'}
+            >
+              {navCollapsed ? <IconChevronRight size={14} /> : <IconChevronLeft size={14} />}
+            </ActionIcon>
+            {!navCollapsed && (
+              <div
+                onMouseDown={onDragHandleMouseDown}
+                style={{ flex: 1, width: '100%', cursor: 'col-resize' }}
+              />
+            )}
           </div>
-          <div
-            onMouseDown={onDragHandleMouseDown}
-            style={{ width: 6, flexShrink: 0, cursor: 'col-resize' }}
-          />
         </div>
       </AppShell.Navbar>
 
@@ -419,7 +446,14 @@ export function AppLayout() {
             <RecordTab />
           </div>
         )}
-        {activeTab === 'archive' && <PlaceholderTab tab="archive" />}
+        {activeTab === 'archive' && (
+          <div style={{
+            margin: 'calc(-1 * var(--mantine-spacing-md))',
+            height: 'calc(100vh - 88px)',
+          }}>
+            <ArchiveTab />
+          </div>
+        )}
       </AppShell.Main>
     </AppShell>
   )

@@ -1,7 +1,6 @@
 import {
   ActionIcon,
   Combobox,
-  Divider,
   InputBase,
   Loader,
   Stack,
@@ -10,10 +9,20 @@ import {
   Tooltip,
   useCombobox,
 } from '@mantine/core'
-import { IconAlertCircle, IconAlertTriangle, IconExclamationMark, IconX } from '@tabler/icons-react'
-import { useState } from 'react'
+import {
+  IconAlertCircle,
+  IconAlertTriangle,
+  IconChevronDown,
+  IconChevronRight,
+  IconExclamationMark,
+  IconX,
+} from '@tabler/icons-react'
+import { useEffect, useRef, useState } from 'react'
 import { useMilestones, type Milestone } from '~/api/milestones'
 import { type MilestoneStatusInfo } from '~/api/issues'
+
+const MIN_ISSUES_HEIGHT = 80
+const COLLAPSED_ISSUES_HEIGHT = 36
 
 interface Props {
   selected: number[]
@@ -23,20 +32,84 @@ interface Props {
   milestoneStatusByMilestone: Record<number, MilestoneStatusInfo>
 }
 
-export function MilestoneFilter({ selected, onSelect, includeClosedIssues, onIncludeClosedIssuesChange, milestoneStatusByMilestone }: Props) {
+export function MilestoneFilter({
+  selected,
+  onSelect,
+  includeClosedIssues,
+  onIncludeClosedIssuesChange,
+  milestoneStatusByMilestone,
+}: Props) {
   const [includeClosedMilestones, setIncludeClosedMilestones] = useState(false)
   const [search, setSearch] = useState('')
   const { data, isLoading, isError } = useMilestones()
   const combobox = useCombobox({ onDropdownClose: () => setSearch('') })
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [issuesHeight, setIssuesHeight] = useState(300)
+  const [issuesCollapsed, setIssuesCollapsed] = useState(false)
+  const lastIssuesHeightRef = useRef(300)
+  const isDragging = useRef(false)
+  const dragStartY = useRef(0)
+  const dragStartHeight = useRef(0)
+
+  // Set issues section to 50% of container height on mount
+  useEffect(() => {
+    if (containerRef.current) {
+      const h = containerRef.current.clientHeight
+      if (h > 0) {
+        const half = Math.round(h * 0.5)
+        setIssuesHeight(half)
+        lastIssuesHeightRef.current = half
+      }
+    }
+  }, [])
+
+  // Vertical drag-to-resize
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isDragging.current) return
+      const delta = dragStartY.current - e.clientY
+      const maxH = (containerRef.current?.clientHeight ?? 600) - MIN_ISSUES_HEIGHT
+      setIssuesHeight(Math.max(MIN_ISSUES_HEIGHT, Math.min(maxH, dragStartHeight.current + delta)))
+    }
+    const onUp = () => {
+      if (!isDragging.current) return
+      isDragging.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
+  const onDragHandleMouseDown = (e: React.MouseEvent) => {
+    isDragging.current = true
+    dragStartY.current = e.clientY
+    dragStartHeight.current = issuesHeight
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    e.preventDefault()
+  }
+
+  function toggleIssuesCollapse() {
+    if (issuesCollapsed) {
+      setIssuesHeight(lastIssuesHeightRef.current)
+    } else {
+      lastIssuesHeightRef.current = issuesHeight
+    }
+    setIssuesCollapsed((c) => !c)
+  }
+
   const available = (data ?? []).filter(
-    (m) => (includeClosedMilestones || m.state === 'open') && !selected.includes(m.number)
+    (m) => (includeClosedMilestones || m.state === 'open') && !selected.includes(m.number),
   )
-
   const filtered = available.filter((m) =>
-    m.title.toLowerCase().includes(search.toLowerCase())
+    m.title.toLowerCase().includes(search.toLowerCase()),
   )
-
   const selectedMilestones = (data ?? []).filter((m) => selected.includes(m.number))
 
   function add(number: number) {
@@ -70,74 +143,123 @@ export function MilestoneFilter({ selected, onSelect, includeClosedIssues, onInc
     statusAttemptedCount: 0,
   }
 
+  const displayIssuesHeight = issuesCollapsed ? COLLAPSED_ISSUES_HEIGHT : issuesHeight
+
   return (
-    <Stack gap="sm">
-      <Text fw={600} size="sm">Milestones</Text>
+    <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-      <Combobox store={combobox} onOptionSubmit={(val) => add(Number(val))}>
-        <Combobox.Target>
-          <InputBase
-            placeholder="Search milestones…"
+      {/* ── Milestones section ────────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 'var(--mantine-spacing-md)' }}>
+        <Stack gap="sm">
+          <Text fw={600} size="sm">Milestones</Text>
+          <Switch
+            label="Include Closed Milestones"
             size="xs"
-            value={search}
-            rightSection={isLoading ? <Loader size={12} /> : <Combobox.Chevron />}
-            onChange={(e) => {
-              setSearch(e.currentTarget.value)
-              combobox.openDropdown()
-            }}
-            onClick={() => combobox.openDropdown()}
-            onFocus={() => combobox.openDropdown()}
+            checked={includeClosedMilestones}
+            onChange={(e) => handleIncludeClosedMilestonesChange(e.currentTarget.checked)}
           />
-        </Combobox.Target>
-
-        <Combobox.Dropdown>
-          <Combobox.Options>
-            {isError && <Combobox.Empty>Failed to load</Combobox.Empty>}
-            {!isLoading && !isError && filtered.length === 0 && (
-              <Combobox.Empty>No milestones found</Combobox.Empty>
-            )}
-            {[...filtered].reverse().map((m) => (
-              <Combobox.Option key={m.number} value={String(m.number)}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Text size="sm">{m.title}</Text>
-                  {m.state === 'closed' && <ClosedPill />}
-                </div>
-                <Text size="xs" c="dimmed">
-                  {m.open_issues} open · {m.closed_issues} closed
-                </Text>
-              </Combobox.Option>
+          <Combobox store={combobox} onOptionSubmit={(val) => add(Number(val))}>
+            <Combobox.Target>
+              <InputBase
+                placeholder="Search milestones…"
+                size="xs"
+                value={search}
+                rightSection={isLoading ? <Loader size={12} /> : <Combobox.Chevron />}
+                onChange={(e) => { setSearch(e.currentTarget.value); combobox.openDropdown() }}
+                onClick={() => combobox.openDropdown()}
+                onFocus={() => combobox.openDropdown()}
+              />
+            </Combobox.Target>
+            <Combobox.Dropdown>
+              <Combobox.Options>
+                {isError && <Combobox.Empty>Failed to load</Combobox.Empty>}
+                {!isLoading && !isError && filtered.length === 0 && (
+                  <Combobox.Empty>No milestones found</Combobox.Empty>
+                )}
+                {[...filtered].reverse().map((m) => (
+                  <Combobox.Option key={m.number} value={String(m.number)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Text size="sm">{m.title}</Text>
+                      {m.state === 'closed' && <ClosedPill />}
+                    </div>
+                    <Text size="xs" c="dimmed">
+                      {m.open_issues} open · {m.closed_issues} closed
+                    </Text>
+                  </Combobox.Option>
+                ))}
+              </Combobox.Options>
+            </Combobox.Dropdown>
+          </Combobox>
+          <Stack gap={6}>
+            {selectedMilestones.map((m) => (
+              <SelectedMilestoneCard
+                key={m.number}
+                milestone={m}
+                onRemove={() => remove(m.number)}
+                statusInfo={milestoneStatusByMilestone[m.number] ?? defaultStatusInfo}
+              />
             ))}
-          </Combobox.Options>
-        </Combobox.Dropdown>
-      </Combobox>
+          </Stack>
+        </Stack>
+      </div>
 
-      <Switch
-        label="Include closed milestones"
-        size="xs"
-        checked={includeClosedMilestones}
-        onChange={(e) => handleIncludeClosedMilestonesChange(e.currentTarget.checked)}
-      />
+      {/* ── Issues section ────────────────────────────────────────────────── */}
+      <div style={{ height: displayIssuesHeight, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
 
-      <Divider />
-
-      <Switch
-        label="Include closed issues"
-        size="xs"
-        checked={includeClosedIssues}
-        onChange={(e) => onIncludeClosedIssuesChange(e.currentTarget.checked)}
-      />
-
-      <Stack gap={6}>
-        {selectedMilestones.map((m) => (
-          <SelectedMilestoneCard
-            key={m.number}
-            milestone={m}
-            onRemove={() => remove(m.number)}
-            statusInfo={milestoneStatusByMilestone[m.number] ?? defaultStatusInfo}
+        {/* Drag handle — doubles as the section border */}
+        {!issuesCollapsed && (
+          <div
+            onMouseDown={onDragHandleMouseDown}
+            style={{
+              height: 6,
+              flexShrink: 0,
+              cursor: 'row-resize',
+              borderTop: '1px solid var(--mantine-color-gray-3)',
+            }}
           />
-        ))}
-      </Stack>
-    </Stack>
+        )}
+
+        {/* Header row */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '0 var(--mantine-spacing-md)',
+          height: COLLAPSED_ISSUES_HEIGHT,
+          flexShrink: 0,
+          borderTop: issuesCollapsed ? '1px solid var(--mantine-color-gray-3)' : undefined,
+          cursor: 'pointer',
+        }}
+        onClick={toggleIssuesCollapse}
+        title={issuesCollapsed ? 'Expand' : 'Collapse'}
+        >
+          <ActionIcon
+            size="xs"
+            variant="subtle"
+            tabIndex={-1}
+            style={{ pointerEvents: 'none' }}
+          >
+            {issuesCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
+          </ActionIcon>
+          <Text fw={600} size="sm">Issues</Text>
+        </div>
+
+        {/* Scrollable content */}
+        {!issuesCollapsed && (
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 var(--mantine-spacing-md) var(--mantine-spacing-md)' }}>
+            <Stack gap="sm">
+              <Switch
+                label="Include Closed Issues"
+                size="xs"
+                checked={includeClosedIssues}
+                onChange={(e) => onIncludeClosedIssuesChange(e.currentTarget.checked)}
+              />
+            </Stack>
+          </div>
+        )}
+      </div>
+
+    </div>
   )
 }
 

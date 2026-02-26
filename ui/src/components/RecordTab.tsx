@@ -4,7 +4,6 @@ import {
   Alert,
   Button,
   Combobox,
-  Divider,
   InputBase,
   Loader,
   Stack,
@@ -24,6 +23,8 @@ import {
   IconAlertCircle,
   IconAlertTriangle,
   IconArrowBackUp,
+  IconChevronDown,
+  IconChevronRight,
   IconExclamationMark,
   IconGripVertical,
   IconLock,
@@ -44,6 +45,8 @@ type ContextItem =
   | { id: string; type: 'file'; serverPath: string; displayName: string }
   | { id: 'qc-record'; type: 'qc-record' }
 
+const MIN_RS_HEIGHT = 80
+const COLLAPSED_HEIGHT = 36
 
 // ─── RecordTab ────────────────────────────────────────────────────────────────
 
@@ -65,23 +68,39 @@ export function RecordTab() {
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [fileTreeKey, setFileTreeKey] = useState(0)
 
+  // Sidebar section layout state
+  const [milestoneCollapsed, setMilestoneCollapsed] = useState(false)
+  const [rsCollapsed, setRsCollapsed] = useState(false)
+  const [rsHeight, setRsHeight] = useState(300)
+  const [outputHeight, setOutputHeight] = useState<number | null>(null)
+  const sidebarRef = useRef<HTMLDivElement>(null)
+  const outputSectionRef = useRef<HTMLDivElement>(null)
+  const minOutputHeightRef = useRef(0)
+  const currentOutputHeightRef = useRef(0)
+  const lastRsHeightRef = useRef(300)
+  // Output drag refs
+  const isDraggingOutput = useRef(false)
+  const dragStartYOutput = useRef(0)
+  const dragStartHeightOutput = useRef(0)
+  // RS drag refs
+  const isDraggingRs = useRef(false)
+  const dragStartYRs = useRef(0)
+  const dragStartHeightRs = useRef(0)
+  // Keep ref in sync so drag closure always sees current value
+  if (outputHeight !== null) currentOutputHeightRef.current = outputHeight
+
   const { data: repoData } = useRepoInfo()
   const { data: milestonesData } = useMilestones()
   const previewRequestId = useRef(0)
-  // True once the user has manually edited the output path field
   const outputPathUserEdited = useRef(false)
-  // Drives the reset button visibility (state so it triggers a re-render)
   const [outputPathIsCustom, setOutputPathIsCustom] = useState(false)
 
-  // Fetch issue lists + statuses for all selected milestones (include closed issues for record)
   const { statuses, milestoneStatusByMilestone, isLoadingIssues, isLoadingStatuses } =
     useMilestoneIssues(selectedMilestones, true)
 
-  // Keep a ref so the preview/generate effects can read the latest value without it being a dep
   const milestoneStatusRef = useRef(milestoneStatusByMilestone)
   milestoneStatusRef.current = milestoneStatusByMilestone
 
-  // Count unapproved issues per milestone (warning indicator, does NOT exclude from downstream)
   const unapprovedByMilestone = useMemo(() => {
     const result: Record<number, number> = {}
     for (const n of selectedMilestones) {
@@ -96,13 +115,11 @@ export function RecordTab() {
     return result
   }, [selectedMilestones, statuses, milestonesData])
 
-  // A milestone is excluded from downstream if it has any errors (list or status fetch failures)
   function hasErrors(n: number): boolean {
     const info = milestoneStatusRef.current[n]
     return !info || info.listFailed || info.statusErrorCount > 0
   }
 
-  // Revert output path to the auto-generated default
   function resetOutputPath() {
     outputPathUserEdited.current = false
     setOutputPathIsCustom(false)
@@ -116,16 +133,87 @@ export function RecordTab() {
     setOutputPath(`${repoData.repo}-${names}${tablesOnly ? '-tables' : ''}.pdf`)
   }
 
-  // Stable string of errored milestone numbers — lets output path effect react to error changes
   const erroredKey = selectedMilestones
     .filter((n) => milestoneStatusByMilestone[n]?.listFailed || (milestoneStatusByMilestone[n]?.statusErrorCount ?? 0) > 0)
     .sort((a, b) => a - b)
     .join(',')
 
-  // Signature of the last preview request actually fired — used to skip redundant re-fires
   const lastPreviewSignatureRef = useRef('')
 
-  // Auto-populate output path from repo + milestone names (excluding errored milestones)
+  // Measure output section height on mount; set RS to 50% of sidebar
+  useEffect(() => {
+    if (sidebarRef.current && outputSectionRef.current) {
+      const total = sidebarRef.current.clientHeight
+      const outH = outputSectionRef.current.clientHeight
+      if (total > 0 && outH > 0) {
+        minOutputHeightRef.current = outH
+        currentOutputHeightRef.current = outH
+        setOutputHeight(outH)
+        const half = Math.round(total * 0.5)
+        setRsHeight(half)
+        lastRsHeightRef.current = half
+      }
+    }
+  }, [])
+
+  // Unified drag-to-resize for output and RS handles
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (isDraggingOutput.current) {
+        const delta = e.clientY - dragStartYOutput.current
+        const min = minOutputHeightRef.current
+        const max = (sidebarRef.current?.clientHeight ?? 600) - COLLAPSED_HEIGHT * 2
+        setOutputHeight(Math.max(min, Math.min(max, dragStartHeightOutput.current + delta)))
+      }
+      if (isDraggingRs.current) {
+        const delta = dragStartYRs.current - e.clientY
+        const totalH = sidebarRef.current?.clientHeight ?? 600
+        const maxH = totalH - currentOutputHeightRef.current - COLLAPSED_HEIGHT
+        setRsHeight(Math.max(MIN_RS_HEIGHT, Math.min(maxH, dragStartHeightRs.current + delta)))
+      }
+    }
+    const onUp = () => {
+      isDraggingOutput.current = false
+      isDraggingRs.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
+  const onOutputDragHandleMouseDown = (e: React.MouseEvent) => {
+    isDraggingOutput.current = true
+    dragStartYOutput.current = e.clientY
+    dragStartHeightOutput.current = outputHeight ?? minOutputHeightRef.current
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    e.preventDefault()
+  }
+
+  const onRsDragHandleMouseDown = (e: React.MouseEvent) => {
+    isDraggingRs.current = true
+    dragStartYRs.current = e.clientY
+    dragStartHeightRs.current = rsHeight
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    e.preventDefault()
+  }
+
+  function toggleRsCollapse() {
+    if (rsCollapsed) {
+      setRsHeight(lastRsHeightRef.current)
+    } else {
+      lastRsHeightRef.current = rsHeight
+    }
+    setRsCollapsed((c) => !c)
+  }
+
+  // Auto-populate output path
   useEffect(() => {
     if (outputPathUserEdited.current) return
     if (!repoData) return
@@ -141,8 +229,7 @@ export function RecordTab() {
     setOutputPath(`${repoData.repo}-${milestoneNames}${tablesOnly ? '-tables' : ''}.pdf`)
   }, [selectedMilestones, milestonesData, repoData, tablesOnly, erroredKey])
 
-  // Auto-preview: fires once all selected milestones' issue statuses have loaded,
-  // but only if the effective request (included milestones + settings) actually changed.
+  // Auto-preview
   useEffect(() => {
     if (selectedMilestones.length === 0) {
       setPreviewKey(null)
@@ -151,14 +238,10 @@ export function RecordTab() {
       lastPreviewSignatureRef.current = ''
       return
     }
-
-    // Still waiting for issue lists or status fetches — hold silently
     if (isLoadingIssues || isLoadingStatuses) {
       setPreviewError(null)
       return
     }
-
-    // Exclude milestones with any errors
     const includedMilestones = selectedMilestones.filter((n) => !hasErrors(n))
     if (includedMilestones.length === 0) {
       setPreviewLoading(false)
@@ -166,8 +249,6 @@ export function RecordTab() {
       lastPreviewSignatureRef.current = ''
       return
     }
-
-    // Deduplicate: skip if identical to the last SUCCESSFULLY completed request
     const qcIndex = contextItems.findIndex((i) => i.type === 'qc-record')
     const contextFiles = contextItems
       .filter((i): i is Extract<ContextItem, { type: 'file' }> => i.type === 'file')
@@ -185,7 +266,6 @@ export function RecordTab() {
     previewRecord({ milestone_numbers: includedMilestones, tables_only: tablesOnly, output_path: '', context_files: contextFiles })
       .then((result) => {
         if (id !== previewRequestId.current) return
-        // Only store signature on success — failed requests leave it unset so retries can fire
         lastPreviewSignatureRef.current = signature
         setPreviewKey(result.key)
       })
@@ -248,207 +328,313 @@ export function RecordTab() {
     ])
   }
 
+  const bothCollapsed = milestoneCollapsed && rsCollapsed
+
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* ── Left sidebar: all controls ───────────────────────────────────── */}
-      <ResizableSidebar defaultWidth={400} minWidth={280} maxWidth={560}>
-        <Stack gap="sm">
 
-          {/* Milestones */}
-          <MilestoneSelector
-            selectedMilestones={selectedMilestones}
-            onSelectedMilestonesChange={setSelectedMilestones}
-            showOpenMilestones={showOpenMilestones}
-            onShowOpenMilestonesChange={setShowOpenMilestones}
-            statusByMilestone={milestoneStatusByMilestone}
-            unapprovedByMilestone={unapprovedByMilestone}
-          />
+      {/* ── Left sidebar ─────────────────────────────────────────────────── */}
+      <ResizableSidebar defaultWidth={320} minWidth={280} maxWidth={560} noPadding>
+        <div ref={sidebarRef} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-          <Divider />
-
-          {/* Record Structure */}
-          <div>
-            <Text fw={600} size="sm" mb={4}>
-              Record Structure
-            </Text>
-            <Text size="xs" c="dimmed" mb={8}>
-              Add documents to provide context to the QC findings
-            </Text>
-
-            <DragDropContext onDragEnd={onDragEnd}>
-              <Droppable droppableId="context-list">
-                {(provided) => (
-                  <div
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                    style={{
-                      border: '1px solid var(--mantine-color-gray-3)',
-                      borderRadius: 6,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    {contextItems.map((item, index) => (
-                      <Draggable
-                        key={item.id}
-                        draggableId={item.id}
-                        index={index}
-                        isDragDisabled={item.type === 'qc-record'}
-                      >
-                        {(provided, snapshot) =>
-                          item.type === 'qc-record' ? (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 6,
-                                padding: '7px 10px',
-                                backgroundColor: '#d7e7d3',
-                                borderTop: index > 0 ? '1px solid var(--mantine-color-gray-3)' : undefined,
-                                borderBottom: index < contextItems.length - 1 ? '1px solid var(--mantine-color-gray-3)' : undefined,
-                                ...provided.draggableProps.style,
-                              }}
-                            >
-                              <IconLock size={12} color="#2f7a3b" style={{ flexShrink: 0 }} />
-                              <Text size="xs" fw={600} c="#2f7a3b" style={{ flex: 1 }}>
-                                QC Record
-                              </Text>
-                              <Tooltip
-                                label={tablesOnly
-                                  ? 'Tables only: include only the QC summary tables'
-                                  : 'Full record: include QC history and summary tables'}
-                                withArrow
-                                position="top"
-                              >
-                                <Switch
-                                  label="Tables only"
-                                  size="xs"
-                                  color="#2f7a3b"
-                                  checked={tablesOnly}
-                                  onChange={(e) => setTablesOnly(e.currentTarget.checked)}
-                                  styles={{
-                                    label: { color: tablesOnly ? '#1a1a1a' : '#868e96', fontSize: 11, paddingLeft: 6, fontWeight: 700 },
-                                    track: {
-                                      borderColor: tablesOnly ? '#2f7a3b' : '#adb5bd',
-                                      backgroundColor: tablesOnly ? undefined : '#e9ecef',
-                                    },
-                                    thumb: { borderColor: tablesOnly ? '#2f7a3b' : '#adb5bd' },
-                                  }}
-                                />
-                              </Tooltip>
-                            </div>
-                          ) : (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 6,
-                                padding: '6px 10px',
-                                backgroundColor: snapshot.isDragging ? '#f8f9fa' : 'white',
-                                borderTop: index > 0 ? '1px solid var(--mantine-color-gray-3)' : undefined,
-                                ...provided.draggableProps.style,
-                              }}
-                            >
-                              <div {...provided.dragHandleProps} style={{ flexShrink: 0, cursor: 'grab', display: 'flex' }}>
-                                <IconGripVertical size={14} color="var(--mantine-color-gray-5)" />
-                              </div>
-                              <Text
-                                size="xs"
-                                style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                              >
-                                {item.displayName}
-                              </Text>
-                              <ActionIcon
-                                size="xs"
-                                variant="transparent"
-                                color="dark"
-                                onClick={() => removeContextItem(item.id)}
-                                aria-label={`Remove ${item.displayName}`}
-                                style={{ flexShrink: 0 }}
-                              >
-                                <IconX size={11} />
-                              </ActionIcon>
-                            </div>
-                          )
-                        }
-                      </Draggable>
-                    ))}
-                    {provided.placeholder}
-                  </div>
-                )}
-              </Droppable>
-            </DragDropContext>
-
-            <Button
-              leftSection={<IconPlus size={12} />}
-              variant="light"
-              size="xs"
-              mt={6}
-              onClick={() => setAddModalOpen(true)}
-            >
-              Add File
-            </Button>
+          {/* ── Output Path + Generate ───────────────────────────────────── */}
+          {/* flex:1 only when both below are collapsed; otherwise fixed to measured height */}
+          <div
+            ref={outputSectionRef}
+            style={
+              bothCollapsed
+                ? { flex: 1, minHeight: 0, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }
+                : { height: outputHeight ?? 'auto', flexShrink: 0, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }
+            }
+          >
+            <Stack gap="sm">
+              <TextInput
+                label="Output Path"
+                placeholder="/path/to/report.pdf"
+                size="xs"
+                value={outputPath}
+                onChange={(e) => {
+                  const val = e.currentTarget.value
+                  outputPathUserEdited.current = val !== ''
+                  setOutputPathIsCustom(val !== '')
+                  setOutputPath(val)
+                }}
+                rightSection={outputPathIsCustom && selectedMilestones.length > 0 ? (
+                  <Tooltip label="Reset to default" withArrow position="top">
+                    <ActionIcon
+                      size="xs"
+                      variant="transparent"
+                      color="gray"
+                      onClick={resetOutputPath}
+                      aria-label="Reset output path to default"
+                    >
+                      <IconArrowBackUp size={13} />
+                    </ActionIcon>
+                  </Tooltip>
+                ) : undefined}
+              />
+              {generateError && (
+                <Alert color="red" p="xs">
+                  <Text size="xs">{generateError}</Text>
+                </Alert>
+              )}
+              {generateSuccess && (
+                <Alert color="green" p="xs">
+                  <Text size="xs">PDF written to {outputPath}</Text>
+                </Alert>
+              )}
+              <Button
+                fullWidth
+                size="sm"
+                color="green"
+                onClick={handleGenerate}
+                loading={generateLoading}
+                disabled={selectedMilestones.length === 0 || !outputPath.trim()}
+              >
+                Generate
+              </Button>
+            </Stack>
           </div>
 
-          <Divider />
+          {/* ── Drag handle A: between Output and Milestones ─────────────── */}
+          {/* Hidden when both sections below are collapsed */}
+          {!bothCollapsed && outputHeight !== null && (
+            <div
+              onMouseDown={onOutputDragHandleMouseDown}
+              style={{
+                height: 6,
+                flexShrink: 0,
+                cursor: 'row-resize',
+                borderTop: '1px solid var(--mantine-color-gray-3)',
+              }}
+            />
+          )}
 
-          {/* Output path + Generate */}
-          <TextInput
-            label="Output Path"
-            placeholder="/path/to/report.pdf"
-            size="xs"
-            value={outputPath}
-            onChange={(e) => {
-              const val = e.currentTarget.value
-              outputPathUserEdited.current = val !== ''
-              setOutputPathIsCustom(val !== '')
-              setOutputPath(val)
-            }}
-            rightSection={outputPathIsCustom && selectedMilestones.length > 0 ? (
-              <Tooltip label="Reset to default" withArrow position="top">
-                <ActionIcon
+          {/* ── Milestones (collapsible) ─────────────────────────────────── */}
+          <div style={
+            milestoneCollapsed
+              ? {
+                  height: COLLAPSED_HEIGHT,
+                  flexShrink: 0,
+                  // needs its own top border when drag handle A is hidden
+                  borderTop: bothCollapsed ? '1px solid var(--mantine-color-gray-3)' : undefined,
+                }
+              : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+          }>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '0 var(--mantine-spacing-md)',
+                height: COLLAPSED_HEIGHT,
+                flexShrink: 0,
+                borderBottom: milestoneCollapsed ? undefined : '1px solid var(--mantine-color-gray-3)',
+                cursor: 'pointer',
+              }}
+              onClick={() => setMilestoneCollapsed((c) => !c)}
+              title={milestoneCollapsed ? 'Expand' : 'Collapse'}
+            >
+              <ActionIcon size="xs" variant="subtle" tabIndex={-1} style={{ pointerEvents: 'none' }}>
+                {milestoneCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
+              </ActionIcon>
+              <Text fw={600} size="sm">Milestones</Text>
+            </div>
+            {!milestoneCollapsed && (
+              <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }}>
+                <Stack gap="sm">
+                  <Switch
+                    label="Include open milestones"
+                    size="xs"
+                    checked={showOpenMilestones}
+                    onChange={(e) => setShowOpenMilestones(e.currentTarget.checked)}
+                  />
+                  <MilestoneCombobox
+                    selectedMilestones={selectedMilestones}
+                    onSelectedMilestonesChange={setSelectedMilestones}
+                    showOpenMilestones={showOpenMilestones}
+                    statusByMilestone={milestoneStatusByMilestone}
+                    unapprovedByMilestone={unapprovedByMilestone}
+                  />
+                </Stack>
+              </div>
+            )}
+          </div>
+
+          {/* ── Record Structure (resizable + collapsible) ───────────────── */}
+          {/* flex:1 (fills space) when milestones is collapsed; fixed height otherwise */}
+          <div style={
+            rsCollapsed
+              ? { height: COLLAPSED_HEIGHT, flexShrink: 0 }
+              : milestoneCollapsed
+                ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+                : { height: rsHeight, flexShrink: 0, display: 'flex', flexDirection: 'column' }
+          }>
+            {/* RS drag handle — only when both milestones and RS are expanded */}
+            {!milestoneCollapsed && !rsCollapsed && (
+              <div
+                onMouseDown={onRsDragHandleMouseDown}
+                style={{
+                  height: 6,
+                  flexShrink: 0,
+                  cursor: 'row-resize',
+                  borderTop: '1px solid var(--mantine-color-gray-3)',
+                }}
+              />
+            )}
+
+            {/* Header — top border when RS drag handle is absent */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '0 var(--mantine-spacing-md)',
+                height: COLLAPSED_HEIGHT,
+                flexShrink: 0,
+                borderTop: (rsCollapsed || milestoneCollapsed)
+                  ? '1px solid var(--mantine-color-gray-3)'
+                  : undefined,
+                cursor: 'pointer',
+              }}
+              onClick={toggleRsCollapse}
+              title={rsCollapsed ? 'Expand' : 'Collapse'}
+            >
+              <ActionIcon size="xs" variant="subtle" tabIndex={-1} style={{ pointerEvents: 'none' }}>
+                {rsCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
+              </ActionIcon>
+              <Text fw={600} size="sm">Record Structure</Text>
+            </div>
+
+            {!rsCollapsed && (
+              <div style={{ flex: 1, overflowY: 'auto', padding: '0 var(--mantine-spacing-md) var(--mantine-spacing-md)' }}>
+                <Text size="xs" c="dimmed" mb={8}>
+                  Add documents to provide context to the QC findings
+                </Text>
+                <DragDropContext onDragEnd={onDragEnd}>
+                  <Droppable droppableId="context-list">
+                    {(provided) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.droppableProps}
+                        style={{
+                          border: '1px solid var(--mantine-color-gray-3)',
+                          borderRadius: 6,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {contextItems.map((item, index) => (
+                          <Draggable
+                            key={item.id}
+                            draggableId={item.id}
+                            index={index}
+                            isDragDisabled={item.type === 'qc-record'}
+                          >
+                            {(provided, snapshot) =>
+                              item.type === 'qc-record' ? (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.draggableProps}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '7px 10px',
+                                    backgroundColor: '#d7e7d3',
+                                    borderTop: index > 0 ? '1px solid var(--mantine-color-gray-3)' : undefined,
+                                    borderBottom: index < contextItems.length - 1 ? '1px solid var(--mantine-color-gray-3)' : undefined,
+                                    ...provided.draggableProps.style,
+                                  }}
+                                >
+                                  <IconLock size={12} color="#2f7a3b" style={{ flexShrink: 0 }} />
+                                  <Text size="xs" fw={600} c="#2f7a3b" style={{ flex: 1 }}>
+                                    QC Record
+                                  </Text>
+                                  <Tooltip
+                                    label={tablesOnly
+                                      ? 'Tables only: include only the QC summary tables'
+                                      : 'Full record: include QC history and summary tables'}
+                                    withArrow
+                                    position="top"
+                                  >
+                                    <Switch
+                                      label="Tables only"
+                                      size="xs"
+                                      color="#2f7a3b"
+                                      checked={tablesOnly}
+                                      onChange={(e) => setTablesOnly(e.currentTarget.checked)}
+                                      styles={{
+                                        label: { color: tablesOnly ? '#1a1a1a' : '#868e96', fontSize: 11, paddingLeft: 6, fontWeight: 700 },
+                                        track: {
+                                          borderColor: tablesOnly ? '#2f7a3b' : '#adb5bd',
+                                          backgroundColor: tablesOnly ? undefined : '#e9ecef',
+                                        },
+                                        thumb: { borderColor: tablesOnly ? '#2f7a3b' : '#adb5bd' },
+                                      }}
+                                    />
+                                  </Tooltip>
+                                </div>
+                              ) : (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.draggableProps}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '6px 10px',
+                                    backgroundColor: snapshot.isDragging ? '#f8f9fa' : 'white',
+                                    borderTop: index > 0 ? '1px solid var(--mantine-color-gray-3)' : undefined,
+                                    ...provided.draggableProps.style,
+                                  }}
+                                >
+                                  <div {...provided.dragHandleProps} style={{ flexShrink: 0, cursor: 'grab', display: 'flex' }}>
+                                    <IconGripVertical size={14} color="var(--mantine-color-gray-5)" />
+                                  </div>
+                                  <Text
+                                    size="xs"
+                                    style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                  >
+                                    {item.displayName}
+                                  </Text>
+                                  <ActionIcon
+                                    size="xs"
+                                    variant="transparent"
+                                    color="dark"
+                                    onClick={() => removeContextItem(item.id)}
+                                    aria-label={`Remove ${item.displayName}`}
+                                    style={{ flexShrink: 0 }}
+                                  >
+                                    <IconX size={11} />
+                                  </ActionIcon>
+                                </div>
+                              )
+                            }
+                          </Draggable>
+                        ))}
+                        {provided.placeholder}
+                      </div>
+                    )}
+                  </Droppable>
+                </DragDropContext>
+                <Button
+                  leftSection={<IconPlus size={12} />}
+                  variant="light"
                   size="xs"
-                  variant="transparent"
-                  color="gray"
-                  onClick={resetOutputPath}
-                  aria-label="Reset output path to default"
+                  mt={6}
+                  onClick={() => setAddModalOpen(true)}
                 >
-                  <IconArrowBackUp size={13} />
-                </ActionIcon>
-              </Tooltip>
-            ) : undefined}
-          />
+                  Add File
+                </Button>
+              </div>
+            )}
+          </div>
 
-          {generateError && (
-            <Alert color="red" p="xs">
-              <Text size="xs">{generateError}</Text>
-            </Alert>
-          )}
-          {generateSuccess && (
-            <Alert color="green" p="xs">
-              <Text size="xs">PDF written to {outputPath}</Text>
-            </Alert>
-          )}
-          <Button
-            fullWidth
-            size="sm"
-            color="green"
-            onClick={handleGenerate}
-            loading={generateLoading}
-            disabled={selectedMilestones.length === 0 || !outputPath.trim()}
-          >
-            Generate
-          </Button>
-
-        </Stack>
+        </div>
       </ResizableSidebar>
 
       {/* ── Right pane: full-height PDF preview ──────────────────────────── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        {/* Keep the old iframe visible while a new preview is loading */}
         {previewKey && (
           <iframe
             key={previewKey}
@@ -456,8 +642,6 @@ export function RecordTab() {
             style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
           />
         )}
-
-        {/* Overlay: loading spinner */}
         {previewLoading && (
           <div style={{
             position: 'absolute',
@@ -473,8 +657,6 @@ export function RecordTab() {
             <Text size="sm" c="dimmed">Generating preview…</Text>
           </div>
         )}
-
-        {/* Overlay: error */}
         {previewError && !previewLoading && (
           <div style={{
             position: 'absolute',
@@ -497,8 +679,6 @@ export function RecordTab() {
             </Alert>
           </div>
         )}
-
-        {/* Placeholder: no milestones selected */}
         {!previewKey && !previewLoading && !previewError && (
           <div style={{
             position: 'absolute',
@@ -522,34 +702,32 @@ export function RecordTab() {
   )
 }
 
-// ─── Milestone selector ───────────────────────────────────────────────────────
+// ─── MilestoneCombobox ────────────────────────────────────────────────────────
 
-interface MilestoneSelectorProps {
+interface MilestoneComboboxProps {
   selectedMilestones: number[]
   onSelectedMilestonesChange: (v: number[]) => void
   showOpenMilestones: boolean
-  onShowOpenMilestonesChange: (v: boolean) => void
   statusByMilestone: Record<number, MilestoneStatusInfo>
   unapprovedByMilestone: Record<number, number>
 }
 
-function MilestoneSelector({
+function MilestoneCombobox({
   selectedMilestones,
   onSelectedMilestonesChange,
   showOpenMilestones,
-  onShowOpenMilestonesChange,
   statusByMilestone,
   unapprovedByMilestone,
-}: MilestoneSelectorProps) {
+}: MilestoneComboboxProps) {
   const { data, isLoading, isError } = useMilestones()
   const [search, setSearch] = useState('')
   const combobox = useCombobox({ onDropdownClose: () => setSearch('') })
 
   const available = (data ?? []).filter(
-    (m) => (showOpenMilestones || m.state === 'closed') && !selectedMilestones.includes(m.number)
+    (m) => (showOpenMilestones || m.state === 'closed') && !selectedMilestones.includes(m.number),
   )
   const filtered = available.filter((m) =>
-    m.title.toLowerCase().includes(search.toLowerCase())
+    m.title.toLowerCase().includes(search.toLowerCase()),
   )
   const selectedItems = (data ?? []).filter((m) => selectedMilestones.includes(m.number))
 
@@ -565,8 +743,6 @@ function MilestoneSelector({
 
   return (
     <Stack gap="sm">
-      <Text fw={600} size="sm">Milestones</Text>
-
       <Combobox store={combobox} onOptionSubmit={(val) => add(Number(val))}>
         <Combobox.Target>
           <InputBase
@@ -604,13 +780,6 @@ function MilestoneSelector({
         </Combobox.Dropdown>
       </Combobox>
 
-      <Switch
-        label="Show open milestones"
-        size="xs"
-        checked={showOpenMilestones}
-        onChange={(e) => onShowOpenMilestonesChange(e.currentTarget.checked)}
-      />
-
       {selectedItems.length > 0 && (
         <Stack gap={4}>
           {selectedItems.map((m) => (
@@ -629,8 +798,6 @@ function MilestoneSelector({
 }
 
 // ─── RecordMilestoneCard ──────────────────────────────────────────────────────
-// Same as SelectedMilestoneCard in MilestoneFilter, but shows an unlock icon
-// for open milestones instead of a closed pill for closed ones.
 
 function RecordMilestoneCard({
   milestone,
@@ -643,9 +810,7 @@ function RecordMilestoneCard({
   unapprovedCount: number
   onRemove: () => void
 }) {
-  // Any error (list or status) → red and excluded from downstream
   const isRed = statusInfo.listFailed || statusInfo.statusErrorCount > 0
-  // Unapproved issues → yellow warning (still included in downstream)
   const isYellow = !isRed && unapprovedCount > 0
 
   const bgColor = isRed ? '#ffe3e3' : isYellow ? '#fff3bf' : '#d7e7d3'
@@ -674,22 +839,16 @@ function RecordMilestoneCard({
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <Text size="sm" fw={600} truncate="end">{milestone.title}</Text>
-
-          {/* Open milestone indicator */}
           {milestone.state !== 'closed' && (
             <Tooltip label="Milestone is not yet closed — record may be incomplete" withArrow>
               <IconLockOpen data-testid="open-milestone-indicator" size={14} color="#e67700" style={{ flexShrink: 0 }} />
             </Tooltip>
           )}
-
-          {/* List fetch error */}
           {statusInfo.listFailed && statusInfo.listError && (
             <Tooltip label={`${statusInfo.listError} — excluded from record`} withArrow>
               <IconExclamationMark data-testid="list-error-indicator" size={14} color="#c92a2a" style={{ flexShrink: 0 }} />
             </Tooltip>
           )}
-
-          {/* Status fetch errors — any count → red + excluded */}
           {statusInfo.statusErrorCount > 0 && errorLines && (
             <Tooltip label={errorLines} withArrow multiline>
               <span data-testid="status-error-count" style={{ color: '#c92a2a', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
@@ -698,8 +857,6 @@ function RecordMilestoneCard({
               </span>
             </Tooltip>
           )}
-
-          {/* Unapproved issues warning — included but flagged */}
           {isYellow && (
             <Tooltip
               label={`${unapprovedCount} issue${unapprovedCount !== 1 ? 's' : ''} not yet approved`}
@@ -712,18 +869,15 @@ function RecordMilestoneCard({
             </Tooltip>
           )}
         </div>
-
         <Text size="xs" c="dimmed">
           {milestone.open_issues} open · {milestone.closed_issues} closed
         </Text>
-
         {statusInfo.loadingCount > 0 && (
           <Text size="xs" c="dimmed" style={{ animation: 'glisten 1.4s ease-in-out infinite' }}>
             {statusInfo.loadingCount} {statusInfo.loadingCount === 1 ? 'issue' : 'issues'} loading…
           </Text>
         )}
       </div>
-
       <ActionIcon
         size="xs"
         variant="transparent"

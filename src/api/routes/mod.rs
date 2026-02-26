@@ -1,5 +1,6 @@
 //! API route handlers.
 
+pub mod archive;
 pub mod comments;
 pub mod configuration;
 pub mod files;

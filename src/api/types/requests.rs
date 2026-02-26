@@ -184,6 +184,23 @@ fn default_true() -> bool {
     true
 }
 
+/// A single file entry for archive generation.
+#[derive(Debug, Deserialize)]
+pub struct ArchiveFileRequest {
+    pub repository_file: PathBuf,
+    pub commit: String,
+    pub milestone: Option<String>,
+    pub approved: Option<bool>,
+}
+
+/// Request to generate an archive.
+#[derive(Debug, Deserialize)]
+pub struct ArchiveGenerateRequest {
+    pub output_path: String,
+    pub flatten: bool,
+    pub files: Vec<ArchiveFileRequest>,
+}
+
 #[derive(serde::Deserialize)]
 pub struct SetupConfigurationRequest {
     pub url: String,
