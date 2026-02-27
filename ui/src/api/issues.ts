@@ -167,7 +167,7 @@ export interface MilestoneStatusInfo {
   statusAttemptedCount: number
 }
 
-async function fetchMilestoneIssues(milestoneNumber: number): Promise<Issue[]> {
+export async function fetchMilestoneIssues(milestoneNumber: number): Promise<Issue[]> {
   const res = await fetch(`/api/milestones/${milestoneNumber}/issues`)
   if (!res.ok) throw new Error(`Failed to fetch issues for milestone ${milestoneNumber}: ${res.status}`)
   return res.json()

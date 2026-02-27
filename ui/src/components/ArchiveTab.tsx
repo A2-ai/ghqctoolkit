@@ -31,6 +31,7 @@ import {
   type IssueStatusResponse,
   type IssueStatusResult,
   type MilestoneStatusInfo,
+  fetchMilestoneIssues,
   fetchSingleIssueStatus,
   issueStatusBatcher,
   useMilestoneIssues,
@@ -53,7 +54,7 @@ interface SourceIssue { number: number; title: string; html_url: string }
 type RelevantEntry =
   | { type: 'qc'; file_name: string; issue_number: number; via: SourceIssue }
   | { type: 'bare'; file_name: string; via: SourceIssue }
-  | { type: 'conflict'; file_name: string; reason: string; via: SourceIssue[]; blocking: boolean }
+  | { type: 'conflict'; file_name: string; reason: string; via: SourceIssue[]; blocking: boolean; issue_numbers?: number[] }
 
 function extractIssueNumber(url: string): number | null {
   const match = url.match(/\/issues\/(\d+)(?:[^/]*)$/)
@@ -133,6 +134,32 @@ export function ArchiveTab() {
   const { data: repoData } = useRepoInfo()
   const { data: milestonesData } = useMilestones()
 
+  // Pre-fetch all milestone issue lists to warm the cache and detect conflicts
+  const allMilestoneNumbers = useMemo(
+    () => (milestonesData ?? []).map(m => m.number),
+    [milestonesData],
+  )
+
+  const allMilestoneIssueQueries = useQueries({
+    queries: allMilestoneNumbers.map(n => ({
+      queryKey: ['milestones', n, 'issues'],
+      queryFn: () => fetchMilestoneIssues(n),
+    })),
+  })
+
+  // Per-milestone file sets: "all" = every issue title, "approvedOnly" = closed issues only
+  const milestoneFileSets = useMemo(() => {
+    const map = new Map<number, { all: Set<string>; approvedOnly: Set<string> }>()
+    for (let i = 0; i < allMilestoneNumbers.length; i++) {
+      const issues = allMilestoneIssueQueries[i]?.data ?? []
+      map.set(allMilestoneNumbers[i], {
+        all: new Set(issues.map(iss => iss.title)),
+        approvedOnly: new Set(issues.filter(iss => iss.state === 'closed').map(iss => iss.title)),
+      })
+    }
+    return map
+  }, [allMilestoneNumbers, allMilestoneIssueQueries])
+
   const { statuses, milestoneStatusByMilestone, isLoadingStatuses } =
     useMilestoneIssues(selectedMilestones, true)
 
@@ -179,6 +206,34 @@ export function ArchiveTab() {
     }
     return result
   }, [selectedMilestones, statuses, milestonesData])
+
+  // Detect whether enabling non-approved issues would introduce cross-milestone file conflicts
+  const nonApprovedOverlap = useMemo(() => {
+    if (selectedMilestones.length < 2) return null
+    const fileCount = new Map<string, number>()
+    for (const n of selectedMilestones) {
+      for (const f of milestoneFileSets.get(n)?.all ?? []) {
+        fileCount.set(f, (fileCount.get(f) ?? 0) + 1)
+      }
+    }
+    const approvedCount = new Map<string, number>()
+    for (const n of selectedMilestones) {
+      for (const f of milestoneFileSets.get(n)?.approvedOnly ?? []) {
+        approvedCount.set(f, (approvedCount.get(f) ?? 0) + 1)
+      }
+    }
+    const conflicts = [...fileCount.entries()]
+      .filter(([f, c]) => c >= 2 && (approvedCount.get(f) ?? 0) < 2)
+      .map(([f]) => f)
+    return conflicts.length > 0 ? conflicts : null
+  }, [selectedMilestones, milestoneFileSets])
+
+  // Force includeNonApproved off when it would cause cross-milestone file conflicts
+  useEffect(() => {
+    if (nonApprovedOverlap && includeNonApproved) {
+      setIncludeNonApproved(false)
+    }
+  }, [nonApprovedOverlap, includeNonApproved])
 
   const erroredKey = selectedMilestones
     .filter(
@@ -350,17 +405,21 @@ export function ArchiveTab() {
         (v, i, arr) => arr.findIndex(x => x.number === v.number) === i,
       )
 
+      const qcIssueNums = sources
+        .filter(s => s.kind === 'qc' && s.issue_number !== null)
+        .map(s => s.issue_number!)
+
       // File name already covered by a visible milestone issue — informational, non-blocking.
       // viaAll here only contains sources whose QC issue was NOT already in the archive
       // (the others were skipped above), so the via list is already correct.
       if (archiveFileNames.has(file_name)) {
-        entries.push({ type: 'conflict', file_name, reason: 'File already covered by milestone issues', via: viaAll, blocking: false })
+        entries.push({ type: 'conflict', file_name, reason: 'File already covered by milestone issues', via: viaAll, blocking: false, issue_numbers: qcIssueNums.length > 0 ? qcIssueNums : undefined })
         continue
       }
 
       // Genuine ambiguity: multiple different non-archived sources claim this file — blocking
       if (sources.length > 1) {
-        entries.push({ type: 'conflict', file_name, reason: 'Multiple QC issues reference this file', via: viaAll, blocking: true })
+        entries.push({ type: 'conflict', file_name, reason: 'Multiple QC issues reference this file', via: viaAll, blocking: true, issue_numbers: qcIssueNums.length > 0 ? qcIssueNums : undefined })
         continue
       }
 
@@ -368,7 +427,7 @@ export function ArchiveTab() {
 
       // Conflict with a manually added file claiming the same name
       if (addedFiles.has(file_name)) {
-        entries.push({ type: 'conflict', file_name, reason: 'Conflicts with a manually added file', via: viaAll, blocking: true })
+        entries.push({ type: 'conflict', file_name, reason: 'Conflicts with a manually added file', via: viaAll, blocking: true, issue_numbers: qcIssueNums.length > 0 ? qcIssueNums : undefined })
         continue
       }
 
@@ -385,9 +444,12 @@ export function ArchiveTab() {
   // QC relevant issue numbers not already in statuses
   const qcIssueNumbersToFetch = useMemo(() => {
     const existing = new Set(statuses.map(s => s.issue.number))
-    return relevantFileEntries
-      .filter(e => e.type === 'qc' as const)
-      .map(e => e.issue_number)
+    const nums: number[] = []
+    for (const e of relevantFileEntries) {
+      if (e.type === 'qc') nums.push(e.issue_number)
+      if (e.type === 'conflict' && e.issue_numbers) nums.push(...e.issue_numbers)
+    }
+    return nums
       .filter(n => !existing.has(n))
       .filter((n, i, arr) => arr.indexOf(n) === i)
   }, [relevantFileEntries, statuses])
@@ -462,7 +524,7 @@ export function ArchiveTab() {
   )
   const conflictCount = useMemo(
     () =>
-      relevantFileEntries.filter(e => e.type === 'conflict' && e.blocking).length +
+      relevantFileEntries.filter(e => e.type === 'conflict').length +
       Array.from(addedFileConflicts.values()).filter(c => c.blocking).length,
     [relevantFileEntries, addedFileConflicts],
   )
@@ -672,6 +734,8 @@ export function ArchiveTab() {
                     showOpenMilestones={showOpenMilestones}
                     statusByMilestone={milestoneStatusByMilestone}
                     unapprovedByMilestone={unapprovedByMilestone}
+                    milestoneFileSets={milestoneFileSets}
+                    includeNonApproved={includeNonApproved}
                   />
                 </Stack>
               </div>
@@ -725,12 +789,21 @@ export function ArchiveTab() {
             {!issuesCollapsed && (
               <div style={{ flex: 1, overflowY: 'auto', padding: '0 var(--mantine-spacing-md) var(--mantine-spacing-md)' }}>
                 <Stack gap={6} mt={4}>
-                  <Switch
-                    label="Include non-approved issues"
-                    size="xs"
-                    checked={includeNonApproved}
-                    onChange={(e) => setIncludeNonApproved(e.currentTarget.checked)}
-                  />
+                  <Tooltip
+                    label={nonApprovedOverlap ? `Cross-milestone file conflicts: ${nonApprovedOverlap.join(', ')}` : ''}
+                    disabled={!nonApprovedOverlap}
+                    withArrow
+                    multiline
+                    maw={300}
+                  >
+                    <Switch
+                      label="Include non-approved issues"
+                      size="xs"
+                      checked={includeNonApproved}
+                      disabled={!!nonApprovedOverlap}
+                      onChange={(e) => setIncludeNonApproved(e.currentTarget.checked)}
+                    />
+                  </Tooltip>
                   <Switch
                     label="Include relevant files"
                     size="xs"
@@ -939,6 +1012,10 @@ export function ArchiveTab() {
               .filter(e => !dismissedRelevantFiles.has(e.file_name))
               .map((entry) => {
               if (entry.type === 'conflict') {
+                // Try to find a QC issue status for richer rendering
+                const qcIssueNum = entry.issue_numbers?.[0]
+                const qcStatus = qcIssueNum != null ? relevantQcStatusMap.get(qcIssueNum) : undefined
+
                 return (
                   <Tooltip key={`conflict-${entry.file_name}`} label={entry.reason} withArrow>
                     <Stack
@@ -951,14 +1028,33 @@ export function ArchiveTab() {
                         minWidth: 0,
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-                        <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
-                          {entry.file_name}
-                        </Text>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+                        {qcStatus ? (
+                          <Anchor
+                            href={qcStatus.issue.html_url}
+                            target="_blank"
+                            size="sm"
+                            fw={700}
+                            style={{ wordBreak: 'break-all', flex: 1, minWidth: 0 }}
+                          >
+                            {entry.file_name}
+                          </Anchor>
+                        ) : (
+                          <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
+                            {entry.file_name}
+                          </Text>
+                        )}
                         <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={() => dismissRelevantFile(entry.file_name)} aria-label="Remove">
                           <IconX size={11} />
                         </ActionIcon>
                       </div>
+                      {qcStatus ? (<>
+                        {qcStatus.issue.milestone && (
+                          <Text size="xs" c="dimmed"><b>Milestone:</b> {qcStatus.issue.milestone}</Text>
+                        )}
+                        <Text size="xs" c="dimmed"><b>Commit:</b> {(qcStatus.qc_status.approved_commit ?? qcStatus.qc_status.latest_commit).slice(0, 7)}</Text>
+                        <Text size="xs" c="dimmed"><b>Status:</b> {qcStatus.qc_status.status.replace(/_/g, ' ')}</Text>
+                      </>) : null}
                       {entry.via.map(v => (
                         <Text key={v.number} size="xs" c="dimmed">
                           <b>Via:</b>{' '}
@@ -974,14 +1070,35 @@ export function ArchiveTab() {
                 const resolution = resolvedBareFiles.get(entry.file_name)
                 if (resolution) {
                   return (
-                    <ResolvedFileCard
+                    <Stack
                       key={`bare-${entry.file_name}`}
-                      fileName={entry.file_name}
-                      commit={resolution.commit}
-                      via={{ title: entry.via.title, html_url: entry.via.html_url }}
-                      onEdit={() => setEditFileModal(entry.file_name)}
-                      onRemove={() => dismissRelevantFile(entry.file_name)}
-                    />
+                      gap={5}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 6,
+                        border: '1px solid var(--mantine-color-gray-3)',
+                        backgroundColor: 'white',
+                        minWidth: 0,
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => setEditFileModal(entry.file_name)}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                        <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
+                          {entry.file_name}
+                        </Text>
+                        <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={e => { e.stopPropagation(); dismissRelevantFile(entry.file_name) }} aria-label="Remove">
+                          <IconX size={11} />
+                        </ActionIcon>
+                      </div>
+                      <Text size="xs" c="dimmed"><b>Commit:</b> {resolution.commit.slice(0, 7)}</Text>
+                      <Text size="xs" c="dimmed">
+                        <b>Via:</b>{' '}
+                        <Anchor href={entry.via.html_url} target="_blank" size="xs" onClick={e => e.stopPropagation()}>
+                          {entry.via.title}
+                        </Anchor>
+                      </Text>
+                    </Stack>
                   )
                 }
                 // Unresolved — yellow card with tooltip
@@ -1204,6 +1321,8 @@ interface ArchiveMilestoneComboboxProps {
   showOpenMilestones: boolean
   statusByMilestone: Record<number, MilestoneStatusInfo>
   unapprovedByMilestone: Record<number, number>
+  milestoneFileSets: Map<number, { all: Set<string>; approvedOnly: Set<string> }>
+  includeNonApproved: boolean
 }
 
 function ArchiveMilestoneCombobox({
@@ -1212,6 +1331,8 @@ function ArchiveMilestoneCombobox({
   showOpenMilestones,
   statusByMilestone,
   unapprovedByMilestone,
+  milestoneFileSets,
+  includeNonApproved,
 }: ArchiveMilestoneComboboxProps) {
   const { data, isLoading, isError } = useMilestones()
   const [search, setSearch] = useState('')
@@ -1224,6 +1345,49 @@ function ArchiveMilestoneCombobox({
     m.title.toLowerCase().includes(search.toLowerCase()),
   )
   const selectedItems = (data ?? []).filter((m) => selectedMilestones.includes(m.number))
+
+  // Build the union of file names from currently selected milestones
+  const selectedFileUnion = useMemo(() => {
+    const union = new Set<string>()
+    for (const n of selectedMilestones) {
+      const fileSet = milestoneFileSets.get(n)
+      if (!fileSet) continue
+      const set = includeNonApproved ? fileSet.all : fileSet.approvedOnly
+      for (const f of set) union.add(f)
+    }
+    return union
+  }, [selectedMilestones, milestoneFileSets, includeNonApproved])
+
+  // For each candidate milestone, compute conflicts with the selected set
+  const milestoneConflicts = useMemo(() => {
+    const map = new Map<number, { conflicts: string[]; milestones: string[] }>()
+    for (const m of filtered) {
+      const candidateFiles = milestoneFileSets.get(m.number)
+      if (!candidateFiles) continue
+      const candidateSet = includeNonApproved ? candidateFiles.all : candidateFiles.approvedOnly
+      const conflicts: string[] = []
+      for (const f of candidateSet) {
+        if (selectedFileUnion.has(f)) conflicts.push(f)
+      }
+      if (conflicts.length > 0) {
+        // Find which selected milestones own the conflicting files
+        const owningMilestones = new Set<string>()
+        for (const n of selectedMilestones) {
+          const fileSet = milestoneFileSets.get(n)
+          if (!fileSet) continue
+          const set = includeNonApproved ? fileSet.all : fileSet.approvedOnly
+          for (const f of conflicts) {
+            if (set.has(f)) {
+              const title = (data ?? []).find(ms => ms.number === n)?.title ?? String(n)
+              owningMilestones.add(title)
+            }
+          }
+        }
+        map.set(m.number, { conflicts, milestones: [...owningMilestones] })
+      }
+    }
+    return map
+  }, [filtered, milestoneFileSets, includeNonApproved, selectedFileUnion, selectedMilestones, data])
 
   function add(number: number) {
     onSelectedMilestonesChange([...selectedMilestones, number])
@@ -1255,17 +1419,31 @@ function ArchiveMilestoneCombobox({
             {!isLoading && !isError && filtered.length === 0 && (
               <Combobox.Empty>No milestones found</Combobox.Empty>
             )}
-            {[...filtered].reverse().map((m) => (
-              <Combobox.Option key={m.number} value={String(m.number)}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Text size="sm">{m.title}</Text>
-                  {m.state !== 'closed' && <OpenPill />}
-                </div>
-                <Text size="xs" c="dimmed">
-                  {m.open_issues} open · {m.closed_issues} closed
-                </Text>
-              </Combobox.Option>
-            ))}
+            {[...filtered].reverse().map((m) => {
+              const conflict = milestoneConflicts.get(m.number)
+              const isDisabled = !!conflict
+              const tooltipLabel = conflict
+                ? conflict.milestones.map(ms =>
+                    `Conflicts with ${ms}: ${conflict.conflicts.join(', ')}`
+                  ).join('\n')
+                : ''
+              const option = (
+                <Combobox.Option key={m.number} value={String(m.number)} disabled={isDisabled}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Text size="sm" c={isDisabled ? 'dimmed' : undefined}>{m.title}</Text>
+                    {m.state !== 'closed' && <OpenPill />}
+                  </div>
+                  <Text size="xs" c="dimmed">
+                    {m.open_issues} open · {m.closed_issues} closed
+                  </Text>
+                </Combobox.Option>
+              )
+              return isDisabled ? (
+                <Tooltip key={m.number} label={tooltipLabel} withArrow multiline maw={300}>
+                  <div>{option}</div>
+                </Tooltip>
+              ) : option
+            })}
           </Combobox.Options>
         </Combobox.Dropdown>
       </Combobox>
