@@ -2,7 +2,8 @@
 
 use crate::GitProvider;
 use crate::api::routes::{
-    archive, comments, configuration, files, health, issues, milestones, preview, record, status,
+    archive, comments, commits, configuration, files, health, issues, milestones, preview, record,
+    status,
 };
 use crate::api::state::AppState;
 use axum::{
@@ -90,6 +91,7 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         // Supporting Data
         .route("/api/assignees", get(status::list_assignees))
         .route("/api/repo", get(status::repo_info))
+        .route("/api/commits", get(commits::get_commits))
         // Record PDF generation
         .route(
             "/api/record/upload",
