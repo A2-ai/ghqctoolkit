@@ -333,8 +333,7 @@ impl QCComment {
         let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread =
-            IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
         let commits = &issue_thread.commits;
 
         if commits.is_empty() {
@@ -408,8 +407,7 @@ impl QCComment {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread =
-            IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
         // Select commits for comparison with status annotations
         let (current_commit, previous_commit) = prompt_commits(&issue_thread)?;
 
@@ -488,8 +486,7 @@ impl QCApprove {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread =
-            IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
         let commits = &issue_thread.commits;
 
         if commits.is_empty() {
@@ -548,8 +545,7 @@ impl QCApprove {
             bail!("")
         }
 
-        let issue_thread =
-            IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
         let commits = &issue_thread.commits;
 
         if commits.is_empty() {
@@ -691,8 +687,7 @@ impl QCReview {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get QC-tracked commits for status/metadata
-        let issue_thread =
-            IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
 
         if issue_thread.commits.is_empty() {
             return Err(anyhow!(
@@ -783,8 +778,7 @@ impl QCReview {
         let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread =
-            IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
 
         if issue_thread.commits.is_empty() {
             return Err(anyhow!("No commits found for file: {}", file.display()));

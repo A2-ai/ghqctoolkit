@@ -311,8 +311,7 @@ pub async fn create_issue_information(
         );
     }
 
-    let issue_thread =
-        IssueThread::from_issue_comments(issue, &comments, git_info, commit_cache)?;
+    let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info, commit_cache)?;
     let open = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status

@@ -100,10 +100,13 @@ impl CreatedThreads {
         let disk_cache = app_state.disk_cache();
 
         // Step 1: Fetch all comments in parallel
-        let comment_futures = issues
-            .iter()
-            .map(|issue| async move { (issue, get_issue_comments(issue, disk_cache, git_info).await) })
-            .collect::<Vec<_>>();
+        let comment_futures =
+            issues
+                .iter()
+                .map(|issue| async move {
+                    (issue, get_issue_comments(issue, disk_cache, git_info).await)
+                })
+                .collect::<Vec<_>>();
         let comment_results = futures::future::join_all(comment_futures).await;
 
         // Step 2: Build IssueThreads sequentially with the shared commit cache.

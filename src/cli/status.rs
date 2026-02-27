@@ -242,8 +242,7 @@ pub async fn interactive_milestone_status(
     // Get status for all selected milestones
     let mut commit_cache = CommitCache::new();
     let status_rows =
-        get_milestone_status_rows(&selected_milestones, cache, git_info, &mut commit_cache)
-            .await?;
+        get_milestone_status_rows(&selected_milestones, cache, git_info, &mut commit_cache).await?;
 
     // Display results
     display_milestone_status_table(&status_rows);

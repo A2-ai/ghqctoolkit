@@ -719,9 +719,13 @@ mod tests {
         let git_info = RobustMockGitInfo::new()
             .with_file_commits_result(branch.clone(), Ok(test_commits.clone()));
 
-        let result =
-            get_commits_robust(&git_info, &branch, Some(&initial_commit), &mut HashMap::new())
-                .unwrap();
+        let result = get_commits_robust(
+            &git_info,
+            &branch,
+            Some(&initial_commit),
+            &mut HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(result.len(), test_commits.len());
         // Convert result to expected format for comparison
