@@ -10,7 +10,7 @@ use crate::{
         AppState,
         cache::{CacheEntry, CacheKey, StatusCache},
     },
-    parse_blocking_qcs,
+    get_issue_comments, parse_blocking_qcs,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -97,19 +97,45 @@ impl CreatedThreads {
         app_state: &AppState<G>,
     ) -> Self {
         let git_info = app_state.git_info();
-        let cache = app_state.disk_cache();
-        let thread_futures = issues
-            .iter()
-            .map(|issue| async move { IssueThread::from_issue(issue, cache, git_info).await })
-            .collect::<Vec<_>>();
-        let thread_results = futures::future::join_all(thread_futures).await;
+        let disk_cache = app_state.disk_cache();
+
+        // Step 1: Fetch all comments in parallel
+        let comment_futures =
+            issues
+                .iter()
+                .map(|issue| async move {
+                    (issue, get_issue_comments(issue, disk_cache, git_info).await)
+                })
+                .collect::<Vec<_>>();
+        let comment_results = futures::future::join_all(comment_futures).await;
+
+        // Step 2: Build IssueThreads sequentially with the shared commit cache.
+        // Acquire the write lock for the duration so the populated cache persists
+        // across requests, avoiding redundant git commit walks for the same branch.
+        let mut thread_results: Vec<(&Issue, Result<IssueThread, IssueError>)> = Vec::new();
+        {
+            let mut commit_cache = app_state.commit_cache.write().await;
+            for (issue, comments_result) in comment_results {
+                let result = match comments_result {
+                    Ok(comments) => IssueThread::from_issue_comments(
+                        issue,
+                        &comments,
+                        git_info,
+                        &mut *commit_cache,
+                    ),
+                    Err(e) => Err(IssueError::GitHubApiError(e)),
+                };
+                thread_results.push((issue, result));
+            }
+        } // commit_cache lock released here
+
         let mut created = CreatedThreads::default();
 
-        // Collect entries first, then acquire write lock once
+        // Collect entries, then acquire status cache write lock
         {
             let mut cache_write = app_state.status_cache.write().await;
 
-            for (result, issue) in thread_results.into_iter().zip(issues) {
+            for (issue, result) in thread_results {
                 match result {
                     Ok(issue_thread) => {
                         let entry = CacheEntry::new(issue, &issue_thread);

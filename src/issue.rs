@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     cache::{DiskCache, get_issue_comments},
     git::{
-        GitComment, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
-        get_commits_robust,
+        CommitCache, GitComment, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError,
+        GitHubReader, get_commits_robust,
     },
 };
 
@@ -101,10 +101,11 @@ pub struct IssueThread {
 
 impl IssueThread {
     /// Create IssueThread from issue and pre-fetched comments
-    pub async fn from_issue_comments(
+    pub fn from_issue_comments(
         issue: &Issue,
         comments: &[GitComment],
         git_info: &(impl GitFileOps + GitCommitAnalysis),
+        commit_cache: &mut CommitCache,
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
         let issue_is_open = matches!(issue.state, IssueState::Open);
@@ -157,8 +158,12 @@ impl IssueThread {
         }
 
         // 6. Get all file commits using robust method or fallback
-        let all_commits =
-            get_commits_robust(git_info, &Some(branch.clone()), reference_commit.as_ref())?;
+        let all_commits = get_commits_robust(
+            git_info,
+            &Some(branch.clone()),
+            reference_commit.as_ref(),
+            commit_cache,
+        )?;
 
         let mut issue_commits = Vec::new();
         let mut qc_notif_found = false;
@@ -225,12 +230,13 @@ impl IssueThread {
         issue: &Issue,
         cache: Option<&DiskCache>,
         git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
+        commit_cache: &mut CommitCache,
     ) -> Result<Self, IssueError> {
         // Get the comments (cached based on issue update time)
         let comments = get_issue_comments(issue, cache, git_info).await?;
 
         // Delegate to from_issue_comments with the fetched comments
-        Self::from_issue_comments(issue, &comments, git_info).await
+        Self::from_issue_comments(issue, &comments, git_info, commit_cache)
     }
 
     pub fn latest_commit(&self) -> &IssueCommit {
@@ -513,6 +519,7 @@ mod tests {
         GitFileOpsError, GitHubReader,
     };
     use octocrab::models::issues::Issue;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::str::FromStr;
 
@@ -757,7 +764,7 @@ mod tests {
             .with_commits(create_test_commits())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info)
+        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
             .await
             .unwrap();
 
@@ -819,7 +826,7 @@ mod tests {
             .with_commits(create_test_commits())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info)
+        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
             .await
             .unwrap();
 
@@ -887,7 +894,7 @@ mod tests {
             .with_commits(test_commits.clone())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info)
+        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
             .await
             .unwrap();
 
@@ -967,7 +974,7 @@ mod tests {
             .with_commits(test_commits.clone())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info)
+        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
             .await
             .unwrap();
 

@@ -14,8 +14,8 @@ use inquire::{
 use octocrab::models::Milestone;
 
 use crate::{
-    DiskCache, GitCommitAnalysis, GitFileOps, GitHubReader, GitRepository, IssueThread,
-    archive::ArchiveFile, git::GitCommit,
+    CommitCache, DiskCache, GitCommitAnalysis, GitFileOps, GitHubReader, GitRepository,
+    IssueThread, archive::ArchiveFile, get_issue_comments, git::GitCommit,
 };
 
 pub async fn prompt_archive(
@@ -240,12 +240,23 @@ pub async fn get_milestone_issue_threads(
         )
     }
 
-    let issue_thread_futures = milestone_results.iter().flatten().map(|issue| async move {
-        let issue_thread = IssueThread::from_issue(issue, cache, git_info).await?;
-        Ok::<_, anyhow::Error>(issue_thread)
-    });
+    // Fetch all comments in parallel first
+    let comment_futures = milestone_results
+        .iter()
+        .flatten()
+        .map(|issue| async move { (issue, get_issue_comments(issue, cache, git_info).await) })
+        .collect::<Vec<_>>();
+    let comment_results = future::join_all(comment_futures).await;
 
-    let issue_thread_results = future::try_join_all(issue_thread_futures).await?;
+    // Build IssueThreads sequentially so commit_cache can be shared
+    let mut commit_cache = CommitCache::new();
+    let mut issue_thread_results = Vec::new();
+    for (issue, comments_result) in comment_results {
+        let comments = comments_result?;
+        let issue_thread =
+            IssueThread::from_issue_comments(issue, &comments, git_info, &mut commit_cache)?;
+        issue_thread_results.push(issue_thread);
+    }
 
     Ok(issue_thread_results)
 }

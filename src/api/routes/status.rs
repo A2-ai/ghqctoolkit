@@ -26,5 +26,24 @@ pub async fn list_assignees<G: GitProvider + 'static>(
 pub async fn repo_info<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
 ) -> Result<Json<RepoInfoResponse>, ApiError> {
-    RepoInfoResponse::new(state.git_info()).await.map(Json)
+    let response = RepoInfoResponse::new(state.git_info()).await?;
+
+    // Invalidate the commit cache for this branch if HEAD has moved.
+    {
+        let mut commit_cache = state.commit_cache.write().await;
+        if let Some(commits) = commit_cache.get(&response.branch) {
+            let cached_head = commits.first().map(|c| c.commit.to_string());
+            if cached_head.as_deref() != Some(&response.local_commit) {
+                log::debug!(
+                    "Commit cache invalidated for branch '{}': cached HEAD {:?} != current HEAD {}",
+                    response.branch,
+                    cached_head,
+                    response.local_commit
+                );
+                commit_cache.remove(&response.branch);
+            }
+        }
+    }
+
+    Ok(Json(response))
 }
