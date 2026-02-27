@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     path::{Path, PathBuf},
 };
@@ -27,6 +28,9 @@ pub struct GitCommit {
     pub message: String,
     pub files: Vec<PathBuf>,
 }
+
+/// Cache mapping branch name (or empty string for HEAD) to their commits.
+pub type CommitCache = HashMap<String, Vec<GitCommit>>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum GitFileOpsError {
@@ -279,6 +283,26 @@ pub fn find_file_commits<P: AsRef<Path>>(file: P, commits: &[GitCommit]) -> Vec<
         .collect()
 }
 
+/// Get commits for a branch, using `cache` to avoid redundant lookups.
+/// On a cache miss the result is fetched via `git_info.commits()` and stored before returning.
+/// Uses `""` as the cache key for `None` (HEAD).
+pub fn find_commits(
+    git_info: &impl GitFileOps,
+    branch: &Option<String>,
+    cache: &mut HashMap<String, Vec<GitCommit>>,
+) -> Result<Vec<GitCommit>, GitFileOpsError> {
+    let cache_key = branch.as_deref().unwrap_or("");
+    if let Some(cached) = cache.get(cache_key) {
+        log::debug!("Cache hit for branch commits: {:?}", branch);
+        return Ok(cached.clone());
+    }
+
+    log::debug!("Cache miss for branch commits: {:?}, fetching", branch);
+    let commits = git_info.commits(branch)?;
+    cache.insert(cache_key.to_string(), commits.clone());
+    Ok(commits)
+}
+
 /// Find which branch a commit was merged into using merge commit analysis
 /// Based on the R algorithm: looks for merge commits where the target commit
 /// is an ancestor of the second parent (merged-in branch)
@@ -405,16 +429,17 @@ fn collect_tree_files_with_oids_recursive(
 }
 
 /// Get commits with robust branch handling
-/// 1. Try the specified branch first
+/// 1. Try the specified branch first (via `find_commits` cache)
 /// 2. If commit is provided and branch not found, find merged branch using commit analysis
 /// 3. Fall back to searching all branches containing the commit
 pub fn get_commits_robust(
     git_info: &(impl GitFileOps + GitCommitAnalysis),
     branch: &Option<String>,
     commit: Option<&ObjectId>,
+    cache: &mut HashMap<String, Vec<GitCommit>>,
 ) -> Result<Vec<GitCommit>, GitFileOpsError> {
     // First, try to get commits from the specified branch
-    match git_info.commits(branch) {
+    match find_commits(git_info, branch, cache) {
         Ok(commits) => {
             log::debug!("Found {} commits for branch {:?}", commits.len(), branch);
             return Ok(commits);
@@ -443,7 +468,7 @@ pub fn get_commits_robust(
             );
 
             // Try to get commits from the target branch
-            match git_info.commits(&Some(target_branch.clone())) {
+            match find_commits(git_info, &Some(target_branch.clone()), cache) {
                 Ok(commits) => {
                     log::debug!(
                         "Found {} commits for merged target branch {}",
@@ -483,7 +508,7 @@ pub fn get_commits_robust(
 
             // Try each branch until we find one that works
             for branch_name in branches_containing_commit {
-                match git_info.commits(&Some(branch_name.clone())) {
+                match find_commits(git_info, &Some(branch_name.clone()), cache) {
                     Ok(commits) if !commits.is_empty() => {
                         log::debug!(
                             "Found {} commits for branch {} (contains commit)",
@@ -694,7 +719,13 @@ mod tests {
         let git_info = RobustMockGitInfo::new()
             .with_file_commits_result(branch.clone(), Ok(test_commits.clone()));
 
-        let result = get_commits_robust(&git_info, &branch, Some(&initial_commit)).unwrap();
+        let result = get_commits_robust(
+            &git_info,
+            &branch,
+            Some(&initial_commit),
+            &mut HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(result.len(), test_commits.len());
         // Convert result to expected format for comparison
@@ -729,9 +760,13 @@ mod tests {
             // Target branch has the commits
             .with_file_commits_result(Some("main".to_string()), Ok(test_commits.clone()));
 
-        let result =
-            get_commits_robust(&git_info, &Some(branch.to_string()), Some(&initial_commit))
-                .unwrap();
+        let result = get_commits_robust(
+            &git_info,
+            &Some(branch.to_string()),
+            Some(&initial_commit),
+            &mut HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(result.len(), test_commits.len());
         let result_tuples: Vec<(ObjectId, String)> = result
@@ -765,9 +800,13 @@ mod tests {
             .with_file_commits_result(Some("main".to_string()), Ok(test_commits.clone()))
             .with_file_commits_result(Some("develop".to_string()), Ok(Vec::new()));
 
-        let result =
-            get_commits_robust(&git_info, &Some(branch.to_string()), Some(&initial_commit))
-                .unwrap();
+        let result = get_commits_robust(
+            &git_info,
+            &Some(branch.to_string()),
+            Some(&initial_commit),
+            &mut HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(result.len(), test_commits.len());
         let result_tuples: Vec<(ObjectId, String)> = result
@@ -794,8 +833,12 @@ mod tests {
             // No branches contain the commit
             .with_branches_containing_commit(initial_commit, vec![]);
 
-        let result =
-            get_commits_robust(&git_info, &Some(branch.to_string()), Some(&initial_commit));
+        let result = get_commits_robust(
+            &git_info,
+            &Some(branch.to_string()),
+            Some(&initial_commit),
+            &mut HashMap::new(),
+        );
 
         // Should fail when no branch can be found
         assert!(matches!(result, Err(GitFileOpsError::BranchNotFound(_))));
@@ -812,8 +855,12 @@ mod tests {
             Err(GitFileOpsError::BranchNotFound(branch.to_string())),
         );
 
-        let result =
-            get_commits_robust(&git_info, &Some(branch.to_string()), Some(&invalid_commit));
+        let result = get_commits_robust(
+            &git_info,
+            &Some(branch.to_string()),
+            Some(&invalid_commit),
+            &mut HashMap::new(),
+        );
 
         // Should fail since no branches can be found and all fallbacks fail
         assert!(matches!(result, Err(GitFileOpsError::BranchNotFound(_))));
@@ -830,8 +877,12 @@ mod tests {
             Err(GitFileOpsError::AuthorNotFound(PathBuf::from("test"))),
         );
 
-        let result =
-            get_commits_robust(&git_info, &Some(branch.to_string()), Some(&initial_commit));
+        let result = get_commits_robust(
+            &git_info,
+            &Some(branch.to_string()),
+            Some(&initial_commit),
+            &mut HashMap::new(),
+        );
 
         assert!(matches!(result, Err(GitFileOpsError::AuthorNotFound(_))));
     }
@@ -867,9 +918,13 @@ mod tests {
             // Target branch has the commits
             .with_file_commits_result(Some("develop".to_string()), Ok(test_commits.clone()));
 
-        let result =
-            get_commits_robust(&git_info, &Some(branch.to_string()), Some(&initial_commit))
-                .unwrap();
+        let result = get_commits_robust(
+            &git_info,
+            &Some(branch.to_string()),
+            Some(&initial_commit),
+            &mut HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(result.len(), test_commits.len());
         let result_tuples: Vec<(ObjectId, String)> = result

@@ -1,7 +1,7 @@
 //! Application state for the API server.
 
 use crate::api::cache::StatusCache;
-use crate::{Configuration, DiskCache, GitProvider};
+use crate::{CommitCache, Configuration, DiskCache, GitProvider};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -21,6 +21,8 @@ pub struct AppState<G: GitProvider> {
     disk_cache: Option<Arc<DiskCache>>,
     /// In-memory cache for issue status responses.
     pub status_cache: Arc<RwLock<StatusCache>>,
+    /// In-memory cache for branch commit lists, shared across requests.
+    pub commit_cache: Arc<RwLock<CommitCache>>,
 }
 
 impl<G: GitProvider> AppState<G> {
@@ -37,6 +39,7 @@ impl<G: GitProvider> AppState<G> {
             configuration_git_info: configuration_git_info.map(Arc::new),
             disk_cache: disk_cache.map(Arc::new),
             status_cache: Arc::new(RwLock::new(StatusCache::new())),
+            commit_cache: Arc::new(RwLock::new(CommitCache::new())),
         }
     }
 

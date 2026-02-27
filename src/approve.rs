@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::cache::DiskCache;
 use crate::comment_system::CommentBody;
 use crate::git::{
-    GitCommitAnalysis, GitFileOps, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter,
+    CommitCache, GitCommitAnalysis, GitFileOps, GitHelpers, GitHubApiError, GitHubReader,
+    GitHubWriter,
 };
 use crate::issue::{BlockingQC, parse_blocking_qcs};
 use crate::qc_status::get_blocking_qc_status;
@@ -185,8 +186,9 @@ pub async fn get_unapproved_blocking_qcs(
     blocking_qcs: &[BlockingQC],
     git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
     cache: Option<&DiskCache>,
+    commit_cache: &mut CommitCache,
 ) -> BlockingQCCheckResult {
-    let status = get_blocking_qc_status(blocking_qcs, git_info, cache).await;
+    let status = get_blocking_qc_status(blocking_qcs, git_info, cache, commit_cache).await;
 
     BlockingQCCheckResult {
         unapproved: status
@@ -208,6 +210,7 @@ pub async fn approve_with_validation(
     git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitAnalysis),
     cache: Option<&DiskCache>,
     force: bool,
+    commit_cache: &mut CommitCache,
 ) -> Result<ApprovalResult, ApprovalError> {
     // Parse blocking QCs directly from the issue body
     // This avoids requiring full IssueThread construction which can fail if
@@ -220,7 +223,8 @@ pub async fn approve_with_validation(
         .unwrap_or_default();
 
     // Check blocking QCs
-    let check_result = get_unapproved_blocking_qcs(&blocking_qcs, git_info, cache).await;
+    let check_result =
+        get_unapproved_blocking_qcs(&blocking_qcs, git_info, cache, commit_cache).await;
 
     // If not forcing and there are issues, return error
     if !force && !check_result.all_approved() {
