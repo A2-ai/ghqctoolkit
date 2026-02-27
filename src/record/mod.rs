@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use tera::{Context, Tera};
 
 use crate::{
-    ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, GitStatusOps,
-    RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
+    ChecklistSummary, CommitCache, Configuration, DiskCache, GitHubReader, GitRepository,
+    GitStatusOps, RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
     git::{GitComment, GitCommitAnalysis, GitFileOps, GitState},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
@@ -210,32 +210,26 @@ pub async fn get_milestone_issue_information(
 
     let mut res = HashMap::new();
     for (milestone_name, issues) in milestone_issues {
-        // Create detailed issue information for each issue (used for both summary and details)
-        let issue_futures: Vec<_> = issues
-            .iter()
-            .map(|issue| {
-                let repo_users_clone = repo_users.clone();
-                let git_status_clone = git_state.clone();
-                let dirty_files_clone = dirty_files.clone();
-                async move {
-                    create_issue_information(
-                        issue,
-                        milestone_name,
-                        &repo_users_clone,
-                        &git_status_clone,
-                        &dirty_files_clone,
-                        cache,
-                        git_info,
-                        http_downloader,
-                        staging_dir,
-                    )
-                    .await
-                }
-            })
-            .collect();
+        let mut commit_cache = CommitCache::new();
+        let mut issue_information = Vec::new();
 
-        let issue_results = futures::future::join_all(issue_futures).await;
-        let issue_information = issue_results.into_iter().collect::<Result<Vec<_>, _>>()?;
+        // Create detailed issue information for each issue sequentially so commit_cache is shared
+        for issue in issues {
+            let info = create_issue_information(
+                issue,
+                milestone_name,
+                &repo_users,
+                &git_state,
+                &dirty_files,
+                cache,
+                git_info,
+                http_downloader,
+                staging_dir,
+                &mut commit_cache,
+            )
+            .await?;
+            issue_information.push(info);
+        }
 
         res.insert(milestone_name.to_string(), issue_information);
     }
@@ -276,6 +270,7 @@ pub async fn create_issue_information(
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: &Path,
+    commit_cache: &mut CommitCache,
 ) -> Result<IssueInformation, RecordError> {
     // Get comments and check if we need HTML for JWT URLs
     let mut comments = get_issue_comments(issue, cache, git_info).await?;
@@ -316,7 +311,8 @@ pub async fn create_issue_information(
         );
     }
 
-    let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info).await?;
+    let issue_thread =
+        IssueThread::from_issue_comments(issue, &comments, git_info, commit_cache)?;
     let open = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status

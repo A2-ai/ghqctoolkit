@@ -16,7 +16,8 @@ pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
 pub use auth::AuthError;
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{
-    GitAuthor, GitCommit, GitFileOps, GitFileOpsError, find_file_commits, get_commits_robust,
+    CommitCache, GitAuthor, GitCommit, GitFileOps, GitFileOpsError, find_file_commits,
+    get_commits_robust,
 };
 
 #[cfg(test)]

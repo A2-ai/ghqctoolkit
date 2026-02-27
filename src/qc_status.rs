@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use crate::cache::DiskCache;
 use crate::git::{GitHubApiError, GitHubReader};
 use crate::issue::{BlockingQC, IssueError, IssueThread};
-use crate::{GitCommitAnalysis, GitFileOps};
+use crate::{CommitCache, GitCommitAnalysis, GitFileOps};
 
 static CHECKLIST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^\s*-\s*\[([xX\s])\]").expect("Failed to compile checklist regex")
@@ -109,13 +109,13 @@ impl QCStatus {
         blocking_qc: &BlockingQC,
         cache: Option<&DiskCache>,
         git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
+        commit_cache: &mut CommitCache,
     ) -> Result<Self, QCStatusError> {
         // Fetch the issue
         let issue = git_info.get_issue(blocking_qc.issue_number).await?;
 
-        // Get comments and build IssueThread - but we only need approval status
-        // which can be determined from the comments directly
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
+        // Get comments and build IssueThread
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
         let status = QCStatus::determine_status(&issue_thread);
         Ok(status)
     }
@@ -412,6 +412,7 @@ pub async fn get_blocking_qc_status(
     blocking_qcs: &[BlockingQC],
     git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
     cache: Option<&DiskCache>,
+    commit_cache: &mut CommitCache,
 ) -> BlockingQCStatus {
     let mut status = BlockingQCStatus::default();
 
@@ -419,36 +420,27 @@ pub async fn get_blocking_qc_status(
         return status;
     }
 
-    let blocking_qc_futures = blocking_qcs
-        .iter()
-        .map(|qc| async move {
-            log::debug!(
-                "Getting status for #{} - {}",
-                qc.issue_number,
-                qc.file_name.display()
-            );
-            QCStatus::from_blocking_qc(qc, cache, git_info).await
-        })
-        .collect::<Vec<_>>();
-    let results = futures::future::join_all(blocking_qc_futures).await;
-
-    for (result, blocking_qc) in results.into_iter().zip(blocking_qcs) {
+    for qc in blocking_qcs {
+        log::debug!(
+            "Getting status for #{} - {}",
+            qc.issue_number,
+            qc.file_name.display()
+        );
+        let result = QCStatus::from_blocking_qc(qc, cache, git_info, commit_cache).await;
         match result {
             Ok(s) => {
                 if s.is_approved() {
                     status
                         .approved
-                        .insert(blocking_qc.issue_number, blocking_qc.file_name.clone());
+                        .insert(qc.issue_number, qc.file_name.clone());
                 } else {
                     status
                         .not_approved
-                        .insert(blocking_qc.issue_number, (blocking_qc.file_name.clone(), s));
+                        .insert(qc.issue_number, (qc.file_name.clone(), s));
                 }
             }
             Err(e) => {
-                status
-                    .errors
-                    .insert(blocking_qc.issue_number, e.to_string());
+                status.errors.insert(qc.issue_number, e.to_string());
             }
         }
     }
