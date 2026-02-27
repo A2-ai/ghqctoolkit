@@ -365,7 +365,7 @@ function ArchiveMilestoneSelector({
           />
         </Combobox.Target>
         <Combobox.Dropdown>
-          <Combobox.Options>
+          <Combobox.Options style={{ maxHeight: 360, overflowY: 'auto' }}>
             {isError && <Combobox.Empty>Failed to load</Combobox.Empty>}
             {!isLoading && !isError && filtered.length === 0 && (
               <Combobox.Empty>No milestones found</Combobox.Empty>
