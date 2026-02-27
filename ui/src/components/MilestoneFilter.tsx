@@ -263,7 +263,7 @@ export function MilestoneFilter({
   )
 }
 
-function ClosedPill() {
+export function ClosedPill() {
   return (
     <span style={{
       fontSize: 10,
@@ -276,6 +276,23 @@ function ClosedPill() {
       flexShrink: 0,
     }}>
       closed
+    </span>
+  )
+}
+
+export function OpenPill() {
+  return (
+    <span style={{
+      fontSize: 10,
+      fontWeight: 600,
+      padding: '1px 5px',
+      borderRadius: 4,
+      backgroundColor: '#2f9e44',
+      color: 'white',
+      lineHeight: '16px',
+      flexShrink: 0,
+    }}>
+      open
     </span>
   )
 }

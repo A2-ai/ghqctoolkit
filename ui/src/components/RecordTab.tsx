@@ -28,7 +28,7 @@ import {
   IconExclamationMark,
   IconGripVertical,
   IconLock,
-  IconLockOpen,
+
   IconPlus,
   IconX,
 } from '@tabler/icons-react'
@@ -36,6 +36,7 @@ import { useMilestones } from '~/api/milestones'
 import { type RecordRequest, generateRecord, previewRecord } from '~/api/record'
 import { useRepoInfo } from '~/api/repo'
 import { type MilestoneStatusInfo, useMilestoneIssues } from '~/api/issues'
+import { OpenPill } from './MilestoneFilter'
 import { ResizableSidebar } from './ResizableSidebar'
 import { AddContextFileModal } from './AddContextFileModal'
 
@@ -765,11 +766,7 @@ function MilestoneCombobox({
               <Combobox.Option key={m.number} value={String(m.number)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Text size="sm">{m.title}</Text>
-                  {m.state !== 'closed' && (
-                    <Tooltip label="This milestone is not closed" withArrow>
-                      <IconAlertTriangle size={13} color="#f59f00" style={{ flexShrink: 0 }} />
-                    </Tooltip>
-                  )}
+                  {m.state !== 'closed' && <OpenPill />}
                 </div>
                 <Text size="xs" c="dimmed">
                   {m.open_issues} open · {m.closed_issues} closed
@@ -841,7 +838,7 @@ function RecordMilestoneCard({
           <Text size="sm" fw={600} truncate="end">{milestone.title}</Text>
           {milestone.state !== 'closed' && (
             <Tooltip label="Milestone is not yet closed — record may be incomplete" withArrow>
-              <IconLockOpen data-testid="open-milestone-indicator" size={14} color="#e67700" style={{ flexShrink: 0 }} />
+              <span data-testid="open-milestone-indicator"><OpenPill /></span>
             </Tooltip>
           )}
           {statusInfo.listFailed && statusInfo.listError && (

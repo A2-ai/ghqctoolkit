@@ -21,7 +21,6 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconExclamationMark,
-  IconLockOpen,
   IconX,
 } from '@tabler/icons-react'
 import { useQueries } from '@tanstack/react-query'
@@ -36,6 +35,7 @@ import {
 } from '~/api/issues'
 import { type ArchiveFileRequest, generateArchive } from '~/api/archive'
 import { useRepoInfo } from '~/api/repo'
+import { OpenPill } from './MilestoneFilter'
 import { ResizableSidebar } from './ResizableSidebar'
 import { type BareFileResolution, BareFileResolveModal } from './BareFileResolveModal'
 
@@ -46,10 +46,12 @@ const MIN_ISSUES_HEIGHT = 80
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface SourceIssue { number: number; title: string; html_url: string }
+
 type RelevantEntry =
-  | { type: 'qc'; file_name: string; issue_number: number }
-  | { type: 'bare'; file_name: string }
-  | { type: 'conflict'; file_name: string; reason: string }
+  | { type: 'qc'; file_name: string; issue_number: number; via: SourceIssue }
+  | { type: 'bare'; file_name: string; via: SourceIssue }
+  | { type: 'conflict'; file_name: string; reason: string; via: SourceIssue[]; blocking: boolean }
 
 function extractIssueNumber(url: string): number | null {
   const match = url.match(/\/issues\/(\d+)(?:[^/]*)$/)
@@ -253,32 +255,48 @@ export function ArchiveTab() {
   const relevantFileEntries = useMemo<RelevantEntry[]>(() => {
     if (!includeRelevantFiles || statuses.length === 0) return []
 
-    const archiveIssueNumbers = new Set(statuses.map(s => s.issue.number))
-    const archiveFileNames = new Set(statuses.map(s => s.issue.title))
+    // Only consider issues that are currently visible in the right panel.
+    // Relevant files of hidden (unapproved) issues are not surfaced.
+    const visibleStatuses = statuses.filter(s => includeNonApproved || isApprovedStatus(s))
 
-    // file_name → array of sources
-    const fileSourceMap = new Map<string, Array<{ kind: 'qc' | 'bare'; issue_number: number | null }>>()
+    const archiveIssueNumbers = new Set(visibleStatuses.map(s => s.issue.number))
+    const archiveFileNames = new Set(visibleStatuses.map(s => s.issue.title))
 
-    for (const status of statuses) {
-      for (const rf of status.issue.relevant_files) {
+    // file_name → array of sources (each source includes the milestone issue that listed it)
+    const fileSourceMap = new Map<string, Array<{
+      kind: 'qc' | 'bare'
+      issue_number: number | null
+      via: SourceIssue
+    }>>()
+
+    for (const status of visibleStatuses) {
+      const via: SourceIssue = {
+        number: status.issue.number,
+        title: status.issue.title,
+        html_url: status.issue.html_url,
+      }
+      for (const rf of (status.issue.relevant_files ?? [])) {
         const isQcKind = rf.kind === 'blocking_qc' || rf.kind === 'relevant_qc'
         const issueNumber = rf.issue_url ? extractIssueNumber(rf.issue_url) : null
 
         if (isQcKind && issueNumber !== null) {
-          if (archiveIssueNumbers.has(issueNumber)) continue // true de-dup
+          // De-dup at source level: if this QC issue is already a visible milestone
+          // issue, the reference is covered — don't add this source at all.
+          // This ensures the referencing issue (via) is excluded from the conflict card.
+          if (archiveIssueNumbers.has(issueNumber)) continue
           const existing = fileSourceMap.get(rf.file_name)
           if (!existing) {
-            fileSourceMap.set(rf.file_name, [{ kind: 'qc', issue_number: issueNumber }])
+            fileSourceMap.set(rf.file_name, [{ kind: 'qc', issue_number: issueNumber, via }])
           } else if (!existing.some(e => e.issue_number === issueNumber)) {
-            existing.push({ kind: 'qc', issue_number: issueNumber })
+            existing.push({ kind: 'qc', issue_number: issueNumber, via })
           }
         } else {
           // Bare file (file kind or QC kind with null issue_url)
           const existing = fileSourceMap.get(rf.file_name)
           if (!existing) {
-            fileSourceMap.set(rf.file_name, [{ kind: 'bare', issue_number: null }])
+            fileSourceMap.set(rf.file_name, [{ kind: 'bare', issue_number: null, via }])
           } else if (!existing.some(e => e.kind === 'bare')) {
-            existing.push({ kind: 'bare', issue_number: null })
+            existing.push({ kind: 'bare', issue_number: null, via })
           }
         }
       }
@@ -287,30 +305,40 @@ export function ArchiveTab() {
     const entries: RelevantEntry[] = []
 
     for (const [file_name, sources] of fileSourceMap) {
+      const viaAll = sources.map(s => s.via).filter(
+        (v, i, arr) => arr.findIndex(x => x.number === v.number) === i,
+      )
+
+      // File name already covered by a visible milestone issue — informational, non-blocking.
+      // viaAll here only contains sources whose QC issue was NOT already in the archive
+      // (the others were skipped above), so the via list is already correct.
       if (archiveFileNames.has(file_name)) {
-        entries.push({ type: 'conflict', file_name, reason: 'File already covered by milestone issues' })
+        entries.push({ type: 'conflict', file_name, reason: 'File already covered by milestone issues', via: viaAll, blocking: false })
         continue
       }
+
+      // Genuine ambiguity: multiple different non-archived sources claim this file — blocking
       if (sources.length > 1) {
-        entries.push({ type: 'conflict', file_name, reason: 'Multiple QC issues reference this file' })
+        entries.push({ type: 'conflict', file_name, reason: 'Multiple QC issues reference this file', via: viaAll, blocking: true })
         continue
       }
+
       const source = sources[0]
       if (source.kind === 'qc' && source.issue_number !== null) {
-        entries.push({ type: 'qc', file_name, issue_number: source.issue_number })
+        entries.push({ type: 'qc', file_name, issue_number: source.issue_number, via: source.via })
       } else {
-        entries.push({ type: 'bare', file_name })
+        entries.push({ type: 'bare', file_name, via: source.via })
       }
     }
 
     return entries
-  }, [includeRelevantFiles, statuses])
+  }, [includeRelevantFiles, statuses, includeNonApproved])
 
   // QC relevant issue numbers not already in statuses
   const qcIssueNumbersToFetch = useMemo(() => {
     const existing = new Set(statuses.map(s => s.issue.number))
     return relevantFileEntries
-      .filter((e): e is { type: 'qc'; file_name: string; issue_number: number } => e.type === 'qc')
+      .filter(e => e.type === 'qc' as const)
       .map(e => e.issue_number)
       .filter(n => !existing.has(n))
       .filter((n, i, arr) => arr.indexOf(n) === i)
@@ -355,7 +383,7 @@ export function ArchiveTab() {
     [relevantFileEntries, resolvedBareFiles],
   )
   const conflictCount = useMemo(
-    () => relevantFileEntries.filter(e => e.type === 'conflict').length,
+    () => relevantFileEntries.filter(e => e.type === 'conflict' && e.blocking).length,
     [relevantFileEntries],
   )
 
@@ -382,7 +410,7 @@ export function ArchiveTab() {
       }))
 
       const qcRelevantFiles: ArchiveFileRequest[] = relevantFileEntries
-        .filter((e): e is { type: 'qc'; file_name: string; issue_number: number } => e.type === 'qc')
+        .filter(e => e.type === 'qc' as const)
         .flatMap(e => {
           const s = relevantQcStatusMap.get(e.issue_number)
           if (!s) return []
@@ -683,28 +711,33 @@ export function ArchiveTab() {
               .map((entry) => {
               if (entry.type === 'conflict') {
                 return (
-                  <Stack
-                    key={`conflict-${entry.file_name}`}
-                    gap={5}
-                    style={{
-                      padding: '10px 12px',
-                      borderRadius: 6,
-                      border: '1px solid #ff8787',
-                      backgroundColor: '#ffe3e3',
-                      minWidth: 0,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-                      <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
-                        {entry.file_name}
-                      </Text>
-                      <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={() => dismissRelevantFile(entry.file_name)} aria-label="Remove">
-                        <IconX size={11} />
-                      </ActionIcon>
-                    </div>
-                    <Text size="xs" c="dimmed"><b>Type:</b> Conflict</Text>
-                    <Text size="xs" c="red.7">{entry.reason}</Text>
-                  </Stack>
+                  <Tooltip key={`conflict-${entry.file_name}`} label={entry.reason} withArrow>
+                    <Stack
+                      gap={5}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 6,
+                        border: '1px solid #ff8787',
+                        backgroundColor: '#ffe3e3',
+                        minWidth: 0,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                        <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
+                          {entry.file_name}
+                        </Text>
+                        <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={() => dismissRelevantFile(entry.file_name)} aria-label="Remove">
+                          <IconX size={11} />
+                        </ActionIcon>
+                      </div>
+                      {entry.via.map(v => (
+                        <Text key={v.number} size="xs" c="dimmed">
+                          <b>Via:</b>{' '}
+                          <Anchor href={v.html_url} target="_blank" size="xs">{v.title}</Anchor>
+                        </Text>
+                      ))}
+                    </Stack>
+                  </Tooltip>
                 )
               }
 
@@ -713,7 +746,7 @@ export function ArchiveTab() {
                 const bgColor = resolution ? '#d7e7d3' : '#fff3bf'
                 const borderColor = resolution ? '#aacca6' : '#fcc419'
 
-                return (
+                const card = (
                   <Stack
                     key={`bare-${entry.file_name}`}
                     gap={5}
@@ -723,30 +756,34 @@ export function ArchiveTab() {
                       border: `1px solid ${borderColor}`,
                       backgroundColor: bgColor,
                       minWidth: 0,
+                      cursor: 'pointer',
                     }}
+                    onClick={() => setBareFileModalFile(entry.file_name)}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-                      <Text
-                        size="sm"
-                        fw={700}
-                        style={{ wordBreak: 'break-all', flex: 1, cursor: 'pointer' }}
-                        onClick={() => setBareFileModalFile(entry.file_name)}
-                      >
+                      <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
                         {entry.file_name}
                       </Text>
-                      <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={() => dismissRelevantFile(entry.file_name)} aria-label="Remove">
+                      <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={e => { e.stopPropagation(); dismissRelevantFile(entry.file_name) }} aria-label="Remove">
                         <IconX size={11} />
                       </ActionIcon>
                     </div>
-                    <Text size="xs" c="dimmed"><b>Type:</b> Bare file</Text>
-                    {resolution ? (
-                      <Text size="xs" c="dimmed" style={{ cursor: 'pointer' }} onClick={() => setBareFileModalFile(entry.file_name)}>
-                        <b>Commit:</b> {resolution.commit.slice(0, 7)}
-                      </Text>
-                    ) : (
-                      <Text size="xs" c="orange.7" style={{ cursor: 'pointer' }} onClick={() => setBareFileModalFile(entry.file_name)}>Click to resolve</Text>
+                    <Text size="xs" c="dimmed">
+                      <b>Via:</b>{' '}
+                      <Anchor href={entry.via.html_url} target="_blank" size="xs" onClick={e => e.stopPropagation()}>
+                        {entry.via.title}
+                      </Anchor>
+                    </Text>
+                    {resolution && (
+                      <Text size="xs" c="dimmed"><b>Commit:</b> {resolution.commit.slice(0, 7)}</Text>
                     )}
                   </Stack>
+                )
+
+                return resolution ? card : (
+                  <Tooltip key={`bare-${entry.file_name}`} label="Click to resolve" withArrow>
+                    {card}
+                  </Tooltip>
                 )
               }
 
@@ -831,7 +868,12 @@ export function ArchiveTab() {
                   )}
                   <Text size="xs" c="dimmed"><b>Commit:</b> {commit.slice(0, 7)}</Text>
                   <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
-                  <Text size="xs" c="dimmed" style={{ fontStyle: 'italic' }}>Relevant file</Text>
+                  <Text size="xs" c="dimmed">
+                    <b>Via:</b>{' '}
+                    <Anchor href={entry.via.html_url} target="_blank" size="xs">
+                      {entry.via.title}
+                    </Anchor>
+                  </Text>
                 </Stack>
               )
             })}
@@ -846,7 +888,7 @@ export function ArchiveTab() {
           onClose={() => setBareFileModalFile(null)}
           fileName={bareFileModalFile}
           referencingStatuses={referencingStatusesForFile}
-          allStatuses={statuses}
+
           onResolve={(resolution) => {
             setResolvedBareFiles(prev => {
               const next = new Map(prev)
@@ -923,11 +965,7 @@ function ArchiveMilestoneCombobox({
               <Combobox.Option key={m.number} value={String(m.number)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Text size="sm">{m.title}</Text>
-                  {m.state !== 'closed' && (
-                    <Tooltip label="This milestone is not closed" withArrow>
-                      <IconAlertTriangle size={13} color="#f59f00" style={{ flexShrink: 0 }} />
-                    </Tooltip>
-                  )}
+                  {m.state !== 'closed' && <OpenPill />}
                 </div>
                 <Text size="xs" c="dimmed">
                   {m.open_issues} open · {m.closed_issues} closed
@@ -999,7 +1037,7 @@ function ArchiveMilestoneCard({
           <Text size="sm" fw={600} truncate="end">{milestone.title}</Text>
           {milestone.state !== 'closed' && (
             <Tooltip label="Milestone is not yet closed — archive may be incomplete" withArrow>
-              <IconLockOpen data-testid="open-milestone-indicator" size={14} color="#e67700" style={{ flexShrink: 0 }} />
+              <span data-testid="open-milestone-indicator"><OpenPill /></span>
             </Tooltip>
           )}
           {statusInfo.listFailed && statusInfo.listError && (

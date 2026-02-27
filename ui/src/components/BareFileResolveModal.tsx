@@ -13,8 +13,15 @@ import {
   Text,
 } from '@mantine/core'
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { type IssueStatusResponse } from '~/api/issues'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  type IssueStatusError,
+  type IssueStatusResponse,
+  type IssueStatusResult,
+  fetchSingleIssueStatus,
+  useAllMilestoneIssues,
+} from '~/api/issues'
+import { useMilestones } from '~/api/milestones'
 import { type BranchCommit, fetchBranchCommits } from '~/api/commits'
 import { CommitSlider } from './CommitSlider'
 
@@ -29,7 +36,6 @@ interface BareFileResolveModalProps {
   onClose: () => void
   fileName: string
   referencingStatuses: IssueStatusResponse[]
-  allStatuses: IssueStatusResponse[]
   onResolve: (resolution: BareFileResolution) => void
 }
 
@@ -38,7 +44,6 @@ export function BareFileResolveModal({
   onClose,
   fileName,
   referencingStatuses,
-  allStatuses,
   onResolve,
 }: BareFileResolveModalProps) {
   const [currentPage, setCurrentPage] = useState(0)
@@ -48,7 +53,51 @@ export function BareFileResolveModal({
 
   const queryClient = useQueryClient()
 
-  // Pin hash: the default commit to navigate to (first referencing status's commit)
+  // ── Issue tab: load all milestones → all issues → filter by fileName ──────
+  const { data: allMilestones } = useMilestones()
+  const allMilestoneNumbers = useMemo(
+    () => (allMilestones ?? []).map(m => m.number),
+    [allMilestones],
+  )
+
+  const { issues: allIssues, isLoading: isLoadingIssues } = useAllMilestoneIssues(
+    allMilestoneNumbers,
+    opened,
+  )
+
+  const matchingIssueNumbers = useMemo(
+    () => allIssues.filter(i => i.title === fileName).map(i => i.number),
+    [allIssues, fileName],
+  )
+
+  const matchingStatusQueries = useQueries({
+    queries: matchingIssueNumbers.map(n => ({
+      queryKey: ['issue', 'status', n],
+      queryFn: async (): Promise<IssueStatusResult> => {
+        try {
+          const data = await fetchSingleIssueStatus(n)
+          return { ok: true, data }
+        } catch (e) {
+          const err: IssueStatusError = {
+            issue_number: n,
+            kind: 'fetch_failed',
+            error: (e as Error).message,
+          }
+          return { ok: false, error: err }
+        }
+      },
+      staleTime: 5 * 60 * 1000,
+      enabled: opened,
+    })),
+  })
+
+  const matchingStatuses = matchingStatusQueries.flatMap(q => (q.data?.ok ? [q.data.data] : []))
+  const isLoadingStatuses = matchingStatusQueries.some(
+    q => q.isPending && q.fetchStatus !== 'idle',
+  )
+
+  // ── Commit tab ────────────────────────────────────────────────────────────
+
   const pinHash = useMemo(() => {
     if (referencingStatuses.length === 0) return undefined
     return (
@@ -66,8 +115,7 @@ export function BareFileResolveModal({
     referencingStatuses.length > 0 &&
     !referencingStatuses.every(s => s.branch === referencingStatuses[0].branch)
 
-  // ── Step 1: locate query — finds the page of the pin commit ──────────────
-  // Runs once on open; pre-populates the regular page cache.
+  // Step 1: locate query — finds the page of the pin commit
   const { data: locateData } = useQuery({
     queryKey: ['branch-commits-locate', fileName, pinHash ?? '__none__'],
     queryFn: async () => {
@@ -76,7 +124,6 @@ export function BareFileResolveModal({
         pageSize: PAGE_SIZE,
         ...(pinHash ? { locate: pinHash } : { page: 0 }),
       })
-      // Pre-populate the regular page cache to avoid a duplicate fetch
       queryClient.setQueryData(
         ['branch-commits', fileName, result.page, PAGE_SIZE],
         result,
@@ -94,7 +141,7 @@ export function BareFileResolveModal({
     }
   }, [locateData, initialized])
 
-  // ── Step 2: regular page query ────────────────────────────────────────────
+  // Step 2: regular page query
   const { data: pageData, isLoading: isPageLoading } = useQuery({
     queryKey: ['branch-commits', fileName, currentPage, PAGE_SIZE],
     queryFn: () =>
@@ -103,9 +150,6 @@ export function BareFileResolveModal({
     staleTime: 5 * 60 * 1000,
   })
 
-  // Use page data; fall back to locate data. Guard Array.isArray so a stale or
-  // mismatched API response (e.g. old backend returning a plain array) never
-  // surfaces as undefined to downstream .map() calls.
   const rawCommits: BranchCommit[] = Array.isArray(pageData?.commits)
     ? pageData!.commits
     : Array.isArray(locateData?.commits)
@@ -120,16 +164,12 @@ export function BareFileResolveModal({
   const totalPages = Math.ceil(total / PAGE_SIZE)
   const isLoading = !initialized || isPageLoading
 
-  // ── Visible commits: filter by toggle, always keep pin, oldest-first ────
-  // rawCommits is newest-first from the backend. We reverse so that the slider
-  // reads oldest (left) → newest (right).
   const visibleCommits = useMemo(() => {
     const indexed = rawCommits.map((c, i) => ({ ...c, origIdx: i })).reverse()
     if (!fileChangingOnly) return indexed
     return indexed.filter(c => c.file_changed || c.hash === pinHash)
   }, [rawCommits, fileChangingOnly, pinHash])
 
-  // ── Default selection: pin commit if on this page, else newest (rightmost) ─
   useEffect(() => {
     if (visibleCommits.length === 0) return
     if (pinHash) {
@@ -138,9 +178,7 @@ export function BareFileResolveModal({
     }
     setCommitIdx(visibleCommits.length - 1)
   }, [visibleCommits, pinHash]) // eslint-disable-line react-hooks/exhaustive-deps
-  // (intentionally re-runs on page change via visibleCommits)
 
-  // ── Reset on close ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!opened) {
       setCurrentPage(0)
@@ -149,8 +187,6 @@ export function BareFileResolveModal({
       setInitialized(false)
     }
   }, [opened])
-
-  const matchingIssues = allStatuses.filter(s => s.issue.title === fileName)
 
   function handleCommitConfirm() {
     const commit = visibleCommits[commitIdx]?.hash
@@ -175,7 +211,14 @@ export function BareFileResolveModal({
       <Tabs defaultValue="commit">
         <Tabs.List>
           <Tabs.Tab value="commit">Select Commit</Tabs.Tab>
-          <Tabs.Tab value="issue">Select Issue</Tabs.Tab>
+          <Tabs.Tab value="issue">
+            Select Issue
+            {isLoadingIssues || isLoadingStatuses
+              ? <Loader size={10} ml={6} />
+              : matchingStatuses.length > 0
+                ? <Text span size="xs" c="dimmed" ml={4}>({matchingStatuses.length})</Text>
+                : null}
+          </Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="commit" pt="md">
@@ -189,7 +232,6 @@ export function BareFileResolveModal({
 
             {!isLoading && (
               <>
-                {/* Warnings */}
                 {distinctRefCommits.size > 1 && (
                   <Text size="xs" c="orange.7">
                     Multiple QC issues use different commits — defaulting to most recent
@@ -201,7 +243,6 @@ export function BareFileResolveModal({
                   </Text>
                 )}
 
-                {/* File-changing filter toggle */}
                 <Checkbox
                   label="File changing commits only"
                   size="xs"
@@ -263,7 +304,6 @@ export function BareFileResolveModal({
                   </Button>
                 </Group>
 
-                {/* Error if locate couldn't find pin on any page */}
                 {pinHash && !isLoading && total > 0 && pageData && (
                   (() => {
                     const pinOnPage = rawCommits.some(c => c.hash === pinHash)
@@ -291,10 +331,18 @@ export function BareFileResolveModal({
 
         <Tabs.Panel value="issue" pt="md">
           <Stack gap="sm">
-            {matchingIssues.length === 0 && (
-              <Text size="sm" c="dimmed">No loaded QC issues found for this file</Text>
+            {(isLoadingIssues || isLoadingStatuses) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Loader size={14} />
+                <Text size="sm" c="dimmed">
+                  {isLoadingIssues ? 'Loading issues across all milestones…' : 'Loading statuses…'}
+                </Text>
+              </div>
             )}
-            {matchingIssues.map(s => {
+            {!isLoadingIssues && !isLoadingStatuses && matchingStatuses.length === 0 && (
+              <Text size="sm" c="dimmed">No QC issues found for this file across all milestones</Text>
+            )}
+            {matchingStatuses.map(s => {
               const isApproved =
                 s.qc_status.status === 'approved' ||
                 s.qc_status.status === 'changes_after_approval'
