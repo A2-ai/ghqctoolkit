@@ -12,7 +12,7 @@ import {
   Tabs,
   Text,
 } from '@mantine/core'
-import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react'
+import { IconArrowLeft, IconChevronLeft, IconChevronRight } from '@tabler/icons-react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   type IssueStatusError,
@@ -24,28 +24,104 @@ import {
 import { useMilestones } from '~/api/milestones'
 import { type BranchCommit, fetchBranchCommits } from '~/api/commits'
 import { CommitSlider } from './CommitSlider'
+import { FileTreeBrowser } from './FileTreeBrowser'
 
-export type BareFileResolution =
-  | { type: 'commit'; commit: string; file_name: string }
-  | { type: 'issue'; issueNumber: number; commit: string; file_name: string }
+export type AddedFileResolution = {
+  file_name: string
+  commit: string
+}
 
 const PAGE_SIZE = 10
 
-interface BareFileResolveModalProps {
+interface AddFileModalProps {
   opened: boolean
   onClose: () => void
-  fileName: string
-  referencingStatuses: IssueStatusResponse[]
-  onResolve: (resolution: BareFileResolution) => void
+  /** Files already in the right panel — unselectable in the tree. */
+  claimedFiles: Set<string>
+  onAdd: (resolution: AddedFileResolution) => void
 }
 
-export function BareFileResolveModal({
-  opened,
-  onClose,
-  fileName,
-  referencingStatuses,
-  onResolve,
-}: BareFileResolveModalProps) {
+export function AddFileModal({ opened, onClose, claimedFiles, onAdd }: AddFileModalProps) {
+  const [step, setStep] = useState<1 | 2>(1)
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
+
+  // Reset on close
+  useEffect(() => {
+    if (!opened) {
+      setStep(1)
+      setSelectedFile(null)
+    }
+  }, [opened])
+
+  function handleFileConfirm() {
+    if (selectedFile) setStep(2)
+  }
+
+  function handleBack() {
+    setStep(1)
+  }
+
+  function handleResolve(commit: string) {
+    if (!selectedFile) return
+    onAdd({ file_name: selectedFile, commit })
+    onClose()
+  }
+
+  return (
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={
+        <Text fw={600} size="sm">
+          {step === 1 ? 'Add file to archive' : `Add file: ${selectedFile}`}
+        </Text>
+      }
+      size="lg"
+    >
+      {step === 1 && (
+        <Stack gap="sm">
+          <Text size="xs" c="dimmed">
+            Select a file to add. Files already in the archive are greyed out.
+          </Text>
+          <div style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6, padding: 8 }}>
+            <FileTreeBrowser
+              selectedFile={selectedFile}
+              onSelect={setSelectedFile}
+              claimedFiles={claimedFiles}
+            />
+          </div>
+          <Button
+            size="xs"
+            disabled={!selectedFile}
+            onClick={handleFileConfirm}
+          >
+            Next →
+          </Button>
+        </Stack>
+      )}
+
+      {step === 2 && selectedFile && (
+        <CommitIssueStep
+          fileName={selectedFile}
+          opened={opened}
+          onBack={handleBack}
+          onResolve={handleResolve}
+        />
+      )}
+    </Modal>
+  )
+}
+
+// ─── CommitIssueStep ──────────────────────────────────────────────────────────
+
+interface CommitIssueStepProps {
+  fileName: string
+  opened: boolean
+  onBack: () => void
+  onResolve: (commit: string) => void
+}
+
+function CommitIssueStep({ fileName, opened, onBack, onResolve }: CommitIssueStepProps) {
   const [currentPage, setCurrentPage] = useState(0)
   const [commitIdx, setCommitIdx] = useState(0)
   const [showAll, setShowAll] = useState(false)
@@ -53,7 +129,59 @@ export function BareFileResolveModal({
 
   const queryClient = useQueryClient()
 
-  // ── Issue tab: load all milestones → all issues → filter by fileName ──────
+  // ── Commit tab ─────────────────────────────────────────────────────────────
+
+  const { data: locateData } = useQuery({
+    queryKey: ['branch-commits-locate', fileName, '__none__'],
+    queryFn: async () => {
+      const result = await fetchBranchCommits({ file: fileName, page: 0, pageSize: PAGE_SIZE })
+      queryClient.setQueryData(['branch-commits', fileName, result.page, PAGE_SIZE], result)
+      return result
+    },
+    enabled: opened,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  useEffect(() => {
+    if (locateData && !initialized) {
+      setCurrentPage(typeof locateData.page === 'number' ? locateData.page : 0)
+      setInitialized(true)
+    }
+  }, [locateData, initialized])
+
+  const { data: pageData, isLoading: isPageLoading } = useQuery({
+    queryKey: ['branch-commits', fileName, currentPage, PAGE_SIZE],
+    queryFn: () => fetchBranchCommits({ file: fileName, page: currentPage, pageSize: PAGE_SIZE }),
+    enabled: opened && initialized,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const rawCommits: BranchCommit[] = Array.isArray(pageData?.commits)
+    ? pageData!.commits
+    : Array.isArray(locateData?.commits)
+      ? locateData!.commits
+      : []
+  const total =
+    typeof pageData?.total === 'number'
+      ? pageData.total
+      : typeof locateData?.total === 'number'
+        ? locateData.total
+        : 0
+  const totalPages = Math.ceil(total / PAGE_SIZE)
+  const isLoadingCommits = !initialized || isPageLoading
+
+  const visibleCommits = useMemo(() => {
+    const indexed = rawCommits.map((c, i) => ({ ...c, origIdx: i })).reverse()
+    if (showAll) return indexed
+    return indexed.filter(c => c.file_changed)
+  }, [rawCommits, showAll])
+
+  useEffect(() => {
+    if (visibleCommits.length > 0) setCommitIdx(visibleCommits.length - 1)
+  }, [visibleCommits]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Issue tab ──────────────────────────────────────────────────────────────
+
   const { data: allMilestones } = useMilestones()
   const allMilestoneNumbers = useMemo(
     () => (allMilestones ?? []).map(m => m.number),
@@ -96,118 +224,28 @@ export function BareFileResolveModal({
     q => q.isPending && q.fetchStatus !== 'idle',
   )
 
-  // ── Commit tab ────────────────────────────────────────────────────────────
-
-  const pinHash = useMemo(() => {
-    if (referencingStatuses.length === 0) return undefined
-    return (
-      referencingStatuses[0].qc_status.approved_commit ??
-      referencingStatuses[0].qc_status.latest_commit
-    )
-  }, [referencingStatuses])
-
-  const distinctRefCommits = new Set(
-    referencingStatuses.map(
-      s => s.qc_status.approved_commit ?? s.qc_status.latest_commit,
-    ),
-  )
-  const differentBranchesAmongReferencers =
-    referencingStatuses.length > 0 &&
-    !referencingStatuses.every(s => s.branch === referencingStatuses[0].branch)
-
-  // Step 1: locate query — finds the page of the pin commit
-  const { data: locateData } = useQuery({
-    queryKey: ['branch-commits-locate', fileName, pinHash ?? '__none__'],
-    queryFn: async () => {
-      const result = await fetchBranchCommits({
-        file: fileName,
-        pageSize: PAGE_SIZE,
-        ...(pinHash ? { locate: pinHash } : { page: 0 }),
-      })
-      queryClient.setQueryData(
-        ['branch-commits', fileName, result.page, PAGE_SIZE],
-        result,
-      )
-      return result
-    },
-    enabled: opened,
-    staleTime: 5 * 60 * 1000,
-  })
-
-  useEffect(() => {
-    if (locateData && !initialized) {
-      setCurrentPage(typeof locateData.page === 'number' ? locateData.page : 0)
-      setInitialized(true)
-    }
-  }, [locateData, initialized])
-
-  // Step 2: regular page query
-  const { data: pageData, isLoading: isPageLoading } = useQuery({
-    queryKey: ['branch-commits', fileName, currentPage, PAGE_SIZE],
-    queryFn: () =>
-      fetchBranchCommits({ file: fileName, page: currentPage, pageSize: PAGE_SIZE }),
-    enabled: opened && initialized,
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const rawCommits: BranchCommit[] = Array.isArray(pageData?.commits)
-    ? pageData!.commits
-    : Array.isArray(locateData?.commits)
-      ? locateData!.commits
-      : []
-  const total =
-    typeof pageData?.total === 'number'
-      ? pageData.total
-      : typeof locateData?.total === 'number'
-        ? locateData.total
-        : 0
-  const totalPages = Math.ceil(total / PAGE_SIZE)
-  const isLoading = !initialized || isPageLoading
-
-  const visibleCommits = useMemo(() => {
-    const indexed = rawCommits.map((c, i) => ({ ...c, origIdx: i })).reverse()
-    if (showAll) return indexed
-    return indexed.filter(c => c.file_changed || c.hash === pinHash)
-  }, [rawCommits, showAll, pinHash])
-
-  useEffect(() => {
-    if (visibleCommits.length === 0) return
-    if (pinHash) {
-      const pinIdx = visibleCommits.findIndex(c => c.hash === pinHash)
-      if (pinIdx >= 0) { setCommitIdx(pinIdx); return }
-    }
-    setCommitIdx(visibleCommits.length - 1)
-  }, [visibleCommits, pinHash]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!opened) {
-      setCurrentPage(0)
-      setCommitIdx(0)
-      setShowAll(false)
-      setInitialized(false)
-    }
-  }, [opened])
-
   function handleCommitConfirm() {
     const commit = visibleCommits[commitIdx]?.hash
-    if (!commit) return
-    onResolve({ type: 'commit', commit, file_name: fileName })
-    onClose()
+    if (commit) onResolve(commit)
   }
 
   function handleIssueSelect(status: IssueStatusResponse) {
     const commit = status.qc_status.approved_commit ?? status.qc_status.latest_commit
-    onResolve({ type: 'issue', issueNumber: status.issue.number, commit, file_name: fileName })
-    onClose()
+    onResolve(commit)
   }
 
   return (
-    <Modal
-      opened={opened}
-      onClose={onClose}
-      title={<Text fw={600} size="sm">Resolve bare file: {fileName}</Text>}
-      size="lg"
-    >
+    <Stack gap="sm">
+      <Button
+        size="xs"
+        variant="subtle"
+        leftSection={<IconArrowLeft size={12} />}
+        onClick={onBack}
+        style={{ alignSelf: 'flex-start' }}
+      >
+        Back
+      </Button>
+
       <Tabs defaultValue="commit">
         <Tabs.List>
           <Tabs.Tab value="commit">Select Commit</Tabs.Tab>
@@ -223,26 +261,13 @@ export function BareFileResolveModal({
 
         <Tabs.Panel value="commit" pt="md">
           <Stack gap="sm">
-            {isLoading && (
+            {isLoadingCommits ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Loader size={14} />
                 <Text size="sm" c="dimmed">Loading commits…</Text>
               </div>
-            )}
-
-            {!isLoading && (
+            ) : (
               <>
-                {distinctRefCommits.size > 1 && (
-                  <Text size="xs" c="orange.7">
-                    Multiple QC issues use different commits — defaulting to most recent
-                  </Text>
-                )}
-                {differentBranchesAmongReferencers && (
-                  <Text size="xs" c="orange.7">
-                    Some referencing issues are on a different branch
-                  </Text>
-                )}
-
                 <Checkbox
                   label="Show all commits"
                   size="xs"
@@ -252,9 +277,7 @@ export function BareFileResolveModal({
 
                 {visibleCommits.length === 0 ? (
                   <Text size="sm" c="dimmed">
-                    {rawCommits.length === 0
-                      ? 'No commits on this page'
-                      : 'No file-changing commits on this page'}
+                    {rawCommits.length === 0 ? 'No commits on this page' : 'No file-changing commits on this page'}
                   </Text>
                 ) : (
                   <>
@@ -269,17 +292,12 @@ export function BareFileResolveModal({
                         {visibleCommits[commitIdx].message}
                       </Text>
                     )}
-                    <Button
-                      size="xs"
-                      onClick={handleCommitConfirm}
-                      disabled={!visibleCommits[commitIdx]}
-                    >
+                    <Button size="xs" onClick={handleCommitConfirm} disabled={!visibleCommits[commitIdx]}>
                       Use commit {visibleCommits[commitIdx]?.hash.slice(0, 7)}
                     </Button>
                   </>
                 )}
 
-                {/* Pagination — left=Older (page+1), right=Newer (page-1) */}
                 <Group justify="space-between" mt={4}>
                   <Button
                     size="xs"
@@ -303,27 +321,6 @@ export function BareFileResolveModal({
                     Newer
                   </Button>
                 </Group>
-
-                {pinHash && !isLoading && total > 0 && pageData && (
-                  (() => {
-                    const pinOnPage = rawCommits.some(c => c.hash === pinHash)
-                    const locatePage = locateData?.page
-                    return !pinOnPage && locatePage !== currentPage ? (
-                      <Alert color="blue" p="xs">
-                        <Text size="xs">
-                          Default commit is on page {(locatePage ?? 0) + 1}.{' '}
-                          <Anchor
-                            size="xs"
-                            onClick={() => setCurrentPage(locatePage ?? 0)}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            Go there
-                          </Anchor>
-                        </Text>
-                      </Alert>
-                    ) : null
-                  })()
-                )}
               </>
             )}
           </Stack>
@@ -387,6 +384,6 @@ export function BareFileResolveModal({
           </Stack>
         </Tabs.Panel>
       </Tabs>
-    </Modal>
+    </Stack>
   )
 }

@@ -231,7 +231,7 @@ export async function fetchSingleIssueStatus(issueNumber: number): Promise<Issue
 // Module-level tick batcher. All batcher.load() calls within a single synchronous
 // render pass land before setTimeout fires, so they're coalesced into one HTTP
 // request. React Query's own cache means already-fetched issues never reach here.
-const issueStatusBatcher = (() => {
+export const issueStatusBatcher = (() => {
   let pending = new Map<number, { resolve: (v: IssueStatusResult) => void; reject: (e: Error) => void }>()
   let timer: ReturnType<typeof setTimeout> | null = null
 
