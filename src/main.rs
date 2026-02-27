@@ -13,11 +13,11 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
-    GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread, QCContext,
-    QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation, archive,
-    configuration_status, create_labels_if_needed, create_staging_dir, determine_config_dir,
-    fetch_milestone_issues, get_blocking_qc_status, get_git_status,
+    ArchiveFile, ArchiveMetadata, CommitCache, Configuration, ContextPosition, DiskCache,
+    GitCommand, GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread,
+    QCContext, QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation,
+    archive, configuration_status, create_labels_if_needed, create_staging_dir,
+    determine_config_dir, fetch_milestone_issues, get_blocking_qc_status, get_git_status,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
     unapprove_with_impact,
 };
@@ -391,11 +391,17 @@ async fn main() -> Result<()> {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
 
+                    let mut commit_cache = CommitCache::new();
                     let comment = match (milestone, file) {
                         (None, None) => {
                             // Interactive mode
-                            QCComment::from_interactive(&milestones, cache.as_ref(), &git_info)
-                                .await?
+                            QCComment::from_interactive(
+                                &milestones,
+                                cache.as_ref(),
+                                &git_info,
+                                &mut commit_cache,
+                            )
+                            .await?
                         }
                         (Some(milestone), Some(file)) => {
                             // Non-interactive mode
@@ -409,6 +415,7 @@ async fn main() -> Result<()> {
                                 cache.as_ref(),
                                 &git_info,
                                 no_diff,
+                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -433,11 +440,17 @@ async fn main() -> Result<()> {
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
+                    let mut commit_cache = CommitCache::new();
                     let approval = match (milestone, file, &note) {
                         (None, None, None) => {
                             // Interactive Mode
-                            QCApprove::from_interactive(&milestones, cache.as_ref(), &git_info)
-                                .await?
+                            QCApprove::from_interactive(
+                                &milestones,
+                                cache.as_ref(),
+                                &git_info,
+                                &mut commit_cache,
+                            )
+                            .await?
                         }
                         (Some(milestone), Some(file), _) => {
                             QCApprove::from_args(
@@ -448,6 +461,7 @@ async fn main() -> Result<()> {
                                 &milestones,
                                 cache.as_ref(),
                                 &git_info,
+                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -459,9 +473,15 @@ async fn main() -> Result<()> {
                     };
 
                     // Use approval with validation
-                    let result =
-                        approve_with_validation(&approval, &git_info, cache.as_ref(), force)
-                            .await?;
+                    let mut commit_cache = CommitCache::new();
+                    let result = approve_with_validation(
+                        &approval,
+                        &git_info,
+                        cache.as_ref(),
+                        force,
+                        &mut commit_cache,
+                    )
+                    .await?;
 
                     println!("{}", result);
                 }
@@ -507,11 +527,17 @@ async fn main() -> Result<()> {
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
+                    let mut commit_cache = CommitCache::new();
 
                     let review = match (milestone, file) {
                         (None, None) => {
-                            QCReview::from_interactive(milestones, cache.as_ref(), &git_info)
-                                .await?
+                            QCReview::from_interactive(
+                                milestones,
+                                cache.as_ref(),
+                                &git_info,
+                                &mut commit_cache,
+                            )
+                            .await?
                         }
                         (Some(m), Some(f)) => {
                             QCReview::from_args(
@@ -523,6 +549,7 @@ async fn main() -> Result<()> {
                                 cache.as_ref(),
                                 &git_info,
                                 no_diff,
+                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -542,14 +569,20 @@ async fn main() -> Result<()> {
                 IssueCommands::Status { milestone, file } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
+                    let mut commit_cache = CommitCache::new();
                     match (milestone, file) {
                         (Some(milestone), Some(file)) => {
                             let issue =
                                 find_issue(&milestone, &file, &milestones, &git_info).await?;
                             let checklist_summaries =
                                 analyze_issue_checklists(issue.body.as_deref());
-                            let issue_thread =
-                                IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
+                            let issue_thread = IssueThread::from_issue(
+                                &issue,
+                                cache.as_ref(),
+                                &git_info,
+                                &mut commit_cache,
+                            )
+                            .await?;
                             let git_status = get_git_status(&git_info)?;
                             let qc_status = QCStatus::determine_status(&issue_thread);
                             let file_commits = issue_thread.file_commits();
@@ -557,6 +590,7 @@ async fn main() -> Result<()> {
                                 &issue_thread.blocking_qcs,
                                 &git_info,
                                 cache.as_ref(),
+                                &mut commit_cache,
                             )
                             .await;
                             println!(
@@ -574,7 +608,13 @@ async fn main() -> Result<()> {
                         }
                         (None, None) => {
                             // Interactive mode
-                            interactive_status(&milestones, cache.as_ref(), &git_info).await?;
+                            interactive_status(
+                                &milestones,
+                                cache.as_ref(),
+                                &git_info,
+                                &mut commit_cache,
+                            )
+                            .await?;
                         }
                         _ => {
                             bail!(
