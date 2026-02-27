@@ -27,6 +27,8 @@ tags:
     description: Supporting data queries
   - name: configuration
     description: Configuration management
+  - name: record
+    description: PDF record generation
 
 paths:
   /health:
@@ -155,13 +157,23 @@ paths:
           example: "1,2,3"
       responses:
         '200':
-          description: Array of issue statuses
+          description: All issues resolved successfully
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/IssueStatusResponse'
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
+        '206':
+          description: Partial success — some issues resolved, some failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
+        '500':
+          description: All issues failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
 
   /issues/{number}:
     get:
@@ -234,7 +246,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ApproveRequest'
       responses:
-        '200':
+        '201':
           description: Issue approved
           content:
             application/json:
@@ -261,7 +273,7 @@ paths:
             schema:
               $ref: '#/components/schemas/UnapproveRequest'
       responses:
-        '200':
+        '201':
           description: Issue unapproved
           content:
             application/json:
@@ -292,6 +304,125 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CommentResponse'
+
+  /preview/issue:
+    post:
+      summary: Preview issue body as HTML
+      operationId: previewIssue
+      tags: [issues]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIssueRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the issue
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/review:
+    post:
+      summary: Preview review comment body as HTML
+      operationId: previewReview
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the review comment
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/approve:
+    post:
+      summary: Preview approval comment body as HTML
+      operationId: previewApprove
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the approval comment
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/unapprove:
+    post:
+      summary: Preview unapproval comment body as HTML
+      operationId: previewUnapprove
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnapproveRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the unapproval comment
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/comment:
+    post:
+      summary: Preview comment body as HTML
+      operationId: previewComment
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the comment
+          content:
+            text/html:
+              schema:
+                type: string
 
   /issues/{number}/blocked:
     get:
@@ -353,33 +484,142 @@ paths:
               schema:
                 $ref: '#/components/schemas/RepoInfo'
 
-  /configuration/checklists:
-    get:
-      summary: List available checklists
-      operationId: listChecklists
-      tags: [configuration]
+  /record/upload:
+    post:
+      summary: Upload a context PDF
+      description: |
+        Accepts a multipart/form-data request with a single `file` field containing a PDF.
+        The file is saved to a server temp directory and its path is returned for use
+        in subsequent preview/generate requests.
+      operationId: uploadContextFile
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF file to upload (must have content-type application/pdf)
       responses:
         '200':
-          description: List of checklists
+          description: File uploaded successfully
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Checklist'
+                $ref: '#/components/schemas/RecordUploadResponse'
+        '400':
+          description: Missing file field or content-type is not application/pdf
 
-  /configuration/status:
+  /record/preview:
+    post:
+      summary: Generate a record PDF preview
+      description: |
+        Runs the full record pipeline for the given milestones and returns a session key.
+        The rendered PDF can be retrieved with `GET /record/preview.pdf?key=<key>`.
+        Each call produces an independent key — concurrent sessions never share PDFs.
+      operationId: previewRecord
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordRequest'
+      responses:
+        '200':
+          description: Preview rendered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordPreviewResponse'
+        '400':
+          description: No matching milestones found or invalid request
+        '500':
+          description: Record generation or render failed
+
+  /record/preview.pdf:
     get:
-      summary: Get configuration status
-      operationId: getConfigurationStatus
+      summary: Serve a previously generated preview PDF
+      operationId: servePreviewPdf
+      tags: [record]
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: Preview key returned by POST /record/preview
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The rendered PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Key not found (expired or never created)
+
+  /record/generate:
+    post:
+      summary: Generate and save a record PDF to disk
+      description: |
+        Runs the full record pipeline and writes the PDF to `output_path` on the server.
+        The parent directory is created automatically if it does not exist.
+      operationId: generateRecord
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordRequest'
+      responses:
+        '200':
+          description: PDF written to output_path successfully
+        '400':
+          description: output_path is empty or request is invalid
+        '500':
+          description: Record generation or render failed
+
+  /configuration:
+    get:
+      summary: Get configuration status and checklists
+      operationId: getConfiguration
       tags: [configuration]
       responses:
         '200':
-          description: Configuration status
+          description: Configuration status with full checklist content
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigurationStatusResponse'
+    post:
+      summary: Clone and register a configuration repository
+      operationId: setupConfiguration
+      tags: [configuration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupConfigurationRequest'
+      responses:
+        '200':
+          description: Configuration repository cloned and loaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationStatusResponse'
+        '409':
+          description: Configuration repository already set up
+        '500':
+          description: Clone or configuration load failed
 
 components:
   schemas:
@@ -454,6 +694,37 @@ components:
           type: string
           format: date-time
           nullable: true
+        created_by:
+          type: string
+          description: GitHub login of the user who created the issue
+        branch:
+          type: string
+          nullable: true
+          description: Git branch parsed from issue body
+        checklist_name:
+          type: string
+          nullable: true
+          description: Checklist name parsed from issue body
+        relevant_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelevantFileInfo'
+
+    RelevantFileInfo:
+      type: object
+      required: [file_name, kind]
+      properties:
+        file_name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/RelevantFileKind'
+        issue_url:
+          type: string
+          nullable: true
+
+    RelevantFileKind:
+      type: string
+      enum: [blocking_qc, relevant_qc, file]
 
     IssueStatusResponse:
       type: object
@@ -606,6 +877,34 @@ components:
           type: integer
         error:
           type: string
+
+    IssueStatusErrorKind:
+      type: string
+      enum: [fetch_failed, processing_failed]
+
+    IssueStatusError:
+      type: object
+      required: [issue_number, kind, error]
+      properties:
+        issue_number:
+          type: integer
+        kind:
+          $ref: '#/components/schemas/IssueStatusErrorKind'
+        error:
+          type: string
+
+    BatchIssueStatusResponse:
+      type: object
+      required: [results, errors]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueStatusResponse'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueStatusError'
 
     CreateIssueRequest:
       type: object
@@ -771,7 +1070,7 @@ components:
           items:
             $ref: '#/components/schemas/BlockingQCError'
         closed:
-          type: bool
+          type: boolean
           description: "Whether the issue was successfully closed"
 
     UnapproveRequest:
@@ -787,7 +1086,7 @@ components:
         unapproval_url:
           type: string
         opened:
-          type: bool
+          type: boolean
           description: "Whether the issue was successfully re-opened"
     BlockedIssueStatus:
       type: object
@@ -830,6 +1129,7 @@ components:
         - remote_commit
         - git_status
         - git_status_detail
+        - dirty_files
       properties:
         owner:
           type: string
@@ -851,6 +1151,16 @@ components:
         git_status_detail:
           type: string
           description: Human-readable git status description
+        dirty_files:
+          type: array
+          items:
+            type: string
+          description: List of files which have non-committed changes
+        current_user:
+          type: string
+          nullable: true
+          description: GitHub login of the authenticated user, if available
+
 
     Checklist:
       type: object
@@ -860,19 +1170,13 @@ components:
         content:
           type: string
 
-    ChecklistInfo:
-      type: object
-      properties:
-        name:
-          type: string
-        item_count:
-          type: integer
-
     ConfigurationStatusResponse:
       type: object
       properties:
         directory:
           type: string
+        exists:
+          type: boolean
         git_repository:
           $ref: '#/components/schemas/ConfigGitRepository'
         options:
@@ -880,7 +1184,11 @@ components:
         checklists:
           type: array
           items:
-            $ref: '#/components/schemas/ChecklistInfo'
+            $ref: '#/components/schemas/Checklist'
+        config_repo_env:
+          type: string
+          nullable: true
+          description: Value of GHQC_CONFIG_REPO env var, if set
 
     ConfigGitRepository:
       type: object
@@ -898,6 +1206,15 @@ components:
           items:
             type: string
 
+    SetupConfigurationRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: Git URL of the configuration repository to clone
+          example: "https://github.com/owner/config-repo"
+
     ConfigurationOptions:
       type: object
       properties:
@@ -914,3 +1231,58 @@ components:
           type: string
         record_path:
           type: string
+
+    RecordContextFileRequest:
+      type: object
+      required: [server_path, position]
+      properties:
+        server_path:
+          type: string
+          description: Absolute path on the server (use the temp_path from POST /record/upload for locally uploaded files)
+          example: "/tmp/ghqc-uploads/abc123.pdf"
+        position:
+          type: string
+          enum: [prepend, append]
+          description: Whether to insert this PDF before or after the QC Record in the output
+
+    RecordRequest:
+      type: object
+      required: [milestone_numbers]
+      properties:
+        milestone_numbers:
+          type: array
+          items:
+            type: integer
+          description: GitHub milestone numbers to include in the record
+          example: [1, 2]
+        tables_only:
+          type: boolean
+          default: false
+          description: When true, only emit summary tables without full issue details
+        output_path:
+          type: string
+          description: Destination path for the generated PDF (required for generate, ignored for preview)
+          example: "/path/to/output/record.pdf"
+        context_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecordContextFileRequest'
+          description: Optional PDF files to merge before/after the QC Record
+
+    RecordUploadResponse:
+      type: object
+      required: [temp_path]
+      properties:
+        temp_path:
+          type: string
+          description: Absolute server path where the uploaded PDF was saved
+          example: "/tmp/ghqc-uploads/abc123def456.pdf"
+
+    RecordPreviewResponse:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          description: Opaque session key — pass to GET /record/preview.pdf?key=<key> to retrieve the PDF
+          example: "a1b2c3d4e5f6"

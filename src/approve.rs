@@ -582,6 +582,10 @@ mod tests {
         ) -> Result<Vec<u8>, GitFileOpsError> {
             Ok(Vec::new())
         }
+
+        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
     }
 
     fn load_issue(name: &str) -> Issue {

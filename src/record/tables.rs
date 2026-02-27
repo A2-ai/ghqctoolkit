@@ -21,11 +21,14 @@ pub fn create_milestone_df(
             .iter()
             .map(|issue| {
                 let mut issue_name = insert_breaks(&issue.title, 42);
-                if issue.checklist_summary.contains("100.0%") {
+
+                // U = Unapproved: status is not "Approved" or "Approved; subsequent file changes"
+                if !issue.qc_status.contains("Approved") {
                     issue_name = format!("{} #text(fill: red)[U]", issue_name);
                 }
 
-                if issue.qc_status.contains("Approved") {
+                // C = unchecked checklist items: checklist is not fully complete
+                if !issue.checklist_summary.contains("100.0%") {
                     issue_name = format!("{} #text(fill: red)[C]", issue_name);
                 }
 
@@ -249,11 +252,30 @@ mod tests {
         let row = &result[0];
         assert_eq!(row.name, "v1.0");
 
-        // Should contain both issues with proper Typst formatting
         assert!(row.issues.contains("Test Issue 1"));
         assert!(row.issues.contains("Test Issue 2"));
-        assert!(row.issues.contains("#text(fill: red)[U]")); // 100% issue should have U marker
-        assert!(row.issues.contains("#text(fill: red)[C]")); // Approved issue should have C marker
+
+        // Issue 1 (50%, In Progress): not approved → U; not 100% → C
+        let issue1_part = row.issues.split("Test Issue 2").next().unwrap_or("");
+        assert!(
+            issue1_part.contains("#text(fill: red)[U]"),
+            "unapproved issue should get U"
+        );
+        assert!(
+            issue1_part.contains("#text(fill: red)[C]"),
+            "incomplete checklist should get C"
+        );
+
+        // Issue 2 (100%, Approved): approved → no U; 100% → no C
+        let issue2_part = row.issues.split("Test Issue 2").nth(1).unwrap_or("");
+        assert!(
+            !issue2_part.contains("#text(fill: red)[U]"),
+            "approved issue must not get U"
+        );
+        assert!(
+            !issue2_part.contains("#text(fill: red)[C]"),
+            "complete checklist must not get C"
+        );
     }
 
     #[test]

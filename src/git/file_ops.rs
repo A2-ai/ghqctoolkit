@@ -62,6 +62,10 @@ pub enum GitFileOpsError {
     HeadIdError(gix::reference::head_id::Error),
     #[error("Failed to access repository: {0}")]
     RepositoryError(#[from] crate::git::GitInfoError),
+    #[error("Directory not found in git tree: {0}")]
+    DirectoryNotFound(String),
+    #[error("Path is not a directory: {0}")]
+    NotADirectory(String),
 }
 
 /// File-specific git operations
@@ -80,6 +84,12 @@ pub trait GitFileOps {
         file: &Path,
         commit: &ObjectId,
     ) -> Result<Vec<u8>, GitFileOpsError>;
+
+    /// List immediate children of `path` in the HEAD commit tree.
+    /// `path` is repo-relative, slash-separated, no leading/trailing slash.
+    /// Empty string = repo root.
+    /// Returns `(name, is_directory)` pairs sorted: dirs first, then files, alpha within each.
+    fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError>;
 }
 
 impl GitFileOps for GitInfo {
@@ -271,6 +281,63 @@ impl GitFileOps for GitInfo {
         );
 
         Ok(blob.data.clone())
+    }
+
+    fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+        let repo = self.repository()?;
+        let head_id = repo.head_id().map_err(GitFileOpsError::HeadIdError)?;
+        let commit_obj = repo
+            .find_object(head_id)
+            .map_err(GitFileOpsError::ObjectError)?
+            .try_into_commit()
+            .map_err(GitFileOpsError::CommitError)?;
+        let tree = commit_obj.tree().map_err(GitFileOpsError::TreeError)?;
+
+        let mut all_files: Vec<PathBuf> = Vec::new();
+        collect_tree_files_recursive(&tree, &mut all_files, "")?;
+
+        let mut components: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
+
+        for file in &all_files {
+            let file_str = file.to_string_lossy();
+            let remainder = if path.is_empty() {
+                Some(file_str.as_ref().to_string())
+            } else {
+                let prefix = format!("{}/", path);
+                file_str
+                    .strip_prefix(prefix.as_str())
+                    .map(|s| s.to_string())
+            };
+
+            if let Some(rest) = remainder {
+                if let Some(slash_pos) = rest.find('/') {
+                    let dir_name = rest[..slash_pos].to_string();
+                    components.insert(dir_name, true);
+                } else {
+                    components.entry(rest).or_insert(false);
+                }
+            }
+        }
+
+        if !path.is_empty() && components.is_empty() {
+            if all_files.contains(&PathBuf::from(path)) {
+                return Err(GitFileOpsError::NotADirectory(path.to_string()));
+            } else {
+                return Err(GitFileOpsError::DirectoryNotFound(path.to_string()));
+            }
+        }
+
+        let mut result: Vec<(String, bool)> = components.into_iter().collect();
+        result.sort_by(
+            |(name_a, is_dir_a), (name_b, is_dir_b)| match (is_dir_a, is_dir_b) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => name_a.cmp(name_b),
+            },
+        );
+
+        Ok(result)
     }
 }
 
@@ -669,6 +736,10 @@ mod tests {
             _file: &Path,
             _commit: &ObjectId,
         ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
             Ok(Vec::new())
         }
     }

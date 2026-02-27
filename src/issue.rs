@@ -639,6 +639,10 @@ mod tests {
         ) -> Result<Vec<u8>, GitFileOpsError> {
             Ok(Vec::new())
         }
+
+        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
     }
 
     impl GitCommitAnalysis for SimpleMockGitInfo {
@@ -724,6 +728,10 @@ mod tests {
             _issue_number: u64,
         ) -> Result<Vec<Issue>, crate::git::GitHubApiError> {
             Ok(Vec::new())
+        }
+
+        async fn get_current_user(&self) -> Result<Option<String>, crate::git::GitHubApiError> {
+            Ok(None)
         }
     }
 

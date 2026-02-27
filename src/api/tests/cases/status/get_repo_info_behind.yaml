@@ -27,5 +27,7 @@ response:
       remote_commit: "3456789012345678901234567890abcdef123456"
       git_status: "behind"
       git_status_detail: "Repository is behind by 2 commits"
+      dirty_files: []
+      current_user: "test-user"
 
 assert_write_calls: []

@@ -21,6 +21,8 @@ pub use file_ops::{
 };
 
 #[cfg(test)]
+pub use action::MockGitCli;
+#[cfg(test)]
 pub use file_ops::MockGitFileOps;
 pub use helpers::GitHelpers;
 pub use provider::GitProvider;

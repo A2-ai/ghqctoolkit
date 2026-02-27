@@ -162,6 +162,10 @@ mod tests {
                 .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))?
                 .into_bytes())
         }
+
+        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
     }
 
     #[test]

@@ -1,0 +1,53 @@
+/// <reference types="vite/client" />
+import {
+  HeadContent,
+  Outlet,
+  Scripts,
+  createRootRouteWithContext,
+} from '@tanstack/react-router'
+import { MantineProvider } from '@mantine/core'
+import type { QueryClient } from '@tanstack/react-query'
+import * as React from 'react'
+import mantineCss from '@mantine/core/styles.css?url'
+import '../styles/animations.css'
+
+export const Route = createRootRouteWithContext<{
+  queryClient: QueryClient
+}>()({
+  ssr: false,
+  head: () => ({
+    meta: [
+      { charSet: 'utf-8' },
+      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+      { title: 'ghqc' },
+    ],
+    links: [
+      { rel: 'stylesheet', href: mantineCss },
+      { rel: 'icon', type: 'image/png', href: '/logo.png' },
+    ],
+  }),
+  shellComponent: RootShell,
+  component: RootComponent,
+})
+
+function RootShell({ children }: { children: React.ReactNode }) {
+  return (
+    <html>
+      <head>
+        <HeadContent />
+      </head>
+      <body>
+        {children}
+        <Scripts />
+      </body>
+    </html>
+  )
+}
+
+function RootComponent() {
+  return (
+    <MantineProvider defaultColorScheme="light">
+      <Outlet />
+    </MantineProvider>
+  )
+}

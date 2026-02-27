@@ -183,3 +183,37 @@ pub struct ReviewRequest {
 fn default_true() -> bool {
     true
 }
+
+#[derive(serde::Deserialize)]
+pub struct SetupConfigurationRequest {
+    pub url: String,
+}
+
+/// Position of a context PDF relative to the QC Record.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordContextPosition {
+    Prepend,
+    Append,
+}
+
+/// A single context PDF file for record generation.
+#[derive(Debug, serde::Deserialize)]
+pub struct RecordContextFileRequest {
+    /// Absolute path on the server (or uploaded temp path).
+    pub server_path: String,
+    pub position: RecordContextPosition,
+}
+
+/// Request body for record preview and generation.
+#[derive(Debug, serde::Deserialize)]
+pub struct RecordRequest {
+    pub milestone_numbers: Vec<u64>,
+    #[serde(default)]
+    pub tables_only: bool,
+    /// Output path — used only for generate, ignored for preview.
+    #[serde(default)]
+    pub output_path: String,
+    #[serde(default)]
+    pub context_files: Vec<RecordContextFileRequest>,
+}

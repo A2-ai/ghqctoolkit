@@ -221,7 +221,7 @@ Commands::Serve {
 The server requires two paths at startup:
 1. **Repository path** - Local git repo (uses current directory or `--directory`)
 2. **Config directory** - Resolved via `determine_config_dir()`:
-   - Priority: `--config-dir` arg → `GHQC_CONFIG_HOME` env var → platform default
+   - Priority: `--config-dir` arg → `GHQC_CONFIG_REPO` env var → platform default
 
 ```rust
 // At startup:
