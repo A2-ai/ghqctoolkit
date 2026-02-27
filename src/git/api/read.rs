@@ -81,16 +81,31 @@ impl GitHubReader for GitInfo {
             let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
                 .map_err(GitHubApiError::ClientCreation)?;
             log::debug!("Fetching milestones for {}/{}", owner, repo);
-            let milestones: Vec<Milestone> = octocrab
-                .get(
-                    format!("/repos/{}/{}/milestones?state=all", &owner, &repo),
-                    None::<&()>,
-                )
-                .await
-                .map_err(GitHubApiError::APIError)?;
 
-            log::debug!("Successfully fetched {} milestones", milestones.len());
-            Ok(milestones)
+            let mut all_milestones: Vec<Milestone> = Vec::new();
+            let mut page = 1u32;
+            loop {
+                let page_milestones: Vec<Milestone> = octocrab
+                    .get(
+                        format!(
+                            "/repos/{}/{}/milestones?state=all&per_page=100&page={}",
+                            &owner, &repo, page
+                        ),
+                        None::<&()>,
+                    )
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+
+                let count = page_milestones.len();
+                all_milestones.extend(page_milestones);
+                if count < 100 {
+                    break;
+                }
+                page += 1;
+            }
+
+            log::debug!("Successfully fetched {} milestones", all_milestones.len());
+            Ok(all_milestones)
         }
     }
 
