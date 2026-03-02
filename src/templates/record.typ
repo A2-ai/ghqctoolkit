@@ -149,7 +149,7 @@ No events found.
 No timeline items found.
 {% endif %}
 
-#pagebreak()
+{% if not loop.last %}#pagebreak(){% endif %}
 {% endfor %}
 {% endif %}
 {% endfor %}

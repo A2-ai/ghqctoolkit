@@ -9,12 +9,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::Deserialize;
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::path::PathBuf;
 
 use crate::{
     ContextPosition, GitProvider, QCContext, UreqDownloader,
@@ -28,19 +23,6 @@ use crate::{
 
 /// Maximum size accepted for uploaded context PDFs (50 MB).
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
-
-static KEY_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn generate_key() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let count = KEY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut hasher = DefaultHasher::new();
-    (timestamp, count).hash(&mut hasher);
-    format!("{:x}", hasher.finish())
-}
 
 /// POST /api/record/upload
 ///
@@ -91,7 +73,7 @@ pub async fn upload_context_file<G: GitProvider + 'static>(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to create upload dir: {e}")))?;
 
-    let key = generate_key();
+    let key = uuid::Uuid::new_v4().to_string();
     let temp_path = upload_dir.join(format!("{key}.pdf"));
     tokio::fs::write(&temp_path, &bytes)
         .await
@@ -197,7 +179,7 @@ pub async fn preview_record<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Json(request): Json<RecordRequest>,
 ) -> Result<Json<RecordPreviewResponse>, ApiError> {
-    let key = generate_key();
+    let key = uuid::Uuid::new_v4().to_string();
     let output_path = std::env::temp_dir().join(format!("ghqc-preview-{key}.pdf"));
 
     run_record_pipeline(&state, &request, output_path.clone()).await?;
