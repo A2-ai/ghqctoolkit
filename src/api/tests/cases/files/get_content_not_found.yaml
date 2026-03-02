@@ -1,0 +1,17 @@
+name: "GET /api/files/content - file not found"
+description: "Returns 404 when the file does not exist on disk"
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/files/content"
+  query:
+    path: "nonexistent/file/that/does/not/exist.txt"
+
+response:
+  status: 404
+  body:
+    match_type: partial
+    fields:
+      error: "File not found: nonexistent/file/that/does/not/exist.txt"

@@ -1,0 +1,17 @@
+name: "GET /api/record/preview.pdf - key not found"
+description: "Returns 404 when preview key does not exist in the store"
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/record/preview.pdf"
+  query:
+    key: "nonexistent-key-abc123"
+
+response:
+  status: 404
+  body:
+    match_type: partial
+    fields:
+      error: "Preview key not found: nonexistent-key-abc123"

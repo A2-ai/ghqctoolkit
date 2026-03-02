@@ -35,17 +35,33 @@ pub async fn generate_archive<G: GitProvider + 'static>(
         state.git_info().path().join(&raw)
     };
 
+    // Reject paths containing traversal components before creating any directories
+    for comp in output_path.components() {
+        if matches!(comp, Component::ParentDir) {
+            return Err(ApiError::BadRequest(
+                "output_path must not contain '..' components".to_string(),
+            ));
+        }
+    }
+
     // Ensure the resolved output path stays within the repo root
     let repo_root = state
         .git_info()
         .path()
         .canonicalize()
         .map_err(|e| ApiError::Internal(format!("Failed to canonicalize repo root: {e}")))?;
-    // Canonicalize parent dir (the file itself doesn't exist yet)
+
+    // Create parent dir if needed, then canonicalize to validate containment
     let parent = output_path.parent().unwrap_or(&output_path);
-    let canonical_parent = parent.canonicalize().map_err(|_| {
+    std::fs::create_dir_all(parent).map_err(|e| {
         ApiError::BadRequest(format!(
-            "Output directory does not exist: {}",
+            "Failed to create output directory {}: {e}",
+            parent.display()
+        ))
+    })?;
+    let canonical_parent = parent.canonicalize().map_err(|e| {
+        ApiError::Internal(format!(
+            "Failed to canonicalize output directory {}: {e}",
             parent.display()
         ))
     })?;

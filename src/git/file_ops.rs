@@ -291,44 +291,37 @@ impl GitFileOps for GitInfo {
             .map_err(GitFileOpsError::ObjectError)?
             .try_into_commit()
             .map_err(GitFileOpsError::CommitError)?;
-        let tree = commit_obj.tree().map_err(GitFileOpsError::TreeError)?;
+        let root_tree = commit_obj.tree().map_err(GitFileOpsError::TreeError)?;
 
-        let mut all_files: Vec<PathBuf> = Vec::new();
-        collect_tree_files_recursive(&tree, &mut all_files, "")?;
+        // Navigate directly to the target subtree instead of collecting all files
+        let target_tree = if path.is_empty() {
+            root_tree
+        } else {
+            let entry = root_tree
+                .lookup_entry_by_path(path)
+                .map_err(|_| GitFileOpsError::DirectoryNotFound(path.to_string()))?
+                .ok_or_else(|| GitFileOpsError::DirectoryNotFound(path.to_string()))?;
 
-        let mut components: std::collections::HashMap<String, bool> =
-            std::collections::HashMap::new();
-
-        for file in &all_files {
-            let file_str = file.to_string_lossy();
-            let remainder = if path.is_empty() {
-                Some(file_str.as_ref().to_string())
-            } else {
-                let prefix = format!("{}/", path);
-                file_str
-                    .strip_prefix(prefix.as_str())
-                    .map(|s| s.to_string())
-            };
-
-            if let Some(rest) = remainder {
-                if let Some(slash_pos) = rest.find('/') {
-                    let dir_name = rest[..slash_pos].to_string();
-                    components.insert(dir_name, true);
-                } else {
-                    components.entry(rest).or_insert(false);
-                }
-            }
-        }
-
-        if !path.is_empty() && components.is_empty() {
-            if all_files.contains(&PathBuf::from(path)) {
+            if !entry.mode().is_tree() {
                 return Err(GitFileOpsError::NotADirectory(path.to_string()));
-            } else {
-                return Err(GitFileOpsError::DirectoryNotFound(path.to_string()));
             }
+
+            entry
+                .object()
+                .map_err(GitFileOpsError::ObjectError)?
+                .try_into_tree()
+                .map_err(GitFileOpsError::ObjectToTreeError)?
+        };
+
+        // Iterate only immediate children of the target tree
+        let mut result: Vec<(String, bool)> = Vec::new();
+        for entry in target_tree.iter() {
+            let entry = entry.map_err(|e| GitFileOpsError::TreeError(e.into()))?;
+            let name = entry.filename().to_string();
+            let is_dir = entry.mode().is_tree();
+            result.push((name, is_dir));
         }
 
-        let mut result: Vec<(String, bool)> = components.into_iter().collect();
         result.sort_by(
             |(name_a, is_dir_a), (name_b, is_dir_b)| match (is_dir_a, is_dir_b) {
                 (true, false) => std::cmp::Ordering::Less,
