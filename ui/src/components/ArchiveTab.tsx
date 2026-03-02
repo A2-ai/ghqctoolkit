@@ -946,7 +946,7 @@ function ArchiveMilestoneCombobox({
       }
     }
     return map
-  }, [filtered, milestoneFileSets, includeNonApproved, selectedFileUnion, selectedMilestones, data])
+  }, [filtered, milestoneFileSets, includeNonApproved, selectedFileUnion, selectedMilestones, data, flatten])
 
   function add(number: number) {
     onSelectedMilestonesChange([...selectedMilestones, number])
