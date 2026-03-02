@@ -36,9 +36,11 @@ pub async fn generate_archive<G: GitProvider + 'static>(
     };
 
     // Ensure the resolved output path stays within the repo root
-    let repo_root = state.git_info().path().canonicalize().map_err(|e| {
-        ApiError::Internal(format!("Failed to canonicalize repo root: {e}"))
-    })?;
+    let repo_root = state
+        .git_info()
+        .path()
+        .canonicalize()
+        .map_err(|e| ApiError::Internal(format!("Failed to canonicalize repo root: {e}")))?;
     // Canonicalize parent dir (the file itself doesn't exist yet)
     let parent = output_path.parent().unwrap_or(&output_path);
     let canonical_parent = parent.canonicalize().map_err(|_| {
@@ -52,9 +54,7 @@ pub async fn generate_archive<G: GitProvider + 'static>(
             "output_path must resolve within the repository".to_string(),
         ));
     }
-    let output_path = canonical_parent.join(
-        output_path.file_name().unwrap_or_default(),
-    );
+    let output_path = canonical_parent.join(output_path.file_name().unwrap_or_default());
 
     let flatten = request.flatten;
     let archive_files = build_archive_files(request.files, flatten)?;
