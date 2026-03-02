@@ -57,7 +57,7 @@ pub async fn get_commits<G: GitProvider + 'static>(
     let page_size = params
         .page_size
         .unwrap_or(DEFAULT_PAGE_SIZE)
-        .min(MAX_PAGE_SIZE);
+        .clamp(1, MAX_PAGE_SIZE);
 
     // Use the shared commit cache (same pattern as fetch_helpers.rs)
     let all_commits = {

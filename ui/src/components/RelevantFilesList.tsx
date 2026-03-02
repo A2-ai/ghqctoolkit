@@ -1,11 +1,7 @@
 import { ActionIcon, Text, Tooltip } from '@mantine/core'
 import { IconCopyPlus, IconSquarePlus } from '@tabler/icons-react'
 import type { RelevantFileInfo } from '~/api/issues'
-
-function extractIssueNumber(url: string): number | null {
-  const match = url.match(/\/issues\/(\d+)(?:[^/]*)$/)
-  return match ? parseInt(match[1], 10) : null
-}
+import { extractIssueNumber } from '~/utils'
 
 interface RelevantFilesListProps {
   relevantFiles: RelevantFileInfo[]

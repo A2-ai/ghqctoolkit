@@ -37,15 +37,12 @@ import { OpenPill } from './MilestoneFilter'
 import { ResizableSidebar } from './ResizableSidebar'
 import { type FileResolution, FileResolveModal } from './FileResolveModal'
 import { RelevantFilesList } from './RelevantFilesList'
+import { extractIssueNumber } from '~/utils'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const CARD_HEIGHT = 185
 
-function extractIssueNumber(url: string): number | null {
-  const match = url.match(/\/issues\/(\d+)(?:[^/]*)$/)
-  return match ? parseInt(match[1], 10) : null
-}
 
 function isApprovedStatus(s: IssueStatusResponse): boolean {
   return s.qc_status.status === 'approved' || s.qc_status.status === 'changes_after_approval'
@@ -147,11 +144,11 @@ export function ArchiveTab() {
   }, [milestonesData])
 
   // Whether a status is visible given per-milestone includeNonApproved settings
-  function isStatusVisible(s: IssueStatusResponse): boolean {
+  const isStatusVisible = useCallback((s: IssueStatusResponse): boolean => {
     if (isApprovedStatus(s)) return true
     const msNum = s.issue.milestone ? milestoneTitleToNumber.get(s.issue.milestone) : undefined
     return msNum !== undefined && !!includeNonApproved[msNum]
-  }
+  }, [milestoneTitleToNumber, includeNonApproved])
 
   const unapprovedByMilestone = useMemo(() => {
     const result: Record<number, number> = {}
@@ -220,7 +217,7 @@ export function ArchiveTab() {
       const title = (milestonesData ?? []).find((m) => m.number === n)?.title
       return title !== undefined && visibleTitles.has(title)
     })
-  }, [selectedMilestones, statuses, milestonesData, includeNonApproved])
+  }, [selectedMilestones, statuses, milestonesData, isStatusVisible])
 
   function buildOutputPathName(milestoneNumbers: number[]) {
     if (!repoData || milestoneNumbers.length === 0) return ''
@@ -263,11 +260,11 @@ export function ArchiveTab() {
       }
     }
     return map
-  }, [addedFiles, statuses, includeNonApproved])
+  }, [addedFiles, statuses, isStatusVisible])
 
-  // Check for unresolved added files (bare files with empty commit)
+  // Check for unresolved added files (bare files with empty commit and no backing issue)
   const unresolvedAddedFileCount = useMemo(
-    () => Array.from(addedFiles.values()).filter(r => r.commit === '').length,
+    () => Array.from(addedFiles.values()).filter(r => r.commit === '' && r.source_issue_number == null).length,
     [addedFiles],
   )
   const conflictCount = useMemo(
@@ -377,7 +374,7 @@ export function ArchiveTab() {
     statuses.filter(st => isStatusVisible(st)).forEach(st => s.add(st.issue.title))
     addedFiles.forEach((_, fn) => s.add(fn))
     return s
-  }, [statuses, includeNonApproved, addedFiles])
+  }, [statuses, isStatusVisible, addedFiles])
 
   // ─── Flatten collision detection ─────────────────────────────────────
 
@@ -388,7 +385,7 @@ export function ArchiveTab() {
       if (!addedFileConflicts.get(fn)?.dedup) files.push(fn)
     }
     return files
-  }, [statuses, includeNonApproved, addedFiles, addedFileConflicts])
+  }, [statuses, isStatusVisible, addedFiles, addedFileConflicts])
 
   const basenameCollisions = useMemo(() => {
     const seen = new Map<string, string>()

@@ -376,7 +376,10 @@ function CommitIssueStep({
                     )}
                     <Button
                       size="xs"
-                      onClick={() => onResolve(visibleCommits[commitIdx]?.hash ?? '')}
+                      onClick={() => {
+                        const hash = visibleCommits[commitIdx]?.hash
+                        if (hash) onResolve(hash)
+                      }}
                       disabled={!visibleCommits[commitIdx]}
                     >
                       Use commit {visibleCommits[commitIdx]?.hash.slice(0, 7)}

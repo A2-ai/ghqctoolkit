@@ -2,7 +2,7 @@
 
 use axum::{Json, extract::State};
 use gix::ObjectId;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use crate::{
     GitProvider,
@@ -34,6 +34,27 @@ pub async fn generate_archive<G: GitProvider + 'static>(
     } else {
         state.git_info().path().join(&raw)
     };
+
+    // Ensure the resolved output path stays within the repo root
+    let repo_root = state.git_info().path().canonicalize().map_err(|e| {
+        ApiError::Internal(format!("Failed to canonicalize repo root: {e}"))
+    })?;
+    // Canonicalize parent dir (the file itself doesn't exist yet)
+    let parent = output_path.parent().unwrap_or(&output_path);
+    let canonical_parent = parent.canonicalize().map_err(|_| {
+        ApiError::BadRequest(format!(
+            "Output directory does not exist: {}",
+            parent.display()
+        ))
+    })?;
+    if !canonical_parent.starts_with(&repo_root) {
+        return Err(ApiError::BadRequest(
+            "output_path must resolve within the repository".to_string(),
+        ));
+    }
+    let output_path = canonical_parent.join(
+        output_path.file_name().unwrap_or_default(),
+    );
 
     let flatten = request.flatten;
     let archive_files = build_archive_files(request.files, flatten)?;
@@ -77,19 +98,33 @@ fn build_archive_files(
                     ))
                 })?
         } else {
-            file_req
+            // Strip all root/prefix components (e.g. leading / or ..)
+            let stripped: PathBuf = file_req
                 .repository_file
-                .strip_prefix("/")
-                .unwrap_or(&file_req.repository_file)
-                .to_path_buf()
+                .components()
+                .filter(|c| matches!(c, Component::Normal(_)))
+                .collect();
+            if stripped.as_os_str().is_empty() {
+                return Err(ApiError::BadRequest(format!(
+                    "File path resolves to empty after normalization: {}",
+                    file_req.repository_file.display()
+                )));
+            }
+            stripped
         };
 
-        let qc = match (file_req.milestone, file_req.approved) {
+        let qc = match (&file_req.milestone, &file_req.approved) {
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(ApiError::BadRequest(format!(
+                    "milestone and approved must both be provided or both omitted for file: {}",
+                    file_req.repository_file.display()
+                )));
+            }
             (Some(milestone), Some(approved)) => Some(ArchiveQC {
-                milestone,
-                approved,
+                milestone: milestone.clone(),
+                approved: *approved,
             }),
-            _ => None,
+            (None, None) => None,
         };
 
         archive_files.push(ArchiveFile {
