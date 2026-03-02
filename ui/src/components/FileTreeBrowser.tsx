@@ -15,6 +15,7 @@ interface Props {
   selectedFile: string | null
   onSelect: (file: string | null) => void
   claimedFiles?: Set<string>
+  isFileClaimed?: (fileId: string) => boolean
   fileAnnotations?: Map<string, string[]>
   /** When provided, file nodes whose name fails this test are hidden. Directories always show. */
   filterFile?: (name: string) => boolean
@@ -47,13 +48,13 @@ function findNode(nodes: FileNode[], targetId: string): FileNode | null {
   return null
 }
 
-export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set(), fileAnnotations, filterFile }: Props) {
+export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set(), isFileClaimed, fileAnnotations, filterFile }: Props) {
   const [data, setData] = useState<FileNode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   function NodeRenderer({ node, style, dragHandle }: NodeRendererProps<FileNode>) {
-    const claimed = !node.isInternal && claimedFiles.has(node.id)
+    const claimed = !node.isInternal && (isFileClaimed ? isFileClaimed(node.id) : claimedFiles.has(node.id))
     const annotations = !node.isInternal ? (fileAnnotations?.get(node.id) ?? []) : []
     return (
       <div

@@ -55,6 +55,8 @@ interface FileResolveModalProps {
   referencingStatuses?: IssueStatusResponse[]
   /** Add-file mode only: files already rendered — greyed out in the picker. */
   claimedFiles?: Set<string>
+  /** Flatten-aware claim check — when provided, overrides claimedFiles.has(). */
+  isFileClaimed?: (fileName: string) => boolean
   /** Controls the title when fileName is pre-supplied. Defaults to 'resolve'. */
   editMode?: 'resolve' | 'edit'
   onResolve: (resolution: FileResolution) => void
@@ -66,6 +68,7 @@ export function FileResolveModal({
   fileName: fileNameProp,
   referencingStatuses = [],
   claimedFiles = new Set(),
+  isFileClaimed,
   editMode = 'resolve',
   onResolve,
 }: FileResolveModalProps) {
@@ -111,6 +114,7 @@ export function FileResolveModal({
               selectedFile={pickedFile}
               onSelect={setPickedFile}
               claimedFiles={claimedFiles}
+              isFileClaimed={isFileClaimed}
             />
           </div>
           <Button size="xs" disabled={!pickedFile} onClick={() => setStep(2)}>

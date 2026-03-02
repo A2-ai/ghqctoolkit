@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -51,6 +51,10 @@ function isApprovedStatus(s: IssueStatusResponse): boolean {
   return s.qc_status.status === 'approved' || s.qc_status.status === 'changes_after_approval'
 }
 
+function basename(path: string): string {
+  return path.split('/').pop() ?? path
+}
+
 // ─── ArchiveTab ───────────────────────────────────────────────────────────────
 
 export function ArchiveTab() {
@@ -58,6 +62,7 @@ export function ArchiveTab() {
   const [showOpenMilestones, setShowOpenMilestones] = useState(false)
   const [includeNonApproved, setIncludeNonApproved] = useState<Record<number, boolean>>({})
   const [outputPath, setOutputPath] = useState('')
+  const [flatten, setFlatten] = useState(false)
   const [generateLoading, setGenerateLoading] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [generateSuccess, setGenerateSuccess] = useState<string | null>(null)
@@ -167,24 +172,28 @@ export function ArchiveTab() {
       const candidateApproved = milestoneFileSets.get(candidate)?.approvedOnly ?? new Set<string>()
       // Files that are non-approved-only in this milestone
       const nonApprovedFiles = [...candidateAll].filter(f => !candidateApproved.has(f))
-      // Check if any of those conflict with other selected milestones' file sets
+      // Build set of files from other milestones (using basenames when flatten is ON)
+      const otherFiles = new Set<string>()
+      for (const other of selectedMilestones) {
+        if (other === candidate) continue
+        const otherSet = includeNonApproved[other]
+          ? milestoneFileSets.get(other)?.all
+          : milestoneFileSets.get(other)?.approvedOnly
+        if (otherSet) {
+          for (const f of otherSet) otherFiles.add(flatten ? basename(f) : f)
+        }
+      }
+      // Check if any non-approved files conflict (using basenames when flatten is ON)
       const conflicts: string[] = []
       for (const f of nonApprovedFiles) {
-        for (const other of selectedMilestones) {
-          if (other === candidate) continue
-          const otherSet = includeNonApproved[other]
-            ? milestoneFileSets.get(other)?.all
-            : milestoneFileSets.get(other)?.approvedOnly
-          if (otherSet?.has(f)) {
-            conflicts.push(f)
-            break
-          }
+        if (otherFiles.has(flatten ? basename(f) : f)) {
+          conflicts.push(f)
         }
       }
       if (conflicts.length > 0) result[candidate] = conflicts
     }
     return result
-  }, [selectedMilestones, milestoneFileSets, includeNonApproved])
+  }, [selectedMilestones, milestoneFileSets, includeNonApproved, flatten])
 
   // Force off any milestone's includeNonApproved that now conflicts
   useEffect(() => {
@@ -342,7 +351,7 @@ export function ArchiveTab() {
         })
 
       const files = [...milestoneIssueFiles, ...addedFilesRequests]
-      const result = await generateArchive({ output_path: outputPath, flatten: false, files })
+      const result = await generateArchive({ output_path: outputPath, flatten, files })
       setGenerateSuccess(result.output_path)
     } catch (err) {
       setGenerateError((err as Error).message)
@@ -369,6 +378,51 @@ export function ArchiveTab() {
     addedFiles.forEach((_, fn) => s.add(fn))
     return s
   }, [statuses, includeNonApproved, addedFiles])
+
+  // ─── Flatten collision detection ─────────────────────────────────────
+
+  const allArchiveFiles = useMemo(() => {
+    const files: string[] = []
+    statuses.filter(s => isStatusVisible(s)).forEach(s => files.push(s.issue.title))
+    for (const [fn] of addedFiles) {
+      if (!addedFileConflicts.get(fn)?.dedup) files.push(fn)
+    }
+    return files
+  }, [statuses, includeNonApproved, addedFiles, addedFileConflicts])
+
+  const basenameCollisions = useMemo(() => {
+    const seen = new Map<string, string>()
+    const collisions: string[] = []
+    for (const f of allArchiveFiles) {
+      const base = basename(f)
+      const existing = seen.get(base)
+      if (existing !== undefined && existing !== f) {
+        if (!collisions.includes(base)) collisions.push(base)
+      } else {
+        seen.set(base, f)
+      }
+    }
+    return collisions
+  }, [allArchiveFiles])
+
+  const canFlatten = basenameCollisions.length === 0
+
+  useEffect(() => {
+    if (!canFlatten && flatten) setFlatten(false)
+  }, [canFlatten, flatten])
+
+  const claimedBasenames = useMemo(() => {
+    if (!flatten) return new Set<string>()
+    const s = new Set<string>()
+    for (const f of claimedFiles) s.add(basename(f))
+    return s
+  }, [flatten, claimedFiles])
+
+  const isFileClaimed = useCallback((fileName: string) => {
+    if (claimedFiles.has(fileName)) return true
+    if (flatten && claimedBasenames.has(basename(fileName))) return true
+    return false
+  }, [claimedFiles, flatten, claimedBasenames])
 
   // Referencing statuses for the file being edited (relevant for bare files; empty for added files)
   const referencingStatusesForFile = useMemo(() => {
@@ -423,6 +477,21 @@ export function ArchiveTab() {
                   <Text size="xs">Archive written to {generateSuccess}</Text>
                 </Alert>
               )}
+              <Tooltip
+                label={`Basename conflicts: ${basenameCollisions.join(', ')}`}
+                disabled={canFlatten}
+                withArrow
+                multiline
+                maw={300}
+              >
+                <Switch
+                  label="Flatten directory structure"
+                  size="xs"
+                  checked={flatten}
+                  disabled={!canFlatten}
+                  onChange={(e) => setFlatten(e.currentTarget.checked)}
+                />
+              </Tooltip>
               <Button
                 fullWidth
                 size="sm"
@@ -459,6 +528,7 @@ export function ArchiveTab() {
                   includeNonApproved={includeNonApproved}
                   onIncludeNonApprovedChange={(n, v) => setIncludeNonApproved(prev => ({ ...prev, [n]: v }))}
                   nonApprovedOverlapByMilestone={nonApprovedOverlapByMilestone}
+                  flatten={flatten}
                 />
               </Stack>
             </div>
@@ -601,6 +671,7 @@ export function ArchiveTab() {
                     <RelevantFilesList
                       relevantFiles={issueStatus.issue.relevant_files ?? []}
                       claimedFiles={claimedFiles}
+                      isFileClaimed={isFileClaimed}
                       onSelectFile={handleSelectRelevantFile}
                       onSelectAll={handleSelectAllRelevant}
                     />
@@ -697,6 +768,7 @@ export function ArchiveTab() {
                   <RelevantFilesList
                     relevantFiles={s.issue.relevant_files ?? []}
                     claimedFiles={claimedFiles}
+                    isFileClaimed={isFileClaimed}
                     onSelectFile={handleSelectRelevantFile}
                     onSelectAll={handleSelectAllRelevant}
                   />
@@ -722,6 +794,7 @@ export function ArchiveTab() {
         opened={addFileModalOpen}
         onClose={() => setAddFileModalOpen(false)}
         claimedFiles={claimedFiles}
+        isFileClaimed={isFileClaimed}
         onResolve={(resolution) => {
           setAddedFiles(prev => {
             const next = new Map(prev)
@@ -805,6 +878,7 @@ interface ArchiveMilestoneComboboxProps {
   includeNonApproved: Record<number, boolean>
   onIncludeNonApprovedChange: (milestoneNumber: number, value: boolean) => void
   nonApprovedOverlapByMilestone: Record<number, string[]>
+  flatten: boolean
 }
 
 function ArchiveMilestoneCombobox({
@@ -817,6 +891,7 @@ function ArchiveMilestoneCombobox({
   includeNonApproved,
   onIncludeNonApprovedChange,
   nonApprovedOverlapByMilestone,
+  flatten,
 }: ArchiveMilestoneComboboxProps) {
   const { data, isLoading, isError } = useMilestones()
   const [search, setSearch] = useState('')
@@ -837,10 +912,10 @@ function ArchiveMilestoneCombobox({
       const fileSet = milestoneFileSets.get(n)
       if (!fileSet) continue
       const set = includeNonApproved[n] ? fileSet.all : fileSet.approvedOnly
-      for (const f of set) union.add(f)
+      for (const f of set) union.add(flatten ? basename(f) : f)
     }
     return union
-  }, [selectedMilestones, milestoneFileSets, includeNonApproved])
+  }, [selectedMilestones, milestoneFileSets, includeNonApproved, flatten])
 
   // For each candidate milestone, compute conflicts with the selected set
   const milestoneConflicts = useMemo(() => {
@@ -852,7 +927,7 @@ function ArchiveMilestoneCombobox({
       const candidateSet = candidateFiles.approvedOnly
       const conflicts: string[] = []
       for (const f of candidateSet) {
-        if (selectedFileUnion.has(f)) conflicts.push(f)
+        if (selectedFileUnion.has(flatten ? basename(f) : f)) conflicts.push(f)
       }
       if (conflicts.length > 0) {
         const owningMilestones = new Set<string>()

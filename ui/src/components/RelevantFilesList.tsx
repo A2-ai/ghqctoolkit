@@ -10,6 +10,7 @@ function extractIssueNumber(url: string): number | null {
 interface RelevantFilesListProps {
   relevantFiles: RelevantFileInfo[]
   claimedFiles: Set<string>
+  isFileClaimed?: (fileName: string) => boolean
   onSelectFile: (rf: RelevantFileInfo) => void
   onSelectAll: (files: RelevantFileInfo[]) => void
 }
@@ -17,12 +18,14 @@ interface RelevantFilesListProps {
 export function RelevantFilesList({
   relevantFiles,
   claimedFiles,
+  isFileClaimed,
   onSelectFile,
   onSelectAll,
 }: RelevantFilesListProps) {
   if (relevantFiles.length === 0) return null
 
-  const unclaimed = relevantFiles.filter(rf => !claimedFiles.has(rf.file_name))
+  const checkClaimed = isFileClaimed ?? ((fn: string) => claimedFiles.has(fn))
+  const unclaimed = relevantFiles.filter(rf => !checkClaimed(rf.file_name))
 
   return (
     <div style={{ marginTop: 4 }}>
@@ -52,7 +55,7 @@ export function RelevantFilesList({
         )}
       </div>
       {relevantFiles.map(rf => {
-        const isClaimed = claimedFiles.has(rf.file_name)
+        const isClaimed = checkClaimed(rf.file_name)
         const isQc = rf.kind === 'blocking_qc' || rf.kind === 'relevant_qc'
         const issueNumber = rf.issue_url ? extractIssueNumber(rf.issue_url) : null
         return (
