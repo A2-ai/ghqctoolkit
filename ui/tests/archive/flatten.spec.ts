@@ -123,7 +123,18 @@ const archiveLibTree: FileTreeResponse = {
 
 async function goToArchive(page: import('playwright/test').Page) {
   await page.goto('/')
-  await page.getByRole('button', { name: 'Archive' }).click()
+  const archiveTabButton = page.getByRole('button', { name: 'Archive', exact: true })
+  const moreButton = page.getByRole('button', { name: 'More', exact: true })
+
+  await expect(archiveTabButton.or(moreButton).first()).toBeVisible({ timeout: 10_000 })
+
+  if (await archiveTabButton.isVisible()) {
+    await archiveTabButton.click()
+    return
+  }
+
+  await moreButton.click()
+  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
 }
 
 function main(page: import('playwright/test').Page) {

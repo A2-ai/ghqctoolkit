@@ -103,6 +103,10 @@ async function selectMilestone(page: import('playwright/test').Page, title: stri
   await page.getByRole('option', { name: new RegExp(title) }).click()
 }
 
+async function toggleIncludeOpenMilestones(page: import('playwright/test').Page) {
+  await main(page).getByRole('switch', { name: /Include open milestones/i }).click()
+}
+
 /** Wait for the milestone card's issue-loading text to disappear */
 async function waitForCardLoaded(page: import('playwright/test').Page) {
   await expect(page.getByText(/issues? loading/)).not.toBeVisible({ timeout: 10_000 })
@@ -136,7 +140,7 @@ test('open milestone visible after toggling show open milestones', async ({ page
   await setup(page, { milestones: [closedMilestone, openMilestone] })
   await goToRecord(page)
 
-  await main(page).getByLabel('Show open milestones').click()
+  await toggleIncludeOpenMilestones(page)
   await main(page).getByPlaceholder('Search milestones…').click()
   await expect(page.getByRole('option', { name: /Sprint 1/ })).toBeVisible()
 })
@@ -196,7 +200,7 @@ test('open milestone shows unlock icon in card', async ({ page }) => {
   })
   await goToRecord(page)
 
-  await main(page).getByLabel('Show open milestones').click()
+  await toggleIncludeOpenMilestones(page)
   await selectMilestone(page, 'Sprint 1')
   await waitForCardLoaded(page)
 
@@ -256,7 +260,7 @@ test('output path excludes errored milestones', async ({ page }) => {
 
   // Select Sprint 0 (errors), then Sprint 1 (ok — needs open toggle)
   await selectMilestone(page, 'Sprint 0')
-  await main(page).getByLabel('Show open milestones').click()
+  await toggleIncludeOpenMilestones(page)
   await selectMilestone(page, 'Sprint 1')
   await waitForCardLoaded(page)
 
@@ -367,7 +371,7 @@ test('preview does not re-fire when only errored milestone changes', async ({ pa
   expect(previewCallCount).toBe(1)
 
   // Select Sprint 1 (errors → excluded); included set is still just Sprint 0 → no re-fire
-  await main(page).getByLabel('Show open milestones').click()
+  await toggleIncludeOpenMilestones(page)
   await selectMilestone(page, 'Sprint 1')
   await waitForCardLoaded(page)
 
