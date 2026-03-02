@@ -70,7 +70,7 @@ function isApprovedStatus(s: IssueStatusResponse): boolean {
 export function ArchiveTab() {
   const [selectedMilestones, setSelectedMilestones] = useState<number[]>([])
   const [showOpenMilestones, setShowOpenMilestones] = useState(false)
-  const [includeNonApproved, setIncludeNonApproved] = useState(false)
+  const [includeNonApproved, setIncludeNonApproved] = useState<Record<number, boolean>>({})
   const [includeRelevantFiles, setIncludeRelevantFiles] = useState(false)
   const [outputPath, setOutputPath] = useState('')
   const [generateLoading, setGenerateLoading] = useState(false)
@@ -197,6 +197,20 @@ export function ArchiveTab() {
     return !info || info.listFailed || info.statusErrorCount > 0
   }
 
+  // Map milestone title → number for per-milestone visibility checks
+  const milestoneTitleToNumber = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const m of milestonesData ?? []) map.set(m.title, m.number)
+    return map
+  }, [milestonesData])
+
+  // Whether a status is visible given per-milestone includeNonApproved settings
+  function isStatusVisible(s: IssueStatusResponse): boolean {
+    if (isApprovedStatus(s)) return true
+    const msNum = s.issue.milestone ? milestoneTitleToNumber.get(s.issue.milestone) : undefined
+    return msNum !== undefined && !!includeNonApproved[msNum]
+  }
+
   const unapprovedByMilestone = useMemo(() => {
     const result: Record<number, number> = {}
     for (const n of selectedMilestones) {
@@ -207,33 +221,49 @@ export function ArchiveTab() {
     return result
   }, [selectedMilestones, statuses, milestonesData])
 
-  // Detect whether enabling non-approved issues would introduce cross-milestone file conflicts
-  const nonApprovedOverlap = useMemo(() => {
-    if (selectedMilestones.length < 2) return null
-    const fileCount = new Map<string, number>()
-    for (const n of selectedMilestones) {
-      for (const f of milestoneFileSets.get(n)?.all ?? []) {
-        fileCount.set(f, (fileCount.get(f) ?? 0) + 1)
+  // Per-milestone: detect if enabling non-approved for a milestone would conflict with other milestones
+  const nonApprovedOverlapByMilestone = useMemo(() => {
+    const result: Record<number, string[]> = {}
+    if (selectedMilestones.length < 2) return result
+    for (const candidate of selectedMilestones) {
+      const candidateAll = milestoneFileSets.get(candidate)?.all ?? new Set<string>()
+      const candidateApproved = milestoneFileSets.get(candidate)?.approvedOnly ?? new Set<string>()
+      // Files that are non-approved-only in this milestone
+      const nonApprovedFiles = [...candidateAll].filter(f => !candidateApproved.has(f))
+      // Check if any of those conflict with other selected milestones' file sets
+      const conflicts: string[] = []
+      for (const f of nonApprovedFiles) {
+        for (const other of selectedMilestones) {
+          if (other === candidate) continue
+          const otherSet = includeNonApproved[other]
+            ? milestoneFileSets.get(other)?.all
+            : milestoneFileSets.get(other)?.approvedOnly
+          if (otherSet?.has(f)) {
+            conflicts.push(f)
+            break
+          }
+        }
       }
+      if (conflicts.length > 0) result[candidate] = conflicts
     }
-    const approvedCount = new Map<string, number>()
-    for (const n of selectedMilestones) {
-      for (const f of milestoneFileSets.get(n)?.approvedOnly ?? []) {
-        approvedCount.set(f, (approvedCount.get(f) ?? 0) + 1)
-      }
-    }
-    const conflicts = [...fileCount.entries()]
-      .filter(([f, c]) => c >= 2 && (approvedCount.get(f) ?? 0) < 2)
-      .map(([f]) => f)
-    return conflicts.length > 0 ? conflicts : null
-  }, [selectedMilestones, milestoneFileSets])
+    return result
+  }, [selectedMilestones, milestoneFileSets, includeNonApproved])
 
-  // Force includeNonApproved off when it would cause cross-milestone file conflicts
+  // Force off any milestone's includeNonApproved that now conflicts
   useEffect(() => {
-    if (nonApprovedOverlap && includeNonApproved) {
-      setIncludeNonApproved(false)
+    const toDisable: number[] = []
+    for (const [msNum, conflicts] of Object.entries(nonApprovedOverlapByMilestone)) {
+      const n = Number(msNum)
+      if (conflicts.length > 0 && includeNonApproved[n]) toDisable.push(n)
     }
-  }, [nonApprovedOverlap, includeNonApproved])
+    if (toDisable.length > 0) {
+      setIncludeNonApproved(prev => {
+        const next = { ...prev }
+        for (const n of toDisable) next[n] = false
+        return next
+      })
+    }
+  }, [nonApprovedOverlapByMilestone, includeNonApproved])
 
   const erroredKey = selectedMilestones
     .filter(
@@ -247,7 +277,7 @@ export function ArchiveTab() {
   // Milestones that have at least one issue visible in the right panel
   const milestonesWithVisibleIssues = useMemo(() => {
     const visibleTitles = new Set(
-      statuses.filter(s => includeNonApproved || isApprovedStatus(s)).map(s => s.issue.milestone),
+      statuses.filter(s => isStatusVisible(s)).map(s => s.issue.milestone),
     )
     return selectedMilestones.filter((n) => {
       const title = (milestonesData ?? []).find((m) => m.number === n)?.title
@@ -353,7 +383,7 @@ export function ArchiveTab() {
 
     // Only consider issues that are currently visible in the right panel.
     // Relevant files of hidden (unapproved) issues are not surfaced.
-    const visibleStatuses = statuses.filter(s => includeNonApproved || isApprovedStatus(s))
+    const visibleStatuses = statuses.filter(s => isStatusVisible(s))
 
     const archiveIssueNumbers = new Set(visibleStatuses.map(s => s.issue.number))
     const archiveFileNames = new Set(visibleStatuses.map(s => s.issue.title))
@@ -490,7 +520,7 @@ export function ArchiveTab() {
     const map = new Map<string, { reason: string; blocking: boolean; dedup: boolean }>()
     const visibleIssuesByTitle = new Map<string, number>() // file_name → issue number
     statuses
-      .filter(s => includeNonApproved || isApprovedStatus(s))
+      .filter(s => isStatusVisible(s))
       .forEach(s => visibleIssuesByTitle.set(s.issue.title, s.issue.number))
 
     for (const [fn, res] of addedFiles) {
@@ -537,7 +567,7 @@ export function ArchiveTab() {
     setGenerateLoading(true)
     try {
       const milestoneIssueFiles: ArchiveFileRequest[] = statuses
-        .filter(s => includeNonApproved || isApprovedStatus(s))
+        .filter(s => isStatusVisible(s))
         .map(s => ({
           repository_file: s.issue.title,
           commit: s.qc_status.approved_commit ?? s.qc_status.latest_commit,
@@ -582,7 +612,7 @@ export function ArchiveTab() {
   }
 
   const visibleFileCount =
-    statuses.filter(s => includeNonApproved || isApprovedStatus(s)).length +
+    statuses.filter(s => isStatusVisible(s)).length +
     (includeRelevantFiles
       ? relevantFileEntries.filter(e => e.type !== 'conflict').length
       : 0) +
@@ -598,7 +628,7 @@ export function ArchiveTab() {
   // Files already occupying the right panel — unselectable in AddFileModal
   const claimedFiles = useMemo(() => {
     const s = new Set<string>()
-    statuses.filter(st => includeNonApproved || isApprovedStatus(st)).forEach(st => s.add(st.issue.title))
+    statuses.filter(st => isStatusVisible(st)).forEach(st => s.add(st.issue.title))
     relevantFileEntries.filter(e => !dismissedRelevantFiles.has(e.file_name)).forEach(e => s.add(e.file_name))
     addedFiles.forEach((_, fn) => s.add(fn))
     return s
@@ -736,6 +766,8 @@ export function ArchiveTab() {
                     unapprovedByMilestone={unapprovedByMilestone}
                     milestoneFileSets={milestoneFileSets}
                     includeNonApproved={includeNonApproved}
+                    onIncludeNonApprovedChange={(n, v) => setIncludeNonApproved(prev => ({ ...prev, [n]: v }))}
+                    nonApprovedOverlapByMilestone={nonApprovedOverlapByMilestone}
                   />
                 </Stack>
               </div>
@@ -789,21 +821,6 @@ export function ArchiveTab() {
             {!issuesCollapsed && (
               <div style={{ flex: 1, overflowY: 'auto', padding: '0 var(--mantine-spacing-md) var(--mantine-spacing-md)' }}>
                 <Stack gap={6} mt={4}>
-                  <Tooltip
-                    label={nonApprovedOverlap ? `Cross-milestone file conflicts: ${nonApprovedOverlap.join(', ')}` : ''}
-                    disabled={!nonApprovedOverlap}
-                    withArrow
-                    multiline
-                    maw={300}
-                  >
-                    <Switch
-                      label="Include non-approved issues"
-                      size="xs"
-                      checked={includeNonApproved}
-                      disabled={!!nonApprovedOverlap}
-                      onChange={(e) => setIncludeNonApproved(e.currentTarget.checked)}
-                    />
-                  </Tooltip>
                   <Switch
                     label="Include relevant files"
                     size="xs"
@@ -962,7 +979,7 @@ export function ArchiveTab() {
 
             {selectedMilestones.length > 0 && (<>
             {/* ── Milestone issue cards ──────────────────────────────────── */}
-            {statuses.filter(s => includeNonApproved || isApprovedStatus(s)).map((s) => {
+            {statuses.filter(s => isStatusVisible(s)).map((s) => {
               const approved = isApprovedStatus(s)
               const commit = s.qc_status.approved_commit ?? s.qc_status.latest_commit
               const shortCommit = commit.slice(0, 7)
@@ -1322,7 +1339,9 @@ interface ArchiveMilestoneComboboxProps {
   statusByMilestone: Record<number, MilestoneStatusInfo>
   unapprovedByMilestone: Record<number, number>
   milestoneFileSets: Map<number, { all: Set<string>; approvedOnly: Set<string> }>
-  includeNonApproved: boolean
+  includeNonApproved: Record<number, boolean>
+  onIncludeNonApprovedChange: (milestoneNumber: number, value: boolean) => void
+  nonApprovedOverlapByMilestone: Record<number, string[]>
 }
 
 function ArchiveMilestoneCombobox({
@@ -1333,6 +1352,8 @@ function ArchiveMilestoneCombobox({
   unapprovedByMilestone,
   milestoneFileSets,
   includeNonApproved,
+  onIncludeNonApprovedChange,
+  nonApprovedOverlapByMilestone,
 }: ArchiveMilestoneComboboxProps) {
   const { data, isLoading, isError } = useMilestones()
   const [search, setSearch] = useState('')
@@ -1352,7 +1373,7 @@ function ArchiveMilestoneCombobox({
     for (const n of selectedMilestones) {
       const fileSet = milestoneFileSets.get(n)
       if (!fileSet) continue
-      const set = includeNonApproved ? fileSet.all : fileSet.approvedOnly
+      const set = includeNonApproved[n] ? fileSet.all : fileSet.approvedOnly
       for (const f of set) union.add(f)
     }
     return union
@@ -1364,18 +1385,18 @@ function ArchiveMilestoneCombobox({
     for (const m of filtered) {
       const candidateFiles = milestoneFileSets.get(m.number)
       if (!candidateFiles) continue
-      const candidateSet = includeNonApproved ? candidateFiles.all : candidateFiles.approvedOnly
+      // Candidate defaults to approvedOnly since it's not yet selected
+      const candidateSet = candidateFiles.approvedOnly
       const conflicts: string[] = []
       for (const f of candidateSet) {
         if (selectedFileUnion.has(f)) conflicts.push(f)
       }
       if (conflicts.length > 0) {
-        // Find which selected milestones own the conflicting files
         const owningMilestones = new Set<string>()
         for (const n of selectedMilestones) {
           const fileSet = milestoneFileSets.get(n)
           if (!fileSet) continue
-          const set = includeNonApproved ? fileSet.all : fileSet.approvedOnly
+          const set = includeNonApproved[n] ? fileSet.all : fileSet.approvedOnly
           for (const f of conflicts) {
             if (set.has(f)) {
               const title = (data ?? []).find(ms => ms.number === n)?.title ?? String(n)
@@ -1457,6 +1478,9 @@ function ArchiveMilestoneCombobox({
               statusInfo={statusByMilestone[m.number] ?? { listFailed: false, listError: null, loadingCount: 0, statusErrorCount: 0, statusErrors: [], statusAttemptedCount: 0 }}
               unapprovedCount={unapprovedByMilestone[m.number] ?? 0}
               onRemove={() => remove(m.number)}
+              includeNonApproved={!!includeNonApproved[m.number]}
+              onIncludeNonApprovedChange={(v) => onIncludeNonApprovedChange(m.number, v)}
+              nonApprovedOverlap={nonApprovedOverlapByMilestone[m.number] ?? null}
             />
           ))}
         </Stack>
@@ -1472,11 +1496,17 @@ function ArchiveMilestoneCard({
   statusInfo,
   unapprovedCount,
   onRemove,
+  includeNonApproved,
+  onIncludeNonApprovedChange,
+  nonApprovedOverlap,
 }: {
   milestone: import('~/api/milestones').Milestone
   statusInfo: MilestoneStatusInfo
   unapprovedCount: number
   onRemove: () => void
+  includeNonApproved: boolean
+  onIncludeNonApprovedChange: (v: boolean) => void
+  nonApprovedOverlap: string[] | null
 }) {
   const isRed = statusInfo.listFailed || statusInfo.statusErrorCount > 0
   const isYellow = !isRed && unapprovedCount > 0
@@ -1545,6 +1575,22 @@ function ArchiveMilestoneCard({
             {statusInfo.loadingCount} {statusInfo.loadingCount === 1 ? 'issue' : 'issues'} loading…
           </Text>
         )}
+        <Tooltip
+          label={nonApprovedOverlap ? `File conflicts: ${nonApprovedOverlap.join(', ')}` : ''}
+          disabled={!nonApprovedOverlap}
+          withArrow
+          multiline
+          maw={300}
+        >
+          <Switch
+            label="Include non-approved"
+            size="xs"
+            checked={includeNonApproved}
+            disabled={!!nonApprovedOverlap}
+            onChange={(e) => onIncludeNonApprovedChange(e.currentTarget.checked)}
+            styles={{ root: { marginTop: 4 } }}
+          />
+        </Tooltip>
       </div>
       <ActionIcon
         size="xs"

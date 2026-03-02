@@ -182,7 +182,7 @@ export function AppLayout() {
   const { data: repoData, isError: repoIsError, error: repoError } = useRepoInfo()
   const { data: configStatus } = useConfigurationStatus()
   const [selectedMilestones, setSelectedMilestones] = useState<number[]>([])
-  const [includeClosedIssues, setIncludeClosedIssues] = useState(false)
+  const [includeClosedIssues, setIncludeClosedIssues] = useState<Record<number, boolean>>({})
   const [activeTab, setActiveTab] = useState<Tab>('status')
   const [headerWidth, setHeaderWidth] = useState(window.innerWidth)
   const [navWidth, setNavWidth] = useState(320)

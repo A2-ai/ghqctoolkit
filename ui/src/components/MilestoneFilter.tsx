@@ -12,23 +12,18 @@ import {
 import {
   IconAlertCircle,
   IconAlertTriangle,
-  IconChevronDown,
-  IconChevronRight,
   IconExclamationMark,
   IconX,
 } from '@tabler/icons-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useMilestones, type Milestone } from '~/api/milestones'
 import { type MilestoneStatusInfo } from '~/api/issues'
-
-const MIN_ISSUES_HEIGHT = 80
-const COLLAPSED_ISSUES_HEIGHT = 36
 
 interface Props {
   selected: number[]
   onSelect: (numbers: number[]) => void
-  includeClosedIssues: boolean
-  onIncludeClosedIssuesChange: (include: boolean) => void
+  includeClosedIssues: Record<number, boolean>
+  onIncludeClosedIssuesChange: (v: Record<number, boolean>) => void
   milestoneStatusByMilestone: Record<number, MilestoneStatusInfo>
 }
 
@@ -43,66 +38,6 @@ export function MilestoneFilter({
   const [search, setSearch] = useState('')
   const { data, isLoading, isError } = useMilestones()
   const combobox = useCombobox({ onDropdownClose: () => setSearch('') })
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [issuesHeight, setIssuesHeight] = useState(300)
-  const [issuesCollapsed, setIssuesCollapsed] = useState(false)
-  const lastIssuesHeightRef = useRef(300)
-  const isDragging = useRef(false)
-  const dragStartY = useRef(0)
-  const dragStartHeight = useRef(0)
-
-  // Set issues section to 50% of container height on mount
-  useEffect(() => {
-    if (containerRef.current) {
-      const h = containerRef.current.clientHeight
-      if (h > 0) {
-        const half = Math.round(h * 0.5)
-        setIssuesHeight(half)
-        lastIssuesHeightRef.current = half
-      }
-    }
-  }, [])
-
-  // Vertical drag-to-resize
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!isDragging.current) return
-      const delta = dragStartY.current - e.clientY
-      const maxH = (containerRef.current?.clientHeight ?? 600) - MIN_ISSUES_HEIGHT
-      setIssuesHeight(Math.max(MIN_ISSUES_HEIGHT, Math.min(maxH, dragStartHeight.current + delta)))
-    }
-    const onUp = () => {
-      if (!isDragging.current) return
-      isDragging.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-    return () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-  }, [])
-
-  const onDragHandleMouseDown = (e: React.MouseEvent) => {
-    isDragging.current = true
-    dragStartY.current = e.clientY
-    dragStartHeight.current = issuesHeight
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-    e.preventDefault()
-  }
-
-  function toggleIssuesCollapse() {
-    if (issuesCollapsed) {
-      setIssuesHeight(lastIssuesHeightRef.current)
-    } else {
-      lastIssuesHeightRef.current = issuesHeight
-    }
-    setIssuesCollapsed((c) => !c)
-  }
 
   const available = (data ?? []).filter(
     (m) => (includeClosedMilestones || m.state === 'open') && !selected.includes(m.number),
@@ -143,12 +78,8 @@ export function MilestoneFilter({
     statusAttemptedCount: 0,
   }
 
-  const displayIssuesHeight = issuesCollapsed ? COLLAPSED_ISSUES_HEIGHT : issuesHeight
-
   return (
-    <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-
-      {/* ── Milestones section ────────────────────────────────────────────── */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 'var(--mantine-spacing-md)' }}>
         <Stack gap="sm">
           <Text fw={600} size="sm">Milestones</Text>
@@ -197,68 +128,13 @@ export function MilestoneFilter({
                 milestone={m}
                 onRemove={() => remove(m.number)}
                 statusInfo={milestoneStatusByMilestone[m.number] ?? defaultStatusInfo}
+                includeClosedIssues={!!includeClosedIssues[m.number]}
+                onIncludeClosedIssuesChange={(v) => onIncludeClosedIssuesChange({ ...includeClosedIssues, [m.number]: v })}
               />
             ))}
           </Stack>
         </Stack>
       </div>
-
-      {/* ── Issues section ────────────────────────────────────────────────── */}
-      <div style={{ height: displayIssuesHeight, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
-
-        {/* Drag handle — doubles as the section border */}
-        {!issuesCollapsed && (
-          <div
-            onMouseDown={onDragHandleMouseDown}
-            style={{
-              height: 6,
-              flexShrink: 0,
-              cursor: 'row-resize',
-              borderTop: '1px solid var(--mantine-color-gray-3)',
-            }}
-          />
-        )}
-
-        {/* Header row */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: '0 var(--mantine-spacing-md)',
-          height: COLLAPSED_ISSUES_HEIGHT,
-          flexShrink: 0,
-          borderTop: issuesCollapsed ? '1px solid var(--mantine-color-gray-3)' : undefined,
-          cursor: 'pointer',
-        }}
-        onClick={toggleIssuesCollapse}
-        title={issuesCollapsed ? 'Expand' : 'Collapse'}
-        >
-          <ActionIcon
-            size="xs"
-            variant="subtle"
-            tabIndex={-1}
-            style={{ pointerEvents: 'none' }}
-          >
-            {issuesCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
-          </ActionIcon>
-          <Text fw={600} size="sm">Issues</Text>
-        </div>
-
-        {/* Scrollable content */}
-        {!issuesCollapsed && (
-          <div style={{ flex: 1, overflowY: 'auto', padding: '0 var(--mantine-spacing-md) var(--mantine-spacing-md)' }}>
-            <Stack gap="sm">
-              <Switch
-                label="Include Closed Issues"
-                size="xs"
-                checked={includeClosedIssues}
-                onChange={(e) => onIncludeClosedIssuesChange(e.currentTarget.checked)}
-              />
-            </Stack>
-          </div>
-        )}
-      </div>
-
     </div>
   )
 }
@@ -301,10 +177,14 @@ function SelectedMilestoneCard({
   milestone,
   onRemove,
   statusInfo,
+  includeClosedIssues,
+  onIncludeClosedIssuesChange,
 }: {
   milestone: Milestone
   onRemove: () => void
   statusInfo: MilestoneStatusInfo
+  includeClosedIssues: boolean
+  onIncludeClosedIssuesChange: (v: boolean) => void
 }) {
   const isAllFailed =
     !statusInfo.listFailed &&
@@ -383,6 +263,13 @@ function SelectedMilestoneCard({
             </Text>
           </>
         )}
+        <Switch
+          label="Include closed issues"
+          size="xs"
+          checked={includeClosedIssues}
+          onChange={(e) => onIncludeClosedIssuesChange(e.currentTarget.checked)}
+          styles={{ root: { marginTop: 4 } }}
+        />
       </div>
       <ActionIcon
         size="xs"

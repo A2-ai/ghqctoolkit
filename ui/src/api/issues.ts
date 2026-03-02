@@ -270,7 +270,12 @@ export const issueStatusBatcher = (() => {
   }
 })()
 
-export function useMilestoneIssues(milestoneNumbers: number[], includeClosedIssues: boolean) {
+export function useMilestoneIssues(milestoneNumbers: number[], includeClosedIssues: boolean | Record<number, boolean>) {
+  // Normalize to per-milestone lookup
+  const closedByMilestone = typeof includeClosedIssues === 'boolean'
+    ? Object.fromEntries(milestoneNumbers.map(n => [n, includeClosedIssues]))
+    : includeClosedIssues
+
   // Step 1: fetch issue lists per milestone (each independently cached)
   const milestoneQueries = useQueries({
     queries: milestoneNumbers.map((n) => ({
@@ -283,9 +288,9 @@ export function useMilestoneIssues(milestoneNumbers: number[], includeClosedIssu
   // The batcher coalesces all queryFn calls from one render into a single HTTP
   // request. React Query's cache prevents re-fetching already-seen issues.
   const allNeededNums = milestoneQueries
-    .flatMap((q) =>
+    .flatMap((q, idx) =>
       (q.data ?? [])
-        .filter((i) => i.state === 'open' || includeClosedIssues)
+        .filter((i) => i.state === 'open' || closedByMilestone[milestoneNumbers[idx]])
         .map((i) => i.number),
     )
     .filter((n, i, arr) => arr.indexOf(n) === i) // deduplicate
@@ -301,7 +306,9 @@ export function useMilestoneIssues(milestoneNumbers: number[], includeClosedIssu
 
   const allIssues = milestoneQueries.flatMap((q) => q.data ?? [])
   const deduped = [...new Map(allIssues.map((i) => [i.number, i])).values()]
-  const issues = includeClosedIssues ? deduped : deduped.filter((i) => i.state === 'open')
+  // Keep an issue if ANY of its milestones have closed issues enabled
+  const anyIncludeClosed = Object.values(closedByMilestone).some(Boolean)
+  const issues = anyIncludeClosed ? deduped : deduped.filter((i) => i.state === 'open')
 
   const statuses = statusQueries.flatMap((q) => (q.data?.ok ? [q.data.data] : []))
 
@@ -315,7 +322,7 @@ export function useMilestoneIssues(milestoneNumbers: number[], includeClosedIssu
 
     const relevantNums = new Set(
       milestoneIssues
-        .filter((i) => i.state === 'open' || includeClosedIssues)
+        .filter((i) => i.state === 'open' || closedByMilestone[milestoneNum])
         .map((i) => i.number),
     )
 
