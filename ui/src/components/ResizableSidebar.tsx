@@ -8,6 +8,8 @@ interface Props {
   defaultWidth?: number
   minWidth?: number
   maxWidth?: number
+  /** Remove internal padding and scrolling so the child can manage its own layout */
+  noPadding?: boolean
 }
 
 const COLLAPSED_WIDTH = 28
@@ -17,6 +19,7 @@ export function ResizableSidebar({
   defaultWidth = 260,
   minWidth = 160,
   maxWidth = 520,
+  noPadding = false,
 }: Props) {
   const [width, setWidth] = useState(defaultWidth)
   const [collapsed, setCollapsed] = useState(false)
@@ -78,9 +81,9 @@ export function ResizableSidebar({
       {!collapsed && (
         <div style={{
           flex: 1,
-          overflowY: 'auto',
+          overflowY: noPadding ? 'hidden' : 'auto',
           overflowX: 'hidden',
-          padding: 'var(--mantine-spacing-md)',
+          padding: noPadding ? 0 : 'var(--mantine-spacing-md)',
         }}>
           {children}
         </div>

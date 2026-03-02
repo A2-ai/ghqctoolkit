@@ -178,6 +178,7 @@ export function CreateTab() {
               value={selectedMilestone !== null ? String(selectedMilestone) : null}
               onChange={v => setSelectedMilestone(v !== null ? Number(v) : null)}
               nothingFoundMessage="No open milestones"
+              maxDropdownHeight={360}
               searchable
               clearable
               renderOption={({ option }) => {

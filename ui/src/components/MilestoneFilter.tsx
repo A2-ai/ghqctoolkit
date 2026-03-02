@@ -1,7 +1,6 @@
 import {
   ActionIcon,
   Combobox,
-  Divider,
   InputBase,
   Loader,
   Stack,
@@ -10,7 +9,12 @@ import {
   Tooltip,
   useCombobox,
 } from '@mantine/core'
-import { IconAlertCircle, IconAlertTriangle, IconExclamationMark, IconX } from '@tabler/icons-react'
+import {
+  IconAlertCircle,
+  IconAlertTriangle,
+  IconExclamationMark,
+  IconX,
+} from '@tabler/icons-react'
 import { useState } from 'react'
 import { useMilestones, type Milestone } from '~/api/milestones'
 import { type MilestoneStatusInfo } from '~/api/issues'
@@ -18,25 +22,29 @@ import { type MilestoneStatusInfo } from '~/api/issues'
 interface Props {
   selected: number[]
   onSelect: (numbers: number[]) => void
-  includeClosedIssues: boolean
-  onIncludeClosedIssuesChange: (include: boolean) => void
+  includeClosedIssues: Record<number, boolean>
+  onIncludeClosedIssuesChange: (v: Record<number, boolean>) => void
   milestoneStatusByMilestone: Record<number, MilestoneStatusInfo>
 }
 
-export function MilestoneFilter({ selected, onSelect, includeClosedIssues, onIncludeClosedIssuesChange, milestoneStatusByMilestone }: Props) {
+export function MilestoneFilter({
+  selected,
+  onSelect,
+  includeClosedIssues,
+  onIncludeClosedIssuesChange,
+  milestoneStatusByMilestone,
+}: Props) {
   const [includeClosedMilestones, setIncludeClosedMilestones] = useState(false)
   const [search, setSearch] = useState('')
   const { data, isLoading, isError } = useMilestones()
   const combobox = useCombobox({ onDropdownClose: () => setSearch('') })
 
   const available = (data ?? []).filter(
-    (m) => (includeClosedMilestones || m.state === 'open') && !selected.includes(m.number)
+    (m) => (includeClosedMilestones || m.state === 'open') && !selected.includes(m.number),
   )
-
   const filtered = available.filter((m) =>
-    m.title.toLowerCase().includes(search.toLowerCase())
+    m.title.toLowerCase().includes(search.toLowerCase()),
   )
-
   const selectedMilestones = (data ?? []).filter((m) => selected.includes(m.number))
 
   function add(number: number) {
@@ -71,77 +79,67 @@ export function MilestoneFilter({ selected, onSelect, includeClosedIssues, onInc
   }
 
   return (
-    <Stack gap="sm">
-      <Text fw={600} size="sm">Milestones</Text>
-
-      <Combobox store={combobox} onOptionSubmit={(val) => add(Number(val))}>
-        <Combobox.Target>
-          <InputBase
-            placeholder="Search milestones…"
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 'var(--mantine-spacing-md)' }}>
+        <Stack gap="sm">
+          <Text fw={600} size="sm">Milestones</Text>
+          <Switch
+            label="Include Closed Milestones"
             size="xs"
-            value={search}
-            rightSection={isLoading ? <Loader size={12} /> : <Combobox.Chevron />}
-            onChange={(e) => {
-              setSearch(e.currentTarget.value)
-              combobox.openDropdown()
-            }}
-            onClick={() => combobox.openDropdown()}
-            onFocus={() => combobox.openDropdown()}
+            checked={includeClosedMilestones}
+            onChange={(e) => handleIncludeClosedMilestonesChange(e.currentTarget.checked)}
           />
-        </Combobox.Target>
-
-        <Combobox.Dropdown>
-          <Combobox.Options>
-            {isError && <Combobox.Empty>Failed to load</Combobox.Empty>}
-            {!isLoading && !isError && filtered.length === 0 && (
-              <Combobox.Empty>No milestones found</Combobox.Empty>
-            )}
-            {[...filtered].reverse().map((m) => (
-              <Combobox.Option key={m.number} value={String(m.number)}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Text size="sm">{m.title}</Text>
-                  {m.state === 'closed' && <ClosedPill />}
-                </div>
-                <Text size="xs" c="dimmed">
-                  {m.open_issues} open · {m.closed_issues} closed
-                </Text>
-              </Combobox.Option>
+          <Combobox store={combobox} onOptionSubmit={(val) => add(Number(val))}>
+            <Combobox.Target>
+              <InputBase
+                placeholder="Search milestones…"
+                size="xs"
+                value={search}
+                rightSection={isLoading ? <Loader size={12} /> : <Combobox.Chevron />}
+                onChange={(e) => { setSearch(e.currentTarget.value); combobox.openDropdown() }}
+                onClick={() => combobox.openDropdown()}
+                onFocus={() => combobox.openDropdown()}
+              />
+            </Combobox.Target>
+            <Combobox.Dropdown>
+              <Combobox.Options style={{ maxHeight: 360, overflowY: 'auto' }}>
+                {isError && <Combobox.Empty>Failed to load</Combobox.Empty>}
+                {!isLoading && !isError && filtered.length === 0 && (
+                  <Combobox.Empty>No milestones found</Combobox.Empty>
+                )}
+                {[...filtered].reverse().map((m) => (
+                  <Combobox.Option key={m.number} value={String(m.number)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Text size="sm">{m.title}</Text>
+                      {m.state === 'closed' && <ClosedPill />}
+                    </div>
+                    <Text size="xs" c="dimmed">
+                      {m.open_issues} open · {m.closed_issues} closed
+                    </Text>
+                  </Combobox.Option>
+                ))}
+              </Combobox.Options>
+            </Combobox.Dropdown>
+          </Combobox>
+          <Stack gap={6}>
+            {selectedMilestones.map((m) => (
+              <SelectedMilestoneCard
+                key={m.number}
+                milestone={m}
+                onRemove={() => remove(m.number)}
+                statusInfo={milestoneStatusByMilestone[m.number] ?? defaultStatusInfo}
+                includeClosedIssues={!!includeClosedIssues[m.number]}
+                onIncludeClosedIssuesChange={(v) => onIncludeClosedIssuesChange({ ...includeClosedIssues, [m.number]: v })}
+              />
             ))}
-          </Combobox.Options>
-        </Combobox.Dropdown>
-      </Combobox>
-
-      <Switch
-        label="Include closed milestones"
-        size="xs"
-        checked={includeClosedMilestones}
-        onChange={(e) => handleIncludeClosedMilestonesChange(e.currentTarget.checked)}
-      />
-
-      <Divider />
-
-      <Switch
-        label="Include closed issues"
-        size="xs"
-        checked={includeClosedIssues}
-        onChange={(e) => onIncludeClosedIssuesChange(e.currentTarget.checked)}
-      />
-
-      <Stack gap={6}>
-        {selectedMilestones.map((m) => (
-          <SelectedMilestoneCard
-            key={m.number}
-            milestone={m}
-            onRemove={() => remove(m.number)}
-            statusInfo={milestoneStatusByMilestone[m.number] ?? defaultStatusInfo}
-          />
-        ))}
-      </Stack>
-    </Stack>
+          </Stack>
+        </Stack>
+      </div>
+    </div>
   )
 }
 
-function ClosedPill() {
+export function ClosedPill() {
   return (
     <span style={{
       fontSize: 10,
@@ -158,14 +156,35 @@ function ClosedPill() {
   )
 }
 
+export function OpenPill() {
+  return (
+    <span style={{
+      fontSize: 10,
+      fontWeight: 600,
+      padding: '1px 5px',
+      borderRadius: 4,
+      backgroundColor: '#2f9e44',
+      color: 'white',
+      lineHeight: '16px',
+      flexShrink: 0,
+    }}>
+      open
+    </span>
+  )
+}
+
 function SelectedMilestoneCard({
   milestone,
   onRemove,
   statusInfo,
+  includeClosedIssues,
+  onIncludeClosedIssuesChange,
 }: {
   milestone: Milestone
   onRemove: () => void
   statusInfo: MilestoneStatusInfo
+  includeClosedIssues: boolean
+  onIncludeClosedIssuesChange: (v: boolean) => void
 }) {
   const isAllFailed =
     !statusInfo.listFailed &&
@@ -244,6 +263,13 @@ function SelectedMilestoneCard({
             </Text>
           </>
         )}
+        <Switch
+          label="Include closed issues"
+          size="xs"
+          checked={includeClosedIssues}
+          onChange={(e) => onIncludeClosedIssuesChange(e.currentTarget.checked)}
+          styles={{ root: { marginTop: 4 } }}
+        />
       </div>
       <ActionIcon
         size="xs"

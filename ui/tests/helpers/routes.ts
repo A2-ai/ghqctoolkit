@@ -59,6 +59,10 @@ export interface RouteOverrides {
   recordGenerateSuccess: boolean
   /** Response for POST /api/record/upload; null → 400 */
   recordUploadResponse: { temp_path: string } | null
+  /** Response for POST /api/archive/generate; null → 500 */
+  archiveGenerateResponse: { output_path: string } | null
+  /** Response for GET /api/commits */
+  commitsResponse: { commits: { hash: string; message: string; file_changed: boolean }[]; total: number; page: number; page_size: number }
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -86,6 +90,8 @@ const defaultOverrides: RouteOverrides = {
   recordPreviewResponse: { key: 'preview-test-key' },
   recordGenerateSuccess: true,
   recordUploadResponse: { temp_path: '/tmp/ghqc-uploads/test123.pdf' },
+  archiveGenerateResponse: { output_path: '/mock/repo/test-archive.tar.gz' },
+  commitsResponse: { commits: [{ hash: 'abc1234567890', message: 'Initial commit', file_changed: true }], total: 1, page: 0, page_size: 10 },
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -336,6 +342,30 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(cfg.recordUploadResponse) })
     } else {
       route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'Upload failed' }) })
+    }
+  })
+
+  await page.route(/\/api\/commits/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(cfg.commitsResponse),
+    })
+  })
+
+  await page.route(/\/api\/archive\/generate/, (route) => {
+    if (cfg.archiveGenerateResponse) {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(cfg.archiveGenerateResponse),
+      })
+    } else {
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Archive generation failed' }),
+      })
     }
   })
 
