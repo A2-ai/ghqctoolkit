@@ -85,7 +85,10 @@ fn build_archive_files(
         };
 
         let qc = match (file_req.milestone, file_req.approved) {
-            (Some(milestone), Some(approved)) => Some(ArchiveQC { milestone, approved }),
+            (Some(milestone), Some(approved)) => Some(ArchiveQC {
+                milestone,
+                approved,
+            }),
             _ => None,
         };
 
