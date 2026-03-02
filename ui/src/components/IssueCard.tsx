@@ -68,7 +68,7 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
 
       {/* File link */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
-        <Anchor href={issue.html_url} target="_blank" size="md" fw={700} style={{ lineHeight: 1.3, textAlign: 'center' }}>
+        <Anchor href={issue.html_url} target="_blank" size="md" fw={700} style={{ lineHeight: 1.3, textAlign: 'center', wordBreak: 'break-all' }}>
           {issue.title}
         </Anchor>
       </div>
