@@ -2,6 +2,8 @@ import { Anchor, Stack, Text, Tooltip } from '@mantine/core'
 import { IconAsterisk } from '@tabler/icons-react'
 import type { ReactNode } from 'react'
 import type { IssueStatusResponse } from '~/api/issues'
+import { useChecklistDisplayName } from '~/api/configuration'
+import { capitalize } from '~/utils/displayName'
 
 interface Props {
   status: IssueStatusResponse
@@ -13,6 +15,8 @@ interface Props {
 export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCommit }: Props) {
   const { issue, qc_status, dirty, branch, checklist_summary, blocking_qc_status } = status
   const isWrongBranch = branch !== currentBranch
+  const { singular } = useChecklistDisplayName()
+  const singularCap = capitalize(singular)
 
   // Per-lane commit rows (commits array is newest-first)
   let commitRows: ReactNode = null
@@ -89,7 +93,7 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
       {/* Checklist progress */}
       {checklist_summary.total > 0 && (
         <InlineProgress
-          label="Checklist"
+          label={singularCap}
           value={(checklist_summary.completed / checklist_summary.total) * 100}
           completed={checklist_summary.completed}
           total={checklist_summary.total}

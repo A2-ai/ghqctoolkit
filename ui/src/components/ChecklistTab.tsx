@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Group, Loader, Stack, Text, TextInput, Textarea } from '@mantine/core'
 import { fetchChecklists } from '~/api/checklists'
+import { useChecklistDisplayName } from '~/api/configuration'
+import { capitalize } from '~/utils/displayName'
 
 export interface ChecklistDraft {
   name: string
@@ -23,6 +25,8 @@ interface Props {
 
 export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
   const counter = useRef(0)
+  const { singular } = useChecklistDisplayName()
+  const singularCap = capitalize(singular)
 
   const [tabs, setTabs] = useState<TabEntry[]>([])
   const [activeKey, setActiveKey] = useState<string | null>(null)
@@ -197,7 +201,7 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
       <Stack gap="sm" style={{ flex: 1, minWidth: 0 }}>
         {activeKey === null && (
           <Text size="sm" c="dimmed" mt="xs">
-            Select a checklist from the list, or click + New to create one.
+            Select a {singular} from the list, or click + New to create one.
           </Text>
         )}
         {activeKey !== null && <TextInput
@@ -209,7 +213,7 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
           <>
             <div>
               <Text size="sm" fw={500} mb={4}>
-                Checklist
+                {singularCap}
               </Text>
               <Textarea
                 value={editorContent}

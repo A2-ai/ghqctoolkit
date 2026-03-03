@@ -1,6 +1,8 @@
 import { Stack, Text } from '@mantine/core'
 import { IconFile, IconLink, IconLock } from '@tabler/icons-react'
 import type { RelevantFileDraft } from './CreateIssueModal'
+import { useChecklistDisplayName } from '~/api/configuration'
+import { capitalize } from '~/utils/displayName'
 
 interface Props {
   file: string | null
@@ -28,6 +30,8 @@ export function IssuePreviewCard({
   relevantFiles = [],
 }: Props) {
   const title = file ? `${file}` : null
+  const { singular } = useChecklistDisplayName()
+  const singularCap = capitalize(singular)
 
   return (
     <Stack
@@ -56,7 +60,7 @@ export function IssuePreviewCard({
 
       <PlaceholderRow label="Branch" value={branch} />
       <PlaceholderRow label="Created by" value={createdBy} />
-      <PlaceholderRow label="Checklist" value={checklistName} />
+      <PlaceholderRow label={singularCap} value={checklistName} />
 
       {assignees.length > 0 ? (
         <Text size="xs" c="dimmed">

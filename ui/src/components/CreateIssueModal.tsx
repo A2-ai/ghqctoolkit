@@ -8,6 +8,8 @@ import { ReviewersTab } from './ReviewersTab'
 import type { ChecklistDraft } from './ChecklistTab'
 import { useRepoInfo } from '~/api/repo'
 import { useIssuesForMilestone } from '~/api/issues'
+import { useChecklistDisplayName } from '~/api/configuration'
+import { capitalize } from '~/utils/displayName'
 import type { RelevantFileKind } from '~/api/issues'
 import { toCreateIssueRequest } from '~/api/create'
 import { fetchFileContent, fetchIssuePreview } from '~/api/preview'
@@ -62,6 +64,8 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const [issuePreviewLoading, setIssuePreviewLoading] = useState(false)
   const { data: repoInfo } = useRepoInfo()
   const { data: milestoneIssues = [] } = useIssuesForMilestone(milestoneNumber)
+  const { singular } = useChecklistDisplayName()
+  const singularCap = capitalize(singular)
 
   // Populate state each time the modal opens (fresh create or edit)
   useEffect(() => {
@@ -153,7 +157,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
         <Tabs.List grow>
           <Tabs.Tab value="file">Select a File</Tabs.Tab>
-          <Tabs.Tab value="checklist">Select a Checklist</Tabs.Tab>
+          <Tabs.Tab value="checklist">Select a {singularCap}</Tabs.Tab>
           <Tabs.Tab value="relevant">Select Relevant Files</Tabs.Tab>
           <Tabs.Tab value="reviewers">Select Reviewer(s)</Tabs.Tab>
         </Tabs.List>

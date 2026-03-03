@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { Collapse, Divider, Text, TextInput, Button, Textarea } from '@mantine/core'
 import { IconChevronRight } from '@tabler/icons-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useConfigurationStatus, setupConfiguration } from '~/api/configuration'
+import { useConfigurationStatus, useChecklistDisplayName, setupConfiguration } from '~/api/configuration'
 import type { ConfigurationStatus } from '~/api/configuration'
+import { capitalize } from '~/utils/displayName'
 import type { Checklist } from '~/api/checklists'
 
 function Section({
@@ -203,11 +204,13 @@ function ChecklistsSection({ checklists }: { checklists: Checklist[] }) {
 
 function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus }) {
   const opts = configStatus.options
+  const { singular } = useChecklistDisplayName()
+  const singularCap = capitalize(singular)
 
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: 'Display name', value: <Text size="sm">{opts.checklist_display_name}</Text> },
     {
-      label: 'Checklist directory',
+      label: `${singularCap} directory`,
       value: (
         <Text size="sm" style={{ fontFamily: 'monospace' }}>
           {opts.checklist_directory}
@@ -236,7 +239,7 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
       ),
     },
     ...(opts.prepended_checklist_note !== null
-      ? [{ label: 'Checklist note', value: <Text size="sm">{opts.prepended_checklist_note}</Text> }]
+      ? [{ label: `${singularCap} note`, value: <Text size="sm">{opts.prepended_checklist_note}</Text> }]
       : []),
   ]
 
@@ -256,6 +259,8 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
 
 export function ConfigurationTab() {
   const { data: configStatus, isLoading } = useConfigurationStatus()
+  const { plural } = useChecklistDisplayName()
+  const pluralCap = capitalize(plural)
 
   if (isLoading || !configStatus) {
     return (
@@ -271,7 +276,7 @@ export function ConfigurationTab() {
         <GitRepoSection configStatus={configStatus} />
       </Section>
 
-      <Section title="Checklists">
+      <Section title={pluralCap}>
         <ChecklistsSection checklists={configStatus.checklists} />
       </Section>
 
