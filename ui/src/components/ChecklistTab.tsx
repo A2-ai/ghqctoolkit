@@ -51,11 +51,14 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
           originalName: t.name,
           originalContent: t.content,
         }))
+
+        setTabs(entries)
+        setLoading(false)
+
         // When editing, pre-select the matching tab (or create a custom one)
         if (initialDraft) {
           const match = entries.find((e) => e.savedName === initialDraft.name)
           if (match) {
-            setTabs(entries)
             setActiveKey(match.key)
             setEditorName(match.savedName)
             setEditorContent(match.savedContent)
@@ -69,62 +72,23 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
               originalName: initialDraft.name,
               originalContent: initialDraft.content,
             }
-            const allEntries = [...entries, customTab]
-            setTabs(allEntries)
+            setTabs([...entries, customTab])
             setActiveKey(customKey)
             setEditorName(initialDraft.name)
             setEditorContent(initialDraft.content)
             onChange({ name: initialDraft.name, content: initialDraft.content })
           }
-          setLoading(false)
           return
         }
 
-        setTabs(entries)
-        setLoading(false)
-
-        // Activate the first visible tab
-        const first = entries[0]
-        if (first) {
-          setActiveKey(first.key)
-          setEditorName(first.savedName)
-          setEditorContent(first.savedContent)
-          onChange({ name: first.savedName, content: first.savedContent })
-        }
+        // Fresh create: no tab selected, no editor rendered
+        setActiveKey(null)
       })
       .catch((err: Error) => {
         setError(err.message)
         setLoading(false)
       })
   }, [])
-
-  // When the component stays mounted across modal opens (keepMounted on Modal),
-  // respond to initialDraft changes to select the right tab for editing.
-  useEffect(() => {
-    if (loading || !initialDraft) return
-    const match = tabs.find((t) => t.savedName === initialDraft.name)
-    if (match) {
-      if (match.key !== activeKey) loadTab(match.key)
-    } else {
-      const key = 'edit-custom'
-      const customTab: TabEntry = {
-        key,
-        savedName: initialDraft.name,
-        savedContent: initialDraft.content,
-        originalName: initialDraft.name,
-        originalContent: initialDraft.content,
-      }
-      setTabs((prev) => {
-        const idx = prev.findIndex((t) => t.key === 'edit-custom')
-        return idx >= 0 ? prev.map((t) => t.key === 'edit-custom' ? customTab : t) : [...prev, customTab]
-      })
-      setActiveKey(key)
-      setEditorName(initialDraft.name)
-      setEditorContent(initialDraft.content)
-      onChange({ name: initialDraft.name, content: initialDraft.content })
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialDraft?.name, initialDraft?.content])
 
   function loadTab(key: string, entries = tabs) {
     const tab = entries.find((t) => t.key === key)
@@ -231,45 +195,54 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
 
       {/* Right: editor */}
       <Stack gap="sm" style={{ flex: 1, minWidth: 0 }}>
-        <TextInput
+        {activeKey === null && (
+          <Text size="sm" c="dimmed" mt="xs">
+            Select a checklist from the list, or click + New to create one.
+          </Text>
+        )}
+        {activeKey !== null && <TextInput
           label="Name"
           value={editorName}
           onChange={(e) => handleNameChange(e.currentTarget.value)}
-        />
-        <div>
-          <Text size="sm" fw={500} mb={4}>
-            Checklist
-          </Text>
-          <Textarea
-            value={editorContent}
-            onChange={(e) => handleContentChange(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Tab') {
-                e.preventDefault()
-                const el = e.currentTarget
-                const start = el.selectionStart
-                const end = el.selectionEnd
-                const next = editorContent.slice(0, start) + '  ' + editorContent.slice(end)
-                handleContentChange(next)
-                requestAnimationFrame(() => {
-                  el.selectionStart = el.selectionEnd = start + 2
-                })
-              }
-            }}
-            autosize
-            minRows={8}
-            maxRows={14}
-            styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
-          />
-        </div>
-        <Group justify="flex-end" gap="xs">
-          <Button variant="default" size="xs" onClick={handleReset}>
-            Reset
-          </Button>
-          <Button variant="default" size="xs" onClick={handleSave}>
-            Save
-          </Button>
-        </Group>
+        />}
+        {activeKey !== null && (
+          <>
+            <div>
+              <Text size="sm" fw={500} mb={4}>
+                Checklist
+              </Text>
+              <Textarea
+                value={editorContent}
+                onChange={(e) => handleContentChange(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Tab') {
+                    e.preventDefault()
+                    const el = e.currentTarget
+                    const start = el.selectionStart
+                    const end = el.selectionEnd
+                    const next = editorContent.slice(0, start) + '  ' + editorContent.slice(end)
+                    handleContentChange(next)
+                    requestAnimationFrame(() => {
+                      el.selectionStart = el.selectionEnd = start + 2
+                    })
+                  }
+                }}
+                autosize
+                minRows={8}
+                maxRows={14}
+                styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
+              />
+            </div>
+            <Group justify="flex-end" gap="xs">
+              <Button variant="default" size="xs" onClick={handleReset}>
+                Reset
+              </Button>
+              <Button variant="default" size="xs" onClick={handleSave}>
+                Save
+              </Button>
+            </Group>
+          </>
+        )}
       </Stack>
     </div>
   )

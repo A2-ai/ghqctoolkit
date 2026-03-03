@@ -50,6 +50,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '', content: '' })
   const [checklistSelected, setChecklistSelected] = useState(false)
+  const [checklistKey, setChecklistKey] = useState(0)
   const [assignees, setAssignees] = useState<string[]>([])
   const [relevantFiles, setRelevantFiles] = useState<RelevantFileDraft[]>([])
   const [activeTab, setActiveTab] = useState<string | null>('file')
@@ -66,6 +67,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   useEffect(() => {
     if (opened) {
       setActiveTab('file')
+      setChecklistKey((k) => k + 1) // remount ChecklistTab to clear any new-* tabs
       if (editItem) {
         setSelectedFile(editItem.file)
         setChecklistDraft({ name: editItem.checklistName, content: editItem.checklistContent })
@@ -167,6 +169,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             </Tabs.Panel>
             <Tabs.Panel value="checklist" keepMounted>
               <ChecklistTab
+                key={checklistKey}
                 onChange={setChecklistDraft}
                 onSelect={() => setChecklistSelected(true)}
                 initialDraft={editItem ? { name: editItem.checklistName, content: editItem.checklistContent } : null}
@@ -191,7 +194,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
               file={selectedFile}
               branch={repoInfo?.branch ?? null}
               createdBy={repoInfo?.current_user ?? null}
-              checklistName={checklistDraft.name || null}
+              checklistName={checklistSelected ? (checklistDraft.name || null) : null}
               assignees={assignees}
               relevantFiles={relevantFiles}
             />
