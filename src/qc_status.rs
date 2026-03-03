@@ -108,9 +108,7 @@ impl QCStatus {
                         // No file-changing commit found, but the issue has been posted
                         // (an Initial/Notification commit exists). Treat like a covered
                         // status commit: awaiting review unless already reviewed.
-                        let latest_status_entry = commits
-                            .iter()
-                            .find(|c| !c.statuses.is_empty());
+                        let latest_status_entry = commits.iter().find(|c| !c.statuses.is_empty());
                         match latest_status_entry {
                             Some(sc)
                                 if sc.statuses.contains(&crate::issue::CommitStatus::Reviewed) =>
