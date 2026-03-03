@@ -21,9 +21,13 @@ interface Props {
   onChange: (draft: ChecklistDraft) => void
   onSelect?: () => void
   initialDraft?: ChecklistDraft | null
+  /** Custom tabs saved in previous modal opens; restored on remount */
+  persistedCustomTabs?: ChecklistDraft[]
+  /** Called when user saves a custom (non-API) tab; parent stores it across opens */
+  onSaveCustom?: (tab: ChecklistDraft) => void
 }
 
-export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
+export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustomTabs, onSaveCustom }: Props) {
   const counter = useRef(0)
   const { singular } = useChecklistDisplayName()
   const singularCap = capitalize(singular)
@@ -56,12 +60,22 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
           originalContent: t.content,
         }))
 
-        setTabs(entries)
+        // Restore any custom tabs saved in previous modal opens
+        const persistedEntries: TabEntry[] = (persistedCustomTabs ?? []).map((t, i) => ({
+          key: `persisted-${i}`,
+          savedName: t.name,
+          savedContent: t.content,
+          originalName: t.name,
+          originalContent: t.content,
+        }))
+        const allEntries = [...entries, ...persistedEntries]
+
+        setTabs(allEntries)
         setLoading(false)
 
         // When editing, pre-select the matching tab (or create a custom one)
         if (initialDraft) {
-          const match = entries.find((e) => e.savedName === initialDraft.name)
+          const match = allEntries.find((e) => e.savedName === initialDraft.name)
           if (match) {
             setActiveKey(match.key)
             setEditorName(match.savedName)
@@ -76,7 +90,7 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
               originalName: initialDraft.name,
               originalContent: initialDraft.content,
             }
-            setTabs([...entries, customTab])
+            setTabs([...allEntries, customTab])
             setActiveKey(customKey)
             setEditorName(initialDraft.name)
             setEditorContent(initialDraft.content)
@@ -120,6 +134,10 @@ export function ChecklistTab({ onChange, onSelect, initialDraft }: Props) {
         t.key === activeKey ? { ...t, savedName: editorName, savedContent: editorContent } : t,
       ),
     )
+    // Notify parent to persist custom tabs (keys not from API)
+    if (!activeKey.startsWith('api-')) {
+      onSaveCustom?.({ name: editorName, content: editorContent })
+    }
   }
 
   function handleReset() {

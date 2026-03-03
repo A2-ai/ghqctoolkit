@@ -53,6 +53,8 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '', content: '' })
   const [checklistSelected, setChecklistSelected] = useState(false)
   const [checklistKey, setChecklistKey] = useState(0)
+  // Custom tabs saved via "Save" persist across modal opens for the duration of the Create tab
+  const [savedCustomTabs, setSavedCustomTabs] = useState<ChecklistDraft[]>([])
   const [assignees, setAssignees] = useState<string[]>([])
   const [relevantFiles, setRelevantFiles] = useState<RelevantFileDraft[]>([])
   const [activeTab, setActiveTab] = useState<string | null>('file')
@@ -177,6 +179,11 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
                 onChange={setChecklistDraft}
                 onSelect={() => setChecklistSelected(true)}
                 initialDraft={editItem ? { name: editItem.checklistName, content: editItem.checklistContent } : null}
+                persistedCustomTabs={savedCustomTabs}
+                onSaveCustom={(tab) => setSavedCustomTabs((prev) => {
+                  const idx = prev.findIndex((t) => t.name === tab.name)
+                  return idx >= 0 ? prev.map((t, i) => i === idx ? tab : t) : [...prev, tab]
+                })}
               />
             </Tabs.Panel>
             <Tabs.Panel value="relevant">
