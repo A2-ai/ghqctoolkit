@@ -20,7 +20,7 @@ flowchart TB
 ```
 
 1. **Create** — Open a GitHub Issue for a file, assign a checklist and reviewers.
-2. **Review** — The reviewer works through the checklist on GitHub.
+2. **Review** — The reviewer works through the checklist on GitHub, and optionally post a comment on the issue with a diff between their local, uncommitted changes and a commit.
 3. **Comment** — Post a comment on the issue linking two commits, with an optional diff and note, to document changes made in response to review feedback.
 4. **Iterate** — Repeat the review → comment cycle until the file is ready.
 5. **Approve** — Close the issue with an approval comment pinning the reviewed commit.
