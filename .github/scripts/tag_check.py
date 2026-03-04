@@ -1,20 +1,19 @@
 import sys
-import subprocess
-
+import re
 
 
 def verify_tag(git_tag):
-    result = subprocess.run(
-        ["cargo", "run", "--release", "--", "--version"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-        check=True,
-    )
+    with open("Cargo.toml") as f:
+        content = f.read()
 
-    version = f"v{result.stdout.replace('pharos', '').strip()}"
-    if git_tag != version:
-        print(f"Different version compared to tag: tag={git_tag} cli={version}")
+    match = re.search(r'^\s*version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+    if not match:
+        print("Could not find version in Cargo.toml")
+        return 1
+
+    cargo_version = f"v{match.group(1)}"
+    if git_tag != cargo_version:
+        print(f"Different version compared to tag: tag={git_tag} cargo={cargo_version}")
         return 1
 
     return 0

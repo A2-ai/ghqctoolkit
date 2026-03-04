@@ -28,7 +28,7 @@ jobs:
           - runner: macos-15
             target: aarch64-apple-darwin
             container: ""
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
             container: ""
           - runner: windows-2022
@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies (AlmaLinux)
         if: matrix.container != ''
         run: |
-          dnf install -y gcc gcc-c++ make git curl tar gzip clang llvm
+          dnf install -y gcc gcc-c++ make git curl tar gzip clang llvm unzip
 
       - name: Install Rust
         if: runner.os != 'Windows'
@@ -53,7 +53,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python (for version check)
+      - name: Install Python (for tag check)
         if: matrix.container != '' && github.ref_type == 'tag'
         run: |
           dnf install -y python3
