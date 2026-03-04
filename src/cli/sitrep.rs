@@ -161,7 +161,7 @@ impl fmt::Display for ConfigSitRep {
             if self.path_exists {
                 ""
             } else {
-                "❌ Directory not found"
+                "    ❌ Directory not found"
             }
         )?;
 
@@ -182,7 +182,7 @@ impl fmt::Display for ConfigSitRep {
         checklists.sort_by(|a, b| a.cmp(b));
         writeln!(
             f,
-            "Checklists: {}\n  -{}",
+            "Checklists: {}\n  - {}",
             self.configuration.checklists.len(),
             checklists.join("\n  - ")
         )?;
@@ -275,11 +275,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn load_milestone_json(name: &str) -> Value {
-        let text = std::fs::read_to_string(format!(
-            "src/tests/github_api/milestones/{}.json",
-            name
-        ))
-        .unwrap_or_else(|_| panic!("Failed to load milestone fixture: {}", name));
+        let text =
+            std::fs::read_to_string(format!("src/tests/github_api/milestones/{}.json", name))
+                .unwrap_or_else(|_| panic!("Failed to load milestone fixture: {}", name));
         serde_json::from_str(&text).expect("Failed to parse milestone fixture JSON")
     }
 
@@ -309,13 +307,10 @@ mod tests {
         // v1.0 has more open issues (4) than v2.0 (2), so v1.0 should sort first
         let v1 = MilestoneSitRep::from(parse_milestone(load_milestone_json("v1.0")));
         let v2 = MilestoneSitRep::from(parse_milestone(load_milestone_json("v2.0")));
-        let mut milestones: Vec<(String, MilestoneSitRep)> = vec![
-            ("v2.0".to_string(), v2),
-            ("v1.0".to_string(), v1),
-        ];
-        milestones.sort_by(|(_, a), (_, b)| {
-            a.open.cmp(&b.open).reverse().then(a.name.cmp(&b.name))
-        });
+        let mut milestones: Vec<(String, MilestoneSitRep)> =
+            vec![("v2.0".to_string(), v2), ("v1.0".to_string(), v1)];
+        milestones
+            .sort_by(|(_, a), (_, b)| a.open.cmp(&b.open).reverse().then(a.name.cmp(&b.name)));
         let names: Vec<&str> = milestones.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["v1.0", "v2.0"]);
     }
@@ -336,9 +331,8 @@ mod tests {
             ("alpha".to_string(), make("alpha", 3)),
             ("beta".to_string(), make("beta", 3)),
         ];
-        milestones.sort_by(|(_, a), (_, b)| {
-            a.open.cmp(&b.open).reverse().then(a.name.cmp(&b.name))
-        });
+        milestones
+            .sort_by(|(_, a), (_, b)| a.open.cmp(&b.open).reverse().then(a.name.cmp(&b.name)));
         let names: Vec<&str> = milestones.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta", "zebra"]);
     }
@@ -353,6 +347,63 @@ mod tests {
             branch: Err("detached HEAD".to_string()),
             milestones: Ok(vec![]),
         };
-        assert!(rep.to_string().contains("Failed to determine branch: detached HEAD"));
+        assert!(
+            rep.to_string()
+                .contains("Failed to determine branch: detached HEAD")
+        );
+    }
+
+    fn make_sitrep(repository: Result<RepoSitRep, String>) -> SitRep {
+        SitRep {
+            directory: PathBuf::from("/projects/myrepo"),
+            repository,
+            configuration: ConfigSitRep {
+                owner: Some("owner".to_string()),
+                repo: Some("repo".to_string()),
+                remote_url: Some("https://github.com/owner/repo".to_string()),
+                path_exists: false,
+                configuration: Configuration::from_path(PathBuf::from("/config/path")),
+            },
+        }
+    }
+
+    #[test]
+    fn test_sitrep_display_ok() {
+        let v1 = MilestoneSitRep::from(parse_milestone(load_milestone_json("v1.0")));
+        let v2 = MilestoneSitRep::from(parse_milestone(load_milestone_json("v2.0")));
+        // pre-sorted: v1.0 (4 open) before v2.0 (2 open)
+        let repo = RepoSitRep {
+            path: PathBuf::from("/projects/myrepo"),
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            remote_url: "https://github.com/owner/repo".to_string(),
+            branch: Ok("main".to_string()),
+            milestones: Ok(vec![("v1.0".to_string(), v1), ("v2.0".to_string(), v2)]),
+        };
+        insta::assert_snapshot!(make_sitrep(Ok(repo)).to_string());
+    }
+
+    #[test]
+    fn test_sitrep_display_repo_error() {
+        insta::assert_snapshot!(make_sitrep(Err("not a git repository".to_string())).to_string());
+    }
+
+    #[test]
+    fn test_sitrep_display_custom_configuration() {
+        let v1 = MilestoneSitRep::from(parse_milestone(load_milestone_json("v1.0")));
+        let repo = RepoSitRep {
+            path: PathBuf::from("/projects/myrepo"),
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            remote_url: "https://github.com/owner/repo".to_string(),
+            branch: Ok("main".to_string()),
+            milestones: Ok(vec![("v1.0".to_string(), v1)]),
+        };
+        let sitrep = SitRep {
+            directory: PathBuf::from("/projects/myrepo"),
+            repository: Ok(repo),
+            configuration: ConfigSitRep::new("src/tests/custom_configuration", None),
+        };
+        insta::assert_snapshot!(sitrep.to_string());
     }
 }

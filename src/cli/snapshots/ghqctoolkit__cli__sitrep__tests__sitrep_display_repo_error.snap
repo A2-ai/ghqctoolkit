@@ -1,0 +1,16 @@
+---
+source: src/cli/sitrep.rs
+expression: "make_sitrep(Err(\"not a git repository\".to_string())).to_string()"
+---
+=== Repository =====================
+Failed to determine Git Repository Info for /projects/myrepo: not a git repository
+=== Configuration ==================
+Directory: /config/path    ❌ Directory not found
+Repository: owner/repo (https://github.com/owner/repo)
+Checklists: 1
+  - Custom: 1 items
+Options:
+  - Checklist Display Name:  checklists
+  - Logo Path: logo.png
+  - Checklist Directory: checklists
+  - Record Template Path: record.typ
