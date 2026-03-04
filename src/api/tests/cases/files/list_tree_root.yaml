@@ -1,0 +1,20 @@
+name: "GET /api/files/tree - root listing"
+description: "Returns top-level git-tracked entries when no path param is given"
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/files/tree"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      path: ""
+      entries:
+        - name: "src"
+          kind: "directory"
+        - name: "Cargo.toml"
+          kind: "file"

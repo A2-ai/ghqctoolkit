@@ -1,0 +1,34 @@
+{
+  "name": "ghqc-ui",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bunx --bun vite dev --port 3103",
+    "build": "bunx --bun vite build && bun run scripts/gen-index-html.ts",
+    "preview": "bunx --bun vite preview",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "dependencies": {
+    "@hello-pangea/dnd": "^18",
+    "@mantine/core": "^8",
+    "@mantine/hooks": "^8",
+    "@tabler/icons-react": "^3.37.1",
+    "@tanstack/react-query": "^5",
+    "@tanstack/react-router": "^1",
+    "@tanstack/react-start": "^1",
+    "react": "^19",
+    "react-arborist": "^3.4.3",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "playwright": "^1.58.2",
+    "typescript": "^5",
+    "vite": "^7",
+    "vite-tsconfig-paths": "^6"
+  }
+}

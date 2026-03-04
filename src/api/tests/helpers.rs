@@ -54,6 +54,9 @@ pub struct MockGitInfo {
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
     git_state: GitState,
 
+    // Authentication
+    current_user: Option<String>,
+
     // Call tracking (for assertions)
     calls: Arc<Mutex<Vec<String>>>,
     write_calls: Arc<Mutex<Vec<WriteCall>>>,
@@ -84,6 +87,7 @@ pub struct MockGitInfoBuilder {
     users: Vec<crate::RepoUser>,
     dirty_files: Vec<PathBuf>,
     git_state: GitState,
+    current_user: Option<String>,
 }
 
 impl MockGitInfoBuilder {
@@ -100,6 +104,7 @@ impl MockGitInfoBuilder {
             users: Vec::new(),
             dirty_files: Vec::new(),
             git_state: GitState::Clean,
+            current_user: Some("test-user".to_string()),
         }
     }
 
@@ -158,6 +163,11 @@ impl MockGitInfoBuilder {
         self
     }
 
+    pub fn with_current_user(mut self, user: Option<String>) -> Self {
+        self.current_user = user;
+        self
+    }
+
     pub fn build(self) -> MockGitInfo {
         MockGitInfo {
             owner: self.owner,
@@ -171,6 +181,7 @@ impl MockGitInfoBuilder {
             users: Arc::new(Mutex::new(self.users)),
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
             git_state: self.git_state,
+            current_user: self.current_user,
             calls: Arc::new(Mutex::new(Vec::new())),
             write_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -283,6 +294,20 @@ impl GitFileOps for MockGitInfo {
         _commit: &ObjectId,
     ) -> Result<Vec<u8>, GitFileOpsError> {
         Ok(vec![])
+    }
+
+    fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+        match path {
+            "" => Ok(vec![
+                ("src".to_string(), true),
+                ("Cargo.toml".to_string(), false),
+            ]),
+            "src" => Ok(vec![
+                ("main.rs".to_string(), false),
+                ("lib.rs".to_string(), false),
+            ]),
+            _ => Err(GitFileOpsError::DirectoryNotFound(path.to_string())),
+        }
     }
 }
 
@@ -405,6 +430,10 @@ impl GitHubReader for MockGitInfo {
         _issue: &Issue,
     ) -> Result<Vec<serde_json::Value>, GitHubApiError> {
         Ok(vec![])
+    }
+
+    async fn get_current_user(&self) -> Result<Option<String>, GitHubApiError> {
+        Ok(self.current_user.clone())
     }
 
     async fn get_blocked_issues(&self, issue_number: u64) -> Result<Vec<Issue>, GitHubApiError> {

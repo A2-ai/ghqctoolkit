@@ -217,17 +217,33 @@ mod test_runner {
         let json1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
         let json2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
 
-        assert!(json1.is_array(), "First request should return an array");
-        assert!(json2.is_array(), "Second request should return an array");
-        assert_eq!(
-            json1.as_array().unwrap().len(),
-            2,
-            "First request should return 2 issues"
+        assert!(
+            json1.is_object(),
+            "First request should return an envelope object"
+        );
+        assert!(
+            json2.is_object(),
+            "Second request should return an envelope object"
         );
         assert_eq!(
-            json2.as_array().unwrap().len(),
+            json1["results"].as_array().unwrap().len(),
             2,
-            "Second request should return 2 issues"
+            "First request should return 2 issues in results"
+        );
+        assert_eq!(
+            json2["results"].as_array().unwrap().len(),
+            2,
+            "Second request should return 2 issues in results"
+        );
+        assert_eq!(
+            json1["errors"].as_array().unwrap().len(),
+            0,
+            "First request should have no errors"
+        );
+        assert_eq!(
+            json2["errors"].as_array().unwrap().len(),
+            0,
+            "Second request should have no errors"
         );
 
         // Responses should be identical (proving cache hit)

@@ -27,6 +27,14 @@ tags:
     description: Supporting data queries
   - name: configuration
     description: Configuration management
+  - name: record
+    description: PDF record generation
+  - name: archive
+    description: Archive generation
+  - name: files
+    description: File tree and content access
+  - name: commits
+    description: Commit history
 
 paths:
   /health:
@@ -155,13 +163,23 @@ paths:
           example: "1,2,3"
       responses:
         '200':
-          description: Array of issue statuses
+          description: All issues resolved successfully
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/IssueStatusResponse'
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
+        '206':
+          description: Partial success — some issues resolved, some failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
+        '500':
+          description: All issues failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchIssueStatusResponse'
 
   /issues/{number}:
     get:
@@ -234,7 +252,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ApproveRequest'
       responses:
-        '200':
+        '201':
           description: Issue approved
           content:
             application/json:
@@ -261,7 +279,7 @@ paths:
             schema:
               $ref: '#/components/schemas/UnapproveRequest'
       responses:
-        '200':
+        '201':
           description: Issue unapproved
           content:
             application/json:
@@ -292,6 +310,125 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CommentResponse'
+
+  /preview/issue:
+    post:
+      summary: Preview issue body as HTML
+      operationId: previewIssue
+      tags: [issues]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIssueRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the issue
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/review:
+    post:
+      summary: Preview review comment body as HTML
+      operationId: previewReview
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the review comment
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/approve:
+    post:
+      summary: Preview approval comment body as HTML
+      operationId: previewApprove
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the approval comment
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/unapprove:
+    post:
+      summary: Preview unapproval comment body as HTML
+      operationId: previewUnapprove
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnapproveRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the unapproval comment
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /preview/{number}/comment:
+    post:
+      summary: Preview comment body as HTML
+      operationId: previewComment
+      tags: [comments]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the comment
+          content:
+            text/html:
+              schema:
+                type: string
 
   /issues/{number}/blocked:
     get:
@@ -353,33 +490,259 @@ paths:
               schema:
                 $ref: '#/components/schemas/RepoInfo'
 
-  /configuration/checklists:
+  /commits:
     get:
-      summary: List available checklists
-      operationId: listChecklists
-      tags: [configuration]
+      summary: List branch commits
+      description: |
+        Returns a paginated list of commits on the current branch (HEAD), newest first.
+        If `file` is provided, each commit includes whether it touched that file.
+        If `locate` is provided, returns the page containing that commit hash.
+      operationId: listCommits
+      tags: [commits]
+      parameters:
+        - name: file
+          in: query
+          required: false
+          description: File path to check for changes per commit
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 0-indexed page number
+          schema:
+            type: integer
+            default: 0
+        - name: page_size
+          in: query
+          required: false
+          description: Commits per page (1-50, default 10)
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
+        - name: locate
+          in: query
+          required: false
+          description: Commit hash prefix; if set, returns the page containing that commit
+          schema:
+            type: string
       responses:
         '200':
-          description: List of checklists
+          description: Paginated list of commits
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Checklist'
+                $ref: '#/components/schemas/PagedCommitsResponse'
 
-  /configuration/status:
+  /files/tree:
     get:
-      summary: Get configuration status
-      operationId: getConfigurationStatus
+      summary: List directory entries
+      description: Returns files and subdirectories at the given path in the repository.
+      operationId: getFileTree
+      tags: [files]
+      parameters:
+        - name: path
+          in: query
+          required: false
+          description: Directory path relative to repository root (empty string for root)
+          schema:
+            type: string
+            default: ""
+      responses:
+        '200':
+          description: Directory listing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTreeResponse'
+
+  /files/content:
+    get:
+      summary: Get file content
+      description: Returns the raw text content of a file at the given path.
+      operationId: getFileContent
+      tags: [files]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: File path relative to repository root
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File content
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          description: File not found
+
+  /archive/generate:
+    post:
+      summary: Generate a file archive
+      description: |
+        Builds a tar.gz archive containing each specified file at its given commit.
+        When flatten is true, directory structure is stripped (files placed at root).
+      operationId: generateArchive
+      tags: [archive]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArchiveGenerateRequest'
+      responses:
+        '200':
+          description: Archive written successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArchiveGenerateResponse'
+        '400':
+          description: Invalid request (empty output_path, invalid commit hash, etc.)
+        '500':
+          description: Archive generation failed
+
+  /record/upload:
+    post:
+      summary: Upload a context PDF
+      description: |
+        Accepts a multipart/form-data request with a single `file` field containing a PDF.
+        The file is saved to a server temp directory and its path is returned for use
+        in subsequent preview/generate requests.
+      operationId: uploadContextFile
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF file to upload (must have content-type application/pdf)
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordUploadResponse'
+        '400':
+          description: Missing file field or content-type is not application/pdf
+
+  /record/preview:
+    post:
+      summary: Generate a record PDF preview
+      description: |
+        Runs the full record pipeline for the given milestones and returns a session key.
+        The rendered PDF can be retrieved with `GET /record/preview.pdf?key=<key>`.
+        Each call produces an independent key — concurrent sessions never share PDFs.
+      operationId: previewRecord
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordRequest'
+      responses:
+        '200':
+          description: Preview rendered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordPreviewResponse'
+        '400':
+          description: No matching milestones found or invalid request
+        '500':
+          description: Record generation or render failed
+
+  /record/preview.pdf:
+    get:
+      summary: Serve a previously generated preview PDF
+      operationId: servePreviewPdf
+      tags: [record]
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: Preview key returned by POST /record/preview
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The rendered PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Key not found (expired or never created)
+
+  /record/generate:
+    post:
+      summary: Generate and save a record PDF to disk
+      description: |
+        Runs the full record pipeline and writes the PDF to `output_path` on the server.
+        The parent directory is created automatically if it does not exist.
+      operationId: generateRecord
+      tags: [record]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordRequest'
+      responses:
+        '200':
+          description: PDF written to output_path successfully
+        '400':
+          description: output_path is empty or request is invalid
+        '500':
+          description: Record generation or render failed
+
+  /configuration:
+    get:
+      summary: Get configuration status and checklists
+      operationId: getConfiguration
       tags: [configuration]
       responses:
         '200':
-          description: Configuration status
+          description: Configuration status with full checklist content
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigurationStatusResponse'
+    post:
+      summary: Clone and register a configuration repository
+      operationId: setupConfiguration
+      tags: [configuration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupConfigurationRequest'
+      responses:
+        '200':
+          description: Configuration repository cloned and loaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationStatusResponse'
+        '409':
+          description: Configuration repository already set up
+        '500':
+          description: Clone or configuration load failed
 
 components:
   schemas:
@@ -454,6 +817,37 @@ components:
           type: string
           format: date-time
           nullable: true
+        created_by:
+          type: string
+          description: GitHub login of the user who created the issue
+        branch:
+          type: string
+          nullable: true
+          description: Git branch parsed from issue body
+        checklist_name:
+          type: string
+          nullable: true
+          description: Checklist name parsed from issue body
+        relevant_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelevantFileInfo'
+
+    RelevantFileInfo:
+      type: object
+      required: [file_name, kind]
+      properties:
+        file_name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/RelevantFileKind'
+        issue_url:
+          type: string
+          nullable: true
+
+    RelevantFileKind:
+      type: string
+      enum: [blocking_qc, relevant_qc, file]
 
     IssueStatusResponse:
       type: object
@@ -606,6 +1000,34 @@ components:
           type: integer
         error:
           type: string
+
+    IssueStatusErrorKind:
+      type: string
+      enum: [fetch_failed, processing_failed]
+
+    IssueStatusError:
+      type: object
+      required: [issue_number, kind, error]
+      properties:
+        issue_number:
+          type: integer
+        kind:
+          $ref: '#/components/schemas/IssueStatusErrorKind'
+        error:
+          type: string
+
+    BatchIssueStatusResponse:
+      type: object
+      required: [results, errors]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueStatusResponse'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueStatusError'
 
     CreateIssueRequest:
       type: object
@@ -771,7 +1193,7 @@ components:
           items:
             $ref: '#/components/schemas/BlockingQCError'
         closed:
-          type: bool
+          type: boolean
           description: "Whether the issue was successfully closed"
 
     UnapproveRequest:
@@ -787,7 +1209,7 @@ components:
         unapproval_url:
           type: string
         opened:
-          type: bool
+          type: boolean
           description: "Whether the issue was successfully re-opened"
     BlockedIssueStatus:
       type: object
@@ -830,6 +1252,7 @@ components:
         - remote_commit
         - git_status
         - git_status_detail
+        - dirty_files
       properties:
         owner:
           type: string
@@ -851,6 +1274,16 @@ components:
         git_status_detail:
           type: string
           description: Human-readable git status description
+        dirty_files:
+          type: array
+          items:
+            type: string
+          description: List of files which have non-committed changes
+        current_user:
+          type: string
+          nullable: true
+          description: GitHub login of the authenticated user, if available
+
 
     Checklist:
       type: object
@@ -860,19 +1293,13 @@ components:
         content:
           type: string
 
-    ChecklistInfo:
-      type: object
-      properties:
-        name:
-          type: string
-        item_count:
-          type: integer
-
     ConfigurationStatusResponse:
       type: object
       properties:
         directory:
           type: string
+        exists:
+          type: boolean
         git_repository:
           $ref: '#/components/schemas/ConfigGitRepository'
         options:
@@ -880,7 +1307,11 @@ components:
         checklists:
           type: array
           items:
-            $ref: '#/components/schemas/ChecklistInfo'
+            $ref: '#/components/schemas/Checklist'
+        config_repo_env:
+          type: string
+          nullable: true
+          description: Value of GHQC_CONFIG_REPO env var, if set
 
     ConfigGitRepository:
       type: object
@@ -898,6 +1329,15 @@ components:
           items:
             type: string
 
+    SetupConfigurationRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: Git URL of the configuration repository to clone
+          example: "https://github.com/owner/config-repo"
+
     ConfigurationOptions:
       type: object
       properties:
@@ -914,3 +1354,170 @@ components:
           type: string
         record_path:
           type: string
+
+    RecordContextFileRequest:
+      type: object
+      required: [server_path, position]
+      properties:
+        server_path:
+          type: string
+          description: Absolute path on the server (use the temp_path from POST /record/upload for locally uploaded files)
+          example: "/tmp/ghqc-uploads/abc123.pdf"
+        position:
+          type: string
+          enum: [prepend, append]
+          description: Whether to insert this PDF before or after the QC Record in the output
+
+    RecordRequest:
+      type: object
+      required: [milestone_numbers]
+      properties:
+        milestone_numbers:
+          type: array
+          items:
+            type: integer
+          description: GitHub milestone numbers to include in the record
+          example: [1, 2]
+        tables_only:
+          type: boolean
+          default: false
+          description: When true, only emit summary tables without full issue details
+        output_path:
+          type: string
+          description: Destination path for the generated PDF (required for generate, ignored for preview)
+          example: "/path/to/output/record.pdf"
+        context_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecordContextFileRequest'
+          description: Optional PDF files to merge before/after the QC Record
+
+    RecordUploadResponse:
+      type: object
+      required: [temp_path]
+      properties:
+        temp_path:
+          type: string
+          description: Absolute server path where the uploaded PDF was saved
+          example: "/tmp/ghqc-uploads/abc123def456.pdf"
+
+    RecordPreviewResponse:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          description: Opaque session key — pass to GET /record/preview.pdf?key=<key> to retrieve the PDF
+          example: "a1b2c3d4e5f6"
+
+    GitStatusEnum:
+      type: string
+      enum: [clean, dirty, ahead, behind, diverged, conflict]
+      description: |
+        - clean: Up to date with remote, no uncommitted changes
+        - dirty: Has uncommitted changes
+        - ahead: Local commits not on remote
+        - behind: Remote commits not local
+        - diverged: Both ahead and behind
+        - conflict: Merge conflicts present
+
+    PagedCommitsResponse:
+      type: object
+      required: [commits, total, page, page_size]
+      properties:
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchCommit'
+        total:
+          type: integer
+          description: Total number of commits
+        page:
+          type: integer
+          description: Current 0-indexed page number
+        page_size:
+          type: integer
+          description: Number of commits per page
+
+    BranchCommit:
+      type: object
+      required: [hash, message, file_changed]
+      properties:
+        hash:
+          type: string
+          description: Full commit hash
+        message:
+          type: string
+          description: Commit message
+        file_changed:
+          type: boolean
+          description: Whether this commit changed the requested file (false if no file filter)
+
+    FileTreeResponse:
+      type: object
+      required: [path, entries]
+      properties:
+        path:
+          type: string
+          description: Directory path that was queried
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileTreeEntry'
+
+    FileTreeEntry:
+      type: object
+      required: [name, kind]
+      properties:
+        name:
+          type: string
+          description: File or directory name
+        kind:
+          type: string
+          enum: [file, directory]
+
+    ArchiveGenerateRequest:
+      type: object
+      required: [output_path, flatten, files]
+      properties:
+        output_path:
+          type: string
+          description: Destination path for the archive file
+          example: "repo-milestone.tar.gz"
+        flatten:
+          type: boolean
+          description: When true, strip directory structure and place all files at root
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArchiveFileRequest'
+          minItems: 1
+
+    ArchiveFileRequest:
+      type: object
+      required: [repository_file, commit]
+      properties:
+        repository_file:
+          type: string
+          description: Path to the file in the repository
+          example: "src/analysis.R"
+        commit:
+          type: string
+          description: Full commit hash to retrieve the file at
+        milestone:
+          type: string
+          nullable: true
+          description: Milestone name (for QC metadata in archive)
+        approved:
+          type: boolean
+          nullable: true
+          description: Whether the file's QC issue is approved
+
+    ArchiveGenerateResponse:
+      type: object
+      required: [output_path]
+      properties:
+        output_path:
+          type: string
+          description: Absolute path where the archive was written
+          example: "/path/to/repo-milestone.tar.gz"

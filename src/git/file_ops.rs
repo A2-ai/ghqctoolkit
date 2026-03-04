@@ -62,6 +62,10 @@ pub enum GitFileOpsError {
     HeadIdError(gix::reference::head_id::Error),
     #[error("Failed to access repository: {0}")]
     RepositoryError(#[from] crate::git::GitInfoError),
+    #[error("Directory not found in git tree: {0}")]
+    DirectoryNotFound(String),
+    #[error("Path is not a directory: {0}")]
+    NotADirectory(String),
 }
 
 /// File-specific git operations
@@ -80,6 +84,12 @@ pub trait GitFileOps {
         file: &Path,
         commit: &ObjectId,
     ) -> Result<Vec<u8>, GitFileOpsError>;
+
+    /// List immediate children of `path` in the HEAD commit tree.
+    /// `path` is repo-relative, slash-separated, no leading/trailing slash.
+    /// Empty string = repo root.
+    /// Returns `(name, is_directory)` pairs sorted: dirs first, then files, alpha within each.
+    fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError>;
 }
 
 impl GitFileOps for GitInfo {
@@ -271,6 +281,56 @@ impl GitFileOps for GitInfo {
         );
 
         Ok(blob.data.clone())
+    }
+
+    fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+        let repo = self.repository()?;
+        let head_id = repo.head_id().map_err(GitFileOpsError::HeadIdError)?;
+        let commit_obj = repo
+            .find_object(head_id)
+            .map_err(GitFileOpsError::ObjectError)?
+            .try_into_commit()
+            .map_err(GitFileOpsError::CommitError)?;
+        let root_tree = commit_obj.tree().map_err(GitFileOpsError::TreeError)?;
+
+        // Navigate directly to the target subtree instead of collecting all files
+        let target_tree = if path.is_empty() {
+            root_tree
+        } else {
+            let entry = root_tree
+                .lookup_entry_by_path(path)
+                .map_err(|_| GitFileOpsError::DirectoryNotFound(path.to_string()))?
+                .ok_or_else(|| GitFileOpsError::DirectoryNotFound(path.to_string()))?;
+
+            if !entry.mode().is_tree() {
+                return Err(GitFileOpsError::NotADirectory(path.to_string()));
+            }
+
+            entry
+                .object()
+                .map_err(GitFileOpsError::ObjectError)?
+                .try_into_tree()
+                .map_err(GitFileOpsError::ObjectToTreeError)?
+        };
+
+        // Iterate only immediate children of the target tree
+        let mut result: Vec<(String, bool)> = Vec::new();
+        for entry in target_tree.iter() {
+            let entry = entry.map_err(|e| GitFileOpsError::TreeError(e.into()))?;
+            let name = entry.filename().to_string();
+            let is_dir = entry.mode().is_tree();
+            result.push((name, is_dir));
+        }
+
+        result.sort_by(
+            |(name_a, is_dir_a), (name_b, is_dir_b)| match (is_dir_a, is_dir_b) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => name_a.cmp(name_b),
+            },
+        );
+
+        Ok(result)
     }
 }
 
@@ -669,6 +729,10 @@ mod tests {
             _file: &Path,
             _commit: &ObjectId,
         ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
             Ok(Vec::new())
         }
     }

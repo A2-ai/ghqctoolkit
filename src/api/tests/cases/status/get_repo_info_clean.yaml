@@ -24,5 +24,7 @@ response:
       remote_commit: "abc1234567890abcdef1234567890abcdef12340"
       git_status: "clean"
       git_status_detail: "Repository is up to date!"
+      dirty_files: []
+      current_user: "test-user"
 
 assert_write_calls: []

@@ -1,5 +1,5 @@
-name: "GET /api/configuration/status"
-description: "Successfully fetch configuration repository status"
+name: "GET /api/configuration"
+description: "Successfully fetch configuration status with checklists"
 
 fixtures:
 
@@ -9,7 +9,7 @@ git_state:
 
 request:
   method: GET
-  path: "/api/configuration/status"
+  path: "/api/configuration"
 
 response:
   status: 200
@@ -30,3 +30,8 @@ response:
             - repo
             - status
             - dirty_files
+        checklists:
+          type: array
+          item_fields:
+            - name
+            - content

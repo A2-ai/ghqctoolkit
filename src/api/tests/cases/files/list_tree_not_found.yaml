@@ -1,0 +1,17 @@
+name: "GET /api/files/tree - directory not found"
+description: "Returns 404 when the requested path does not exist in the git tree"
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/files/tree"
+  query:
+    path: "nonexistent"
+
+response:
+  status: 404
+  body:
+    match_type: partial
+    fields:
+      error: "Directory not found: nonexistent"

@@ -127,6 +127,9 @@ pub struct GitState {
     /// Remote commit hash (for status calculations)
     #[serde(default = "default_remote_commit")]
     pub remote_commit: String,
+    /// Current authenticated user (defaults to "test-user", set to null to simulate unauthenticated)
+    #[serde(default = "default_current_user")]
+    pub current_user: Option<String>,
 }
 
 /// Git status specification for tests
@@ -156,6 +159,7 @@ impl Default for GitState {
             dirty_files: Vec::new(),
             status: None,
             remote_commit: default_remote_commit(),
+            current_user: default_current_user(),
         }
     }
 }
@@ -178,6 +182,10 @@ fn default_branch() -> String {
 
 fn default_remote_commit() -> String {
     "def4567890abcdef4567890abcdef4567890abc0".to_string()
+}
+
+fn default_current_user() -> Option<String> {
+    Some("test-user".to_string())
 }
 
 /// HTTP request specification

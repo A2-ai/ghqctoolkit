@@ -328,6 +328,10 @@ mod tests {
                 created_at: test_issue.created_at,
                 updated_at: test_issue.updated_at,
                 closed_at: None,
+                created_by: "Author".to_string(),
+                branch: Some("main".to_string()),
+                checklist_name: Some("checklist".to_string()),
+                relevant_files: Vec::new(),
             },
             qc_status: QCStatus {
                 status: QCStatusEnum::InProgress,
@@ -389,6 +393,10 @@ mod tests {
                 created_at: test_issue1.created_at,
                 updated_at: test_issue1.updated_at,
                 closed_at: None,
+                created_by: "Author".to_string(),
+                branch: Some("main".to_string()),
+                checklist_name: Some("checklist".to_string()),
+                relevant_files: Vec::new(),
             },
             qc_status: QCStatus {
                 status: QCStatusEnum::InProgress,

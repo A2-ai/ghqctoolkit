@@ -1,0 +1,22 @@
+name: "GET /api/files/tree - subdirectory listing"
+description: "Returns entries for the specified subdirectory"
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/files/tree"
+  query:
+    path: "src"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      path: "src"
+      entries:
+        - name: "main.rs"
+          kind: "file"
+        - name: "lib.rs"
+          kind: "file"

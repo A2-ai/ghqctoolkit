@@ -16,10 +16,12 @@ pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
 pub use auth::AuthError;
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{
-    CommitCache, GitAuthor, GitCommit, GitFileOps, GitFileOpsError, find_file_commits,
-    get_commits_robust,
+    CommitCache, GitAuthor, GitCommit, GitFileOps, GitFileOpsError, find_commits,
+    find_file_commits, get_commits_robust,
 };
 
+#[cfg(test)]
+pub use action::MockGitCli;
 #[cfg(test)]
 pub use file_ops::MockGitFileOps;
 pub use helpers::GitHelpers;

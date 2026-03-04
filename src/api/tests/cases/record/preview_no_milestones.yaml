@@ -1,0 +1,20 @@
+name: "POST /api/record/preview - no matching milestones"
+description: "Returns 400 when requested milestones don't exist"
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/record/preview"
+  body:
+    milestone_numbers: [999]
+    tables_only: false
+    output_path: ""
+    context_files: []
+
+response:
+  status: 400
+  body:
+    match_type: partial
+    fields:
+      error: "No matching milestones found"

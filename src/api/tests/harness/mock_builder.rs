@@ -18,7 +18,8 @@ impl MockBuilder {
             .with_repo(&git_state.repo)
             .with_commit(&git_state.commit)
             .with_branch(&git_state.branch)
-            .with_remote_commit(&git_state.remote_commit);
+            .with_remote_commit(&git_state.remote_commit)
+            .with_current_user(git_state.current_user.clone());
 
         // Add all issues
         for (number, issue) in &fixtures.issues {

@@ -31,3 +31,6 @@ The API is documented in `openapi/openapi.yml`. This file is manually maintained
 ### OpenAPI File Location
 - Path: `openapi/openapi.yml`
 - Format: YAML (OpenAPI 3.0.3)
+
+## Planning
+When writing a plan, use the AskUserQuestions tool for all decisions.

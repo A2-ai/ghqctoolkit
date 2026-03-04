@@ -27,5 +27,7 @@ response:
       remote_commit: "9012345678901234567890abcdef1234567890ab"
       git_status: "ahead"
       git_status_detail: "Repository is ahead by 2 commits"
+      dirty_files: []
+      current_user: "test-user"
 
 assert_write_calls: []

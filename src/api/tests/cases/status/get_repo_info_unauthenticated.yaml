@@ -1,0 +1,29 @@
+name: "GET /api/repo - unauthenticated user"
+description: "When get_current_user returns None, current_user is null in response"
+
+git_state:
+  commit: "abc1234567890abcdef1234567890abcdef12340"
+  branch: "main"
+  remote_commit: "abc1234567890abcdef1234567890abcdef12340"
+  current_user: null
+  status:
+    type: clean
+
+request:
+  method: GET
+  path: "/api/repo"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      owner: "test-owner"
+      repo: "test-repo"
+      branch: "main"
+      local_commit: "abc1234567890abcdef1234567890abcdef12340"
+      remote_commit: "abc1234567890abcdef1234567890abcdef12340"
+      git_status: "clean"
+      git_status_detail: "Repository is up to date!"
+      dirty_files: []
+      current_user: null

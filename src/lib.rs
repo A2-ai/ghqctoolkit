@@ -23,6 +23,9 @@ pub mod cli;
 #[cfg(feature = "api")]
 pub mod api;
 
+#[cfg(feature = "ui")]
+pub mod ui;
+
 pub use approve::{
     ApprovalError, ApprovalResult, BlockingQCCheckResult, ImpactNode, ImpactedIssues, QCApprove,
     QCUnapprove, UnapprovalResult, approve_with_validation, get_unapproved_blocking_qcs,
@@ -44,7 +47,7 @@ pub use git::{
     AuthError, CommitCache, GitAuthor, GitCli, GitCliError, GitCommand, GitComment, GitCommit,
     GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
     GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError, GitProvider, GitRepository,
-    GitRepositoryError, GitState, GitStatus, GitStatusError, GitStatusOps, RepoUser,
+    GitRepositoryError, GitState, GitStatus, GitStatusError, GitStatusOps, RepoUser, find_commits,
     find_file_commits, get_git_status,
 };
 pub use issue::{
