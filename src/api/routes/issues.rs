@@ -11,7 +11,7 @@ use crate::api::types::{
 };
 use crate::create::QCIssueError;
 use crate::git::GitHubApiError;
-use crate::{GitProvider, QCEntry, batch_post_qc_entries, get_repo_users};
+use crate::{GitProvider, QCEntry, batch_post_qc_entries, create_labels_if_needed, get_repo_users};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -113,6 +113,17 @@ pub async fn create_issues<G: GitProvider + 'static>(
             "Issues already exist in milestone for files:\n  - {}",
             duplicate_issues.join("\n  - ")
         )));
+    }
+
+    // Check if labels exist and create if not
+    if let Err(e) = create_labels_if_needed(
+        state.disk_cache(),
+        state.git_info().branch().ok().as_deref(),
+        state.git_info(),
+    )
+    .await
+    {
+        log::warn!("Failed to create issue labels: {e}. Continuing without...");
     }
 
     let res = batch_post_qc_entries(&entries, state.git_info(), milestone_number)
