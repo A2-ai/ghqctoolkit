@@ -11,7 +11,7 @@ Directory: /projects/myrepo
 Repository: owner/repo (https://github.com/owner/repo)
 Branch: main
 Milestones: 1
-  - v1.0: 4 open | 8 closed
+  - v1.0 [open]: 4 open | 8 closed
 
 === Configuration ==================
 Directory: src/tests/custom_configuration

@@ -14,6 +14,7 @@ use crate::{
 #[derive(Debug, Clone, Serialize)]
 struct MilestoneSitRep {
     name: String,
+    is_open: bool,
     open: u64,
     closed: u64,
     total: u64,
@@ -23,8 +24,10 @@ impl From<Milestone> for MilestoneSitRep {
     fn from(milestone: Milestone) -> Self {
         let open = milestone.open_issues.unwrap_or_default() as u64;
         let closed = milestone.closed_issues.unwrap_or_default() as u64;
+        let is_open = milestone.state.as_deref() != Some("closed");
         Self {
             name: milestone.title,
+            is_open,
             open,
             closed,
             total: open + closed,
@@ -34,10 +37,11 @@ impl From<Milestone> for MilestoneSitRep {
 
 impl fmt::Display for MilestoneSitRep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = if self.is_open { "open" } else { "closed" };
         write!(
             f,
-            "{}: {} open | {} closed",
-            self.name, self.open, self.closed
+            "{} [{}]: {} open | {} closed",
+            self.name, state, self.open, self.closed
         )
     }
 }
@@ -105,8 +109,12 @@ impl fmt::Display for RepoSitRep {
             Ok(milestones) => {
                 writeln!(
                     f,
-                    "Milestones: {}\n  - {}",
-                    milestones.len(),
+                    "Milestones: {}{}",
+                    if milestones.len() == 0 {
+                        "None".to_string()
+                    } else {
+                        format!("{}\n  - ", milestones.len())
+                    },
                     milestones
                         .iter()
                         .map(|(_, m)| m.to_string())
@@ -314,7 +322,7 @@ mod tests {
         serde_json::from_value(json).expect("Failed to deserialize milestone")
     }
 
-    // v1.0: open=4, closed=8  |  v2.0: open=2, closed=3
+    // v1.0: open=4, closed=8, state=open  |  v2.0: open=2, closed=3, state=open
 
     #[test]
     fn test_from_milestone_totals() {
@@ -323,12 +331,21 @@ mod tests {
         assert_eq!(rep.open, 4);
         assert_eq!(rep.closed, 8);
         assert_eq!(rep.total, 12);
+        assert!(rep.is_open);
+    }
+
+    #[test]
+    fn test_from_milestone_closed_state() {
+        let mut json = load_milestone_json("v1.0");
+        json["state"] = serde_json::json!("closed");
+        let rep = MilestoneSitRep::from(parse_milestone(json));
+        assert!(!rep.is_open);
     }
 
     #[test]
     fn test_milestone_display() {
         let rep = MilestoneSitRep::from(parse_milestone(load_milestone_json("v2.0")));
-        assert_eq!(rep.to_string(), "v2.0: 2 open | 3 closed");
+        assert_eq!(rep.to_string(), "v2.0 [open]: 2 open | 3 closed");
     }
 
     #[test]

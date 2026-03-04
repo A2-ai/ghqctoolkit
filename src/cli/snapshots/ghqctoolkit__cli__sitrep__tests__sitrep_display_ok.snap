@@ -11,8 +11,8 @@ Directory: /projects/myrepo
 Repository: owner/repo (https://github.com/owner/repo)
 Branch: main
 Milestones: 2
-  - v1.0: 4 open | 8 closed
-  - v2.0: 2 open | 3 closed
+  - v1.0 [open]: 4 open | 8 closed
+  - v2.0 [open]: 2 open | 3 closed
 
 === Configuration ==================
 Directory: /config/path    ❌ Directory not found
