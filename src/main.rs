@@ -71,6 +71,9 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value = "3103")]
         port: u16,
+        /// Do not open frontend in new tab
+        #[arg(long)]
+        no_open: bool,
     },
 }
 
@@ -1057,7 +1060,7 @@ async fn main() -> Result<()> {
             axum::serve(listener, app).await?;
         }
         #[cfg(feature = "ui")]
-        Commands::Ui { port } => {
+        Commands::Ui { port, no_open } => {
             use ghqctoolkit::api::AppState;
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
@@ -1078,7 +1081,7 @@ async fn main() -> Result<()> {
 
             let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache)
                 .with_creator(|path| GitInfo::from_path(path, &StdEnvProvider).ok());
-            ghqctoolkit::ui::run(port, state).await?;
+            ghqctoolkit::ui::run(port, state, no_open).await?;
         }
     }
 
