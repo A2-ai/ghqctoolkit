@@ -8,6 +8,8 @@ import { ReviewersTab } from './ReviewersTab'
 import type { ChecklistDraft } from './ChecklistTab'
 import { useRepoInfo } from '~/api/repo'
 import { useIssuesForMilestone } from '~/api/issues'
+import { useChecklistDisplayName } from '~/api/configuration'
+import { capitalize } from '~/utils/displayName'
 import type { RelevantFileKind } from '~/api/issues'
 import { toCreateIssueRequest } from '~/api/create'
 import { fetchFileContent, fetchIssuePreview } from '~/api/preview'
@@ -50,6 +52,9 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '', content: '' })
   const [checklistSelected, setChecklistSelected] = useState(false)
+  const [checklistKey, setChecklistKey] = useState(0)
+  // Custom tabs saved via "Save" persist across modal opens for the duration of the Create tab
+  const [savedCustomTabs, setSavedCustomTabs] = useState<ChecklistDraft[]>([])
   const [assignees, setAssignees] = useState<string[]>([])
   const [relevantFiles, setRelevantFiles] = useState<RelevantFileDraft[]>([])
   const [activeTab, setActiveTab] = useState<string | null>('file')
@@ -61,11 +66,14 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const [issuePreviewLoading, setIssuePreviewLoading] = useState(false)
   const { data: repoInfo } = useRepoInfo()
   const { data: milestoneIssues = [] } = useIssuesForMilestone(milestoneNumber)
+  const { singular } = useChecklistDisplayName()
+  const singularCap = capitalize(singular)
 
   // Populate state each time the modal opens (fresh create or edit)
   useEffect(() => {
     if (opened) {
       setActiveTab('file')
+      setChecklistKey((k) => k + 1) // remount ChecklistTab to clear any new-* tabs
       if (editItem) {
         setSelectedFile(editItem.file)
         setChecklistDraft({ name: editItem.checklistName, content: editItem.checklistContent })
@@ -151,7 +159,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
         <Tabs.List grow>
           <Tabs.Tab value="file">Select a File</Tabs.Tab>
-          <Tabs.Tab value="checklist">Select a Checklist</Tabs.Tab>
+          <Tabs.Tab value="checklist">Select a {singularCap}</Tabs.Tab>
           <Tabs.Tab value="relevant">Select Relevant Files</Tabs.Tab>
           <Tabs.Tab value="reviewers">Select Reviewer(s)</Tabs.Tab>
         </Tabs.List>
@@ -167,9 +175,15 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             </Tabs.Panel>
             <Tabs.Panel value="checklist" keepMounted>
               <ChecklistTab
+                key={checklistKey}
                 onChange={setChecklistDraft}
                 onSelect={() => setChecklistSelected(true)}
                 initialDraft={editItem ? { name: editItem.checklistName, content: editItem.checklistContent } : null}
+                persistedCustomTabs={savedCustomTabs}
+                onSaveCustom={(tab) => setSavedCustomTabs((prev) => {
+                  const idx = prev.findIndex((t) => t.name === tab.name)
+                  return idx >= 0 ? prev.map((t, i) => i === idx ? tab : t) : [...prev, tab]
+                })}
               />
             </Tabs.Panel>
             <Tabs.Panel value="relevant">
@@ -191,7 +205,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
               file={selectedFile}
               branch={repoInfo?.branch ?? null}
               createdBy={repoInfo?.current_user ?? null}
-              checklistName={checklistDraft.name || null}
+              checklistName={checklistSelected ? (checklistDraft.name || null) : null}
               assignees={assignees}
               relevantFiles={relevantFiles}
             />

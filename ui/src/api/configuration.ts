@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { Checklist } from '~/api/checklists'
+import { resolveDisplayName } from '~/utils/displayName'
 
 export interface ConfigGitRepository {
   owner: string
@@ -37,6 +38,12 @@ export function useConfigurationStatus() {
     queryKey: ['configuration', 'status'],
     queryFn: fetchConfigurationStatus,
   })
+}
+
+/** Returns singular/plural display names derived from the configured checklist_display_name. */
+export function useChecklistDisplayName(): { singular: string; plural: string } {
+  const { data } = useConfigurationStatus()
+  return resolveDisplayName(data?.options.checklist_display_name ?? 'checklist')
 }
 
 export async function setupConfiguration(url: string): Promise<ConfigurationStatus> {

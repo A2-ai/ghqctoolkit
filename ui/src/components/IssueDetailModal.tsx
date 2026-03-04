@@ -25,6 +25,8 @@ import { CommitSlider } from '~/components/CommitSlider'
 import { UnapproveSwimLanes } from '~/components/UnapproveSwimLanes'
 import { wrapInGithubStyles } from '~/utils/github'
 import { STATUS_LANE_COLOR } from '~/utils/statusColors'
+import { useChecklistDisplayName } from '~/api/configuration'
+import { capitalize } from '~/utils/displayName'
 
 // Commit status dot colors (rendered oldest→newest, lowest→highest)
 const STATUS_DOT_COLORS: Record<string, string> = {
@@ -416,6 +418,8 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
   const blocking_qc_status = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const laneColor = STATUS_LANE_COLOR[qc_status.status]
   const formattedStatus = qc_status.status.replace(/_/g, ' ')
+  const { singular } = useChecklistDisplayName()
+  const singularCap = capitalize(singular)
 
   return (
     <Card
@@ -454,7 +458,7 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
 
         {checklist_summary.total > 0 && (
           <InlineProgress
-            label="Checklist"
+            label={singularCap}
             value={(checklist_summary.completed / checklist_summary.total) * 100}
             completed={checklist_summary.completed}
             total={checklist_summary.total}

@@ -264,7 +264,7 @@ test('checklists section filters Custom and shows content on selection', async (
   expect(await page.getByRole('button', { name: 'Custom' }).count()).toBe(0)
 
   // "Code Review" should be visible and its content shown in the textarea
-  await expect(page.getByRole('button', { name: 'Code Review' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Code Review', exact: true })).toBeVisible()
   await expect(page.getByRole('textbox').filter({ hasText: '- [ ] Review logic' })).toBeVisible()
 })
 

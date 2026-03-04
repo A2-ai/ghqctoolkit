@@ -31,6 +31,8 @@ export interface RouteOverrides {
   issueStatuses: BatchIssueStatusResponse
   /** HTTP status code for /api/issues/status (default 200) */
   issueStatusesCode: number
+  /** checklist_display_name returned by GET /api/configuration (default: 'checklists') */
+  checklistDisplayName: string
   /** Checklists returned by GET /api/configuration */
   checklists: Checklist[]
   /** Assignees returned by /api/assignees */
@@ -76,6 +78,7 @@ const defaultOverrides: RouteOverrides = {
     errors: [],
   },
   issueStatusesCode: 200,
+  checklistDisplayName: 'checklists',
   checklists: defaultChecklists,
   assignees: defaultAssignees,
   fileTree: { '': rootFileTree, src: srcFileTree },
@@ -157,7 +160,7 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       git_repository: null,
       options: {
         prepended_checklist_note: null,
-        checklist_display_name: 'Code Review',
+        checklist_display_name: cfg.checklistDisplayName,
         logo_path: 'logo.png',
         logo_found: false,
         checklist_directory: 'checklists/',
