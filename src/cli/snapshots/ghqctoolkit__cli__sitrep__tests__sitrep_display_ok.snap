@@ -2,6 +2,10 @@
 source: src/cli/sitrep.rs
 expression: make_sitrep(Ok(repo)).to_string()
 ---
+=== Binary =========================
+Version: 0.1.0
+Path: /usr/local/bin/ghqc
+
 === Repository =====================
 Directory: /projects/myrepo
 Repository: owner/repo (https://github.com/owner/repo)

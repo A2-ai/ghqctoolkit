@@ -216,7 +216,33 @@ impl fmt::Display for ConfigSitRep {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct BinarySitRep {
+    version: String,
+    path: Result<PathBuf, String>,
+}
+
+impl BinarySitRep {
+    fn new() -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            path: std::env::current_exe().map_err(|e| e.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for BinarySitRep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Version: {}", self.version)?;
+        match &self.path {
+            Ok(p) => writeln!(f, "Path: {}", p.display()),
+            Err(e) => writeln!(f, "Path: Failed to determine executable path: {e}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SitRep {
+    binary: BinarySitRep,
     directory: PathBuf,
     repository: Result<RepoSitRep, String>,
     configuration: ConfigSitRep,
@@ -240,6 +266,7 @@ impl SitRep {
         let configuration = ConfigSitRep::new(&config_dir, config_git_info.as_ref());
 
         Self {
+            binary: BinarySitRep::new(),
             directory: directory.as_ref().to_path_buf(),
             repository,
             configuration,
@@ -249,6 +276,8 @@ impl SitRep {
 
 impl fmt::Display for SitRep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "=== Binary =========================")?;
+        writeln!(f, "{}", self.binary)?;
         writeln!(f, "=== Repository =====================")?;
         match &self.repository {
             Ok(r) => {
@@ -353,8 +382,16 @@ mod tests {
         );
     }
 
+    fn fixed_binary() -> BinarySitRep {
+        BinarySitRep {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            path: Ok(PathBuf::from("/usr/local/bin/ghqc")),
+        }
+    }
+
     fn make_sitrep(repository: Result<RepoSitRep, String>) -> SitRep {
         SitRep {
+            binary: fixed_binary(),
             directory: PathBuf::from("/projects/myrepo"),
             repository,
             configuration: ConfigSitRep {
@@ -400,6 +437,7 @@ mod tests {
             milestones: Ok(vec![("v1.0".to_string(), v1)]),
         };
         let sitrep = SitRep {
+            binary: fixed_binary(),
             directory: PathBuf::from("/projects/myrepo"),
             repository: Ok(repo),
             configuration: ConfigSitRep::new("src/tests/custom_configuration", None),

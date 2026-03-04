@@ -2,6 +2,10 @@
 source: src/cli/sitrep.rs
 expression: "make_sitrep(Err(\"not a git repository\".to_string())).to_string()"
 ---
+=== Binary =========================
+Version: 0.1.0
+Path: /usr/local/bin/ghqc
+
 === Repository =====================
 Failed to determine Git Repository Info for /projects/myrepo: not a git repository
 === Configuration ==================
