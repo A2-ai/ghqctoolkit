@@ -58,6 +58,12 @@ enum Commands {
         #[command(subcommand)]
         configuration_command: ConfigurationCommands,
     },
+    /// Situation report
+    Sitrep {
+        /// Output as json
+        #[arg(long)]
+        json: bool,
+    },
     #[cfg(all(feature = "api", not(feature = "ui")))]
     /// Start the API server
     Serve {
@@ -1029,6 +1035,19 @@ async fn main() -> Result<()> {
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
+        Commands::Sitrep { json } => {
+            use ghqctoolkit::cli::SitRep;
+
+            let sit_rep = SitRep::new(&cli.directory, cli.config_dir.as_ref()).await;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&sit_rep).expect("valid json")
+                );
+            } else {
+                println!("{}", sit_rep);
+            }
+        }
         #[cfg(all(feature = "api", not(feature = "ui")))]
         Commands::Serve { port } => {
             use ghqctoolkit::api::{AppState, create_router};
