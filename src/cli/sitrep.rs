@@ -267,3 +267,92 @@ impl fmt::Display for SitRep {
         writeln!(f, "{}", self.configuration)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    fn load_milestone_json(name: &str) -> Value {
+        let text = std::fs::read_to_string(format!(
+            "src/tests/github_api/milestones/{}.json",
+            name
+        ))
+        .unwrap_or_else(|_| panic!("Failed to load milestone fixture: {}", name));
+        serde_json::from_str(&text).expect("Failed to parse milestone fixture JSON")
+    }
+
+    fn parse_milestone(json: Value) -> octocrab::models::Milestone {
+        serde_json::from_value(json).expect("Failed to deserialize milestone")
+    }
+
+    // v1.0: open=4, closed=8  |  v2.0: open=2, closed=3
+
+    #[test]
+    fn test_from_milestone_totals() {
+        let rep = MilestoneSitRep::from(parse_milestone(load_milestone_json("v1.0")));
+        assert_eq!(rep.name, "v1.0");
+        assert_eq!(rep.open, 4);
+        assert_eq!(rep.closed, 8);
+        assert_eq!(rep.total, 12);
+    }
+
+    #[test]
+    fn test_milestone_display() {
+        let rep = MilestoneSitRep::from(parse_milestone(load_milestone_json("v2.0")));
+        assert_eq!(rep.to_string(), "v2.0: 2 open | 3 closed");
+    }
+
+    #[test]
+    fn test_milestone_sort_highest_open_first() {
+        // v1.0 has more open issues (4) than v2.0 (2), so v1.0 should sort first
+        let v1 = MilestoneSitRep::from(parse_milestone(load_milestone_json("v1.0")));
+        let v2 = MilestoneSitRep::from(parse_milestone(load_milestone_json("v2.0")));
+        let mut milestones: Vec<(String, MilestoneSitRep)> = vec![
+            ("v2.0".to_string(), v2),
+            ("v1.0".to_string(), v1),
+        ];
+        milestones.sort_by(|(_, a), (_, b)| {
+            a.open.cmp(&b.open).reverse().then(a.name.cmp(&b.name))
+        });
+        let names: Vec<&str> = milestones.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["v1.0", "v2.0"]);
+    }
+
+    #[test]
+    fn test_milestone_sort_tiebreak_alphabetical() {
+        // When open counts are equal, sort alphabetically by name.
+        // Use v1.0 as the base fixture and patch title + open_issues for each variant.
+        let make = |title: &str, open: u64| {
+            let mut json = load_milestone_json("v1.0");
+            json["title"] = serde_json::json!(title);
+            json["open_issues"] = serde_json::json!(open);
+            MilestoneSitRep::from(parse_milestone(json))
+        };
+
+        let mut milestones: Vec<(String, MilestoneSitRep)> = vec![
+            ("zebra".to_string(), make("zebra", 3)),
+            ("alpha".to_string(), make("alpha", 3)),
+            ("beta".to_string(), make("beta", 3)),
+        ];
+        milestones.sort_by(|(_, a), (_, b)| {
+            a.open.cmp(&b.open).reverse().then(a.name.cmp(&b.name))
+        });
+        let names: Vec<&str> = milestones.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta", "zebra"]);
+    }
+
+    #[test]
+    fn test_repo_sitrep_display_branch_error() {
+        let rep = RepoSitRep {
+            path: PathBuf::from("/some/path"),
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            remote_url: "https://github.com/owner/repo".to_string(),
+            branch: Err("detached HEAD".to_string()),
+            milestones: Ok(vec![]),
+        };
+        assert!(rep.to_string().contains("Failed to determine branch: detached HEAD"));
+    }
+}
