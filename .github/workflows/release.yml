@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies (AlmaLinux)
         if: matrix.container != ''
         run: |
-          dnf install -y gcc gcc-c++ make git curl tar gzip clang llvm unzip
+          dnf install -y gcc gcc-c++ make git curl tar gzip clang llvm unzip perl-IPC-Cmd
 
       - name: Install Rust
         if: runner.os != 'Windows'

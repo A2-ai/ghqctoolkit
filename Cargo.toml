@@ -52,6 +52,7 @@ typst-kit = { version = "0.14", features = ["embed-fonts"] }
 typst-pdf = "0.14"
 tempfile = "3.0"
 uuid = { version = "1.21", features = ["v4"] }
+openssl = { version = "0.10", features = ["vendored"] }
 
 [features]
 cli = [
