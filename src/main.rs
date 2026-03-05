@@ -24,7 +24,7 @@ use ghqctoolkit::{
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(name = "ghqc", author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
