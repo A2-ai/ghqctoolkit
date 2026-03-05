@@ -61,6 +61,12 @@ Issues are grouped into Milestones for organizational purposes.
 | [`ghqc configuration setup`](docs/configuration.md) | Clone the configuration repository |
 | [`ghqc configuration status`](docs/configuration.md) | Display configuration directory and available checklists |
 
+### Diagnostics
+
+| Command | Description |
+|---|---|
+| [`ghqc sitrep`](docs/sitrep.md) | Print a situation report: binary version, repository info, and configuration status |
+
 ### Server
 
 | Command | Description |
@@ -129,3 +135,4 @@ An example configuration repository is available at [a2-ai/ghqc.example_config_r
 - [Milestone: Record](docs/milestone-record.md)
 - [Milestone: Archive](docs/milestone-archive.md)
 - [Serve / UI](docs/serve.md)
+- [Sitrep](docs/sitrep.md)
