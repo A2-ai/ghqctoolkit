@@ -1,0 +1,26 @@
+---
+source: src/cli/sitrep.rs
+expression: make_sitrep(Ok(repo)).to_string()
+---
+=== Binary =========================
+Version: 0.1.0
+Path: /usr/local/bin/ghqc
+
+=== Repository =====================
+Directory: /projects/myrepo
+Repository: owner/repo (https://github.com/owner/repo)
+Branch: main
+Milestones: 2
+  - v1.0 [open]: 4 open | 8 closed
+  - v2.0 [open]: 2 open | 3 closed
+
+=== Configuration ==================
+Directory: /config/path    ❌ Directory not found
+Repository: owner/repo (https://github.com/owner/repo)
+Checklists: 1
+  - Custom: 1 items
+Options:
+  - Checklist Display Name:  checklists
+  - Logo Path: logo.png
+  - Checklist Directory: checklists
+  - Record Template Path: record.typ

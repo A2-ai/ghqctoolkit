@@ -62,7 +62,7 @@ impl Checklist {
         Self { name, content }
     }
 
-    fn items(&self) -> usize {
+    pub fn items(&self) -> usize {
         self.content.matches("- [ ]").count()
     }
 }

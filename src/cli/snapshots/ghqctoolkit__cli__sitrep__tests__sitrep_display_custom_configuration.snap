@@ -1,0 +1,28 @@
+---
+source: src/cli/sitrep.rs
+expression: sitrep.to_string()
+---
+=== Binary =========================
+Version: 0.1.0
+Path: /usr/local/bin/ghqc
+
+=== Repository =====================
+Directory: /projects/myrepo
+Repository: owner/repo (https://github.com/owner/repo)
+Branch: main
+Milestones: 1
+  - v1.0 [open]: 4 open | 8 closed
+
+=== Configuration ==================
+Directory: src/tests/custom_configuration
+Repository: Not determined to be git repository
+Checklists: 2
+  - Custom Checklist: 3 items
+  - Custom: 1 items
+Options:
+  - Prepended Checklist Note:
+     │ Please review carefully
+  - Checklist Display Name:  Custom Quality Check
+  - Logo Path: assets/custom_logo.svg
+  - Checklist Directory: my_custom_checklists
+  - Record Template Path: record.typ
