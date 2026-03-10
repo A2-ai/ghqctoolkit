@@ -1,3 +1,5 @@
+import { API_BASE } from "../config"
+
 export interface RecordContextFileRequest {
   server_path: string
   position: 'prepend' | 'append'
@@ -13,7 +15,7 @@ export interface RecordRequest {
 export async function uploadContextFile(file: File): Promise<{ temp_path: string }> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch('/api/record/upload', { method: 'POST', body: form })
+  const res = await fetch(`${API_BASE}/record/upload`, { method: 'POST', body: form })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`Upload failed: ${text}`)
@@ -22,7 +24,7 @@ export async function uploadContextFile(file: File): Promise<{ temp_path: string
 }
 
 export async function previewRecord(req: RecordRequest): Promise<{ key: string }> {
-  const res = await fetch('/api/record/preview', {
+  const res = await fetch(`${API_BASE}/record/preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -35,7 +37,7 @@ export async function previewRecord(req: RecordRequest): Promise<{ key: string }
 }
 
 export async function generateRecord(req: RecordRequest): Promise<void> {
-  const res = await fetch('/api/record/generate', {
+  const res = await fetch(`${API_BASE}/record/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),

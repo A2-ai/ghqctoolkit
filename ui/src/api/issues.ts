@@ -1,4 +1,5 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { API_BASE } from '../config'
 
 export type RelevantFileKind = 'blocking_qc' | 'relevant_qc' | 'file'
 
@@ -127,7 +128,7 @@ export interface CommentResponse {
 }
 
 export async function postComment(issueNumber: number, request: CreateCommentRequest): Promise<CommentResponse> {
-  const res = await fetch(`/api/issues/${issueNumber}/comment`, {
+  const res = await fetch(`${API_BASE}/issues/${issueNumber}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -168,20 +169,20 @@ export interface MilestoneStatusInfo {
 }
 
 export async function fetchMilestoneIssues(milestoneNumber: number): Promise<Issue[]> {
-  const res = await fetch(`/api/milestones/${milestoneNumber}/issues`)
+  const res = await fetch(`${API_BASE}/milestones/${milestoneNumber}/issues`)
   if (!res.ok) throw new Error(`Failed to fetch issues for milestone ${milestoneNumber}: ${res.status}`)
   return res.json()
 }
 
 async function fetchIssueStatuses(issueNumbers: number[]): Promise<BatchIssueStatusResponse> {
-  const res = await fetch(`/api/issues/status?issues=${issueNumbers.join(',')}`)
+  const res = await fetch(`${API_BASE}/issues/status?issues=${issueNumbers.join(',')}`)
   const data = await res.json()
   if ('results' in data && 'errors' in data) return data as BatchIssueStatusResponse
   throw new Error(`Failed to fetch issue statuses: ${res.status}`)
 }
 
 export async function postReview(issueNumber: number, request: ReviewRequest): Promise<CommentResponse> {
-  const res = await fetch(`/api/issues/${issueNumber}/review`, {
+  const res = await fetch(`${API_BASE}/issues/${issueNumber}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -194,7 +195,7 @@ export async function postReview(issueNumber: number, request: ReviewRequest): P
 }
 
 export async function postUnapprove(issueNumber: number, request: UnapproveRequest): Promise<UnapprovalResponse> {
-  const res = await fetch(`/api/issues/${issueNumber}/unapprove`, {
+  const res = await fetch(`${API_BASE}/issues/${issueNumber}/unapprove`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -207,7 +208,7 @@ export async function postUnapprove(issueNumber: number, request: UnapproveReque
 }
 
 export async function postApprove(issueNumber: number, request: ApproveRequest, force = false): Promise<ApprovalResponse> {
-  const url = force ? `/api/issues/${issueNumber}/approve?force=true` : `/api/issues/${issueNumber}/approve`
+  const url = force ? `${API_BASE}/issues/${issueNumber}/approve?force=true` : `${API_BASE}/issues/${issueNumber}/approve`
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -391,7 +392,7 @@ export interface BlockedIssueStatus {
 }
 
 export async function fetchBlockedIssues(issueNumber: number): Promise<BlockedIssueStatus[]> {
-  const res = await fetch(`/api/issues/${issueNumber}/blocked`)
+  const res = await fetch(`${API_BASE}/issues/${issueNumber}/blocked`)
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to fetch blocked issues: ${res.status}`)

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter } from '@tanstack/react-router'
 import { routeTree } from './routeTree.gen'
+import { ROUTER_BASE } from './config'
 
 export function getRouter() {
   const queryClient = new QueryClient({
@@ -13,6 +14,7 @@ export function getRouter() {
 
   return createRouter({
     routeTree,
+    basepath: ROUTER_BASE,
     context: { queryClient },
     defaultPreload: 'intent',
     Wrap: ({ children }) => (
