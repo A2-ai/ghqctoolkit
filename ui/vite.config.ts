@@ -4,7 +4,6 @@ import viteReact from '@vitejs/plugin-react'
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 
 export default defineConfig({
-  base: './',
   server: {
     port: 3103,
     proxy: {
