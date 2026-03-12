@@ -32,6 +32,7 @@ import {
   IconPlus,
   IconX,
 } from '@tabler/icons-react'
+import { API_BASE } from '~/config'
 import { useMilestones } from '~/api/milestones'
 import { type RecordRequest, generateRecord, previewRecord } from '~/api/record'
 import { useRepoInfo } from '~/api/repo'
@@ -639,7 +640,7 @@ export function RecordTab() {
         {previewKey && (
           <iframe
             key={previewKey}
-            src={`/api/record/preview.pdf?key=${previewKey}`}
+            src={`${API_BASE}/record/preview.pdf?key=${previewKey}`}
             style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
           />
         )}
