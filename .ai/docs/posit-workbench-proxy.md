@@ -33,6 +33,7 @@ The fix has four parts, each targeting a specific failure mode:
 | `ui/src/server.ts` | `transformAssetUrls: '.'` | SSR manifest links become `./assets/...` |
 | `ui/src/router.tsx` | Wrap `router.update` | Preserves runtime `basepath` against TSS override |
 | `ui/src/components/AppLayout.tsx` + `__root.tsx` | `./logo.png` | Public static assets use relative paths |
+| `ui/src/components/RecordTab.tsx` (and similar) | Use `API_BASE` | Dynamic URLs built in JSX use the correct prefix |
 
 ---
 
@@ -149,9 +150,7 @@ const router = createRouter({
   // ...
 })
 
-// Only in production: dev mode derives ROUTER_BASE from source file paths,
-// which gives wrong values (e.g. '/src'). In dev, let TSS reset to '/' normally.
-if (typeof window !== 'undefined' && !import.meta.env.DEV) {
+if (typeof window !== 'undefined') {
   const _update = router.update.bind(router)
   router.update = (opts) => _update({ ...opts, basepath: ROUTER_BASE })
 }
@@ -164,7 +163,9 @@ This ensures:
 
 ---
 
-## Part 4 — Public Static Assets
+## Part 4 — Hardcoded URLs in Components
+
+### Public static assets (`public/`)
 
 Assets in `public/` (like `logo.png`) are not processed by Vite or `transformAssetUrls`.
 Any hardcoded `/logo.png` path in JSX or in `<link>` tags will break under the proxy.
@@ -179,38 +180,29 @@ Change all such references to `./logo.png`:
 <img src="./logo.png" alt="ghqc logo" />
 ```
 
----
+### Dynamic API URLs in JSX (iframes, anchors, etc.)
 
-## Part 5 — Simplify the Rust Server
+Hardcoded `/api/...` strings constructed at runtime in JSX — such as `src` on an
+`<iframe>` or `href` on a download link — are not touched by Vite or `transformAssetUrls`,
+so they also resolve from the domain root and bypass the proxy prefix.
 
-The Rust server previously patched HTML at runtime in `serve_index` to work around the
-absolute asset paths. With all paths now relative in the generated `index.html`, this
-is no longer needed.
+Use `API_BASE` from `config.ts` wherever a URL is built dynamically:
 
-**Before:**
-```rust
-fn serve_index(path: &str) -> Response {
-    let html = String::from_utf8_lossy(&index.data);
-    let html = html.replace("\"/assets/", "\"./assets/");
-    let html = html.replace("href=\"/logo.", "href=\"./logo.");
-    let html = html.replacen("<head>", &format!("<head><base href=\"{base_href}\">"), 1);
-    // ...
-}
+```tsx
+// Before — breaks under proxy
+<iframe src={`/api/record/preview.pdf?key=${key}`} />
+
+// After — uses runtime-derived base
+import { API_BASE } from '~/config'
+
+<iframe src={`${API_BASE}/record/preview.pdf?key=${key}`} />
 ```
 
-**After:**
-```rust
-fn serve_index() -> Response {
-    match UiAssets::get("index.html") {
-        Some(index) => Response::builder()
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .header(header::CONTENT_LENGTH, index.data.len())
-            .body(Body::from(index.data))
-            .unwrap_or(/* ... */),
-        None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
-    }
-}
-```
+`API_BASE` is `new URL('api', appRoot).href` — a full absolute URL computed from
+`import.meta.url` at runtime — so it automatically includes the proxy prefix.
+
+The general rule: **any URL string you construct yourself in TypeScript or JSX must use
+`API_BASE` rather than a bare `/api/...` path.**
 
 ---
 
@@ -228,17 +220,16 @@ Browser at: https://<host>/rstudio/s/<sid>/p/<pid>/
                 ├─ Lazy route chunks: import('./chunk.js')  ← relative, via base: ''
                 │    └─ resolves from assets/ → correct proxy URL
                 │
-                └─ API calls: API_BASE = https://<host>/rstudio/.../api
-                     └─ proxy strips prefix → Rust server sees /api/...
+                ├─ API fetch calls: API_BASE = https://<host>/rstudio/.../api
+                │    └─ proxy strips prefix → Rust server sees /api/...
+                │
+                └─ Dynamic JSX URLs (iframe src, download href, etc.)
+                     └─ must use API_BASE — bare /api/... bypasses the proxy
 ```
 
 ---
 
 ## Caveats
-
-- `import.meta.url` only gives the correct proxy prefix in **production builds**. In Vite
-  dev mode it points to source files, so `ROUTER_BASE` would be wrong (e.g. `/src`). The
-  `!import.meta.env.DEV` guard in `router.tsx` handles this.
 
 - `transformAssetUrls` is marked **experimental** in TanStack Start and may change in
   future versions.

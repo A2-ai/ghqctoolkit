@@ -27,8 +27,7 @@ export function getRouter() {
   // Wrap update in the browser only so the client keeps ROUTER_BASE while the server
   // continues to reset basepath to '/' for correct server-side route matching.
   // In dev mode, import.meta.url points to source files and gives wrong ROUTER_BASE.
-  // Only apply in production builds where ROUTER_BASE is correctly derived from the bundle URL.
-  if (typeof window !== 'undefined' && !import.meta.env.DEV) {
+  if (typeof window !== 'undefined') {
     const _update = router.update.bind(router)
     router.update = (opts) => _update({ ...opts, basepath: ROUTER_BASE })
   }
