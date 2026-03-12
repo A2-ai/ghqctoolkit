@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { API_BASE } from '../config'
 
 export interface Milestone {
   number: number
@@ -10,7 +11,7 @@ export interface Milestone {
 }
 
 async function fetchMilestones(): Promise<Milestone[]> {
-  const res = await fetch('/api/milestones')
+  const res = await fetch(`${API_BASE}/milestones`)
   if (!res.ok) throw new Error(`Failed to fetch milestones: ${res.status}`)
   return res.json()
 }

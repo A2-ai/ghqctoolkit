@@ -60,15 +60,24 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
           originalContent: t.content,
         }))
 
-        // Restore any custom tabs saved in previous modal opens
-        const persistedEntries: TabEntry[] = (persistedCustomTabs ?? []).map((t, i) => ({
-          key: `persisted-${i}`,
-          savedName: t.name,
-          savedContent: t.content,
-          originalName: t.name,
-          originalContent: t.content,
-        }))
-        const allEntries = [...entries, ...persistedEntries]
+        // Merge persisted saves into API tabs (overrides savedContent for edited API tabs),
+        // then append any persisted custom tabs whose names don't match an API tab.
+        const apiNames = new Set(visible.map((t) => t.name))
+        const persistedMap = new Map((persistedCustomTabs ?? []).map((t) => [t.name, t]))
+        const mergedEntries: TabEntry[] = entries.map((e) => {
+          const persisted = persistedMap.get(e.originalName)
+          return persisted ? { ...e, savedName: persisted.name, savedContent: persisted.content } : e
+        })
+        const extraEntries: TabEntry[] = (persistedCustomTabs ?? [])
+          .filter((t) => !apiNames.has(t.name))
+          .map((t, i) => ({
+            key: `persisted-${i}`,
+            savedName: t.name,
+            savedContent: t.content,
+            originalName: t.name,
+            originalContent: t.content,
+          }))
+        const allEntries = [...mergedEntries, ...extraEntries]
 
         setTabs(allEntries)
         setLoading(false)
@@ -134,10 +143,7 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
         t.key === activeKey ? { ...t, savedName: editorName, savedContent: editorContent } : t,
       ),
     )
-    // Notify parent to persist custom tabs (keys not from API)
-    if (!activeKey.startsWith('api-')) {
-      onSaveCustom?.({ name: editorName, content: editorContent })
-    }
+    onSaveCustom?.({ name: editorName, content: editorContent })
   }
 
   function handleReset() {

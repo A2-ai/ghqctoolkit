@@ -399,6 +399,11 @@ pub async fn setup_configuration(
     Ok(())
 }
 
+/// Determine directory for config:
+///     1. Use provided config_dir
+///     2. If `GHQC_CONFIG_REPO` set, use $XDG_DATA_HOME/ghqc/{repo_name}
+///     3. If `GHQC_CONFIG_DIR` set, use that directory
+///     4. If none of the above, use $XDG_DATA_HOME/ghqc/config
 pub fn determine_config_dir(
     config_dir: Option<PathBuf>,
     env: &impl EnvProvider,
@@ -408,47 +413,47 @@ pub fn determine_config_dir(
         return Ok(c);
     }
 
-    let strategy = etcetera::choose_base_strategy()
-        .map_err(|e| ConfigurationError::ConfigDir(e.to_string()))?;
-    let config_dir = strategy.data_dir().join("ghqc");
+    let strategy =
+        etcetera::choose_base_strategy().map_err(|e| ConfigurationError::ConfigDir(e.to_string()));
 
-    match env.var("GHQC_CONFIG_REPO") {
-        Ok(url_str) => {
-            log::debug!("GHQC_CONFIG_REPO found: {url_str}");
-            let url = gix::url::parse(url_str.as_str().into()).map_err(|error| {
-                ConfigurationError::InvalidGitUrl {
-                    url: url_str,
-                    error,
-                }
+    let config_dir = strategy.map(|xdg| xdg.data_dir().join("ghqc"));
+
+    if let Ok(url_str) = env.var("GHQC_CONFIG_REPO") {
+        log::debug!("GHQC_CONFIG_REPO found: {url_str}");
+        let url = gix::url::parse(url_str.as_str().into()).map_err(|error| {
+            ConfigurationError::InvalidGitUrl {
+                url: url_str,
+                error,
+            }
+        })?;
+
+        // Extract repo name from URL path (last segment)
+        let url_path: PathBuf = url.path.to_string().into();
+        let repo_name = url_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                ConfigurationError::ConfigDir(format!("Cannot extract repo name from URL: {}", url))
             })?;
 
-            // Extract repo name from URL path (last segment)
-            let url_path: PathBuf = url.path.to_string().into();
-            let repo_name = url_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    ConfigurationError::ConfigDir(format!(
-                        "Cannot extract repo name from URL: {}",
-                        url
-                    ))
-                })?;
+        let dir = config_dir?.join(repo_name);
+        log::debug!("Using env var directory: {}", dir.display());
 
-            let dir = config_dir.join(repo_name);
-            log::debug!("Using env var directory: {}", dir.display());
-
-            Ok(dir)
-        }
-        Err(_) => {
-            // No env var set, use default path with no URL
-            let dir = config_dir.join("config");
-            log::debug!(
-                "GHQC_CONFIG_REPO not set. Using default dir: {}",
-                dir.display()
-            );
-            Ok(dir)
-        }
+        return Ok(dir);
     }
+
+    if let Ok(env_dir) = env.var("GHQC_CONFIG_DIR") {
+        log::debug!("GHQC_CONFIG_DIR found: {env_dir}");
+        return Ok(PathBuf::from(env_dir));
+    }
+
+    // No env var set, use default path with no URL
+    let dir = config_dir?.join("config");
+    log::debug!(
+        "GHQC_CONFIG_REPO not set. Using default dir: {}",
+        dir.display()
+    );
+    Ok(dir)
 }
 
 pub fn configuration_status(
@@ -585,6 +590,7 @@ pub enum ConfigurationError {
 mod tests {
     use super::*;
     use crate::utils::MockEnvProvider;
+    use mockall::Sequence;
     use tempfile::TempDir;
 
     #[test]
@@ -615,10 +621,18 @@ mod tests {
     #[test]
     fn test_determine_config_dir_without_env_var() {
         let mut mock_env = MockEnvProvider::new();
+        let mut sequence = Sequence::new();
         mock_env
             .expect_var()
             .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
             .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_CONFIG_DIR"))
+            .times(1)
+            .in_sequence(&mut sequence)
             .returning(|_| Err(std::env::VarError::NotPresent));
 
         let result = determine_config_dir(None, &mock_env).unwrap();
@@ -626,6 +640,30 @@ mod tests {
         // Should use default "ghqc" directory
         assert!(result.ends_with("config"));
         assert!(result.to_string_lossy().contains("ghqc")); // Should be in some config directory
+    }
+
+    #[test]
+    fn test_determine_config_dir_with_config_dir_env_var() {
+        let mut mock_env = MockEnvProvider::new();
+        let mut sequence = Sequence::new();
+        let env_path = "/env/config/path";
+
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_CONFIG_DIR"))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| Ok(env_path.to_string()));
+
+        let result = determine_config_dir(None, &mock_env).unwrap();
+
+        assert_eq!(result, PathBuf::from(env_path));
     }
 
     #[test]

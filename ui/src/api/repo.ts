@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import { API_BASE } from '../config'
 
 export type GitStatus = 'clean' | 'ahead' | 'behind' | 'diverged'
 
@@ -16,7 +17,7 @@ export interface RepoInfo {
 }
 
 async function fetchRepoInfo(): Promise<RepoInfo> {
-  const res = await fetch('/api/repo')
+  const res = await fetch(`${API_BASE}/repo`)
   if (!res.ok) {
     let message = `Failed to fetch repo info: ${res.status}`
     try {

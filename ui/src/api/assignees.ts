@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { API_BASE } from '../config'
 
 export interface Assignee {
   login: string
@@ -6,7 +7,7 @@ export interface Assignee {
 }
 
 async function fetchAssignees(): Promise<Assignee[]> {
-  const res = await fetch('/api/assignees')
+  const res = await fetch(`${API_BASE}/assignees`)
   if (!res.ok) throw new Error(`Failed to fetch assignees: ${res.status}`)
   return res.json()
 }

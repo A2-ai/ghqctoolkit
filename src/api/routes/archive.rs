@@ -29,14 +29,9 @@ pub async fn generate_archive<G: GitProvider + 'static>(
     }
 
     let raw = PathBuf::from(&request.output_path);
-    let output_path = if raw.is_absolute() {
-        raw
-    } else {
-        state.git_info().path().join(&raw)
-    };
 
-    // Reject paths containing traversal components before creating any directories
-    for comp in output_path.components() {
+    // Reject user-supplied paths that explicitly traverse upward
+    for comp in raw.components() {
         if matches!(comp, Component::ParentDir) {
             return Err(ApiError::BadRequest(
                 "output_path must not contain '..' components".to_string(),
@@ -44,12 +39,19 @@ pub async fn generate_archive<G: GitProvider + 'static>(
         }
     }
 
-    // Ensure the resolved output path stays within the repo root
-    let repo_root = state
+    // Canonicalize the repo root first so a relative -d ../project doesn't inject '..'
+    let repo_root_for_join = state
         .git_info()
         .path()
         .canonicalize()
         .map_err(|e| ApiError::Internal(format!("Failed to canonicalize repo root: {e}")))?;
+    let output_path = if raw.is_absolute() {
+        raw
+    } else {
+        repo_root_for_join.join(&raw)
+    };
+
+    let repo_root = repo_root_for_join;
 
     // Create parent dir if needed, then canonicalize to validate containment
     let parent = output_path.parent().unwrap_or(&output_path);

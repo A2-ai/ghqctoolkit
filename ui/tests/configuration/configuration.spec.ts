@@ -38,6 +38,15 @@ const configured = {
   config_repo_env: null,
 }
 
+const localDirectoryConfig = {
+  directory: '/mock/config',
+  exists: true,
+  git_repository: null,
+  options: defaultOptions,
+  checklists: twoChecklists,
+  config_repo_env: null,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -119,7 +128,22 @@ test('setup form: Set Up button disabled when URL input is empty', async ({ page
 })
 
 // ---------------------------------------------------------------------------
-// 4. Not configured — typing a URL enables Set Up; clicking Set Up transitions
+// 4. Existing config directory without git metadata renders read-only status
+// ---------------------------------------------------------------------------
+test('existing configuration directory disables setup and reports non-git state', async ({ page }) => {
+  await setupRoutes(page)
+  await mockConfiguration(page, localDirectoryConfig)
+
+  await goToConfiguration(page)
+
+  await expect(page.getByText('Not a git repository')).toBeVisible()
+  await expect(page.getByText('/mock/config')).toBeVisible()
+  await expect(page.getByLabel('Git URL')).not.toBeVisible()
+  await expect(page.getByRole('button', { name: 'Set Up' })).not.toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 5. Not configured — typing a URL enables Set Up; clicking Set Up transitions
 //    to configured state
 // ---------------------------------------------------------------------------
 test('typing a URL enables Set Up and clicking it renders configured state', async ({ page }) => {
@@ -145,7 +169,7 @@ test('typing a URL enables Set Up and clicking it renders configured state', asy
 })
 
 // ---------------------------------------------------------------------------
-// 5. GHQC_CONFIG_REPO set — URL pre-filled, input disabled, hint shown,
+// 6. GHQC_CONFIG_REPO set — URL pre-filled, input disabled, hint shown,
 //    Set Up enabled without typing
 // ---------------------------------------------------------------------------
 test('GHQC_CONFIG_REPO pre-fills and disables the URL input', async ({ page }) => {
@@ -167,7 +191,7 @@ test('GHQC_CONFIG_REPO pre-fills and disables the URL input', async ({ page }) =
 })
 
 // ---------------------------------------------------------------------------
-// 6. GHQC_CONFIG_REPO set — clicking Set Up transitions to configured state
+// 7. GHQC_CONFIG_REPO set — clicking Set Up transitions to configured state
 // ---------------------------------------------------------------------------
 test('Set Up with GHQC_CONFIG_REPO transitions to configured state', async ({ page }) => {
   const envUrl = 'https://github.com/myorg/config-repo'
@@ -185,7 +209,7 @@ test('Set Up with GHQC_CONFIG_REPO transitions to configured state', async ({ pa
 })
 
 // ---------------------------------------------------------------------------
-// 7. Setup POST failure — error message shown below the form
+// 8. Setup POST failure — error message shown below the form
 // ---------------------------------------------------------------------------
 test('setup POST failure shows error message', async ({ page }) => {
   await setupRoutes(page)
@@ -214,7 +238,7 @@ test('setup POST failure shows error message', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 8. Already configured — shows owner/repo, status badge, no setup form
+// 9. Already configured — shows owner/repo, status badge, no setup form
 // ---------------------------------------------------------------------------
 test('already configured renders repo info and status badge', async ({ page }) => {
   await setupRoutes(page)
@@ -228,7 +252,7 @@ test('already configured renders repo info and status badge', async ({ page }) =
 })
 
 // ---------------------------------------------------------------------------
-// 9. Already configured — dirty_files listed when present
+// 10. Already configured — dirty_files listed when present
 // ---------------------------------------------------------------------------
 test('dirty files shown when config repo has uncommitted changes', async ({ page }) => {
   const dirty = {
@@ -251,7 +275,7 @@ test('dirty files shown when config repo has uncommitted changes', async ({ page
 })
 
 // ---------------------------------------------------------------------------
-// 10. Checklists section: Custom is filtered out; selecting a checklist
+// 11. Checklists section: Custom is filtered out; selecting a checklist
 //     shows its content
 // ---------------------------------------------------------------------------
 test('checklists section filters Custom and shows content on selection', async ({ page }) => {
@@ -269,7 +293,7 @@ test('checklists section filters Custom and shows content on selection', async (
 })
 
 // ---------------------------------------------------------------------------
-// 11. Options section renders configuration values
+// 12. Options section renders configuration values
 // ---------------------------------------------------------------------------
 test('options section renders display name, paths, and logo status', async ({ page }) => {
   await setupRoutes(page)

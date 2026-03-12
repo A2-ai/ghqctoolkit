@@ -2,8 +2,9 @@ use crate::GitProvider;
 use crate::api::AppState;
 use axum::{
     body::Body,
-    http::{StatusCode, Uri, header},
-    response::{Html, IntoResponse, Response},
+    extract::Request,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use rust_embed::Embed;
 
@@ -12,22 +13,40 @@ use rust_embed::Embed;
 struct UiAssets;
 
 /// Serve an embedded static file, falling back to index.html for SPA routing.
-async fn static_handler(uri: Uri) -> Response {
-    let path = uri.path().trim_start_matches('/');
+async fn static_handler(req: Request) -> Response {
+    let path = req.uri().path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
+
+    if path == "index.html" {
+        return serve_index();
+    }
 
     match UiAssets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
+            let bytes = content.data;
             Response::builder()
                 .header(header::CONTENT_TYPE, mime.as_ref())
-                .body(Body::from(content.data))
+                .header(header::CONTENT_LENGTH, bytes.len())
+                .body(Body::from(bytes))
                 .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "").into_response())
         }
-        None => match UiAssets::get("index.html") {
-            Some(index) => Html(index.data).into_response(),
-            None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
-        },
+        None => serve_index(),
+    }
+}
+
+fn serve_index() -> Response {
+    match UiAssets::get("index.html") {
+        Some(index) => {
+            // Asset paths are already relative (./assets/...) — produced at build time by
+            // transformAssetUrls in src/server.ts. No runtime rewriting needed.
+            Response::builder()
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .header(header::CONTENT_LENGTH, index.data.len())
+                .body(Body::from(index.data))
+                .unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "").into_response())
+        }
+        None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
     }
 }
 
