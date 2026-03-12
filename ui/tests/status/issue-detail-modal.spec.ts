@@ -13,6 +13,12 @@ import {
   cleanModalStatus,
   approvedModalIssue,
   approvedModalStatus,
+  helperIssue,
+  fileAIssue,
+  helperStatusInitial,
+  helperStatusApproved,
+  fileAStatusBlocked,
+  fileAStatusUnblocked,
 } from '../fixtures/index'
 
 // ---------------------------------------------------------------------------
@@ -499,4 +505,68 @@ test('unapprove post shows success modal', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
   // Result modal links by issue title, not generic "View on GitHub"
   await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 35. Approving a blocking-QC issue invalidates the dependent issue's status
+// ---------------------------------------------------------------------------
+// helper (#90) is a blocking QC for file_a (#91). After helper is approved,
+// file_a's card should update from 0/1 to 1/1 without a manual refresh.
+test('approving blocking-QC issue refreshes dependent issue card', async ({ page }) => {
+  let helperApproved = false
+
+  await setupRoutes(page, {
+    milestones: [openMilestone],
+    milestoneIssues: { 1: [helperIssue, fileAIssue] },
+    issueStatuses: { results: [helperStatusInitial, fileAStatusBlocked], errors: [] },
+  })
+
+  // Dynamic status handler — returns updated statuses after the approve fires.
+  // Registered after setupRoutes so it takes priority (Playwright uses LIFO).
+  await page.route(/\/api\/issues\/status/, (route) => {
+    const body = helperApproved
+      ? { results: [helperStatusApproved, fileAStatusUnblocked], errors: [] }
+      : { results: [helperStatusInitial, fileAStatusBlocked], errors: [] }
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+  })
+
+  // Approve handler sets the flag before fulfilling.
+  await page.route(/\/api\/issues\/\d+\/approve/, (route, request) => {
+    if (request.method() === 'POST') {
+      helperApproved = true
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          approval_url: `https://github.com/test-owner/test-repo/issues/${helperIssue.number}#issuecomment-12345`,
+          skipped_unapproved: [],
+          skipped_errors: [],
+          closed: false,
+        }),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.goto('/')
+  await page.getByPlaceholder('Search milestones…').click()
+  await page.getByRole('option', { name: /Sprint 1/ }).click()
+
+  // file_a initially shows 0/1 blocking QC progress
+  await expect(page.getByTestId(`issue-card-${fileAIssue.number}`).getByText('0/1')).toBeVisible()
+
+  // Open helper and approve it
+  await page.getByTestId(`issue-card-${helperIssue.number}`).click()
+  await expect(page.getByRole('tablist')).toBeVisible()
+  await page.getByRole('tab', { name: 'Approve', exact: true }).click()
+  await page.getByRole('tabpanel', { name: 'Approve' }).getByRole('button', { name: 'Approve' }).click()
+  await expect(page.getByRole('heading', { name: 'Approved' })).toBeVisible()
+
+  // Close result modal then issue modal
+  await page.locator('.mantine-Modal-close').click()
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  // file_a's blocking QC progress should now reflect helper's approval
+  await expect(page.getByTestId(`issue-card-${fileAIssue.number}`).getByText('1/1')).toBeVisible()
 })

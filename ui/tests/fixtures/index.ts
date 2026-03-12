@@ -296,6 +296,80 @@ export const inProgressModalStatus: IssueStatusResponse = {
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
 }
 
+// ── Blocking QC inverse-map / cache-invalidation fixtures ────────────────────
+// helperIssue (#90) is a blocking QC for fileAIssue (#91).
+// Before helper is approved: fileA shows 0/1 blocking QC progress.
+// After helper is approved:  fileA shows 1/1.
+
+export const helperIssue = makeIssue({ number: 90, title: 'src/helper.rs', branch: 'feature-branch' })
+export const fileAIssue  = makeIssue({ number: 91, title: 'src/file_a.rs' })
+
+export const helperStatusInitial: IssueStatusResponse = {
+  issue: helperIssue,
+  qc_status: {
+    status: 'awaiting_review',
+    status_detail: 'Awaiting first review',
+    approved_commit: null,
+    initial_commit: 'aaa0000000000000000000000000000000000000',
+    latest_commit:  'aaa0000000000000000000000000000000000000',
+  },
+  dirty: false,
+  branch: 'feature-branch',
+  commits: [
+    { hash: 'aaa0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  ],
+  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  blocking_qc_status: emptyBlockingQCStatus,
+}
+
+export const helperStatusApproved: IssueStatusResponse = {
+  ...helperStatusInitial,
+  qc_status: {
+    status: 'approved',
+    status_detail: 'Approved',
+    approved_commit: 'aaa0000000000000000000000000000000000000',
+    initial_commit:  'aaa0000000000000000000000000000000000000',
+    latest_commit:   'aaa0000000000000000000000000000000000000',
+  },
+}
+
+export const fileAStatusBlocked: IssueStatusResponse = {
+  issue: fileAIssue,
+  qc_status: {
+    status: 'awaiting_review',
+    status_detail: 'Awaiting first review',
+    approved_commit: null,
+    initial_commit: 'bbb0000000000000000000000000000000000000',
+    latest_commit:  'bbb0000000000000000000000000000000000000',
+  },
+  dirty: false,
+  branch: 'main',
+  commits: [
+    { hash: 'bbb0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  ],
+  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  blocking_qc_status: {
+    total: 1,
+    approved_count: 0,
+    summary: '0/1 blocking QCs approved',
+    approved: [],
+    not_approved: [{ issue_number: 90, file_name: 'src/helper.rs', status: 'awaiting_review' }],
+    errors: [],
+  },
+}
+
+export const fileAStatusUnblocked: IssueStatusResponse = {
+  ...fileAStatusBlocked,
+  blocking_qc_status: {
+    total: 1,
+    approved_count: 1,
+    summary: '1/1 blocking QCs approved',
+    approved: [{ issue_number: 90, file_name: 'src/helper.rs' }],
+    not_approved: [],
+    errors: [],
+  },
+}
+
 // ── Create tab fixtures ───────────────────────────────────────────────────────
 
 export const defaultAssignees: Assignee[] = [
