@@ -401,7 +401,7 @@ mod tests {
 
     fn fixed_binary() -> BinarySitRep {
         BinarySitRep {
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: "0.0.0-test".to_string(),
             path: Ok(PathBuf::from("/usr/local/bin/ghqc")),
         }
     }

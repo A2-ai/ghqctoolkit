@@ -3,7 +3,7 @@ source: src/cli/sitrep.rs
 expression: sitrep.to_string()
 ---
 === Binary =========================
-Version: 0.1.0
+Version: 0.0.0-test
 Path: /usr/local/bin/ghqc
 
 === Repository =====================
