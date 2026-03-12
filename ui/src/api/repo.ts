@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { API_BASE } from '../config'
 
 export type GitStatus = 'clean' | 'ahead' | 'behind' | 'diverged'
@@ -62,6 +62,15 @@ export function useRepoInfo() {
       }
     }
   }, [queryClient])
+
+  const prevCommitRef = useRef<string | null>(null)
+  useEffect(() => {
+    const commit = query.data?.local_commit ?? null
+    if (commit !== null && prevCommitRef.current !== null && commit !== prevCommitRef.current) {
+      queryClient.invalidateQueries({ queryKey: ['issue', 'status'] })
+    }
+    prevCommitRef.current = commit
+  }, [query.data?.local_commit, queryClient])
 
   return query
 }
