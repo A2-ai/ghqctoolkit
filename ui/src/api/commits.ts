@@ -1,3 +1,5 @@
+import { API_BASE } from '../config'
+
 export interface BranchCommit {
   hash: string
   message: string
@@ -28,7 +30,7 @@ export async function fetchBranchCommits(
   params.set('page', String(page))
   if (pageSize !== undefined) params.set('page_size', String(pageSize))
   if (locate !== undefined) params.set('locate', locate)
-  const res = await fetch(`/api/commits?${params.toString()}`)
+  const res = await fetch(`${API_BASE}/commits?${params.toString()}`)
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to fetch commits: ${res.status}`)

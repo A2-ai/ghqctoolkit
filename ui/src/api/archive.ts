@@ -1,3 +1,5 @@
+import { API_BASE } from '../config'
+
 export interface ArchiveFileRequest {
   repository_file: string
   commit: string
@@ -18,7 +20,7 @@ export interface ArchiveGenerateResponse {
 export async function generateArchive(
   request: ArchiveGenerateRequest,
 ): Promise<ArchiveGenerateResponse> {
-  const res = await fetch('/api/archive/generate', {
+  const res = await fetch(`${API_BASE}/archive/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

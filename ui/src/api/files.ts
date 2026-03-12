@@ -1,3 +1,5 @@
+import { API_BASE } from '../config'
+
 export type TreeEntryKind = 'file' | 'directory'
 
 export interface TreeEntry {
@@ -11,7 +13,7 @@ export interface FileTreeResponse {
 }
 
 export async function fetchFileTree(path: string): Promise<FileTreeResponse> {
-  const res = await fetch(`/api/files/tree?path=${encodeURIComponent(path)}`)
+  const res = await fetch(`${API_BASE}/files/tree?path=${encodeURIComponent(path)}`)
   if (!res.ok) throw new Error(`Failed to fetch file tree: ${res.status}`)
   return res.json()
 }

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import type { Checklist } from '~/api/checklists'
 import { resolveDisplayName } from '~/utils/displayName'
+import { API_BASE } from '../config'
 
 export interface ConfigGitRepository {
   owner: string
@@ -28,7 +29,7 @@ export interface ConfigurationStatus {
 }
 
 async function fetchConfigurationStatus(): Promise<ConfigurationStatus> {
-  const res = await fetch('/api/configuration')
+  const res = await fetch(`${API_BASE}/configuration`)
   if (!res.ok) throw new Error(`Failed to fetch configuration status: ${res.status}`)
   return res.json()
 }
@@ -47,7 +48,7 @@ export function useChecklistDisplayName(): { singular: string; plural: string } 
 }
 
 export async function setupConfiguration(url: string): Promise<ConfigurationStatus> {
-  const res = await fetch('/api/configuration', {
+  const res = await fetch(`${API_BASE}/configuration`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),

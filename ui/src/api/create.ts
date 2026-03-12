@@ -1,5 +1,6 @@
 import type { QueuedItem, RelevantFileDraft } from '~/components/CreateIssueModal'
 import type { Milestone } from './milestones'
+import { API_BASE } from '../config'
 
 // ── Request types ─────────────────────────────────────────────────────────────
 
@@ -103,7 +104,7 @@ async function parseError(res: Response, fallback: string): Promise<string> {
 }
 
 export async function postCreateMilestone(name: string, description: string | null): Promise<Milestone> {
-  const res = await fetch('/api/milestones', {
+  const res = await fetch(`${API_BASE}/milestones`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, description }),
@@ -116,7 +117,7 @@ export async function postCreateIssues(
   milestoneNumber: number,
   requests: CreateIssueRequest[],
 ): Promise<CreateIssueResponse[]> {
-  const res = await fetch(`/api/milestones/${milestoneNumber}/issues`, {
+  const res = await fetch(`${API_BASE}/milestones/${milestoneNumber}/issues`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requests),

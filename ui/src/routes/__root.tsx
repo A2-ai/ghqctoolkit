@@ -23,7 +23,7 @@ export const Route = createRootRouteWithContext<{
     ],
     links: [
       { rel: 'stylesheet', href: mantineCss },
-      { rel: 'icon', type: 'image/png', href: '/logo.png' },
+      { rel: 'icon', type: 'image/png', href: './logo.png' },
     ],
   }),
   shellComponent: RootShell,

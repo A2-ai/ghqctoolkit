@@ -1,8 +1,9 @@
 import type { CreateIssueRequest } from './create'
 import type { ApproveRequest, CreateCommentRequest, ReviewRequest, UnapproveRequest } from './issues'
+import { API_BASE } from '../config'
 
 export async function fetchFileContent(path: string): Promise<string> {
-  const res = await fetch(`/api/files/content?path=${encodeURIComponent(path)}`)
+  const res = await fetch(`${API_BASE}/files/content?path=${encodeURIComponent(path)}`)
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to fetch file: ${res.status}`)
@@ -11,7 +12,7 @@ export async function fetchFileContent(path: string): Promise<string> {
 }
 
 export async function fetchCommentPreview(issueNumber: number, request: CreateCommentRequest): Promise<string> {
-  const res = await fetch(`/api/preview/${issueNumber}/comment`, {
+  const res = await fetch(`${API_BASE}/preview/${issueNumber}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -24,7 +25,7 @@ export async function fetchCommentPreview(issueNumber: number, request: CreateCo
 }
 
 export async function fetchReviewPreview(issueNumber: number, request: ReviewRequest): Promise<string> {
-  const res = await fetch(`/api/preview/${issueNumber}/review`, {
+  const res = await fetch(`${API_BASE}/preview/${issueNumber}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -37,7 +38,7 @@ export async function fetchReviewPreview(issueNumber: number, request: ReviewReq
 }
 
 export async function fetchApprovePreview(issueNumber: number, request: ApproveRequest): Promise<string> {
-  const res = await fetch(`/api/preview/${issueNumber}/approve`, {
+  const res = await fetch(`${API_BASE}/preview/${issueNumber}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -50,7 +51,7 @@ export async function fetchApprovePreview(issueNumber: number, request: ApproveR
 }
 
 export async function fetchUnapprovePreview(issueNumber: number, request: UnapproveRequest): Promise<string> {
-  const res = await fetch(`/api/preview/${issueNumber}/unapprove`, {
+  const res = await fetch(`${API_BASE}/preview/${issueNumber}/unapprove`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -63,7 +64,7 @@ export async function fetchUnapprovePreview(issueNumber: number, request: Unappr
 }
 
 export async function fetchIssuePreview(request: CreateIssueRequest): Promise<string> {
-  const res = await fetch('/api/preview/issue', {
+  const res = await fetch(`${API_BASE}/preview/issue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
