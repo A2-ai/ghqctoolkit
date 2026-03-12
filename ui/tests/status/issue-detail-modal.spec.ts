@@ -364,6 +364,80 @@ test('approve post shows success modal', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
+// 32. Approve tab is disabled when issue is already approved
+// ---------------------------------------------------------------------------
+test('approve tab is disabled when issue is already approved', async ({ page }) => {
+  await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
+  // defaultTab for 'approved' is 'unapprove'; Approve tab should be disabled
+  await expect(page.getByRole('tab', { name: 'Approve', exact: true })).toBeDisabled()
+})
+
+// ---------------------------------------------------------------------------
+// 33. After approval with closed:true, issue card is removed from the swimlane
+// ---------------------------------------------------------------------------
+test('after approval with closed:true, issue card is removed from swimlane', async ({ page }) => {
+  await setupRoutes(page, {
+    milestones: [openMilestone],
+    milestoneIssues: { 1: [singleCommitIssue] },
+    issueStatuses: { results: [singleCommitStatus], errors: [] },
+    postApproveResponse: {
+      approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777',
+      skipped_unapproved: [],
+      skipped_errors: [],
+      closed: true,
+    },
+  })
+  await page.goto('/')
+  await page.getByPlaceholder('Search milestones…').click()
+  await page.getByRole('option', { name: /Sprint 1/ }).click()
+  await page.getByTestId(`issue-card-${singleCommitIssue.number}`).click()
+  await expect(page.getByRole('tablist')).toBeVisible()
+
+  await page.getByRole('tab', { name: 'Approve', exact: true }).click()
+  await page.getByRole('tabpanel', { name: 'Approve' }).getByRole('button', { name: 'Approve' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Approved' })).toBeVisible()
+  // The outer issue detail modal uses withCloseButton=false, so the only
+  // .mantine-Modal-close in the DOM is the inner result modal's Mantine button.
+  // After it closes, the outer modal's custom ActionIcon becomes clickable.
+  await page.locator('.mantine-Modal-close').click()
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  await expect(page.getByTestId(`issue-card-${singleCommitIssue.number}`)).not.toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 34. After approval with closed:false, issue card remains in the swimlane
+// ---------------------------------------------------------------------------
+test('after approval with closed:false, issue card remains in swimlane', async ({ page }) => {
+  await setupRoutes(page, {
+    milestones: [openMilestone],
+    milestoneIssues: { 1: [singleCommitIssue] },
+    issueStatuses: { results: [singleCommitStatus], errors: [] },
+    postApproveResponse: {
+      approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777',
+      skipped_unapproved: [],
+      skipped_errors: [],
+      closed: false,
+    },
+  })
+  await page.goto('/')
+  await page.getByPlaceholder('Search milestones…').click()
+  await page.getByRole('option', { name: /Sprint 1/ }).click()
+  await page.getByTestId(`issue-card-${singleCommitIssue.number}`).click()
+  await expect(page.getByRole('tablist')).toBeVisible()
+
+  await page.getByRole('tab', { name: 'Approve', exact: true }).click()
+  await page.getByRole('tabpanel', { name: 'Approve' }).getByRole('button', { name: 'Approve' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Approved' })).toBeVisible()
+  await page.locator('.mantine-Modal-close').click()
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  await expect(page.getByTestId(`issue-card-${singleCommitIssue.number}`)).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
 // 27. Unapprove tab: shows status card (defaults to unapprove for approved issues)
 // ---------------------------------------------------------------------------
 test('unapprove tab shows status card', async ({ page }) => {

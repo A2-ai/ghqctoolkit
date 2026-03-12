@@ -8,6 +8,7 @@ import {
   inProgressModalStatus,
   approvedChildBlocked,
   approvedChildIssue,
+  approvedChildStatus,
   notApprovedChildBlocked,
   notApprovedChildIssue,
   grandchildBlocked,
@@ -194,4 +195,52 @@ test('fallback: post unapprove shows result modal', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
   await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// Cache update: unapproval with opened:true marks issue open in milestone cache
+// ---------------------------------------------------------------------------
+
+// After unapproval when the backend reports opened:true, the issue's state is
+// patched to 'open' in the React Query milestone cache. This means the card
+// stays visible in the swimlane even after "Include closed issues" is toggled
+// off — proving the cache was updated rather than the issue relying on the
+// include-closed filter.
+test('after unapproval with opened:true, previously-closed issue stays visible when include-closed is toggled off', async ({ page }) => {
+  // approvedChildIssue has state:'closed' — not visible by default
+  await setupRoutes(page, {
+    milestones: [openMilestone],
+    milestoneIssues: { 1: [approvedChildIssue] },
+    issueStatuses: { results: [approvedChildStatus], errors: [] },
+    postUnapproveResponse: {
+      unapproval_url: 'https://github.com/test-owner/test-repo/issues/80#issuecomment-55555',
+      opened: true,
+    },
+  })
+  await page.goto('/')
+  await page.getByPlaceholder('Search milestones…').click()
+  await page.getByRole('option', { name: /Sprint 1/ }).click()
+
+  // Closed issue is hidden until toggle is enabled
+  await expect(page.getByTestId(`issue-card-${approvedChildIssue.number}`)).not.toBeVisible()
+  await page.getByRole('switch', { name: 'Include closed issues' }).click()
+  await expect(page.getByTestId(`issue-card-${approvedChildIssue.number}`)).toBeVisible()
+
+  // Open the modal (defaults to Unapprove tab since issue is approved)
+  await page.getByTestId(`issue-card-${approvedChildIssue.number}`).click()
+  await expect(page.getByRole('tablist')).toBeVisible()
+
+  const panel = page.getByRole('tabpanel', { name: 'Unapprove' })
+  await panel.getByPlaceholder('Reason (required)').fill('Reverting approval')
+  await panel.getByRole('button', { name: 'Unapprove' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
+  // The outer issue detail modal uses withCloseButton=false, so the only
+  // .mantine-Modal-close in the DOM is the inner result modal's Mantine button.
+  await page.locator('.mantine-Modal-close').click()
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  // Toggle include-closed OFF — issue should still be visible because state was set to 'open'
+  await page.getByRole('switch', { name: 'Include closed issues' }).click()
+  await expect(page.getByTestId(`issue-card-${approvedChildIssue.number}`)).toBeVisible()
 })
