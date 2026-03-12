@@ -262,7 +262,7 @@ export function AppLayout() {
           backgroundColor: '#f8f9fa',
         }}
       >
-        <img src="/logo.png" alt="ghqc logo" style={{ height: 80 }} />
+        <img src="./logo.png" alt="ghqc logo" style={{ height: 80 }} />
         <div
           style={{
             backgroundColor: '#ffe3e3',
@@ -315,7 +315,7 @@ export function AppLayout() {
                 height: 46,
               }}
             >
-              <img src="/logo.png" alt="ghqc logo" style={{ height: 38 }} />
+              <img src="./logo.png" alt="ghqc logo" style={{ height: 38 }} />
               {repoData && (
                 <span style={{ fontSize: 20, fontWeight: 700 }}>
                   {repoData.owner} / {repoData.repo}
