@@ -59,6 +59,20 @@ function GitRepoSection({ configStatus }: { configStatus: ConfigurationStatus })
   })
 
   const git = configStatus.git_repository
+  const localDirectoryOnly = configStatus.exists && git === null
+
+  if (localDirectoryOnly) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Text fw={700} size="sm">
+          Not a git repository
+        </Text>
+        <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace' }}>
+          {configStatus.directory}
+        </Text>
+      </div>
+    )
+  }
 
   if (!git) {
     return (
