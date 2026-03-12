@@ -229,6 +229,54 @@ export async function fetchSingleIssueStatus(issueNumber: number): Promise<Issue
   throw new Error(err?.error ?? `No status returned for issue ${issueNumber}`)
 }
 
+// ---------------------------------------------------------------------------
+// Blocking QC inverse map
+// ---------------------------------------------------------------------------
+// blockingQcInverseMap: blocking-QC issue number → set of issue numbers that
+// list it as a blocking QC. Used to invalidate only the affected dependent
+// issues when a blocker is approved or unapproved.
+//
+// issueToBlockingQcs: issue number → set of its blocking QC issue numbers.
+// Kept in sync so stale entries are removed when a status is re-fetched.
+const blockingQcInverseMap = new Map<number, Set<number>>()
+const issueToBlockingQcs  = new Map<number, Set<number>>()
+
+function updateBlockingQcMaps(issueNumber: number, status: BlockingQCStatus | undefined) {
+  // Remove this issue from whichever sets it was previously in.
+  const prev = issueToBlockingQcs.get(issueNumber)
+  if (prev) {
+    for (const blockerNum of prev) {
+      blockingQcInverseMap.get(blockerNum)?.delete(issueNumber)
+    }
+  }
+  // Rebuild from the freshly-fetched status.
+  const next = new Set<number>()
+  if (status) {
+    for (const item of [...status.approved, ...status.not_approved]) {
+      next.add(item.issue_number)
+    }
+  }
+  issueToBlockingQcs.set(issueNumber, next)
+  for (const blockerNum of next) {
+    if (!blockingQcInverseMap.has(blockerNum)) blockingQcInverseMap.set(blockerNum, new Set())
+    blockingQcInverseMap.get(blockerNum)!.add(issueNumber)
+  }
+}
+
+/** Returns a stable callback that invalidates every issue whose blocking-QC
+ *  status depends on `issueNumber` (i.e. issues that list it as a blocker). */
+export function useInvalidateBlockingDependents() {
+  const queryClient = useQueryClient()
+  return (issueNumber: number) => {
+    const dependents = blockingQcInverseMap.get(issueNumber)
+    if (dependents) {
+      for (const num of dependents) {
+        void queryClient.invalidateQueries({ queryKey: ['issue', 'status', num] })
+      }
+    }
+  }
+}
+
 // Module-level tick batcher. All batcher.load() calls within a single synchronous
 // render pass land before setTimeout fires, so they're coalesced into one HTTP
 // request. React Query's own cache means already-fetched issues never reach here.
@@ -247,6 +295,7 @@ export const issueStatusBatcher = (() => {
         for (const r of response.results) {
           batch.get(r.issue.number)?.resolve({ ok: true, data: r })
           handled.add(r.issue.number)
+          updateBlockingQcMaps(r.issue.number, r.blocking_qc_status)
         }
         for (const e of response.errors) {
           batch.get(e.issue_number)?.resolve({ ok: false, error: e })

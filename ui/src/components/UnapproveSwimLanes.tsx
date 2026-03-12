@@ -6,7 +6,7 @@ import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd'
 import { IconMinus, IconPlus, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { BlockedIssueStatus, Issue, IssueStatusResponse, QCStatus } from '~/api/issues'
-import { fetchSingleIssueStatus, postUnapprove } from '~/api/issues'
+import { fetchSingleIssueStatus, postUnapprove, useInvalidateBlockingDependents } from '~/api/issues'
 import { fetchUnapprovePreview } from '~/api/preview'
 import { wrapInGithubStyles } from '~/utils/github'
 import { STATUS_LANE_COLOR } from '~/utils/statusColors'
@@ -149,6 +149,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
   const [postResults, setPostResults] = useState<Array<{ issueNumber: number; url: string; opened: boolean }>>([])
   const [postErrors, setPostErrors] = useState<Array<{ issueNumber: number; error: string }>>([])
   const queryClient = useQueryClient()
+  const invalidateBlockingDependents = useInvalidateBlockingDependents()
 
   useEffect(() => {
     dispatch({ type: 'INIT_ROOT', root: { issue, qc_status: status.qc_status } })
@@ -265,7 +266,10 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
         }
         const unapprovedNums = results.map((r) => r.issueNumber)
         await Promise.all(
-          unapprovedNums.map((n) => queryClient.invalidateQueries({ queryKey: ['issue', 'status', n] }))
+          unapprovedNums.map((n) => {
+            invalidateBlockingDependents(n)
+            return queryClient.invalidateQueries({ queryKey: ['issue', 'status', n] })
+          })
         )
         try {
           const fresh = await fetchSingleIssueStatus(issue.number)
