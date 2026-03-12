@@ -19,7 +19,7 @@ import {
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
-import { fetchSingleIssueStatus, postApprove, postComment, postReview } from '~/api/issues'
+import { fetchSingleIssueStatus, postApprove, postComment, postReview, useInvalidateBlockingDependents } from '~/api/issues'
 import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
 import { CommitSlider } from '~/components/CommitSlider'
 import { UnapproveSwimLanes } from '~/components/UnapproveSwimLanes'
@@ -759,6 +759,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
   const [postResultUrl, setPostResultUrl] = useState<string | null>(null)
   const [postError, setPostError] = useState<string | null>(null)
   const queryClient = useQueryClient()
+  const invalidateBlockingDependents = useInvalidateBlockingDependents()
 
   useEffect(() => {
     setCommitOrigIdx(defaultCommitOrigIdx)
@@ -831,6 +832,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
         )
       }
       void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
+      invalidateBlockingDependents(issue.number)
       const fresh = await fetchSingleIssueStatus(issue.number)
       onStatusUpdate(fresh)
     } catch (err) {
