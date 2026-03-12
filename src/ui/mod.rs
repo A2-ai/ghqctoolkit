@@ -14,12 +14,11 @@ struct UiAssets;
 
 /// Serve an embedded static file, falling back to index.html for SPA routing.
 async fn static_handler(req: Request) -> Response {
-    let uri_path = req.uri().path();
-    let path = uri_path.trim_start_matches('/');
+    let path = req.uri().path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
     if path == "index.html" {
-        return serve_index(uri_path);
+        return serve_index();
     }
 
     match UiAssets::get(path) {
@@ -32,37 +31,19 @@ async fn static_handler(req: Request) -> Response {
                 .body(Body::from(bytes))
                 .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "").into_response())
         }
-        None => serve_index(uri_path),
+        None => serve_index(),
     }
 }
 
-fn serve_index(path: &str) -> Response {
+fn serve_index() -> Response {
     match UiAssets::get("index.html") {
         Some(index) => {
-            let depth = path
-                .split('/')
-                .filter(|s| !s.is_empty())
-                .count()
-                .saturating_sub(1);
-
-            let base_href = if depth == 0 {
-                "./".to_string()
-            } else {
-                "../".repeat(depth)
-            };
-
-            let html = String::from_utf8_lossy(&index.data);
-            // Rewrite absolute asset paths to relative so they resolve through proxy prefixes.
-            // Covers both HTML attributes and inline JS manifest strings.
-            let html = html.replace("\"/assets/", "\"./assets/");
-            let html = html.replace("href=\"/logo.", "href=\"./logo.");
-            let html = html.replacen("<head>", &format!("<head><base href=\"{base_href}\">"), 1);
-            let bytes = html.into_bytes();
-
+            // Asset paths are already relative (./assets/...) — produced at build time by
+            // transformAssetUrls in src/server.ts. No runtime rewriting needed.
             Response::builder()
                 .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-                .header(header::CONTENT_LENGTH, bytes.len().to_string())
-                .body(Body::from(bytes))
+                .header(header::CONTENT_LENGTH, index.data.len())
+                .body(Body::from(index.data))
                 .unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "").into_response())
         }
         None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
