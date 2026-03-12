@@ -5,7 +5,7 @@ import type { DropResult } from '@hello-pangea/dnd'
 import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd'
 import { IconMinus, IconPlus, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { BlockedIssueStatus, IssueStatusResponse, QCStatus } from '~/api/issues'
+import type { BlockedIssueStatus, Issue, IssueStatusResponse, QCStatus } from '~/api/issues'
 import { fetchSingleIssueStatus, postUnapprove } from '~/api/issues'
 import { fetchUnapprovePreview } from '~/api/preview'
 import { wrapInGithubStyles } from '~/utils/github'
@@ -257,7 +257,16 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
       setPostResults(results)
       setPostErrors(errors)
       if (results.length > 0) {
-        void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
+        const openedNums = results.filter((r) => r.opened).map((r) => r.issueNumber)
+        if (openedNums.length > 0) {
+          queryClient.setQueriesData<Issue[]>({ queryKey: ['milestones'] }, (old) =>
+            old?.map((i) => openedNums.includes(i.number) ? { ...i, state: 'open' } : i)
+          )
+        }
+        const unapprovedNums = results.map((r) => r.issueNumber)
+        await Promise.all(
+          unapprovedNums.map((n) => queryClient.invalidateQueries({ queryKey: ['issue', 'status', n] }))
+        )
         try {
           const fresh = await fetchSingleIssueStatus(issue.number)
           onStatusUpdate(fresh)

@@ -257,6 +257,25 @@ export const grandchildBlocked: BlockedIssueStatus = {
   },
 }
 
+// Full IssueStatusResponse for approvedChildIssue (used in unapproval cache tests)
+export const approvedChildStatus: IssueStatusResponse = {
+  issue: approvedChildIssue,
+  qc_status: {
+    status: 'approved',
+    status_detail: 'Approved',
+    approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    initial_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    latest_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+  },
+  dirty: false,
+  branch: 'main',
+  commits: [
+    { hash: 'cccccccccccccccccccccccccccccccccccccccc', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
+  ],
+  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+}
+
 // Non-approved issue for tab-disabled tests (defaults to Notify tab)
 export const inProgressModalIssue = makeIssue({ number: 82, title: 'src/in-progress-modal.rs', branch: 'feature-branch' })
 export const inProgressModalStatus: IssueStatusResponse = {

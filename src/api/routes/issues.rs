@@ -179,6 +179,28 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
 
     let dirty = state.git_info().dirty()?;
 
+    // Invalidate the commit cache for the current branch if HEAD has moved,
+    // so that IssueThread rebuilds include any new commits.
+    {
+        if let (Ok(branch), Ok(current_commit)) =
+            (state.git_info().branch(), state.git_info().commit())
+        {
+            let mut commit_cache = state.commit_cache.write().await;
+            if let Some(commits) = commit_cache.get(&branch) {
+                let cached_head = commits.first().map(|c| c.commit.to_string());
+                if cached_head.as_deref() != Some(&current_commit) {
+                    log::debug!(
+                        "Commit cache invalidated for branch '{}': cached HEAD {:?} != current HEAD {}",
+                        branch,
+                        cached_head,
+                        current_commit
+                    );
+                    commit_cache.remove(&branch);
+                }
+            }
+        }
+    }
+
     let mut fetched_issues = {
         let cache_read = state.status_cache.read().await;
         let mut fetched_issues =

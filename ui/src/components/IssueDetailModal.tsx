@@ -18,7 +18,7 @@ import {
 } from '@mantine/core'
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { ApproveRequest, IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
+import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
 import { fetchSingleIssueStatus, postApprove, postComment, postReview } from '~/api/issues'
 import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
 import { CommitSlider } from '~/components/CommitSlider'
@@ -87,7 +87,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
         <Tabs.List style={{ borderBottom: 'none' }}>
           <Tabs.Tab value="notify" color="yellow">Notify</Tabs.Tab>
           <Tabs.Tab value="review" color="orange">Review</Tabs.Tab>
-          <Tabs.Tab value="approve" color="green">Approve</Tabs.Tab>
+          <Tabs.Tab value="approve" color="green" disabled={isApproved}>Approve</Tabs.Tab>
           <Tabs.Tab value="unapprove" color="red" disabled={unapproveDisabled}>Unapprove</Tabs.Tab>
         </Tabs.List>
         <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close">
@@ -825,6 +825,11 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     try {
       const result = await postApprove(issue.number, approveRequest, overrideBlocking)
       setPostResultUrl(result.approval_url)
+      if (result.closed) {
+        queryClient.setQueriesData<Issue[]>({ queryKey: ['milestones'] }, (old) =>
+          old?.map((i) => i.number === issue.number ? { ...i, state: 'closed' } : i)
+        )
+      }
       void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
       const fresh = await fetchSingleIssueStatus(issue.number)
       onStatusUpdate(fresh)
