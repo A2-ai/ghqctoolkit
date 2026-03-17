@@ -86,13 +86,44 @@ Running `ghqc ui` serves an embedded React application. The UI provides:
 
 ## Install
 
-### CLI
+### Unix-like Systems
+
+Install the latest GitHub Release to `~/.local/bin`:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/a2-ai/ghqctoolkit/main/scripts/install.sh | bash
+```
+
+### Windows
+
+Install the latest GitHub Release to `%LOCALAPPDATA%\Programs\ghqc` and add it to your user `PATH`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+If you do not have the repository checked out locally, you can download and run the installer directly:
+
+```powershell
+irm https://raw.githubusercontent.com/a2-ai/ghqctoolkit/main/scripts/install.ps1 | iex
+```
+
+Manual install:
+
+1. Download the latest `ghqc-<version>-x86_64-pc-windows-msvc.zip` asset from GitHub Releases.
+2. Extract it to `%LOCALAPPDATA%\Programs\ghqc`.
+3. Add `%LOCALAPPDATA%\Programs\ghqc` to your user `PATH`.
+4. Open a new PowerShell window and run `ghqc --version`.
+
+`ghqc` expects Git to be available on `PATH`, so install Git for Windows if it is not already present.
+
+### Build From Source: CLI
 
 ```shell
 cargo build --features cli --release
 ```
 
-### API + Web UI
+### Build From Source: API + Web UI
 
 ```shell
 cargo build --features cli,ui --release
