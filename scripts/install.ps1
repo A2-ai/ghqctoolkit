@@ -49,6 +49,15 @@ New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 Expand-Archive -Path $zipPath -DestinationPath $installDir -Force
 Remove-Item -Force $zipPath
 
+$targetExeName = "ghqc-$target.exe"
+$targetExePath = Join-Path $installDir $targetExeName
+$exePath = Join-Path $installDir "ghqc.exe"
+
+if ((Test-Path $targetExePath) -and -not (Test-Path $exePath)) {
+    Write-Log "Renaming $targetExeName to ghqc.exe"
+    Rename-Item -Path $targetExePath -NewName "ghqc.exe"
+}
+
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $pathEntries = @()
 
@@ -68,8 +77,6 @@ if ($pathEntries -notcontains $installDir) {
 } else {
     Write-Log "$installDir is already present in the user PATH"
 }
-
-$exePath = Join-Path $installDir "ghqc.exe"
 
 if (-not (Test-Path $exePath)) {
     throw "Installation completed, but ghqc.exe was not found in $installDir"
