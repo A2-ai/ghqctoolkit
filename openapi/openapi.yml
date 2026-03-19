@@ -1087,6 +1087,12 @@ components:
           nullable: true
           description: Optional description of the relationship
           example: "Depends on helper functions"
+        include_diff:
+          type: boolean
+          default: true
+          description: >
+            Whether to post a diff comment for this Previous QC entry.
+            Only applicable for previous_qc entries; ignored for gating_qc and relevant_qc.
 
     RelevantIssueClass:
       oneOf:

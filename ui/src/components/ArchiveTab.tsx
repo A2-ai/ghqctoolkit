@@ -275,7 +275,7 @@ export function ArchiveTab() {
   // ─── Relevant file selection handlers ──────────────────────────────────
 
   function handleSelectRelevantFile(rf: RelevantFileInfo) {
-    const isQc = rf.kind === 'blocking_qc' || rf.kind === 'relevant_qc'
+    const isQc = rf.kind === 'blocking_qc' || rf.kind === 'previous_qc' || rf.kind === 'relevant_qc'
     if (isQc && rf.issue_url) {
       const issueNumber = extractIssueNumber(rf.issue_url)
       if (issueNumber !== null) {
@@ -300,7 +300,7 @@ export function ArchiveTab() {
     setAddedFiles(prev => {
       const next = new Map(prev)
       for (const rf of files) {
-        const isQc = rf.kind === 'blocking_qc' || rf.kind === 'relevant_qc'
+        const isQc = rf.kind === 'blocking_qc' || rf.kind === 'previous_qc' || rf.kind === 'relevant_qc'
         if (isQc && rf.issue_url) {
           const issueNumber = extractIssueNumber(rf.issue_url)
           if (issueNumber !== null) {

@@ -108,8 +108,13 @@ enum IssueCommands {
         description: Option<String>,
 
         /// Previous QC issues (issues which are previous QCs of this file or a similar file)
-        /// Format: <issue_url>[::description]
-        /// Example: https://github.com/owner/repo/issues/123::Previous version of this file
+        /// Format: <issue_url>[::description][::no_diff]
+        /// Append ::no_diff to suppress the automatic diff comment for a specific entry.
+        /// Examples:
+        ///   https://github.com/owner/repo/issues/123
+        ///   https://github.com/owner/repo/issues/123::Previous version of this file
+        ///   https://github.com/owner/repo/issues/123::no_diff
+        ///   https://github.com/owner/repo/issues/123::My desc::no_diff
         #[arg(long, value_parser = IssueUrlArgParser)]
         previous_qc: Vec<IssueUrlArg>,
 

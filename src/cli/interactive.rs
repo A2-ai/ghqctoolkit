@@ -1334,6 +1334,14 @@ pub fn prompt_relevant_file_class() -> Result<RelevantFileClassType> {
     }
 }
 
+/// Prompt whether to include a diff comment for this Previous QC
+pub fn prompt_include_previous_qc_diff() -> Result<bool> {
+    Confirm::new("Include a diff comment for this Previous QC?")
+        .with_default(true)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))
+}
+
 /// Prompt for description (optional for issues, required for files)
 pub fn prompt_relevant_description(required: bool) -> Result<Option<String>> {
     let prompt_text = if required {

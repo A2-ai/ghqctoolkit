@@ -23,6 +23,8 @@ export interface RelevantFileDraft {
   issueNumber: number | null
   milestoneTitle: string | null
   description: string
+  /** Only meaningful for previous_qc entries — whether to post a diff comment. Defaults to true. */
+  includeDiff?: boolean
 }
 
 export interface QueuedItem {

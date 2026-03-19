@@ -74,6 +74,7 @@ export function ExistingIssueCard({ issue }: Props) {
 function RelevantFileLine({ file }: { file: RelevantFileInfo }) {
   const icon =
     file.kind === 'blocking_qc' ? <IconLock size={12} color="#c92a2a" /> :
+    file.kind === 'previous_qc' ? <IconLock size={12} color="#e8590c" /> :
     file.kind === 'relevant_qc' ? <IconLink size={12} color="#666" /> :
     <IconFile size={12} color="#666" />
 

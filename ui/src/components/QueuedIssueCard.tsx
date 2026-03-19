@@ -99,6 +99,7 @@ export function QueuedIssueCard({ item, onEdit, onRemove, conflictReason, dirty 
 function QueuedRelevantFileLine({ draft }: { draft: RelevantFileDraft }) {
   const icon =
     draft.kind === 'blocking_qc' ? <IconLock size={12} color="#c92a2a" /> :
+    draft.kind === 'previous_qc' ? <IconLock size={12} color="#e8590c" /> :
     draft.kind === 'relevant_qc' ? <IconLink size={12} color="#666" /> :
     <IconFile size={12} color="#666" />
 

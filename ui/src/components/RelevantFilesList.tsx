@@ -52,7 +52,7 @@ export function RelevantFilesList({
       </div>
       {relevantFiles.map(rf => {
         const isClaimed = checkClaimed(rf.file_name)
-        const isQc = rf.kind === 'blocking_qc' || rf.kind === 'relevant_qc'
+        const isQc = rf.kind === 'blocking_qc' || rf.kind === 'previous_qc' || rf.kind === 'relevant_qc'
         const issueNumber = rf.issue_url ? extractIssueNumber(rf.issue_url) : null
         return (
           <div
