@@ -146,6 +146,10 @@ fn get_git_credential_token(base_url: &str) -> Option<String> {
     // Use git credential fill to get stored credentials
     let mut cmd = Command::new("git");
     cmd.args(&["credential", "fill"])
+        // Force credential lookup to remain non-interactive even if a helper
+        // would otherwise try to prompt or launch a GUI.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
