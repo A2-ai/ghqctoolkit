@@ -156,3 +156,55 @@ test('full create workflow', async ({ page }) => {
   await expect(resultModal.getByRole('link', { name: 'src/main.rs' })).toBeVisible()
   await expect(resultModal.getByRole('link', { name: 'src/lib.rs' })).toBeVisible()
 })
+
+test('create tab preserves queued items and saved checklists across tab switches until refresh', async ({ page }) => {
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+
+  const modal = page.getByRole('dialog', { name: 'Create QC Issue' })
+  await expect(modal).toBeVisible()
+
+  await modal.getByRole('treeitem', { name: 'src' }).click()
+  await modal.getByRole('treeitem', { name: 'main.rs' }).click()
+
+  await modal.getByRole('tab', { name: 'Select a Checklist' }).click()
+  await modal.getByRole('button', { name: '+ New' }).click()
+  await modal.getByLabel('Name').fill('Persistent Checklist')
+  await modal.locator('textarea').fill('- [ ] Persists across tabs')
+  await modal.getByRole('button', { name: 'Save' }).click()
+  await modal.getByRole('button', { name: 'Queue' }).click()
+
+  await expect(modal).not.toBeVisible()
+  await expect(page.getByText('src/main.rs').first()).toBeVisible()
+
+  await page.getByRole('button', { name: 'Configuration' }).click()
+  await expect(page.getByText('Create New QC')).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'Create' }).click()
+  await expect(page.getByText('src/main.rs').first()).toBeVisible()
+
+  await page.getByText('Create New QC').click()
+  await expect(modal).toBeVisible()
+  await modal.getByRole('tab', { name: 'Select a Checklist' }).click()
+  await expect(modal.getByRole('button', { name: 'Persistent Checklist' })).toBeVisible()
+  await modal.getByRole('button', { name: 'Persistent Checklist' }).click()
+  await expect(modal.getByLabel('Name')).toHaveValue('Persistent Checklist')
+  await expect(modal.locator('textarea')).toHaveValue('- [ ] Persists across tabs')
+  await page.keyboard.press('Escape')
+  await expect(modal).not.toBeVisible()
+
+  await page.reload()
+  await page.getByRole('button', { name: 'Create' }).click()
+  await expect(page.getByText('src/main.rs').first()).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+  await expect(modal).toBeVisible()
+  await modal.getByRole('tab', { name: 'Select a Checklist' }).click()
+  await expect(modal.getByRole('button', { name: 'Persistent Checklist' })).not.toBeVisible()
+})

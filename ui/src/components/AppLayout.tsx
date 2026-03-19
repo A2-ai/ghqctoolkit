@@ -429,14 +429,15 @@ export function AppLayout() {
             remoteCommit={repoData?.remote_commit ?? ''}
           />
         )}
-        {activeTab === 'create' && (
-          <div style={{
+        <div
+          style={{
+            display: activeTab === 'create' ? 'block' : 'none',
             margin: 'calc(-1 * var(--mantine-spacing-md))',
             height: 'calc(100vh - 88px)',
-          }}>
-            <CreateTab />
-          </div>
-        )}
+          }}
+        >
+          <CreateTab />
+        </div>
         {activeTab === 'configuration' && <ConfigurationTab />}
         {activeTab === 'record' && (
           <div style={{
