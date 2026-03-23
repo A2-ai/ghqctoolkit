@@ -25,6 +25,13 @@ pub enum AuthStoreError {
     Decrypt(openssl::error::ErrorStack),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAuthHost {
+    pub base_url: String,
+    pub host: String,
+    pub token_preview: String,
+}
+
 pub fn validate_github_token(token: &str) -> Option<String> {
     let token = token.trim();
     if token.is_empty() || token.contains(char::is_whitespace) {
@@ -123,6 +130,10 @@ pub fn token_page_url(base_url: &str) -> Result<String, AuthStoreError> {
     ))
 }
 
+pub fn list_stored_hosts() -> Result<Vec<StoredAuthHost>, AuthStoreError> {
+    list_stored_hosts_at(&auth_store_root()?)
+}
+
 pub fn load_token_at(root: &Path, base_url: &str) -> Result<Option<String>, AuthStoreError> {
     let path = token_file_path(root, base_url)?;
     if !path.exists() {
@@ -170,6 +181,49 @@ pub fn delete_token_at(root: &Path, base_url: &str) -> Result<bool, AuthStoreErr
     }
     fs::remove_file(path)?;
     Ok(true)
+}
+
+pub fn list_stored_hosts_at(root: &Path) -> Result<Vec<StoredAuthHost>, AuthStoreError> {
+    let dir = hosts_dir(root);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut hosts = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("enc") {
+            continue;
+        }
+
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+
+        let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(stem) else {
+            continue;
+        };
+        let Ok(host) = String::from_utf8(decoded) else {
+            continue;
+        };
+
+        let base_url = format!("https://{host}");
+        let token_preview = match load_token_at(root, &base_url) {
+            Ok(Some(token)) => preview_token(&token),
+            Ok(None) => "<missing>".to_string(),
+            Err(_) => "<unreadable>".to_string(),
+        };
+
+        hosts.push(StoredAuthHost {
+            base_url,
+            host,
+            token_preview,
+        });
+    }
+
+    hosts.sort_by(|a, b| a.host.cmp(&b.host));
+    Ok(hosts)
 }
 
 fn token_file_path(root: &Path, base_url: &str) -> Result<PathBuf, AuthStoreError> {
@@ -252,6 +306,14 @@ fn decrypt_bytes(
     count += crypter.finalize(&mut plaintext[count..])?;
     plaintext.truncate(count);
     Ok(plaintext)
+}
+
+fn preview_token(token: &str) -> String {
+    if token.len() <= 8 {
+        return "*".repeat(token.len());
+    }
+
+    format!("{}...{}", &token[..4], &token[token.len() - 4..])
 }
 
 #[cfg(test)]
@@ -345,5 +407,29 @@ mod tests {
         let temp = TempDir::new().unwrap();
         assert_eq!(load_token_at(temp.path(), "github.com").unwrap(), None);
         assert!(!delete_token_at(temp.path(), "github.com").unwrap());
+    }
+
+    #[test]
+    fn list_hosts_returns_sorted_previews() {
+        let temp = TempDir::new().unwrap();
+        save_token_at(
+            temp.path(),
+            "ghe.example.com",
+            "ghp_token_abcdefghijabcdefghijabcdefghijabcdefghij",
+        )
+        .unwrap();
+        save_token_at(
+            temp.path(),
+            "github.com",
+            "ghp_token_1234567890123456789012345678901234567890",
+        )
+        .unwrap();
+
+        let hosts = list_stored_hosts_at(temp.path()).unwrap();
+        assert_eq!(hosts.len(), 2);
+        assert_eq!(hosts[0].host, "ghe.example.com");
+        assert_eq!(hosts[1].host, "github.com");
+        assert!(hosts[0].token_preview.starts_with("ghp_"));
+        assert!(hosts[0].token_preview.contains("..."));
     }
 }

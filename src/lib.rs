@@ -34,8 +34,9 @@ pub use approve::{
 };
 pub use archive::{ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, archive};
 pub use auth::{
-    AuthStoreError, auth_store_root, canonicalize_base_url, delete_token,
-    extract_host_from_base_url, load_token, save_token, token_page_url, validate_github_token,
+    AuthStoreError, StoredAuthHost, auth_store_root, canonicalize_base_url, delete_token,
+    extract_host_from_base_url, list_stored_hosts, load_token, save_token, token_page_url,
+    validate_github_token,
 };
 pub use cache::DiskCache;
 pub use cache::{

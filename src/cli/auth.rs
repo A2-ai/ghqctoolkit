@@ -4,7 +4,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::auth::{
-    canonicalize_base_url, delete_token, extract_host_from_base_url, save_token, token_page_url,
+    auth_store_root, canonicalize_base_url, delete_token, extract_host_from_base_url,
+    list_stored_hosts, save_token, token_page_url,
 };
 
 pub fn gh_auth_login(
@@ -91,6 +92,37 @@ pub fn gh_auth_logout(directory: &Path, host: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+pub fn gh_auth_status(directory: &Path, host: Option<&str>) -> Result<()> {
+    let store_root = auth_store_root()?;
+    let stored_hosts = list_stored_hosts()?;
+    let selected_host = try_resolve_host_from_repo_or_flag(host, directory)
+        .and_then(|base_url| extract_host_from_base_url(&base_url).ok());
+
+    println!("Auth store: {}", store_root.display());
+    if let Some(selected_host) = selected_host.as_deref() {
+        println!("Selected host: {}", selected_host);
+    }
+
+    if stored_hosts.is_empty() {
+        println!("Authed hosts: none");
+        return Ok(());
+    }
+
+    println!("Authed hosts:");
+    for stored_host in stored_hosts {
+        let marker = if selected_host.as_deref() == Some(stored_host.host.as_str()) {
+            "*"
+        } else {
+            " "
+        };
+        println!(
+            "{} {} ({})",
+            marker, stored_host.host, stored_host.token_preview
+        );
+    }
+    Ok(())
+}
+
 fn gh_available() -> bool {
     Command::new("gh")
         .arg("--version")
@@ -150,6 +182,10 @@ fn resolve_host_from_repo_or_flag(host: Option<&str>, directory: &Path) -> Resul
     Ok(git_info.base_url.clone())
 }
 
+fn try_resolve_host_from_repo_or_flag(host: Option<&str>, directory: &Path) -> Option<String> {
+    resolve_host_from_repo_or_flag(host, directory).ok()
+}
+
 fn validate_token_or_error(token: &str) -> Result<String> {
     crate::validate_github_token(token)
         .ok_or_else(|| anyhow!("Provided token is not a valid GitHub token"))
@@ -181,11 +217,27 @@ fn require_nonempty_token(token: String) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::try_resolve_host_from_repo_or_flag;
+    use tempfile::TempDir;
+
     #[test]
     fn gh_token_output_is_valid() {
         assert!(
             crate::validate_github_token("ghp_1234567890123456789012345678901234567890").is_some()
         );
         assert!(crate::validate_github_token("bad token").is_none());
+    }
+
+    #[test]
+    fn try_resolve_host_uses_explicit_host() {
+        let temp = TempDir::new().unwrap();
+        let resolved = try_resolve_host_from_repo_or_flag(Some("github.com"), temp.path()).unwrap();
+        assert_eq!(resolved, "https://github.com");
+    }
+
+    #[test]
+    fn try_resolve_host_returns_none_when_repo_host_is_unavailable() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(try_resolve_host_from_repo_or_flag(None, temp.path()), None);
     }
 }

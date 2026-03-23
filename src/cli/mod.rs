@@ -9,7 +9,7 @@ mod status;
 pub use archive::{
     MilestoneSelectionFilter, generate_archive_name, get_milestone_issue_threads, prompt_archive,
 };
-pub use auth::{gh_auth_login, gh_auth_logout};
+pub use auth::{gh_auth_login, gh_auth_logout, gh_auth_status};
 pub use context::find_issue;
 pub use file_parser::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, RelevantFileArg,

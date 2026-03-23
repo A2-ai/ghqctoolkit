@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
     RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
-    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, interactive_milestone_status,
-    interactive_status, milestone_status, prompt_archive, prompt_context_files,
-    prompt_milestone_record, single_issue_status,
+    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status,
+    interactive_milestone_status, interactive_status, milestone_status, prompt_archive,
+    prompt_context_files, prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -334,6 +334,12 @@ enum AuthCommands {
     },
     /// Remove the ghqc-stored token for a host
     Logout {
+        /// GitHub host to use, e.g. github.com or https://ghe.example.com
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// Show ghqc auth storage status
+    Status {
         /// GitHub host to use, e.g. github.com or https://ghe.example.com
         #[arg(long)]
         host: Option<String>,
@@ -1078,6 +1084,9 @@ async fn main() -> Result<()> {
             }
             AuthCommands::Logout { host } => {
                 gh_auth_logout(&cli.directory, host.as_deref())?;
+            }
+            AuthCommands::Status { host } => {
+                gh_auth_status(&cli.directory, host.as_deref())?;
             }
         },
         Commands::Sitrep { json } => {
