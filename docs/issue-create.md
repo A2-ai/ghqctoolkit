@@ -59,6 +59,8 @@ Optionally assign one or more GitHub users as reviewers. Press Enter to skip or 
 
 Optionally attach related files for context. These can be supporting files or references to other QC issues. Press Enter when finished.
 
+If you add a `PreviousQC` reference in interactive mode, `ghqc` will also ask whether to post an automatic diff comment comparing the previous QC commit to the current issue's starting commit. That diff comment is enabled by default.
+
 ```shell
 ? 📁 Enter relevant file path (Tab for autocomplete, directories shown with /, Enter for none): scripts/
   scripts/file_2.qmd
@@ -95,7 +97,7 @@ ghqc issue create --milestone "Milestone 1" --file scripts/file_1.qmd --checklis
 | `-c, --checklist-name` | Name of the checklist to attach |
 | `-a, --assignees` | Reviewer GitHub usernames (repeatable) |
 | `-D, --description` | Description for the milestone (only used when creating a new milestone) |
-| `--previous-qc` | Previous QC issue URL, format: `<url>[::description]` (repeatable) |
+| `--previous-qc` | Previous QC issue URL, format: `<url>[::description][::no_diff]` (repeatable). By default, `ghqc` posts an automatic diff comment unless `::no_diff` is added. |
 | `--gating-qc` | Gating QC issue URL — must be approved before this issue can be approved, format: `<url>[::description]` (repeatable) |
 | `--relevant-qc` | Related QC issue URL for informational reference, format: `<url>[::description]` (repeatable) |
 | `--relevant-file` | Plain file reference with justification, format: `file_path::justification` (repeatable) |
@@ -107,6 +109,6 @@ When adding relevant files, `ghqc` supports several relationship types:
 | Type | Description |
 |---|---|
 | `GatingQC` | Another QC issue that must be approved before this one can be approved |
-| `PreviousQC` | A prior QC issue for reference |
+| `PreviousQC` | A prior QC issue for reference. It also blocks approval of the new issue, and by default `ghqc` posts a diff comment comparing the previous QC commit to the new issue's starting commit. Use `::no_diff` to suppress that automatic diff comment in non-interactive mode. |
 | `RelevantQC` | An informational reference to another QC issue |
 | `File` | A plain file reference (requires a justification note) |
