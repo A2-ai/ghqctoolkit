@@ -65,6 +65,30 @@ test('issues placed in correct swimlanes', async ({ page }) => {
   await expect(approvedLane.getByRole('link', { name: /src\/approved\.rs/ })).toBeVisible()
 })
 
+test('clicking the issue title link opens github without opening the issue modal', async ({ page }) => {
+  await setupRoutes(page, {
+    milestoneIssues: {
+      1: [awaitingReviewIssue],
+    },
+    issueStatuses: {
+      results: [awaitingReviewStatus],
+      errors: [],
+    },
+  })
+
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const titleLink = page.getByRole('link', { name: /src\/awaiting\.rs/ })
+  const popupPromise = page.waitForEvent('popup')
+
+  await titleLink.click()
+
+  const popup = await popupPromise
+  await expect(popup).toHaveURL(awaitingReviewIssue.html_url)
+  await expect(page.getByRole('dialog')).not.toBeVisible()
+})
+
 // ---------------------------------------------------------------------------
 // Test 2: Multi-milestone — issues from both appear
 // ---------------------------------------------------------------------------
