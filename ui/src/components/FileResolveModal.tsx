@@ -165,6 +165,14 @@ function CommitIssueStep({
   const [showAll, setShowAll] = useState(false)
   const [initialized, setInitialized] = useState(false)
 
+  useEffect(() => {
+    if (!opened) return
+    setCurrentPage(0)
+    setCommitIdx(0)
+    setShowAll(false)
+    setInitialized(false)
+  }, [opened, fileName])
+
   const queryClient = useQueryClient()
 
   // Pin hash: most recent commit from referencing statuses (if any)
@@ -250,7 +258,6 @@ function CommitIssueStep({
     () => (allMilestones ?? []).map(m => m.number),
     [allMilestones],
   )
-
   const { issues: allIssues, isLoading: isLoadingIssues } = useAllMilestoneIssues(
     allMilestoneNumbers,
     opened,
@@ -291,7 +298,6 @@ function CommitIssueStep({
       }
     }
 
-    // Sort each group by issue number descending (highest first)
     approved.sort((a, b) => b.issue.number - a.issue.number)
     other.sort((a, b) => b.issue.number - a.issue.number)
 

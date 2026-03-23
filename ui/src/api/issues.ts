@@ -1,7 +1,7 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { API_BASE } from '../config'
 
-export type RelevantFileKind = 'blocking_qc' | 'relevant_qc' | 'file'
+export type RelevantFileKind = 'blocking_qc' | 'previous_qc' | 'relevant_qc' | 'file'
 
 export interface RelevantFileInfo {
   file_name: string

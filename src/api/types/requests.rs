@@ -33,6 +33,8 @@ pub struct RelevantIssue {
     pub issue_class: RelevantIssueClass,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default = "default_true")]
+    pub include_diff: bool,
 }
 
 impl RelevantIssue {
@@ -53,6 +55,7 @@ impl RelevantIssue {
                         issue_number: *issue_number,
                         issue_id: *issue_id,
                         description: self.description.clone(),
+                        include_diff: self.include_diff,
                     },
                     QCRelationship::RelevantQC => RelevantFileClass::RelevantQC {
                         issue_number: *issue_number,
@@ -64,6 +67,7 @@ impl RelevantIssue {
                 file_path: path.clone(),
                 relationship: relation,
                 description: self.description.clone(),
+                include_diff: self.include_diff,
             },
         }
     }

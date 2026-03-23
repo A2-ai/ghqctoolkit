@@ -7,7 +7,6 @@ import {
   InputBase,
   Loader,
   Stack,
-  Switch,
   Text,
   TextInput,
   Tooltip,
@@ -40,12 +39,10 @@ import { type MilestoneStatusInfo, useMilestoneIssues } from '~/api/issues'
 import { OpenPill } from './MilestoneFilter'
 import { ResizableSidebar } from './ResizableSidebar'
 import { AddContextFileModal } from './AddContextFileModal'
+import { ToggleField } from './ToggleField'
+import { type RecordContextItem, useUiSession } from '~/state/uiSession'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type ContextItem =
-  | { id: string; type: 'file'; serverPath: string; displayName: string }
-  | { id: 'qc-record'; type: 'qc-record' }
 
 const MIN_RS_HEIGHT = 80
 const COLLAPSED_HEIGHT = 36
@@ -53,33 +50,12 @@ const COLLAPSED_HEIGHT = 36
 // ─── RecordTab ────────────────────────────────────────────────────────────────
 
 export function RecordTab() {
-  const [selectedMilestones, setSelectedMilestones] = useState<number[]>([])
-  const [showOpenMilestones, setShowOpenMilestones] = useState(false)
-  const [tablesOnly, setTablesOnly] = useState(false)
-  const [outputPath, setOutputPath] = useState('')
-  const [contextItems, setContextItems] = useState<ContextItem[]>([
-    { id: 'qc-record', type: 'qc-record' },
-  ])
-  const [previewKey, setPreviewKey] = useState<string | null>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewError, setPreviewError] = useState<string | null>(null)
-  const [previewRetryCounter, setPreviewRetryCounter] = useState(0)
-  const [generateLoading, setGenerateLoading] = useState(false)
-  const [generateError, setGenerateError] = useState<string | null>(null)
-  const [generateSuccess, setGenerateSuccess] = useState(false)
-  const [addModalOpen, setAddModalOpen] = useState(false)
-  const [fileTreeKey, setFileTreeKey] = useState(0)
-
-  // Sidebar section layout state
-  const [milestoneCollapsed, setMilestoneCollapsed] = useState(false)
-  const [rsCollapsed, setRsCollapsed] = useState(false)
-  const [rsHeight, setRsHeight] = useState(300)
-  const [outputHeight, setOutputHeight] = useState<number | null>(null)
+  const { record, setRecord } = useUiSession()
   const sidebarRef = useRef<HTMLDivElement>(null)
   const outputSectionRef = useRef<HTMLDivElement>(null)
   const minOutputHeightRef = useRef(0)
   const currentOutputHeightRef = useRef(0)
-  const lastRsHeightRef = useRef(300)
+  const lastRsHeightRef = useRef(record.rsHeight)
   // Output drag refs
   const isDraggingOutput = useRef(false)
   const dragStartYOutput = useRef(0)
@@ -89,23 +65,21 @@ export function RecordTab() {
   const dragStartYRs = useRef(0)
   const dragStartHeightRs = useRef(0)
   // Keep ref in sync so drag closure always sees current value
-  if (outputHeight !== null) currentOutputHeightRef.current = outputHeight
+  if (record.outputHeight !== null) currentOutputHeightRef.current = record.outputHeight
 
   const { data: repoData } = useRepoInfo()
   const { data: milestonesData } = useMilestones()
   const previewRequestId = useRef(0)
-  const outputPathUserEdited = useRef(false)
-  const [outputPathIsCustom, setOutputPathIsCustom] = useState(false)
 
   const { statuses, milestoneStatusByMilestone, isLoadingIssues, isLoadingStatuses } =
-    useMilestoneIssues(selectedMilestones, true)
+    useMilestoneIssues(record.selectedMilestones, true)
 
   const milestoneStatusRef = useRef(milestoneStatusByMilestone)
   milestoneStatusRef.current = milestoneStatusByMilestone
 
   const unapprovedByMilestone = useMemo(() => {
     const result: Record<number, number> = {}
-    for (const n of selectedMilestones) {
+    for (const n of record.selectedMilestones) {
       const milestoneName = (milestonesData ?? []).find((m) => m.number === n)?.title
       const milestoneStatuses = statuses.filter((s) => s.issue.milestone === milestoneName)
       result[n] = milestoneStatuses.filter(
@@ -115,7 +89,7 @@ export function RecordTab() {
       ).length
     }
     return result
-  }, [selectedMilestones, statuses, milestonesData])
+  }, [record.selectedMilestones, statuses, milestonesData])
 
   function hasErrors(n: number): boolean {
     const info = milestoneStatusRef.current[n]
@@ -123,19 +97,28 @@ export function RecordTab() {
   }
 
   function resetOutputPath() {
-    outputPathUserEdited.current = false
-    setOutputPathIsCustom(false)
-    if (!repoData) { setOutputPath(''); return }
-    const includedNumbers = selectedMilestones.filter((n) => !hasErrors(n))
-    if (includedNumbers.length === 0) { setOutputPath(''); return }
+    if (!repoData) {
+      setRecord((prev) => ({ ...prev, outputPathUserEdited: false, outputPathIsCustom: false, outputPath: '' }))
+      return
+    }
+    const includedNumbers = record.selectedMilestones.filter((n) => !hasErrors(n))
+    if (includedNumbers.length === 0) {
+      setRecord((prev) => ({ ...prev, outputPathUserEdited: false, outputPathIsCustom: false, outputPath: '' }))
+      return
+    }
     const names = includedNumbers
       .map((n) => (milestonesData ?? []).find((m) => m.number === n)?.title ?? String(n))
       .join('-')
       .replace(/\s+/g, '-')
-    setOutputPath(`${repoData.repo}-${names}${tablesOnly ? '-tables' : ''}.pdf`)
+    setRecord((prev) => ({
+      ...prev,
+      outputPathUserEdited: false,
+      outputPathIsCustom: false,
+      outputPath: `${repoData.repo}-${names}${prev.tablesOnly ? '-tables' : ''}.pdf`,
+    }))
   }
 
-  const erroredKey = selectedMilestones
+  const erroredKey = record.selectedMilestones
     .filter((n) => milestoneStatusByMilestone[n]?.listFailed || (milestoneStatusByMilestone[n]?.statusErrorCount ?? 0) > 0)
     .sort((a, b) => a - b)
     .join(',')
@@ -150,13 +133,13 @@ export function RecordTab() {
       if (total > 0 && outH > 0) {
         minOutputHeightRef.current = outH
         currentOutputHeightRef.current = outH
-        setOutputHeight(outH)
+        setRecord((prev) => ({ ...prev, outputHeight: outH }))
         const half = Math.round(total * 0.5)
-        setRsHeight(half)
+        setRecord((prev) => ({ ...prev, rsHeight: half }))
         lastRsHeightRef.current = half
       }
     }
-  }, [])
+  }, [setRecord])
 
   // Unified drag-to-resize for output and RS handles
   useEffect(() => {
@@ -165,13 +148,19 @@ export function RecordTab() {
         const delta = e.clientY - dragStartYOutput.current
         const min = minOutputHeightRef.current
         const max = (sidebarRef.current?.clientHeight ?? 600) - COLLAPSED_HEIGHT * 2
-        setOutputHeight(Math.max(min, Math.min(max, dragStartHeightOutput.current + delta)))
+        setRecord((prev) => ({
+          ...prev,
+          outputHeight: Math.max(min, Math.min(max, dragStartHeightOutput.current + delta)),
+        }))
       }
       if (isDraggingRs.current) {
         const delta = dragStartYRs.current - e.clientY
         const totalH = sidebarRef.current?.clientHeight ?? 600
         const maxH = totalH - currentOutputHeightRef.current - COLLAPSED_HEIGHT
-        setRsHeight(Math.max(MIN_RS_HEIGHT, Math.min(maxH, dragStartHeightRs.current + delta)))
+        setRecord((prev) => ({
+          ...prev,
+          rsHeight: Math.max(MIN_RS_HEIGHT, Math.min(maxH, dragStartHeightRs.current + delta)),
+        }))
       }
     }
     const onUp = () => {
@@ -186,12 +175,12 @@ export function RecordTab() {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
-  }, [])
+  }, [setRecord])
 
   const onOutputDragHandleMouseDown = (e: React.MouseEvent) => {
     isDraggingOutput.current = true
     dragStartYOutput.current = e.clientY
-    dragStartHeightOutput.current = outputHeight ?? minOutputHeightRef.current
+    dragStartHeightOutput.current = record.outputHeight ?? minOutputHeightRef.current
     document.body.style.cursor = 'row-resize'
     document.body.style.userSelect = 'none'
     e.preventDefault()
@@ -200,111 +189,124 @@ export function RecordTab() {
   const onRsDragHandleMouseDown = (e: React.MouseEvent) => {
     isDraggingRs.current = true
     dragStartYRs.current = e.clientY
-    dragStartHeightRs.current = rsHeight
+    dragStartHeightRs.current = record.rsHeight
     document.body.style.cursor = 'row-resize'
     document.body.style.userSelect = 'none'
     e.preventDefault()
   }
 
   function toggleRsCollapse() {
-    if (rsCollapsed) {
-      setRsHeight(lastRsHeightRef.current)
+    if (record.rsCollapsed) {
+      setRecord((prev) => ({ ...prev, rsHeight: lastRsHeightRef.current }))
     } else {
-      lastRsHeightRef.current = rsHeight
+      lastRsHeightRef.current = record.rsHeight
     }
-    setRsCollapsed((c) => !c)
+    setRecord((prev) => ({ ...prev, rsCollapsed: !prev.rsCollapsed }))
   }
 
   // Auto-populate output path
   useEffect(() => {
-    if (outputPathUserEdited.current) return
     if (!repoData) return
-    const includedNumbers = selectedMilestones.filter((n) => !hasErrors(n))
+    const includedNumbers = record.selectedMilestones.filter((n) => !hasErrors(n))
     if (includedNumbers.length === 0) {
-      setOutputPath('')
+      setRecord((prev) => (prev.outputPathUserEdited ? prev : { ...prev, outputPath: '' }))
       return
     }
     const milestoneNames = includedNumbers
       .map((n) => (milestonesData ?? []).find((m) => m.number === n)?.title ?? String(n))
       .join('-')
       .replace(/\s+/g, '-')
-    setOutputPath(`${repoData.repo}-${milestoneNames}${tablesOnly ? '-tables' : ''}.pdf`)
-  }, [selectedMilestones, milestonesData, repoData, tablesOnly, erroredKey])
+    setRecord((prev) => (
+      prev.outputPathUserEdited
+        ? prev
+        : {
+            ...prev,
+            outputPath: `${repoData.repo}-${milestoneNames}${prev.tablesOnly ? '-tables' : ''}.pdf`,
+          }
+    ))
+  }, [record.selectedMilestones, record.outputPathUserEdited, record.tablesOnly, milestonesData, repoData, erroredKey, setRecord])
 
   // Auto-preview
   useEffect(() => {
-    if (selectedMilestones.length === 0) {
-      setPreviewKey(null)
-      setPreviewError(null)
-      setPreviewLoading(false)
+    if (record.selectedMilestones.length === 0) {
+      setRecord((prev) => ({
+        ...prev,
+        previewKey: null,
+        previewError: null,
+        previewLoading: false,
+      }))
       lastPreviewSignatureRef.current = ''
       return
     }
     if (isLoadingIssues || isLoadingStatuses) {
-      setPreviewError(null)
+      setRecord((prev) => ({ ...prev, previewError: null }))
       return
     }
-    const includedMilestones = selectedMilestones.filter((n) => !hasErrors(n))
+    const includedMilestones = record.selectedMilestones.filter((n) => !hasErrors(n))
     if (includedMilestones.length === 0) {
-      setPreviewLoading(false)
-      setPreviewError('All selected milestones failed to load — nothing to preview')
+      setRecord((prev) => ({
+        ...prev,
+        previewLoading: false,
+        previewError: 'All selected milestones failed to load — nothing to preview',
+      }))
       lastPreviewSignatureRef.current = ''
       return
     }
-    const qcIndex = contextItems.findIndex((i) => i.type === 'qc-record')
-    const contextFiles = contextItems
-      .filter((i): i is Extract<ContextItem, { type: 'file' }> => i.type === 'file')
+    const qcIndex = record.contextItems.findIndex((i) => i.type === 'qc-record')
+    const contextFiles = record.contextItems
+      .filter((i): i is Extract<RecordContextItem, { type: 'file' }> => i.type === 'file')
       .map((item) => ({
         server_path: item.serverPath,
-        position: (contextItems.indexOf(item) < qcIndex ? 'prepend' : 'append') as 'prepend' | 'append',
+        position: (record.contextItems.indexOf(item) < qcIndex ? 'prepend' : 'append') as 'prepend' | 'append',
       }))
-    const signature = JSON.stringify({ includedMilestones, tablesOnly, contextFiles })
+    const signature = JSON.stringify({ includedMilestones, tablesOnly: record.tablesOnly, contextFiles })
     if (signature === lastPreviewSignatureRef.current) return
 
     const id = ++previewRequestId.current
-    setPreviewLoading(true)
-    setPreviewError(null)
+    setRecord((prev) => ({
+      ...prev,
+      previewKey: null,
+      previewLoading: true,
+      previewError: null,
+    }))
 
-    previewRecord({ milestone_numbers: includedMilestones, tables_only: tablesOnly, output_path: '', context_files: contextFiles })
+    previewRecord({ milestone_numbers: includedMilestones, tables_only: record.tablesOnly, output_path: '', context_files: contextFiles })
       .then((result) => {
         if (id !== previewRequestId.current) return
         lastPreviewSignatureRef.current = signature
-        setPreviewKey(result.key)
+        setRecord((prev) => ({ ...prev, previewKey: result.key }))
       })
       .catch((err: Error) => {
         if (id !== previewRequestId.current) return
-        setPreviewError(err.message)
+        setRecord((prev) => ({ ...prev, previewError: err.message }))
       })
       .finally(() => {
         if (id !== previewRequestId.current) return
-        setPreviewLoading(false)
+        setRecord((prev) => ({ ...prev, previewLoading: false }))
       })
-  }, [selectedMilestones, isLoadingIssues, isLoadingStatuses, tablesOnly, contextItems, previewRetryCounter])
+  }, [record.selectedMilestones, isLoadingIssues, isLoadingStatuses, record.tablesOnly, record.contextItems, record.previewRetryCounter, setRecord])
 
   async function handleGenerate() {
-    setGenerateError(null)
-    setGenerateSuccess(false)
-    setGenerateLoading(true)
+    setRecord((prev) => ({ ...prev, generateError: null, generateSuccess: false, generateLoading: true }))
     try {
-      const qcIndex = contextItems.findIndex((i) => i.type === 'qc-record')
+      const qcIndex = record.contextItems.findIndex((i) => i.type === 'qc-record')
       const req: RecordRequest = {
-        milestone_numbers: selectedMilestones.filter((n) => !hasErrors(n)),
-        tables_only: tablesOnly,
-        output_path: outputPath,
-        context_files: contextItems
-          .filter((i): i is Extract<ContextItem, { type: 'file' }> => i.type === 'file')
+        milestone_numbers: record.selectedMilestones.filter((n) => !hasErrors(n)),
+        tables_only: record.tablesOnly,
+        output_path: record.outputPath,
+        context_files: record.contextItems
+          .filter((i): i is Extract<RecordContextItem, { type: 'file' }> => i.type === 'file')
           .map((item) => ({
             server_path: item.serverPath,
-            position: contextItems.indexOf(item) < qcIndex ? 'prepend' : 'append',
+            position: record.contextItems.indexOf(item) < qcIndex ? 'prepend' : 'append',
           })),
       }
       await generateRecord(req)
-      setGenerateSuccess(true)
-      setFileTreeKey((k) => k + 1)
+      setRecord((prev) => ({ ...prev, generateSuccess: true, fileTreeKey: prev.fileTreeKey + 1 }))
     } catch (err) {
-      setGenerateError((err as Error).message)
+      setRecord((prev) => ({ ...prev, generateError: (err as Error).message }))
     } finally {
-      setGenerateLoading(false)
+      setRecord((prev) => ({ ...prev, generateLoading: false }))
     }
   }
 
@@ -312,25 +314,28 @@ export function RecordTab() {
     if (!result.destination) return
     const src = result.source.index
     const dst = result.destination.index
-    if (src === dst || contextItems[src].type === 'qc-record') return
-    const items = [...contextItems]
+    if (src === dst || record.contextItems[src].type === 'qc-record') return
+    const items = [...record.contextItems]
     const [moved] = items.splice(src, 1)
     items.splice(dst, 0, moved)
-    setContextItems(items)
+    setRecord((prev) => ({ ...prev, contextItems: items }))
   }
 
   function removeContextItem(id: string) {
-    setContextItems((prev) => prev.filter((i) => i.id !== id))
+    setRecord((prev) => ({ ...prev, contextItems: prev.contextItems.filter((i) => i.id !== id) }))
   }
 
   function addContextItem(item: { serverPath: string; displayName: string }) {
-    setContextItems((prev) => [
+    setRecord((prev) => ({
       ...prev,
-      { id: `file-${Date.now()}`, type: 'file', serverPath: item.serverPath, displayName: item.displayName },
-    ])
+      contextItems: [
+        ...prev.contextItems,
+        { id: `file-${Date.now()}`, type: 'file', serverPath: item.serverPath, displayName: item.displayName },
+      ],
+    }))
   }
 
-  const bothCollapsed = milestoneCollapsed && rsCollapsed
+  const bothCollapsed = record.milestoneCollapsed && record.rsCollapsed
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -346,7 +351,7 @@ export function RecordTab() {
             style={
               bothCollapsed
                 ? { flex: 1, minHeight: 0, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }
-                : { height: outputHeight ?? 'auto', flexShrink: 0, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }
+                : { height: record.outputHeight ?? 'auto', flexShrink: 0, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }
             }
           >
             <Stack gap="sm">
@@ -354,14 +359,17 @@ export function RecordTab() {
                 label="Output Path"
                 placeholder="/path/to/report.pdf"
                 size="xs"
-                value={outputPath}
+                value={record.outputPath}
                 onChange={(e) => {
                   const val = e.currentTarget.value
-                  outputPathUserEdited.current = val !== ''
-                  setOutputPathIsCustom(val !== '')
-                  setOutputPath(val)
+                  setRecord((prev) => ({
+                    ...prev,
+                    outputPathUserEdited: val !== '',
+                    outputPathIsCustom: val !== '',
+                    outputPath: val,
+                  }))
                 }}
-                rightSection={outputPathIsCustom && selectedMilestones.length > 0 ? (
+                rightSection={record.outputPathIsCustom && record.selectedMilestones.length > 0 ? (
                   <Tooltip label="Reset to default" withArrow position="top">
                     <ActionIcon
                       size="xs"
@@ -375,14 +383,14 @@ export function RecordTab() {
                   </Tooltip>
                 ) : undefined}
               />
-              {generateError && (
+              {record.generateError && (
                 <Alert color="red" p="xs">
-                  <Text size="xs">{generateError}</Text>
+                  <Text size="xs">{record.generateError}</Text>
                 </Alert>
               )}
-              {generateSuccess && (
+              {record.generateSuccess && (
                 <Alert color="green" p="xs">
-                  <Text size="xs">PDF written to {outputPath}</Text>
+                  <Text size="xs">PDF written to {record.outputPath}</Text>
                 </Alert>
               )}
               <Button
@@ -390,8 +398,8 @@ export function RecordTab() {
                 size="sm"
                 color="green"
                 onClick={handleGenerate}
-                loading={generateLoading}
-                disabled={selectedMilestones.length === 0 || !outputPath.trim()}
+                loading={record.generateLoading}
+                disabled={record.selectedMilestones.length === 0 || !record.outputPath.trim()}
               >
                 Generate
               </Button>
@@ -400,7 +408,7 @@ export function RecordTab() {
 
           {/* ── Drag handle A: between Output and Milestones ─────────────── */}
           {/* Hidden when both sections below are collapsed */}
-          {!bothCollapsed && outputHeight !== null && (
+          {!bothCollapsed && record.outputHeight !== null && (
             <div
               onMouseDown={onOutputDragHandleMouseDown}
               style={{
@@ -414,7 +422,7 @@ export function RecordTab() {
 
           {/* ── Milestones (collapsible) ─────────────────────────────────── */}
           <div style={
-            milestoneCollapsed
+            record.milestoneCollapsed
               ? {
                   height: COLLAPSED_HEIGHT,
                   flexShrink: 0,
@@ -431,30 +439,29 @@ export function RecordTab() {
                 padding: '0 var(--mantine-spacing-md)',
                 height: COLLAPSED_HEIGHT,
                 flexShrink: 0,
-                borderBottom: milestoneCollapsed ? undefined : '1px solid var(--mantine-color-gray-3)',
+                borderBottom: record.milestoneCollapsed ? undefined : '1px solid var(--mantine-color-gray-3)',
                 cursor: 'pointer',
               }}
-              onClick={() => setMilestoneCollapsed((c) => !c)}
-              title={milestoneCollapsed ? 'Expand' : 'Collapse'}
+              onClick={() => setRecord((prev) => ({ ...prev, milestoneCollapsed: !prev.milestoneCollapsed }))}
+              title={record.milestoneCollapsed ? 'Expand' : 'Collapse'}
             >
               <ActionIcon size="xs" variant="subtle" tabIndex={-1} style={{ pointerEvents: 'none' }}>
-                {milestoneCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
+                {record.milestoneCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
               </ActionIcon>
               <Text fw={600} size="sm">Milestones</Text>
             </div>
-            {!milestoneCollapsed && (
+            {!record.milestoneCollapsed && (
               <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }}>
                 <Stack gap="sm">
-                  <Switch
+                  <ToggleField
                     label="Include open milestones"
-                    size="xs"
-                    checked={showOpenMilestones}
-                    onChange={(e) => setShowOpenMilestones(e.currentTarget.checked)}
+                    checked={record.showOpenMilestones}
+                    onChange={(checked) => setRecord((prev) => ({ ...prev, showOpenMilestones: checked }))}
                   />
                   <MilestoneCombobox
-                    selectedMilestones={selectedMilestones}
-                    onSelectedMilestonesChange={setSelectedMilestones}
-                    showOpenMilestones={showOpenMilestones}
+                    selectedMilestones={record.selectedMilestones}
+                    onSelectedMilestonesChange={(selectedMilestones) => setRecord((prev) => ({ ...prev, selectedMilestones }))}
+                    showOpenMilestones={record.showOpenMilestones}
                     statusByMilestone={milestoneStatusByMilestone}
                     unapprovedByMilestone={unapprovedByMilestone}
                   />
@@ -466,14 +473,14 @@ export function RecordTab() {
           {/* ── Record Structure (resizable + collapsible) ───────────────── */}
           {/* flex:1 (fills space) when milestones is collapsed; fixed height otherwise */}
           <div style={
-            rsCollapsed
+            record.rsCollapsed
               ? { height: COLLAPSED_HEIGHT, flexShrink: 0 }
-              : milestoneCollapsed
+              : record.milestoneCollapsed
                 ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
-                : { height: rsHeight, flexShrink: 0, display: 'flex', flexDirection: 'column' }
+                : { height: record.rsHeight, flexShrink: 0, display: 'flex', flexDirection: 'column' }
           }>
             {/* RS drag handle — only when both milestones and RS are expanded */}
-            {!milestoneCollapsed && !rsCollapsed && (
+            {!record.milestoneCollapsed && !record.rsCollapsed && (
               <div
                 onMouseDown={onRsDragHandleMouseDown}
                 style={{
@@ -494,21 +501,21 @@ export function RecordTab() {
                 padding: '0 var(--mantine-spacing-md)',
                 height: COLLAPSED_HEIGHT,
                 flexShrink: 0,
-                borderTop: (rsCollapsed || milestoneCollapsed)
+                borderTop: (record.rsCollapsed || record.milestoneCollapsed)
                   ? '1px solid var(--mantine-color-gray-3)'
                   : undefined,
                 cursor: 'pointer',
               }}
               onClick={toggleRsCollapse}
-              title={rsCollapsed ? 'Expand' : 'Collapse'}
+              title={record.rsCollapsed ? 'Expand' : 'Collapse'}
             >
               <ActionIcon size="xs" variant="subtle" tabIndex={-1} style={{ pointerEvents: 'none' }}>
-                {rsCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
+                {record.rsCollapsed ? <IconChevronRight size={14} /> : <IconChevronDown size={14} />}
               </ActionIcon>
               <Text fw={600} size="sm">Record Structure</Text>
             </div>
 
-            {!rsCollapsed && (
+            {!record.rsCollapsed && (
               <div style={{ flex: 1, overflowY: 'auto', padding: '0 var(--mantine-spacing-md) var(--mantine-spacing-md)' }}>
                 <Text size="xs" c="dimmed" mb={8}>
                   Add documents to provide context to the QC findings
@@ -525,7 +532,7 @@ export function RecordTab() {
                           overflow: 'hidden',
                         }}
                       >
-                        {contextItems.map((item, index) => (
+                        {record.contextItems.map((item, index) => (
                           <Draggable
                             key={item.id}
                             draggableId={item.id}
@@ -544,7 +551,7 @@ export function RecordTab() {
                                     padding: '7px 10px',
                                     backgroundColor: '#d7e7d3',
                                     borderTop: index > 0 ? '1px solid var(--mantine-color-gray-3)' : undefined,
-                                    borderBottom: index < contextItems.length - 1 ? '1px solid var(--mantine-color-gray-3)' : undefined,
+                                    borderBottom: index < record.contextItems.length - 1 ? '1px solid var(--mantine-color-gray-3)' : undefined,
                                     ...provided.draggableProps.style,
                                   }}
                                 >
@@ -553,27 +560,25 @@ export function RecordTab() {
                                     QC Record
                                   </Text>
                                   <Tooltip
-                                    label={tablesOnly
+                                    label={record.tablesOnly
                                       ? 'Tables only: include only the QC summary tables'
                                       : 'Full record: include QC history and summary tables'}
                                     withArrow
                                     position="top"
                                   >
-                                    <Switch
-                                      label="Tables only"
-                                      size="xs"
-                                      color="#2f7a3b"
-                                      checked={tablesOnly}
-                                      onChange={(e) => setTablesOnly(e.currentTarget.checked)}
-                                      styles={{
-                                        label: { color: tablesOnly ? '#1a1a1a' : '#868e96', fontSize: 11, paddingLeft: 6, fontWeight: 700 },
-                                        track: {
-                                          borderColor: tablesOnly ? '#2f7a3b' : '#adb5bd',
-                                          backgroundColor: tablesOnly ? undefined : '#e9ecef',
-                                        },
-                                        thumb: { borderColor: tablesOnly ? '#2f7a3b' : '#adb5bd' },
-                                      }}
-                                    />
+                                    <div>
+                                      <ToggleField
+                                        label="Tables only"
+                                        checked={record.tablesOnly}
+                                        onChange={(checked) => setRecord((prev) => ({ ...prev, tablesOnly: checked }))}
+                                        color="#2f7a3b"
+                                        labelStyle={{
+                                          color: record.tablesOnly ? '#1a1a1a' : '#868e96',
+                                          fontSize: 11,
+                                          fontWeight: 700,
+                                        }}
+                                      />
+                                    </div>
                                   </Tooltip>
                                 </div>
                               ) : (
@@ -624,7 +629,7 @@ export function RecordTab() {
                   variant="light"
                   size="xs"
                   mt={6}
-                  onClick={() => setAddModalOpen(true)}
+                  onClick={() => setRecord((prev) => ({ ...prev, addModalOpen: true }))}
                 >
                   Add File
                 </Button>
@@ -637,18 +642,18 @@ export function RecordTab() {
 
       {/* ── Right pane: full-height PDF preview ──────────────────────────── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        {previewKey && (
+        {record.previewKey && (
           <iframe
-            key={previewKey}
-            src={`${API_BASE}/record/preview.pdf?key=${previewKey}`}
+            key={record.previewKey}
+            src={`${API_BASE}/record/preview.pdf?key=${record.previewKey}`}
             style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
           />
         )}
-        {previewLoading && (
+        {record.previewLoading && (
           <div style={{
             position: 'absolute',
             inset: 0,
-            backgroundColor: previewKey ? 'rgba(255,255,255,0.65)' : 'white',
+            backgroundColor: record.previewKey ? 'rgba(255,255,255,0.65)' : 'white',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -659,7 +664,7 @@ export function RecordTab() {
             <Text size="sm" c="dimmed">Generating preview…</Text>
           </div>
         )}
-        {previewError && !previewLoading && (
+        {record.previewError && !record.previewLoading && (
           <div style={{
             position: 'absolute',
             inset: 0,
@@ -669,19 +674,19 @@ export function RecordTab() {
             padding: 32,
           }}>
             <Alert color="red" style={{ maxWidth: 480 }}>
-              <Text size="sm" mb={8}>{previewError}</Text>
+              <Text size="sm" mb={8}>{record.previewError}</Text>
               <Button
                 size="xs"
                 color="red"
                 variant="light"
-                onClick={() => setPreviewRetryCounter((c) => c + 1)}
+                onClick={() => setRecord((prev) => ({ ...prev, previewRetryCounter: prev.previewRetryCounter + 1 }))}
               >
                 Retry
               </Button>
             </Alert>
           </div>
         )}
-        {!previewKey && !previewLoading && !previewError && (
+        {!record.previewKey && !record.previewLoading && !record.previewError && (
           <div style={{
             position: 'absolute',
             inset: 0,
@@ -695,10 +700,10 @@ export function RecordTab() {
       </div>
 
       <AddContextFileModal
-        opened={addModalOpen}
-        onClose={() => setAddModalOpen(false)}
+        opened={record.addModalOpen}
+        onClose={() => setRecord((prev) => ({ ...prev, addModalOpen: false }))}
         onAdd={addContextItem}
-        fileTreeKey={fileTreeKey}
+        fileTreeKey={record.fileTreeKey}
       />
     </div>
   )

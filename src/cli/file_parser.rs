@@ -122,9 +122,13 @@ impl TypedValueParser for FileCommitPairParser {
     }
 }
 
-/// Represents a GitHub issue URL with an optional description
-/// Format: "<GITHUB_URL>/issues/<NUMBER>[::description]"
-/// Example: "https://github.com/owner/repo/issues/123" or "https://github.com/owner/repo/issues/123::This is the description"
+/// Represents a GitHub issue URL with an optional description and diff flag.
+/// Format: "<GITHUB_URL>/issues/<NUMBER>[::description][::no_diff]"
+/// Examples:
+///   "https://github.com/owner/repo/issues/123"
+///   "https://github.com/owner/repo/issues/123::My description"
+///   "https://github.com/owner/repo/issues/123::no_diff"
+///   "https://github.com/owner/repo/issues/123::My description::no_diff"
 #[derive(Debug, Clone)]
 pub struct IssueUrlArg {
     /// The original URL provided (without description)
@@ -133,6 +137,8 @@ pub struct IssueUrlArg {
     pub issue_number: u64,
     /// Optional description for this reference
     pub description: Option<String>,
+    /// Whether to include a diff comment (only meaningful for previous_qc; default true)
+    pub include_diff: bool,
 }
 
 impl IssueUrlArg {
@@ -154,27 +160,46 @@ impl FromStr for IssueUrlArg {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Split on "::" to separate URL from optional description
-        let (url_part, description) = if let Some(idx) = s.find("::") {
-            let desc = s[idx + 2..].trim();
-            let desc = if desc.is_empty() {
-                None
-            } else {
-                Some(desc.to_string())
-            };
-            (&s[..idx], desc)
-        } else {
-            (s, None)
+        // Split on "::" into segments: [url, optional_description, optional_no_diff]
+        let segments: Vec<&str> = s.splitn(3, "::").collect();
+
+        let url_part = segments[0].trim();
+
+        // Check if the last segment is "no_diff"
+        let (description, include_diff) = match segments.len() {
+            1 => (None, true),
+            2 => {
+                let seg = segments[1].trim();
+                if seg == "no_diff" {
+                    (None, false)
+                } else if seg.is_empty() {
+                    (None, true)
+                } else {
+                    (Some(seg.to_string()), true)
+                }
+            }
+            3 => {
+                let desc = segments[1].trim();
+                let last = segments[2].trim();
+                let include_diff = last != "no_diff";
+                let description = if desc.is_empty() {
+                    None
+                } else {
+                    Some(desc.to_string())
+                };
+                (description, include_diff)
+            }
+            _ => (None, true),
         };
 
-        let url = url_part.trim();
+        let url = url_part;
 
         // Parse issue number from URL - expected format ends with /issues/<NUMBER>
         // e.g., https://github.com/owner/repo/issues/123
         let parts: Vec<&str> = url.rsplitn(2, '/').collect();
         if parts.len() < 2 {
             return Err(format!(
-                "Invalid issue URL format: {}. Expected format: <url>/issues/<number>[::description]",
+                "Invalid issue URL format: {}. Expected format: <url>/issues/<number>[::description][::no_diff]",
                 url
             ));
         }
@@ -198,6 +223,7 @@ impl FromStr for IssueUrlArg {
             url: url.to_string(),
             issue_number,
             description,
+            include_diff,
         })
     }
 }
@@ -234,7 +260,7 @@ impl TypedValueParser for IssueUrlArgParser {
             err.insert(
                 clap::error::ContextKind::ValidValue,
                 clap::error::ContextValue::String(
-                    "<url>/issues/<number>[::description]".to_string(),
+                    "<url>/issues/<number>[::description][::no_diff]".to_string(),
                 ),
             );
             err.insert(
@@ -338,6 +364,7 @@ mod tests {
         assert_eq!(arg.url, "https://github.com/owner/repo/issues/123");
         assert_eq!(arg.issue_number, 123);
         assert!(arg.description.is_none());
+        assert!(arg.include_diff);
 
         // URL with description
         let arg: IssueUrlArg = "https://github.com/owner/repo/issues/456::This is a description"
@@ -346,6 +373,24 @@ mod tests {
         assert_eq!(arg.url, "https://github.com/owner/repo/issues/456");
         assert_eq!(arg.issue_number, 456);
         assert_eq!(arg.description, Some("This is a description".to_string()));
+        assert!(arg.include_diff);
+
+        // URL with no_diff suffix (no description)
+        let arg: IssueUrlArg = "https://github.com/owner/repo/issues/789::no_diff"
+            .parse()
+            .unwrap();
+        assert_eq!(arg.url, "https://github.com/owner/repo/issues/789");
+        assert_eq!(arg.issue_number, 789);
+        assert!(arg.description.is_none());
+        assert!(!arg.include_diff);
+
+        // URL with description and no_diff suffix
+        let arg: IssueUrlArg = "https://github.com/owner/repo/issues/012::My desc::no_diff"
+            .parse()
+            .unwrap();
+        assert_eq!(arg.url, "https://github.com/owner/repo/issues/012");
+        assert_eq!(arg.description, Some("My desc".to_string()));
+        assert!(!arg.include_diff);
 
         // GitHub Enterprise URL
         let arg: IssueUrlArg = "https://github.enterprise.com/org/project/issues/789"

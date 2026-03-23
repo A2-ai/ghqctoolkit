@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button, Group, Modal, ScrollArea, Tabs } from '@mantine/core'
 import { FileTreeBrowser } from './FileTreeBrowser'
 import { IssuePreviewCard } from './IssuePreviewCard'
@@ -14,6 +14,7 @@ import type { RelevantFileKind } from '~/api/issues'
 import { toCreateIssueRequest } from '~/api/create'
 import { fetchFileContent, fetchIssuePreview } from '~/api/preview'
 import { wrapInGithubStyles } from '~/utils/github'
+import { useUiSession } from '~/state/uiSession'
 
 export type { RelevantFileKind }
 
@@ -23,6 +24,8 @@ export interface RelevantFileDraft {
   issueNumber: number | null
   milestoneTitle: string | null
   description: string
+  /** Only meaningful for previous_qc entries — whether to post a diff comment. Defaults to true. */
+  includeDiff?: boolean
 }
 
 export interface QueuedItem {
@@ -49,94 +52,73 @@ interface Props {
 }
 
 export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTitle, onQueue, onUpdate, queuedItems, editItem, editIndex }: Props) {
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [checklistDraft, setChecklistDraft] = useState<ChecklistDraft>({ name: '', content: '' })
-  const [checklistSelected, setChecklistSelected] = useState(false)
-  const [checklistKey, setChecklistKey] = useState(0)
-  // Custom tabs saved via "Save" persist across modal opens for the duration of the Create tab
-  const [savedCustomTabs, setSavedCustomTabs] = useState<ChecklistDraft[]>([])
-  const [assignees, setAssignees] = useState<string[]>([])
-  const [relevantFiles, setRelevantFiles] = useState<RelevantFileDraft[]>([])
-  const [activeTab, setActiveTab] = useState<string | null>('file')
-  const [filePreviewOpen, setFilePreviewOpen] = useState(false)
-  const [filePreviewContent, setFilePreviewContent] = useState<string | null>(null)
+  const { create, setCreate } = useUiSession()
   const [filePreviewLoading, setFilePreviewLoading] = useState(false)
-  const [issuePreviewOpen, setIssuePreviewOpen] = useState(false)
-  const [issuePreviewHtml, setIssuePreviewHtml] = useState<string | null>(null)
   const [issuePreviewLoading, setIssuePreviewLoading] = useState(false)
   const { data: repoInfo } = useRepoInfo()
   const { data: milestoneIssues = [] } = useIssuesForMilestone(milestoneNumber)
   const { singular } = useChecklistDisplayName()
   const singularCap = capitalize(singular)
-
-  // Populate state each time the modal opens (fresh create or edit)
-  useEffect(() => {
-    if (opened) {
-      setActiveTab('file')
-      setChecklistKey((k) => k + 1) // remount ChecklistTab to clear any new-* tabs
-      if (editItem) {
-        setSelectedFile(editItem.file)
-        setChecklistDraft({ name: editItem.checklistName, content: editItem.checklistContent })
-        setChecklistSelected(true)
-        setAssignees(editItem.assignees)
-        setRelevantFiles(editItem.relevantFiles)
-      } else {
-        setSelectedFile(null)
-        setChecklistSelected(false)
-        setChecklistDraft({ name: '', content: '' })
-        setAssignees([])
-        setRelevantFiles([])
-      }
-    }
-  }, [opened])
+  const modal = create.modal
 
   async function handleViewFile() {
-    if (!selectedFile) return
+    if (!modal.selectedFile) return
     setFilePreviewLoading(true)
     try {
-      const content = await fetchFileContent(selectedFile)
-      setFilePreviewContent(content)
-      setFilePreviewOpen(true)
+      const content = await fetchFileContent(modal.selectedFile)
+      setCreate((prev) => ({
+        ...prev,
+        modal: { ...prev.modal, filePreviewContent: content, filePreviewOpen: true },
+      }))
     } catch (err) {
-      setFilePreviewContent(`Error: ${(err as Error).message}`)
-      setFilePreviewOpen(true)
+      setCreate((prev) => ({
+        ...prev,
+        modal: { ...prev.modal, filePreviewContent: `Error: ${(err as Error).message}`, filePreviewOpen: true },
+      }))
     } finally {
       setFilePreviewLoading(false)
     }
   }
 
   async function handlePreviewIssue() {
-    if (!selectedFile) return
+    if (!modal.selectedFile) return
     const item: QueuedItem = {
-      file: selectedFile,
-      checklistName: checklistDraft.name,
-      checklistContent: checklistDraft.content,
+      file: modal.selectedFile,
+      checklistName: modal.checklistDraft.name,
+      checklistContent: modal.checklistDraft.content,
       branch: repoInfo?.branch ?? null,
       createdBy: repoInfo?.current_user ?? null,
       milestoneTitle,
-      assignees,
-      relevantFiles,
+      assignees: modal.assignees,
+      relevantFiles: modal.relevantFiles,
     }
     // Include queued-but-no-issue-number items in the "batch" so they show as New in the preview
     const batchFiles = new Set([
-      selectedFile,
-      ...relevantFiles.filter(rf => rf.kind !== 'file' && rf.issueNumber === null).map(rf => rf.file),
+      modal.selectedFile,
+      ...modal.relevantFiles.filter(rf => rf.kind !== 'file' && rf.issueNumber === null).map(rf => rf.file),
     ])
     const request = toCreateIssueRequest(item, batchFiles)
     setIssuePreviewLoading(true)
     try {
       const html = await fetchIssuePreview(request)
-      setIssuePreviewHtml(html)
-      setIssuePreviewOpen(true)
+      setCreate((prev) => ({
+        ...prev,
+        modal: { ...prev.modal, issuePreviewHtml: html, issuePreviewOpen: true },
+      }))
     } catch (err) {
-      setIssuePreviewHtml(`<pre>Error: ${(err as Error).message}</pre>`)
-      setIssuePreviewOpen(true)
+      setCreate((prev) => ({
+        ...prev,
+        modal: { ...prev.modal, issuePreviewHtml: `<pre>Error: ${(err as Error).message}</pre>`, issuePreviewOpen: true },
+      }))
     } finally {
       setIssuePreviewLoading(false)
     }
   }
 
-  const canQueue = !!selectedFile && (checklistSelected || (checklistDraft.name.trim().length > 0 && checklistDraft.content.trim().length > 0))
+  const canQueue = !!modal.selectedFile && (
+    modal.checklistSelected ||
+    (modal.checklistDraft.name.trim().length > 0 && modal.checklistDraft.content.trim().length > 0)
+  )
 
   // Issue titles ARE the file path (e.g. "scripts/file_b.R"); build a set for O(1) lookup
   const claimedFiles = useMemo<Set<string>>(
@@ -156,7 +138,11 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       centered
       keepMounted
     >
-      <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
+      <Tabs
+        value={modal.activeTab}
+        onChange={(activeTab) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, activeTab } }))}
+        keepMounted={false}
+      >
         <Tabs.List grow>
           <Tabs.Tab value="file">Select a File</Tabs.Tab>
           <Tabs.Tab value="checklist">Select a {singularCap}</Tabs.Tab>
@@ -168,46 +154,64 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
           <div style={{ flex: '1 1 0', minWidth: 0 }}>
             <Tabs.Panel value="file" keepMounted>
               <FileTreeBrowser
-                selectedFile={selectedFile}
-                onSelect={setSelectedFile}
+                selectedFile={modal.selectedFile}
+                onSelect={(selectedFile) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, selectedFile } }))}
                 claimedFiles={claimedFiles}
               />
             </Tabs.Panel>
             <Tabs.Panel value="checklist" keepMounted>
               <ChecklistTab
-                key={checklistKey}
-                onChange={setChecklistDraft}
-                onSelect={() => setChecklistSelected(true)}
-                initialDraft={editItem ? { name: editItem.checklistName, content: editItem.checklistContent } : null}
-                persistedCustomTabs={savedCustomTabs}
-                onSaveCustom={(tab) => setSavedCustomTabs((prev) => {
-                  const idx = prev.findIndex((t) => t.name === tab.name)
-                  return idx >= 0 ? prev.map((t, i) => i === idx ? tab : t) : [...prev, tab]
+                key={modal.checklistKey}
+                onChange={(checklistDraft) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, checklistDraft } }))}
+                onSelect={() => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, checklistSelected: true } }))}
+                initialDraft={modal.checklistSelected ? modal.checklistDraft : null}
+                persistedCustomTabs={modal.savedCustomTabs}
+                onSaveCustom={(tab) => setCreate((prev) => {
+                  const idx = prev.modal.savedCustomTabs.findIndex((entry) => entry.name === tab.name)
+                  const savedCustomTabs = idx >= 0
+                    ? prev.modal.savedCustomTabs.map((entry, i) => i === idx ? tab : entry)
+                    : [...prev.modal.savedCustomTabs, tab]
+                  return { ...prev, modal: { ...prev.modal, savedCustomTabs } }
                 })}
               />
             </Tabs.Panel>
             <Tabs.Panel value="relevant">
               <RelevantFilesTab
-                relevantFiles={relevantFiles}
-                onAdd={(draft) => setRelevantFiles((prev) => [...prev, draft])}
-                onRemove={(i) => setRelevantFiles((prev) => prev.filter((_, idx) => idx !== i))}
-                onUpdate={(i, draft) => setRelevantFiles((prev) => prev.map((rf, idx) => idx === i ? draft : rf))}
+                relevantFiles={modal.relevantFiles}
+                onAdd={(draft) => setCreate((prev) => ({
+                  ...prev,
+                  modal: { ...prev.modal, relevantFiles: [...prev.modal.relevantFiles, draft] },
+                }))}
+                onRemove={(i) => setCreate((prev) => ({
+                  ...prev,
+                  modal: { ...prev.modal, relevantFiles: prev.modal.relevantFiles.filter((_, idx) => idx !== i) },
+                }))}
+                onUpdate={(i, draft) => setCreate((prev) => ({
+                  ...prev,
+                  modal: {
+                    ...prev.modal,
+                    relevantFiles: prev.modal.relevantFiles.map((rf, idx) => idx === i ? draft : rf),
+                  },
+                }))}
                 queuedItems={queuedItems}
               />
             </Tabs.Panel>
             <Tabs.Panel value="reviewers">
-              <ReviewersTab value={assignees} onChange={setAssignees} />
+              <ReviewersTab
+                value={modal.assignees}
+                onChange={(assignees) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, assignees } }))}
+              />
             </Tabs.Panel>
           </div>
 
           <div style={{ flex: '0 0 260px' }}>
             <IssuePreviewCard
-              file={selectedFile}
+              file={modal.selectedFile}
               branch={repoInfo?.branch ?? null}
               createdBy={repoInfo?.current_user ?? null}
-              checklistName={checklistSelected ? (checklistDraft.name || null) : null}
-              assignees={assignees}
-              relevantFiles={relevantFiles}
+              checklistName={modal.checklistSelected ? (modal.checklistDraft.name || null) : null}
+              assignees={modal.assignees}
+              relevantFiles={modal.relevantFiles}
             />
           </div>
         </Group>
@@ -215,7 +219,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
         <Group justify="flex-end" pt="sm">
           <Button
             variant="default"
-            disabled={!selectedFile}
+            disabled={!modal.selectedFile}
             loading={filePreviewLoading}
             onClick={handleViewFile}
           >
@@ -233,14 +237,14 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             disabled={!canQueue}
             onClick={() => {
               const item: QueuedItem = {
-                file: selectedFile!,
-                checklistName: checklistDraft.name,
-                checklistContent: checklistDraft.content,
+                file: modal.selectedFile!,
+                checklistName: modal.checklistDraft.name,
+                checklistContent: modal.checklistDraft.content,
                 branch: repoInfo?.branch ?? null,
                 createdBy: repoInfo?.current_user ?? null,
                 milestoneTitle,
-                assignees,
-                relevantFiles,
+                assignees: modal.assignees,
+                relevantFiles: modal.relevantFiles,
               }
               if (editIndex != null) {
                 onUpdate(editIndex, item)
@@ -257,9 +261,9 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
 
       {/* File content preview */}
       <Modal
-        opened={filePreviewOpen}
-        onClose={() => setFilePreviewOpen(false)}
-        title={selectedFile ?? 'File Preview'}
+        opened={modal.filePreviewOpen}
+        onClose={() => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, filePreviewOpen: false } }))}
+        title={modal.selectedFile ?? 'File Preview'}
         size={800}
         centered
       >
@@ -276,21 +280,21 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-all',
           }}>
-            {filePreviewContent ?? ''}
+            {modal.filePreviewContent ?? ''}
           </pre>
         </ScrollArea>
       </Modal>
 
       {/* Issue body HTML preview */}
       <Modal
-        opened={issuePreviewOpen}
-        onClose={() => setIssuePreviewOpen(false)}
+        opened={modal.issuePreviewOpen}
+        onClose={() => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, issuePreviewOpen: false } }))}
         title="Issue Preview"
         size={800}
         centered
       >
         <iframe
-          srcDoc={issuePreviewHtml ? wrapInGithubStyles(issuePreviewHtml) : ''}
+          srcDoc={modal.issuePreviewHtml ? wrapInGithubStyles(modal.issuePreviewHtml) : ''}
           style={{ width: '100%', height: 500, border: '1px solid var(--mantine-color-gray-3)' , borderRadius: 6 }}
           title="Issue Preview"
         />

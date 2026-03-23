@@ -18,7 +18,9 @@ interface Props {
 type Relation = 'gating' | 'relevant' | 'previous'
 
 function toKind(relation: Relation): RelevantFileKind {
-  return relation === 'relevant' ? 'relevant_qc' : 'blocking_qc'
+  if (relation === 'relevant') return 'relevant_qc'
+  if (relation === 'previous') return 'previous_qc'
+  return 'blocking_qc'
 }
 
 const TYPE_TOOLTIPS: Record<string, string> = {
@@ -114,6 +116,7 @@ function SelectableIssueCard({ item, checked, onToggle, alreadyHasFile }: Select
           {item.relevantFiles.map((rf, i) => {
             const icon =
               rf.kind === 'blocking_qc' ? <IconLock size={11} color="#c92a2a" /> :
+              rf.kind === 'previous_qc' ? <IconLock size={11} color="#e8590c" /> :
               rf.kind === 'relevant_qc' ? <IconLink size={11} color="#666" /> :
               <IconFile size={11} color="#666" />
             return (

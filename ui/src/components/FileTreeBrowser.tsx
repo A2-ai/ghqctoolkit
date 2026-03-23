@@ -96,10 +96,8 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
   }
 
   useEffect(() => {
-    console.log('[FileTreeBrowser] mounting, starting file tree fetch')
     fetchFileTree('')
       .then((res) => {
-        console.log('[FileTreeBrowser] file tree loaded, entries:', res.entries.length)
         const nodes: FileNode[] = res.entries
           .filter((entry) => entry.kind === 'directory' || !filterFile || filterFile(entry.name))
           .map((entry) => ({
@@ -111,7 +109,6 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
         setLoading(false)
       })
       .catch((err: Error) => {
-        console.error('[FileTreeBrowser] file tree fetch failed:', err.message)
         setError(err.message)
         setLoading(false)
       })
@@ -137,7 +134,6 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
   }
 
   if (loading) {
-    console.log('[FileTreeBrowser] rendering loader (file tree not yet loaded)')
     return <Loader size="sm" />
   }
   if (error) return <Alert color="red">{error}</Alert>
@@ -146,8 +142,8 @@ export function FileTreeBrowser({ selectedFile, onSelect, claimedFiles = new Set
     <Tree<FileNode>
       data={data}
       childrenAccessor={(d) => {
-        if (d.children === undefined) return null // leaf (file)
-        return d.children ?? [] // null → empty array (unloaded dir), array → loaded
+        if (d.children === undefined) return null
+        return d.children ?? []
       }}
       onToggle={handleToggle}
       openByDefault={false}

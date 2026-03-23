@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, Group, Loader, Modal, Select, Text, TextInput, Tooltip } from '@mantine/core'
+import { Box, Button, Checkbox, Group, Loader, Modal, Select, Text, TextInput, Tooltip } from '@mantine/core'
 import { FileTreeBrowser } from './FileTreeBrowser'
 import type { RelevantFileDraft } from './CreateIssueModal'
 import type { RelevantFileKind } from '~/api/issues'
@@ -21,7 +21,9 @@ interface Props {
 type Relation = 'gating' | 'relevant' | 'previous'
 
 function toKind(relation: Relation): RelevantFileKind {
-  return relation === 'relevant' ? 'relevant_qc' : 'blocking_qc'
+  if (relation === 'relevant') return 'relevant_qc'
+  if (relation === 'previous') return 'previous_qc'
+  return 'blocking_qc'
 }
 
 const TYPE_TOOLTIPS: Record<string, string> = {
@@ -47,12 +49,14 @@ export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, 
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null)
   const [relation, setRelation] = useState<Relation>('gating')
   const [description, setDescription] = useState('')
+  const [includeDiff, setIncludeDiff] = useState(true)
 
   function reset() {
     setSelectedFile(null)
     setSelectedIssue(null)
     setRelation('gating')
     setDescription('')
+    setIncludeDiff(true)
   }
 
   useEffect(() => {
@@ -63,9 +67,15 @@ export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, 
       if (editDraft.kind === 'file') {
         setSelectedIssue(null)
         setRelation('gating')
+        setIncludeDiff(true)
+      } else if (editDraft.kind === 'previous_qc') {
+        setRelation('previous')
+        setSelectedIssue(editDraft.issueNumber !== null ? String(editDraft.issueNumber) : 'queued')
+        setIncludeDiff(editDraft.includeDiff ?? true)
       } else {
         setRelation(editDraft.kind === 'relevant_qc' ? 'relevant' : 'gating')
         setSelectedIssue(editDraft.issueNumber !== null ? String(editDraft.issueNumber) : 'queued')
+        setIncludeDiff(true)
       }
     } else {
       reset()
@@ -126,13 +136,17 @@ export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, 
   function handleAdd() {
     if (!selectedFile || !canAdd) return
     let draft: RelevantFileDraft
+    const kind = toKind(relation)
     if (useFileType) {
       draft = { file: selectedFile, kind: 'file', issueNumber: null, milestoneTitle: null, description: description.trim() }
     } else if (selectedIssue === 'queued') {
-      draft = { file: selectedFile, kind: toKind(relation), issueNumber: null, milestoneTitle: queuedItem?.milestoneTitle ?? null, description: description.trim() }
+      draft = { file: selectedFile, kind, issueNumber: null, milestoneTitle: queuedItem?.milestoneTitle ?? null, description: description.trim() }
     } else {
       const ref = fileIssues.find((r) => String(r.number) === selectedIssue)
-      draft = { file: selectedFile, kind: toKind(relation), issueNumber: Number(selectedIssue), milestoneTitle: ref?.milestone ?? null, description: description.trim() }
+      draft = { file: selectedFile, kind, issueNumber: Number(selectedIssue), milestoneTitle: ref?.milestone ?? null, description: description.trim() }
+    }
+    if (kind === 'previous_qc') {
+      draft.includeDiff = includeDiff
     }
     onAdd(draft)
     reset()
@@ -206,6 +220,16 @@ export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, 
                 value={description}
                 onChange={(e) => setDescription(e.currentTarget.value)}
               />
+
+              {/* Include diff checkbox — only for Previous QC */}
+              {issueSelected && relation === 'previous' && (
+                <Checkbox
+                  label="Include diff comment"
+                  checked={includeDiff}
+                  onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                  size="xs"
+                />
+              )}
 
               <Button size="xs" disabled={!canAdd} onClick={handleAdd} mt="auto">
                 {editDraft ? 'Update' : 'Add'}

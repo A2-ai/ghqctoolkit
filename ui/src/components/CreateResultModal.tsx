@@ -24,9 +24,23 @@ export function CreateResultModal({ opened, outcome, onClose, onDone }: Props) {
   const title = outcome.ok
     ? `${outcome.created.length} QC Issue${outcome.created.length !== 1 ? 's' : ''} Created`
     : 'Failed to Create Issues'
+  const handleClose = () => {
+    if (outcome.ok) {
+      onDone(outcome.milestoneNumber)
+      return
+    }
+    onClose()
+  }
 
   return (
-    <Modal opened={opened} onClose={onClose} title={title} size={560} centered>
+    <Modal
+      opened={opened}
+      onClose={handleClose}
+      closeButtonProps={{ onClick: handleClose }}
+      title={title}
+      size={560}
+      centered
+    >
       <Stack gap="sm">
         {outcome.ok ? (
           <>
@@ -68,7 +82,7 @@ export function CreateResultModal({ opened, outcome, onClose, onDone }: Props) {
               </div>
             ))}
             <Group justify="flex-end" pt="xs">
-              <Button onClick={() => onDone(outcome.milestoneNumber)}>Done</Button>
+              <Button onClick={handleClose}>Done</Button>
             </Group>
           </>
         ) : (

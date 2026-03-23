@@ -78,11 +78,13 @@ Issues are grouped into Milestones for organizational purposes.
 
 Running `ghqc ui` serves an embedded React application. The UI provides:
 
-- **Status tab** — Kanban board of all issues, grouped by QC status
-- **Create tab** — Wizard for creating new QC issues
+- **Status tab** — Kanban board of all issues, grouped by QC status. Click the issue title to open GitHub, or click the rest of the card to open the in-app detail modal.
+- **Create tab** — Wizard for creating new QC issues. Previous QC references can include an automatic diff comment, and queued issues plus saved custom checklists persist while switching tabs until refresh.
 - **Record tab** — PDF record generation with file upload for context pages
 - **Archive tab** — Archive generation
 - **Configuration tab** — Configuration repo setup and status
+
+The web UI also supports direct routes for each screen: `/status`, `/create`, `/record`, `/archive`, and `/configuration`. Opening `/` redirects to `/status`.
 
 ## Install
 

@@ -23,11 +23,25 @@ The server starts on port **3103** by default. The browser opens automatically t
 
 | Tab | Description |
 |---|---|
-| **Status** | Kanban board of all issues grouped by QC status. Cards are color-coded by git status: cyan (clean), yellow (ahead/behind), red (conflict). |
-| **Create** | Wizard for creating new QC issues: select/create milestone, browse file tree, pick checklist, assign reviewers, add relevant files. |
+| **Status** | Kanban board of all issues grouped by QC status. Cards are color-coded by git status: cyan (clean), yellow (ahead/behind), red (conflict). Clicking the issue title opens GitHub in a new tab; clicking the rest of the card opens the in-app issue detail modal. |
+| **Create** | Wizard for creating new QC issues: select/create milestone, browse file tree, pick checklist, assign reviewers, add relevant files. Previous QC references can optionally post an automatic diff comment, and that diff is enabled by default. Queued issues and saved custom checklists persist while you move between UI tabs, until the page is refreshed. |
 | **Record** | PDF record generation: select milestones, upload context files (prepend or append), preview, generate and download. |
 | **Archive** | Archive generation: select milestones, set file name, generate zip archive. |
 | **Configuration** | Configuration repo setup and status. |
+
+### Web UI Routes
+
+The embedded UI uses route-based navigation:
+
+| Route | Screen |
+|---|---|
+| `/status` | Status board |
+| `/create` | Create workflow |
+| `/record` | Record generation |
+| `/archive` | Archive generation |
+| `/configuration` | Configuration status |
+
+Opening `/` redirects to `/status`.
 
 ## ghqc serve
 

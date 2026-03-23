@@ -1,16 +1,18 @@
 import { ActionIcon, AppShell, Menu, Text, Tooltip } from '@mantine/core'
-import { ArchiveTab } from './ArchiveTab'
-import { ConfigurationTab } from './ConfigurationTab'
-import { RecordTab } from './RecordTab'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { SwimLanes } from './SwimLanes'
-import { CreateTab } from './CreateTab'
+import { Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { useRepoInfo } from '~/api/repo'
 import { useConfigurationStatus } from '~/api/configuration'
 import { RepoStatus } from './RepoStatus'
 import { MilestoneFilter } from './MilestoneFilter'
 import { useMilestoneIssues } from '~/api/issues'
+import {
+  closeArchiveModals,
+  closeCreateModals,
+  closeRecordModals,
+  useUiSession,
+} from '~/state/uiSession'
 import {
   IconLayoutKanban,
   IconPlus,
@@ -25,12 +27,12 @@ import {
 
 type Tab = 'status' | 'create' | 'record' | 'archive' | 'configuration'
 
-const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
-  { id: 'status',        label: 'Status',        icon: <IconLayoutKanban size={15} /> },
-  { id: 'create',        label: 'Create',        icon: <IconPlus size={15} /> },
-  { id: 'record',        label: 'Record',        icon: <IconFileDescription size={15} /> },
-  { id: 'archive',       label: 'Archive',       icon: <IconArchive size={15} /> },
-  { id: 'configuration', label: 'Configuration', icon: <IconSettings size={15} /> },
+const TABS: { id: Tab; label: string; icon: ReactNode; to: string }[] = [
+  { id: 'status',        label: 'Status',        icon: <IconLayoutKanban size={15} />, to: '/status' },
+  { id: 'create',        label: 'Create',        icon: <IconPlus size={15} />, to: '/create' },
+  { id: 'record',        label: 'Record',        icon: <IconFileDescription size={15} />, to: '/record' },
+  { id: 'archive',       label: 'Archive',       icon: <IconArchive size={15} />, to: '/archive' },
+  { id: 'configuration', label: 'Configuration', icon: <IconSettings size={15} />, to: '/configuration' },
 ]
 
 const PRIMARY_TABS = TABS.slice(0, 2)
@@ -161,39 +163,43 @@ function MoreMenu({
   )
 }
 
-function PlaceholderTab({ tab }: { tab: string }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '60vh',
-      }}
-    >
-      <Text c="dimmed" size="lg">
-        {tab.charAt(0).toUpperCase() + tab.slice(1)} — coming soon
-      </Text>
-    </div>
-  )
-}
-
 export function AppLayout() {
   const { data: repoData, isError: repoIsError, error: repoError } = useRepoInfo()
   const { data: configStatus } = useConfigurationStatus()
-  const [selectedMilestones, setSelectedMilestones] = useState<number[]>([])
-  const [includeClosedIssues, setIncludeClosedIssues] = useState<Record<number, boolean>>({})
-  const [activeTab, setActiveTab] = useState<Tab>('status')
-  const [headerWidth, setHeaderWidth] = useState(window.innerWidth)
-  const [navWidth, setNavWidth] = useState(320)
-  const [navCollapsed, setNavCollapsed] = useState(false)
-  const lastNavWidthRef = useRef(320)
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { status, setStatus, setCreate, setRecord, setArchive } = useUiSession()
+  const [headerWidth, setHeaderWidth] = useState(0)
+  const lastNavWidthRef = useRef(status.navWidth)
   const headerInnerRef = useRef<HTMLDivElement>(null)
+  const lastPathRef = useRef(location.pathname)
   const isDragging = useRef(false)
   const dragStartX = useRef(0)
   const dragStartWidth = useRef(0)
 
+  const activeTab = (() => {
+    const path = location.pathname
+    if (path.startsWith('/create')) return 'create'
+    if (path.startsWith('/record')) return 'record'
+    if (path.startsWith('/archive')) return 'archive'
+    if (path.startsWith('/configuration')) return 'configuration'
+    return 'status'
+  })()
+
+  const closeTransientUi = () => {
+    setCreate(closeCreateModals)
+    setRecord(closeRecordModals)
+    setArchive(closeArchiveModals)
+  }
+
+  const navigateToTab = (to: string) => {
+    if (to === location.pathname) return
+    closeTransientUi()
+    navigate({ to })
+  }
+
   useEffect(() => {
+    setHeaderWidth(window.innerWidth)
     const el = headerInnerRef.current
     if (!el) return
     const ro = new ResizeObserver(([entry]) => setHeaderWidth(entry.contentRect.width))
@@ -201,11 +207,20 @@ export function AppLayout() {
     return () => ro.disconnect()
   }, [])
 
+  useLayoutEffect(() => {
+    if (lastPathRef.current === location.pathname) return
+    lastPathRef.current = location.pathname
+    closeTransientUi()
+  }, [location.pathname, setCreate, setRecord, setArchive])
+
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!isDragging.current) return
       const delta = e.clientX - dragStartX.current
-      setNavWidth(Math.max(160, Math.min(520, dragStartWidth.current + delta)))
+      setStatus((prev) => ({
+        ...prev,
+        navWidth: Math.max(160, Math.min(520, dragStartWidth.current + delta)),
+      }))
     }
     const onMouseUp = () => {
       if (!isDragging.current) return
@@ -224,7 +239,7 @@ export function AppLayout() {
   const onDragHandleMouseDown = (e: React.MouseEvent) => {
     isDragging.current = true
     dragStartX.current = e.clientX
-    dragStartWidth.current = navWidth
+    dragStartWidth.current = status.navWidth
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     e.preventDefault()
@@ -238,14 +253,9 @@ export function AppLayout() {
     tabWarnings.configuration = 'Configuration repository is not set up'
   }
 
-  const { statuses: rawStatuses, milestoneStatusByMilestone } = useMilestoneIssues(
-    selectedMilestones,
-    includeClosedIssues,
-  )
-
-  const dirtyFiles = new Set(repoData?.dirty_files ?? [])
-  const statuses = rawStatuses.map((s) =>
-    !s.dirty && dirtyFiles.has(s.issue.title) ? { ...s, dirty: true } : s
+  const { milestoneStatusByMilestone } = useMilestoneIssues(
+    status.selectedMilestones,
+    status.includeClosedIssues,
   )
 
   if (repoIsError) {
@@ -288,7 +298,7 @@ export function AppLayout() {
     <AppShell
       header={{ height: 88 }}
       navbar={{
-        width: navCollapsed ? 28 : navWidth,
+        width: status.navCollapsed ? 28 : status.navWidth,
         breakpoint: 'sm',
         collapsed: { desktop: activeTab !== 'status' },
       }}
@@ -337,7 +347,7 @@ export function AppLayout() {
                   key={tab.id}
                   tab={tab}
                   active={activeTab === tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => navigateToTab(tab.to)}
                   showIcon={showIcons}
                   warning={tabWarnings[tab.id]}
                 />
@@ -347,7 +357,10 @@ export function AppLayout() {
                 <MoreMenu
                   tabs={MORE_TABS}
                   activeTab={activeTab}
-                  setActiveTab={setActiveTab}
+                  setActiveTab={(tab) => {
+                    const next = TABS.find((entry) => entry.id === tab)
+                    if (next) navigateToTab(next.to)
+                  }}
                   warnings={tabWarnings}
                 />
               ) : (
@@ -356,7 +369,7 @@ export function AppLayout() {
                     key={tab.id}
                     tab={tab}
                     active={activeTab === tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => navigateToTab(tab.to)}
                     showIcon={showIcons}
                     warning={tabWarnings[tab.id]}
                   />
@@ -383,13 +396,13 @@ export function AppLayout() {
 
       <AppShell.Navbar style={{ padding: 0 }}>
         <div style={{ display: 'flex', height: '100%' }}>
-          {!navCollapsed && (
+          {!status.navCollapsed && (
             <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
               <MilestoneFilter
-                selected={selectedMilestones}
-                onSelect={setSelectedMilestones}
-                includeClosedIssues={includeClosedIssues}
-                onIncludeClosedIssuesChange={setIncludeClosedIssues}
+                selected={status.selectedMilestones}
+                onSelect={(selectedMilestones) => setStatus((prev) => ({ ...prev, selectedMilestones }))}
+                includeClosedIssues={status.includeClosedIssues}
+                onIncludeClosedIssuesChange={(includeClosedIssues) => setStatus((prev) => ({ ...prev, includeClosedIssues }))}
                 milestoneStatusByMilestone={milestoneStatusByMilestone}
               />
             </div>
@@ -399,19 +412,19 @@ export function AppLayout() {
               variant="subtle"
               size="sm"
               onClick={() => {
-                if (navCollapsed) {
-                  setNavWidth(lastNavWidthRef.current)
+                if (status.navCollapsed) {
+                  setStatus((prev) => ({ ...prev, navWidth: lastNavWidthRef.current }))
                 } else {
-                  lastNavWidthRef.current = navWidth
+                  lastNavWidthRef.current = status.navWidth
                 }
-                setNavCollapsed((c) => !c)
+                setStatus((prev) => ({ ...prev, navCollapsed: !prev.navCollapsed }))
               }}
               style={{ marginTop: 8 }}
-              title={navCollapsed ? 'Expand' : 'Collapse'}
+              title={status.navCollapsed ? 'Expand' : 'Collapse'}
             >
-              {navCollapsed ? <IconChevronRight size={14} /> : <IconChevronLeft size={14} />}
+              {status.navCollapsed ? <IconChevronRight size={14} /> : <IconChevronLeft size={14} />}
             </ActionIcon>
-            {!navCollapsed && (
+            {!status.navCollapsed && (
               <div
                 onMouseDown={onDragHandleMouseDown}
                 style={{ flex: 1, width: '100%', cursor: 'col-resize' }}
@@ -422,38 +435,7 @@ export function AppLayout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        {activeTab === 'status' && (
-          <SwimLanes
-            statuses={statuses}
-            currentBranch={repoData?.branch ?? ''}
-            remoteCommit={repoData?.remote_commit ?? ''}
-          />
-        )}
-        {activeTab === 'create' && (
-          <div style={{
-            margin: 'calc(-1 * var(--mantine-spacing-md))',
-            height: 'calc(100vh - 88px)',
-          }}>
-            <CreateTab />
-          </div>
-        )}
-        {activeTab === 'configuration' && <ConfigurationTab />}
-        {activeTab === 'record' && (
-          <div style={{
-            margin: 'calc(-1 * var(--mantine-spacing-md))',
-            height: 'calc(100vh - 88px)',
-          }}>
-            <RecordTab />
-          </div>
-        )}
-        {activeTab === 'archive' && (
-          <div style={{
-            margin: 'calc(-1 * var(--mantine-spacing-md))',
-            height: 'calc(100vh - 88px)',
-          }}>
-            <ArchiveTab />
-          </div>
-        )}
+        <Outlet />
       </AppShell.Main>
     </AppShell>
   )

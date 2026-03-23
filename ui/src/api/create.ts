@@ -12,6 +12,7 @@ interface RelevantIssue {
   file_name: string
   issue_class: RelevantIssueClass
   description?: string | null
+  include_diff?: boolean
 }
 
 interface RelevantFileInput {
@@ -29,6 +30,7 @@ export interface CreateIssueRequest {
   relevant_qc?: RelevantIssue[]
   relevant_files?: RelevantFileInput[]
 }
+
 
 // ── Response types ────────────────────────────────────────────────────────────
 
@@ -55,15 +57,20 @@ function toRelevantIssue(rf: RelevantFileDraft, batchFiles: Set<string>): Releva
   } else {
     return null // queued item no longer in batch — skip
   }
-  return {
+  const ri: RelevantIssue = {
     file_name: rf.file,
     issue_class: issueClass,
     description: rf.description || null,
   }
+  if (rf.kind === 'previous_qc') {
+    ri.include_diff = rf.includeDiff ?? true
+  }
+  return ri
 }
 
 export function toCreateIssueRequest(item: QueuedItem, batchFiles: Set<string>): CreateIssueRequest {
   const gatingQc: RelevantIssue[] = []
+  const previousQc: RelevantIssue[] = []
   const relevantQc: RelevantIssue[] = []
   const relevantFiles: RelevantFileInput[] = []
 
@@ -75,6 +82,8 @@ export function toCreateIssueRequest(item: QueuedItem, batchFiles: Set<string>):
       if (!ri) continue
       if (rf.kind === 'blocking_qc') {
         gatingQc.push(ri)
+      } else if (rf.kind === 'previous_qc') {
+        previousQc.push(ri)
       } else {
         relevantQc.push(ri)
       }
@@ -87,6 +96,7 @@ export function toCreateIssueRequest(item: QueuedItem, batchFiles: Set<string>):
     checklist_content: item.checklistContent,
     ...(item.assignees.length > 0 && { assignees: item.assignees }),
     ...(gatingQc.length > 0 && { gating_qc: gatingQc }),
+    ...(previousQc.length > 0 && { previous_qc: previousQc }),
     ...(relevantQc.length > 0 && { relevant_qc: relevantQc }),
     ...(relevantFiles.length > 0 && { relevant_files: relevantFiles }),
   }

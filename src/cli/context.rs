@@ -10,10 +10,10 @@ use crate::{
     cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
         RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees,
-        prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file, prompt_issue,
-        prompt_milestone, prompt_note, prompt_relevant_description, prompt_relevant_file_class,
-        prompt_relevant_file_path, prompt_relevant_file_source, prompt_single_commit,
-        prompt_want_relevant_files,
+        prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
+        prompt_include_previous_qc_diff, prompt_issue, prompt_milestone, prompt_note,
+        prompt_relevant_description, prompt_relevant_file_class, prompt_relevant_file_path,
+        prompt_relevant_file_source, prompt_single_commit, prompt_want_relevant_files,
     },
     comment::QCComment,
     issue::IssueThread,
@@ -162,10 +162,12 @@ impl QCIssue {
                                         }
                                     }
                                     RelevantFileClassType::PreviousQC => {
+                                        let include_diff = prompt_include_previous_qc_diff()?;
                                         RelevantFileClass::PreviousQC {
                                             issue_number: issue.number,
                                             issue_id,
                                             description,
+                                            include_diff,
                                         }
                                     }
                                     RelevantFileClassType::RelevantQC => {
@@ -262,6 +264,7 @@ fn validate_and_convert_relevant_files(
                 issue_number: arg.issue_number,
                 issue_id: None,
                 description: arg.description.clone(),
+                include_diff: arg.include_diff,
             },
         };
         process_issue_arg(arg, relevant, "--previous-qc");

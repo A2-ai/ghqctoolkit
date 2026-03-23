@@ -2,15 +2,21 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
     path::{Path, PathBuf},
+    str::FromStr,
 };
+
+use gix::ObjectId;
 
 use crate::{
     configuration::Checklist,
     git::{
-        GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader,
-        GitHubWriter, GitRepository, GitRepositoryError,
+        CommitCache, GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers,
+        GitHubApiError, GitHubReader, GitHubWriter, GitRepository, GitRepositoryError,
     },
-    relevant_files::{RelevantFile, RelevantFileClass, relevant_files_section},
+    issue::IssueThread,
+    relevant_files::{
+        PreviousQCDiffComment, RelevantFile, RelevantFileClass, relevant_files_section,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -152,7 +158,9 @@ impl QCIssue {
     /// 4. Blocking relationship failures are handled gracefully (logged but don't fail the operation)
     ///
     /// Returns the URL of the created issue.
-    pub async fn post_with_blocking<T: GitHubWriter + GitHubReader + GitHelpers>(
+    pub async fn post_with_blocking<
+        T: GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitAnalysis,
+    >(
         &self,
         git_info: &T,
     ) -> Result<CreateResult, QCIssueError> {
@@ -196,6 +204,47 @@ impl QCIssue {
                         create_result.blocking_errors.insert(issue_number, e);
                     } else {
                         create_result.successful_blocking.push(issue_number);
+                    }
+                }
+            }
+        }
+
+        // Post diff comments for PreviousQC entries that have include_diff = true
+        if let Ok(current_commit) = ObjectId::from_str(&self.commit) {
+            let prev_qc_diffs: Vec<_> = self
+                .relevant_files
+                .iter()
+                .filter_map(|rf| match &rf.class {
+                    RelevantFileClass::PreviousQC {
+                        issue_number,
+                        include_diff: true,
+                        ..
+                    } => Some((rf.file_name.clone(), *issue_number)),
+                    _ => None,
+                })
+                .collect();
+
+            for (prev_file, prev_issue_number) in prev_qc_diffs {
+                if let Ok(prev_issue_obj) = git_info.get_issue(prev_issue_number).await {
+                    let mut commit_cache = CommitCache::new();
+                    if let Ok(thread) =
+                        IssueThread::from_issue(&prev_issue_obj, None, git_info, &mut commit_cache)
+                            .await
+                    {
+                        let prev_commit = thread.latest_commit().hash;
+                        let diff_comment = PreviousQCDiffComment {
+                            issue: issue.clone(),
+                            prev_file,
+                            current_file: self.title.clone(),
+                            prev_commit,
+                            current_commit,
+                            prev_issue_number,
+                        };
+                        if let Err(e) = git_info.post_comment(&diff_comment).await {
+                            log::warn!(
+                                "Failed to post Previous QC diff for #{prev_issue_number}: {e}"
+                            );
+                        }
                     }
                 }
             }
@@ -283,6 +332,7 @@ pub enum RelevantFileEntry {
         file_path: PathBuf,
         relationship: QCRelationship,
         description: Option<String>,
+        include_diff: bool,
     },
     File {
         file_path: PathBuf,
@@ -517,7 +567,9 @@ fn resolve_creation_order(entries: &[QCEntry]) -> ResolutionResult {
 /// Create multiple QC issues in resolved dependency order
 pub async fn batch_post_qc_entries(
     entries: &[QCEntry],
-    git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps),
+    git_info: &(
+         impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps + GitCommitAnalysis
+     ),
     milestone_id: u64,
 ) -> Result<Vec<CreateResult>, QCIssueError> {
     let commit = git_info.commit()?;
@@ -559,6 +611,7 @@ pub async fn batch_post_qc_entries(
                         file_path,
                         relationship,
                         description,
+                        include_diff,
                     } => {
                         let &(issue_number, issue_id) =
                             created_issues.get(file_path).ok_or_else(|| {
@@ -574,6 +627,7 @@ pub async fn batch_post_qc_entries(
                                     issue_number,
                                     issue_id: Some(issue_id),
                                     description: description.clone(),
+                                    include_diff: *include_diff,
                                 },
                                 QCRelationship::GatingQC => RelevantFileClass::GatingQC {
                                     issue_number,
@@ -675,7 +729,10 @@ pub enum QCIssueError {
 mod tests {
     use super::*;
     use crate::{
-        git::{GitAuthor, GitHelpers, GitHubReader, GitHubWriter},
+        git::{
+            GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers, GitHubReader,
+            GitHubWriter,
+        },
         relevant_files::RelevantFileClass,
     };
     use std::collections::{HashMap, HashSet};
@@ -709,7 +766,7 @@ mod tests {
             relevant_files: vec![
                 RelevantFile {
                     file_name: PathBuf::from("previous.R"),
-                    class: RelevantFileClass::PreviousQC { issue_number: 1, issue_id: Some(1001), description: Some("This file has been previously QCed".to_string()) },
+                    class: RelevantFileClass::PreviousQC { issue_number: 1, issue_id: Some(1001), description: Some("This file has been previously QCed".to_string()), include_diff: true },
                 },
                 RelevantFile {
                     file_name: PathBuf::from("gating.R"),
@@ -1080,6 +1137,61 @@ mod tests {
         }
     }
 
+    impl GitFileOps for MockGitInfo {
+        fn commits(
+            &self,
+            _branch: &Option<String>,
+        ) -> Result<Vec<crate::git::GitCommit>, GitFileOpsError> {
+            Ok(vec![])
+        }
+
+        fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
+            Ok(vec![])
+        }
+
+        fn file_bytes_at_commit(
+            &self,
+            _file: &std::path::Path,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok(vec![])
+        }
+
+        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+            Ok(vec![])
+        }
+    }
+
+    impl GitCommitAnalysis for MockGitInfo {
+        fn get_all_merge_commits(
+            &self,
+        ) -> Result<Vec<gix::ObjectId>, crate::git::GitCommitAnalysisError> {
+            Ok(vec![])
+        }
+
+        fn get_commit_parents(
+            &self,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<gix::ObjectId>, crate::git::GitCommitAnalysisError> {
+            Ok(vec![])
+        }
+
+        fn is_ancestor(
+            &self,
+            _ancestor: &gix::ObjectId,
+            _descendant: &gix::ObjectId,
+        ) -> Result<bool, crate::git::GitCommitAnalysisError> {
+            Ok(false)
+        }
+
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<String>, crate::git::GitCommitAnalysisError> {
+            Ok(vec![])
+        }
+    }
+
     fn load_issue(issue_file: &str) -> octocrab::models::issues::Issue {
         let path = format!("src/tests/github_api/issues/{}", issue_file);
         let content = std::fs::read_to_string(&path)
@@ -1114,6 +1226,7 @@ mod tests {
                         issue_number: issue_one.number,
                         issue_id: None,
                         description: None,
+                        include_diff: false,
                     },
                 },
                 RelevantFile {
@@ -1175,6 +1288,7 @@ mod tests {
                     file_path: PathBuf::from("B"),
                     relationship: QCRelationship::PreviousQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
             make_entry(
@@ -1183,6 +1297,7 @@ mod tests {
                     file_path: PathBuf::from("A"),
                     relationship: QCRelationship::GatingQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
             make_entry("A", vec![]),
@@ -1227,11 +1342,13 @@ mod tests {
                         file_path: PathBuf::from("B"),
                         relationship: QCRelationship::PreviousQC,
                         description: None,
+                        include_diff: false,
                     },
                     RelevantFileEntry::NewIssue {
                         file_path: PathBuf::from("C"),
                         relationship: QCRelationship::GatingQC,
                         description: None,
+                        include_diff: false,
                     },
                 ],
             ),
@@ -1241,6 +1358,7 @@ mod tests {
                     file_path: PathBuf::from("A"),
                     relationship: QCRelationship::PreviousQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
             make_entry(
@@ -1249,6 +1367,7 @@ mod tests {
                     file_path: PathBuf::from("A"),
                     relationship: QCRelationship::GatingQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
             make_entry("A", vec![]),
@@ -1292,6 +1411,7 @@ mod tests {
                     file_path: PathBuf::from("B"),
                     relationship: QCRelationship::PreviousQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
             make_entry(
@@ -1300,6 +1420,7 @@ mod tests {
                     file_path: PathBuf::from("A"),
                     relationship: QCRelationship::GatingQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
         ];
@@ -1327,6 +1448,7 @@ mod tests {
                 file_path: PathBuf::from("A"),
                 relationship: QCRelationship::PreviousQC,
                 description: None,
+                include_diff: false,
             }],
         )];
 
@@ -1372,6 +1494,7 @@ mod tests {
                 file_path: PathBuf::from("B"),
                 relationship: QCRelationship::GatingQC,
                 description: Some("Needs B".to_string()),
+                include_diff: false,
             }],
         )];
 
@@ -1400,6 +1523,7 @@ mod tests {
                     file_path: PathBuf::from("B"),
                     relationship: QCRelationship::RelevantQC,
                     description: Some("Just a reference".to_string()),
+                    include_diff: false,
                 }],
             ),
             make_entry("B", vec![]),
@@ -1438,6 +1562,7 @@ mod tests {
                 issue_number: 100,
                 issue_id: Some(1000),
                 description: Some("Existing issue".to_string()),
+                include_diff: false,
             },
         };
 
@@ -1450,6 +1575,7 @@ mod tests {
                         file_path: PathBuf::from("B"),
                         relationship: QCRelationship::GatingQC,
                         description: None,
+                        include_diff: false,
                     },
                 ],
             ),
@@ -1495,6 +1621,7 @@ mod tests {
                     file_path: PathBuf::from("B"),
                     relationship: QCRelationship::PreviousQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
             make_entry(
@@ -1503,6 +1630,7 @@ mod tests {
                     file_path: PathBuf::from("C"),
                     relationship: QCRelationship::GatingQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
             make_entry(
@@ -1511,6 +1639,7 @@ mod tests {
                     file_path: PathBuf::from("A"),
                     relationship: QCRelationship::RelevantQC,
                     description: None,
+                    include_diff: false,
                 }],
             ),
         ];
@@ -1563,16 +1692,19 @@ mod tests {
                         file_path: PathBuf::from("previous"),
                         relationship: QCRelationship::PreviousQC,
                         description: None,
+                        include_diff: false,
                     },
                     RelevantFileEntry::NewIssue {
                         file_path: PathBuf::from("gating"),
                         relationship: QCRelationship::GatingQC,
                         description: None,
+                        include_diff: false,
                     },
                     RelevantFileEntry::NewIssue {
                         file_path: PathBuf::from("relevant"),
                         relationship: QCRelationship::RelevantQC,
                         description: None,
+                        include_diff: false,
                     },
                 ],
             ),

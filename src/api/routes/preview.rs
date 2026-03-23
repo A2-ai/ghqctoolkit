@@ -120,6 +120,7 @@ fn build_relevant_files(request: &CreateIssueRequest) -> Vec<RelevantFile> {
                 issue_number,
                 issue_id,
                 description: rf.description.clone(),
+                include_diff: rf.include_diff,
             },
         });
     }

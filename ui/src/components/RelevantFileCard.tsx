@@ -9,12 +9,14 @@ interface Props {
 
 const KIND_LABELS: Record<RelevantFileDraft['kind'], string> = {
   blocking_qc: 'Gating QC',
+  previous_qc: 'Previous QC',
   relevant_qc: 'Relevant QC',
   file: 'File',
 }
 
 const KIND_COLORS: Record<RelevantFileDraft['kind'], string> = {
   blocking_qc: 'red',
+  previous_qc: 'orange',
   relevant_qc: 'blue',
   file: 'gray',
 }

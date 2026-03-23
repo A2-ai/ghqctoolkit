@@ -78,6 +78,7 @@ export function IssuePreviewCard({
           {relevantFiles.map((rf, i) => {
             const icon =
               rf.kind === 'blocking_qc' ? <IconLock size={12} color="#c92a2a" /> :
+              rf.kind === 'previous_qc' ? <IconLock size={12} color="#e8590c" /> :
               rf.kind === 'relevant_qc' ? <IconLink size={12} color="#666" /> :
               <IconFile size={12} color="#666" />
             return (

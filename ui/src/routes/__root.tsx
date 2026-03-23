@@ -1,7 +1,6 @@
 /// <reference types="vite/client" />
 import {
   HeadContent,
-  Outlet,
   Scripts,
   createRootRouteWithContext,
 } from '@tanstack/react-router'
@@ -9,6 +8,8 @@ import { MantineProvider } from '@mantine/core'
 import type { QueryClient } from '@tanstack/react-query'
 import * as React from 'react'
 import mantineCss from '@mantine/core/styles.css?url'
+import { AppLayout } from '~/components/AppLayout'
+import { UiSessionProvider } from '~/state/uiSession'
 import '../styles/animations.css'
 
 export const Route = createRootRouteWithContext<{
@@ -31,6 +32,10 @@ export const Route = createRootRouteWithContext<{
 })
 
 function RootShell({ children }: { children: React.ReactNode }) {
+  if (typeof document !== 'undefined') {
+    return <>{children}</>
+  }
+
   return (
     <html>
       <head>
@@ -47,7 +52,9 @@ function RootShell({ children }: { children: React.ReactNode }) {
 function RootComponent() {
   return (
     <MantineProvider defaultColorScheme="light">
-      <Outlet />
+      <UiSessionProvider>
+        <AppLayout />
+      </UiSessionProvider>
     </MantineProvider>
   )
 }

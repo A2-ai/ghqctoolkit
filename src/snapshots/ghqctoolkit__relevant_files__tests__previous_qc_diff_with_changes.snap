@@ -1,0 +1,27 @@
+---
+source: src/relevant_files.rs
+expression: body
+---
+# Previous QC
+
+## Metadata
+* previous qc issue: [#1: src/old.R](https://github.com/owner/repo/issues/42)
+* [file at latest qc commit](https://github.com/owner/repo/blob/aaaaaaa/src/old.R)
+* latest qc commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+* new qc initial qc commit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+## File Difference
+<details>
+<summary>View diff</summary>
+
+```diff
+@@ previous script: lines 1-4 @@
+@@  current script: lines 1-4 @@
+  1 line1
+- 2 line2
++ 2 line2 changed
+  3 line3
+  4 
+```
+
+</details>

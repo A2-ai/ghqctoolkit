@@ -25,6 +25,8 @@ import type { BlockedIssueStatus, CommentResponse, UnapprovalResponse } from '..
 export interface RouteOverrides {
   repo: RepoInfo
   milestones: Milestone[]
+  /** Milestones returned by GET /api/milestones after a successful create */
+  milestonesAfterCreate: Milestone[] | null
   /** Map from milestone number to issue list */
   milestoneIssues: Record<number, Issue[]>
   /** Full batch response returned for /api/issues/status */
@@ -43,6 +45,8 @@ export interface RouteOverrides {
   createMilestone: Milestone
   /** Issue responses returned by POST /api/milestones/:n/issues */
   createIssues: CreateIssueResponse[]
+  /** Artificial delay for POST /api/milestones/:n/issues in milliseconds */
+  createIssuesDelayMs: number
   /** Response for POST /api/issues/:n/comment; null → 500 error */
   postCommentResponse: CommentResponse | null
   /** Response for POST /api/issues/:n/review; null → 500 error */
@@ -70,6 +74,7 @@ export interface RouteOverrides {
 const defaultOverrides: RouteOverrides = {
   repo: defaultRepoInfo,
   milestones: [openMilestone],
+  milestonesAfterCreate: null,
   milestoneIssues: {
     1: [libIssue, externalIssue],
   },
@@ -84,6 +89,7 @@ const defaultOverrides: RouteOverrides = {
   fileTree: { '': rootFileTree, src: srcFileTree },
   createMilestone: createdMilestone,
   createIssues: createIssueResponses,
+  createIssuesDelayMs: 0,
   postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
   postReviewResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888' },
   postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
@@ -99,6 +105,7 @@ const defaultOverrides: RouteOverrides = {
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
   const cfg: RouteOverrides = { ...defaultOverrides, ...overrides }
+  let milestoneCreated = false
 
   await page.route('/api/repo', (route) => {
     route.fulfill({
@@ -110,23 +117,30 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
 
   await page.route('/api/milestones', (route, request) => {
     if (request.method() === 'POST') {
+      milestoneCreated = true
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify(cfg.createMilestone),
       })
     } else {
+      const milestones = milestoneCreated && cfg.milestonesAfterCreate !== null
+        ? cfg.milestonesAfterCreate
+        : cfg.milestones
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(cfg.milestones),
+        body: JSON.stringify(milestones),
       })
     }
   })
 
   // Handle /api/milestones/:n/issues — GET returns issue list, POST returns create responses
-  await page.route(/\/api\/milestones\/(\d+)\/issues/, (route, request) => {
+  await page.route(/\/api\/milestones\/(\d+)\/issues/, async (route, request) => {
     if (request.method() === 'POST') {
+      if (cfg.createIssuesDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, cfg.createIssuesDelayMs))
+      }
       route.fulfill({
         status: 200,
         contentType: 'application/json',
