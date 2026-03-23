@@ -8,7 +8,6 @@ import {
   InputBase,
   Loader,
   Stack,
-  Switch,
   Text,
   TextInput,
   Tooltip,
@@ -38,6 +37,8 @@ import { ResizableSidebar } from './ResizableSidebar'
 import { type FileResolution, FileResolveModal } from './FileResolveModal'
 import { RelevantFilesList } from './RelevantFilesList'
 import { extractIssueNumber } from '~/utils'
+import { ToggleField } from './ToggleField'
+import { useUiSession } from '~/state/uiSession'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -55,26 +56,14 @@ function basename(path: string): string {
 // ─── ArchiveTab ───────────────────────────────────────────────────────────────
 
 export function ArchiveTab() {
-  const [selectedMilestones, setSelectedMilestones] = useState<number[]>([])
-  const [showOpenMilestones, setShowOpenMilestones] = useState(false)
-  const [includeNonApproved, setIncludeNonApproved] = useState<Record<number, boolean>>({})
-  const [outputPath, setOutputPath] = useState('')
-  const [flatten, setFlatten] = useState(false)
-  const [generateLoading, setGenerateLoading] = useState(false)
-  const [generateError, setGenerateError] = useState<string | null>(null)
-  const [generateSuccess, setGenerateSuccess] = useState<string | null>(null)
-  const outputPathUserEdited = useRef(false)
-  const [outputPathIsCustom, setOutputPathIsCustom] = useState(false)
-
-  const [addedFiles, setAddedFiles] = useState<Map<string, FileResolution>>(new Map())
-
-  // Single modal state for editing any resolved/bare file
-  const [editFileModal, setEditFileModal] = useState<string | null>(null)
-  const [addFileModalOpen, setAddFileModalOpen] = useState(false)
+  const { archive, setArchive } = useUiSession()
 
   function handleEditResolve(resolution: FileResolution) {
     const { file_name } = resolution
-    setAddedFiles(prev => new Map([...prev, [file_name, resolution]]))
+    setArchive(prev => ({
+      ...prev,
+      addedFiles: new Map([...prev.addedFiles, [file_name, resolution]]),
+    }))
   }
 
 
@@ -108,15 +97,15 @@ export function ArchiveTab() {
   }, [allMilestoneNumbers, allMilestoneIssueQueries])
 
   const { statuses, milestoneStatusByMilestone, isLoadingStatuses } =
-    useMilestoneIssues(selectedMilestones, true)
+    useMilestoneIssues(archive.selectedMilestones, true)
 
   // Fetch statuses for manually added files that came from an issue
   const addedFileIssueNums = useMemo(
-    () => [...addedFiles.values()]
+    () => [...archive.addedFiles.values()]
       .filter((r) => r.source_issue_number != null)
       .map((r) => r.source_issue_number!)
       .filter((n, i, arr) => arr.indexOf(n) === i),
-    [addedFiles],
+    [archive.addedFiles],
   )
 
   const addedFileStatusQueries = useQueries({
@@ -147,77 +136,77 @@ export function ArchiveTab() {
   const isStatusVisible = useCallback((s: IssueStatusResponse): boolean => {
     if (isApprovedStatus(s)) return true
     const msNum = s.issue.milestone ? milestoneTitleToNumber.get(s.issue.milestone) : undefined
-    return msNum !== undefined && !!includeNonApproved[msNum]
-  }, [milestoneTitleToNumber, includeNonApproved])
+    return msNum !== undefined && !!archive.includeNonApproved[msNum]
+  }, [milestoneTitleToNumber, archive.includeNonApproved])
 
   const unapprovedByMilestone = useMemo(() => {
     const result: Record<number, number> = {}
-    for (const n of selectedMilestones) {
+    for (const n of archive.selectedMilestones) {
       const milestoneName = (milestonesData ?? []).find((m) => m.number === n)?.title
       const milestoneStatuses = statuses.filter((s) => s.issue.milestone === milestoneName)
       result[n] = milestoneStatuses.filter((s) => !isApprovedStatus(s)).length
     }
     return result
-  }, [selectedMilestones, statuses, milestonesData])
+  }, [archive.selectedMilestones, statuses, milestonesData])
 
   // Per-milestone: detect if enabling non-approved for a milestone would conflict with other milestones
   const nonApprovedOverlapByMilestone = useMemo(() => {
     const result: Record<number, string[]> = {}
-    if (selectedMilestones.length < 2) return result
-    for (const candidate of selectedMilestones) {
+    if (archive.selectedMilestones.length < 2) return result
+    for (const candidate of archive.selectedMilestones) {
       const candidateAll = milestoneFileSets.get(candidate)?.all ?? new Set<string>()
       const candidateApproved = milestoneFileSets.get(candidate)?.approvedOnly ?? new Set<string>()
       // Files that are non-approved-only in this milestone
       const nonApprovedFiles = [...candidateAll].filter(f => !candidateApproved.has(f))
       // Build set of files from other milestones (using basenames when flatten is ON)
       const otherFiles = new Set<string>()
-      for (const other of selectedMilestones) {
+      for (const other of archive.selectedMilestones) {
         if (other === candidate) continue
-        const otherSet = includeNonApproved[other]
+        const otherSet = archive.includeNonApproved[other]
           ? milestoneFileSets.get(other)?.all
           : milestoneFileSets.get(other)?.approvedOnly
         if (otherSet) {
-          for (const f of otherSet) otherFiles.add(flatten ? basename(f) : f)
+          for (const f of otherSet) otherFiles.add(archive.flatten ? basename(f) : f)
         }
       }
       // Check if any non-approved files conflict (using basenames when flatten is ON)
       const conflicts: string[] = []
       for (const f of nonApprovedFiles) {
-        if (otherFiles.has(flatten ? basename(f) : f)) {
+        if (otherFiles.has(archive.flatten ? basename(f) : f)) {
           conflicts.push(f)
         }
       }
       if (conflicts.length > 0) result[candidate] = conflicts
     }
     return result
-  }, [selectedMilestones, milestoneFileSets, includeNonApproved, flatten])
+  }, [archive.selectedMilestones, milestoneFileSets, archive.includeNonApproved, archive.flatten])
 
   // Force off any milestone's includeNonApproved that now conflicts
   useEffect(() => {
     const toDisable: number[] = []
     for (const [msNum, conflicts] of Object.entries(nonApprovedOverlapByMilestone)) {
       const n = Number(msNum)
-      if (conflicts.length > 0 && includeNonApproved[n]) toDisable.push(n)
+      if (conflicts.length > 0 && archive.includeNonApproved[n]) toDisable.push(n)
     }
     if (toDisable.length > 0) {
-      setIncludeNonApproved(prev => {
-        const next = { ...prev }
-        for (const n of toDisable) next[n] = false
+      setArchive(prev => {
+        const next = { ...prev, includeNonApproved: { ...prev.includeNonApproved } }
+        for (const n of toDisable) next.includeNonApproved[n] = false
         return next
       })
     }
-  }, [nonApprovedOverlapByMilestone, includeNonApproved])
+  }, [nonApprovedOverlapByMilestone, archive.includeNonApproved, setArchive])
 
   // Milestones that have at least one issue visible in the right panel
   const milestonesWithVisibleIssues = useMemo(() => {
     const visibleTitles = new Set(
       statuses.filter(s => isStatusVisible(s)).map(s => s.issue.milestone),
     )
-    return selectedMilestones.filter((n) => {
+    return archive.selectedMilestones.filter((n) => {
       const title = (milestonesData ?? []).find((m) => m.number === n)?.title
       return title !== undefined && visibleTitles.has(title)
     })
-  }, [selectedMilestones, statuses, milestonesData, isStatusVisible])
+  }, [archive.selectedMilestones, statuses, milestonesData, isStatusVisible])
 
   function buildOutputPathName(milestoneNumbers: number[]) {
     if (!repoData || milestoneNumbers.length === 0) return ''
@@ -229,17 +218,35 @@ export function ArchiveTab() {
   }
 
   function resetOutputPath() {
-    outputPathUserEdited.current = false
-    setOutputPathIsCustom(false)
-    setOutputPath(buildOutputPathName(milestonesWithVisibleIssues))
+    const nextOutputPath = buildOutputPathName(milestonesWithVisibleIssues)
+    setArchive(prev => {
+      if (
+        !prev.outputPathUserEdited &&
+        !prev.outputPathIsCustom &&
+        prev.outputPath === nextOutputPath
+      ) {
+        return prev
+      }
+      return {
+        ...prev,
+        outputPathUserEdited: false,
+        outputPathIsCustom: false,
+        outputPath: nextOutputPath,
+      }
+    })
   }
 
   // Auto-populate output path — only names milestones that have visible issues
   useEffect(() => {
-    if (outputPathUserEdited.current) return
-    setOutputPath(buildOutputPathName(milestonesWithVisibleIssues))
+    const nextOutputPath = buildOutputPathName(milestonesWithVisibleIssues)
+    setArchive(prev => {
+      if (prev.outputPathUserEdited || prev.outputPath === nextOutputPath) {
+        return prev
+      }
+      return { ...prev, outputPath: nextOutputPath }
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [milestonesWithVisibleIssues, repoData])
+  }, [milestonesWithVisibleIssues, repoData, archive.outputPathUserEdited, setArchive])
 
   // Conflict state for manually added files
   const addedFileConflicts = useMemo(() => {
@@ -249,7 +256,7 @@ export function ArchiveTab() {
       .filter(s => isStatusVisible(s))
       .forEach(s => visibleIssuesByTitle.set(s.issue.title, s.issue.number))
 
-    for (const [fn, res] of addedFiles) {
+    for (const [fn, res] of archive.addedFiles) {
       const milestoneIssueNumber = visibleIssuesByTitle.get(fn)
       if (milestoneIssueNumber !== undefined) {
         if (res.source_issue_number !== undefined && res.source_issue_number === milestoneIssueNumber) {
@@ -260,12 +267,12 @@ export function ArchiveTab() {
       }
     }
     return map
-  }, [addedFiles, statuses, isStatusVisible])
+  }, [archive.addedFiles, statuses, isStatusVisible])
 
   // Check for unresolved added files (bare files with empty commit and no backing issue)
   const unresolvedAddedFileCount = useMemo(
-    () => Array.from(addedFiles.values()).filter(r => r.commit === '' && r.source_issue_number == null).length,
-    [addedFiles],
+    () => Array.from(archive.addedFiles.values()).filter(r => r.commit === '' && r.source_issue_number == null).length,
+    [archive.addedFiles],
   )
   const conflictCount = useMemo(
     () => Array.from(addedFileConflicts.values()).filter(c => c.blocking).length,
@@ -279,26 +286,25 @@ export function ArchiveTab() {
     if (isQc && rf.issue_url) {
       const issueNumber = extractIssueNumber(rf.issue_url)
       if (issueNumber !== null) {
-        setAddedFiles(prev => {
-          const next = new Map(prev)
+        setArchive(prev => {
+          const next = new Map(prev.addedFiles)
           next.set(rf.file_name, { file_name: rf.file_name, commit: '', source_issue_number: issueNumber })
-          return next
+          return { ...prev, addedFiles: next }
         })
         return
       }
     }
     // Bare file — add as unresolved and open modal
-    setAddedFiles(prev => {
-      const next = new Map(prev)
+    setArchive(prev => {
+      const next = new Map(prev.addedFiles)
       next.set(rf.file_name, { file_name: rf.file_name, commit: '' })
-      return next
+      return { ...prev, addedFiles: next, editFileModal: rf.file_name }
     })
-    setEditFileModal(rf.file_name)
   }
 
   function handleSelectAllRelevant(files: RelevantFileInfo[]) {
-    setAddedFiles(prev => {
-      const next = new Map(prev)
+    setArchive(prev => {
+      const next = new Map(prev.addedFiles)
       for (const rf of files) {
         const isQc = rf.kind === 'blocking_qc' || rf.kind === 'previous_qc' || rf.kind === 'relevant_qc'
         if (isQc && rf.issue_url) {
@@ -310,16 +316,14 @@ export function ArchiveTab() {
         }
         next.set(rf.file_name, { file_name: rf.file_name, commit: '' })
       }
-      return next
+      return { ...prev, addedFiles: next }
     })
   }
 
   // ─── Generation ──────────────────────────────────────────────────────────
 
   async function handleGenerate() {
-    setGenerateError(null)
-    setGenerateSuccess(null)
-    setGenerateLoading(true)
+    setArchive(prev => ({ ...prev, generateError: null, generateSuccess: null, generateLoading: true }))
     try {
       const milestoneIssueFiles: ArchiveFileRequest[] = statuses
         .filter(s => isStatusVisible(s))
@@ -330,7 +334,7 @@ export function ArchiveTab() {
           approved: isApprovedStatus(s),
         }))
 
-      const addedFilesRequests: ArchiveFileRequest[] = Array.from(addedFiles.values())
+      const addedFilesRequests: ArchiveFileRequest[] = Array.from(archive.addedFiles.values())
         .filter(r => !addedFileConflicts.has(r.file_name))
         .map(r => {
           // For QC files added via relevant files, prefer the status-derived commit
@@ -348,22 +352,22 @@ export function ArchiveTab() {
         })
 
       const files = [...milestoneIssueFiles, ...addedFilesRequests]
-      const result = await generateArchive({ output_path: outputPath, flatten, files })
-      setGenerateSuccess(result.output_path)
+      const result = await generateArchive({ output_path: archive.outputPath, flatten: archive.flatten, files })
+      setArchive(prev => ({ ...prev, generateSuccess: result.output_path }))
     } catch (err) {
-      setGenerateError((err as Error).message)
+      setArchive(prev => ({ ...prev, generateError: (err as Error).message }))
     } finally {
-      setGenerateLoading(false)
+      setArchive(prev => ({ ...prev, generateLoading: false }))
     }
   }
 
   const visibleFileCount =
     statuses.filter(s => isStatusVisible(s)).length +
-    addedFiles.size
+    archive.addedFiles.size
 
   const canGenerate =
     visibleFileCount > 0 &&
-    outputPath.trim().length > 0 &&
+    archive.outputPath.trim().length > 0 &&
     !isLoadingStatuses &&
     unresolvedAddedFileCount === 0 &&
     conflictCount === 0
@@ -372,20 +376,20 @@ export function ArchiveTab() {
   const claimedFiles = useMemo(() => {
     const s = new Set<string>()
     statuses.filter(st => isStatusVisible(st)).forEach(st => s.add(st.issue.title))
-    addedFiles.forEach((_, fn) => s.add(fn))
+    archive.addedFiles.forEach((_, fn) => s.add(fn))
     return s
-  }, [statuses, isStatusVisible, addedFiles])
+  }, [statuses, isStatusVisible, archive.addedFiles])
 
   // ─── Flatten collision detection ─────────────────────────────────────
 
   const allArchiveFiles = useMemo(() => {
     const files: string[] = []
     statuses.filter(s => isStatusVisible(s)).forEach(s => files.push(s.issue.title))
-    for (const [fn] of addedFiles) {
+    for (const [fn] of archive.addedFiles) {
       if (!addedFileConflicts.get(fn)?.dedup) files.push(fn)
     }
     return files
-  }, [statuses, isStatusVisible, addedFiles, addedFileConflicts])
+  }, [statuses, isStatusVisible, archive.addedFiles, addedFileConflicts])
 
   const basenameCollisions = useMemo(() => {
     const seen = new Map<string, string>()
@@ -405,29 +409,31 @@ export function ArchiveTab() {
   const canFlatten = basenameCollisions.length === 0
 
   useEffect(() => {
-    if (!canFlatten && flatten) setFlatten(false)
-  }, [canFlatten, flatten])
+    if (!canFlatten && archive.flatten) {
+      setArchive(prev => ({ ...prev, flatten: false }))
+    }
+  }, [canFlatten, archive.flatten, setArchive])
 
   const claimedBasenames = useMemo(() => {
-    if (!flatten) return new Set<string>()
+    if (!archive.flatten) return new Set<string>()
     const s = new Set<string>()
     for (const f of claimedFiles) s.add(basename(f))
     return s
-  }, [flatten, claimedFiles])
+  }, [archive.flatten, claimedFiles])
 
   const isFileClaimed = useCallback((fileName: string) => {
     if (claimedFiles.has(fileName)) return true
-    if (flatten && claimedBasenames.has(basename(fileName))) return true
+    if (archive.flatten && claimedBasenames.has(basename(fileName))) return true
     return false
-  }, [claimedFiles, flatten, claimedBasenames])
+  }, [claimedFiles, archive.flatten, claimedBasenames])
 
   // Referencing statuses for the file being edited (relevant for bare files; empty for added files)
   const referencingStatusesForFile = useMemo(() => {
-    if (!editFileModal) return []
+    if (!archive.editFileModal) return []
     return statuses.filter(s =>
-      (s.issue.relevant_files ?? []).some(rf => rf.file_name === editFileModal),
+      (s.issue.relevant_files ?? []).some(rf => rf.file_name === archive.editFileModal),
     )
-  }, [editFileModal, statuses])
+  }, [archive.editFileModal, statuses])
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -443,14 +449,17 @@ export function ArchiveTab() {
                 label="Output Path"
                 placeholder="archive.tar.gz"
                 size="xs"
-                value={outputPath}
+                value={archive.outputPath}
                 onChange={(e) => {
                   const val = e.currentTarget.value
-                  outputPathUserEdited.current = val !== ''
-                  setOutputPathIsCustom(val !== '')
-                  setOutputPath(val)
+                  setArchive(prev => ({
+                    ...prev,
+                    outputPathUserEdited: val !== '',
+                    outputPathIsCustom: val !== '',
+                    outputPath: val,
+                  }))
                 }}
-                rightSection={outputPathIsCustom && selectedMilestones.length > 0 ? (
+                rightSection={archive.outputPathIsCustom && archive.selectedMilestones.length > 0 ? (
                   <Tooltip label="Reset to default" withArrow position="top">
                     <ActionIcon
                       size="xs"
@@ -464,14 +473,14 @@ export function ArchiveTab() {
                   </Tooltip>
                 ) : undefined}
               />
-              {generateError && (
+              {archive.generateError && (
                 <Alert color="red" p="xs">
-                  <Text size="xs">{generateError}</Text>
+                  <Text size="xs">{archive.generateError}</Text>
                 </Alert>
               )}
-              {generateSuccess && (
+              {archive.generateSuccess && (
                 <Alert color="green" p="xs">
-                  <Text size="xs">Archive written to {generateSuccess}</Text>
+                  <Text size="xs">Archive written to {archive.generateSuccess}</Text>
                 </Alert>
               )}
               <Tooltip
@@ -481,20 +490,21 @@ export function ArchiveTab() {
                 multiline
                 maw={300}
               >
-                <Switch
-                  label="Flatten directory structure"
-                  size="xs"
-                  checked={flatten}
-                  disabled={!canFlatten}
-                  onChange={(e) => setFlatten(e.currentTarget.checked)}
-                />
+                <div>
+                  <ToggleField
+                    label="Flatten directory structure"
+                    checked={archive.flatten}
+                    disabled={!canFlatten}
+                    onChange={(checked) => setArchive(prev => ({ ...prev, flatten: checked }))}
+                  />
+                </div>
               </Tooltip>
               <Button
                 fullWidth
                 size="sm"
                 color="green"
                 onClick={handleGenerate}
-                loading={generateLoading}
+                loading={archive.generateLoading}
                 disabled={!canGenerate}
               >
                 Generate Archive
@@ -509,23 +519,25 @@ export function ArchiveTab() {
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--mantine-spacing-md)' }}>
               <Stack gap="sm">
-                <Switch
+                <ToggleField
                   label="Include open milestones"
-                  size="xs"
-                  checked={showOpenMilestones}
-                  onChange={(e) => setShowOpenMilestones(e.currentTarget.checked)}
+                  checked={archive.showOpenMilestones}
+                  onChange={(checked) => setArchive(prev => ({ ...prev, showOpenMilestones: checked }))}
                 />
                 <ArchiveMilestoneCombobox
-                  selectedMilestones={selectedMilestones}
-                  onSelectedMilestonesChange={setSelectedMilestones}
-                  showOpenMilestones={showOpenMilestones}
+                  selectedMilestones={archive.selectedMilestones}
+                  onSelectedMilestonesChange={(selectedMilestones) => setArchive(prev => ({ ...prev, selectedMilestones }))}
+                  showOpenMilestones={archive.showOpenMilestones}
                   statusByMilestone={milestoneStatusByMilestone}
                   unapprovedByMilestone={unapprovedByMilestone}
                   milestoneFileSets={milestoneFileSets}
-                  includeNonApproved={includeNonApproved}
-                  onIncludeNonApprovedChange={(n, v) => setIncludeNonApproved(prev => ({ ...prev, [n]: v }))}
+                  includeNonApproved={archive.includeNonApproved}
+                  onIncludeNonApprovedChange={(n, v) => setArchive(prev => ({
+                    ...prev,
+                    includeNonApproved: { ...prev.includeNonApproved, [n]: v },
+                  }))}
                   nonApprovedOverlapByMilestone={nonApprovedOverlapByMilestone}
-                  flatten={flatten}
+                  flatten={archive.flatten}
                 />
               </Stack>
             </div>
@@ -543,7 +555,8 @@ export function ArchiveTab() {
           }}>
             {/* ── Add file card (always first) ──────────────────────────── */}
             <div
-              onClick={() => setAddFileModalOpen(true)}
+              data-testid="archive-add-file-card"
+              onClick={() => setArchive(prev => ({ ...prev, addFileModalOpen: true }))}
               style={{
                 height: CARD_HEIGHT,
                 borderRadius: 6,
@@ -573,7 +586,7 @@ export function ArchiveTab() {
             </div>
 
             {/* ── Manually added file cards ─────────────────────────────── */}
-            {Array.from(addedFiles.entries()).map(([fileName, res]) => {
+            {Array.from(archive.addedFiles.entries()).map(([fileName, res]) => {
               const conflict = addedFileConflicts.get(fileName)
               if (conflict?.dedup) return null // silently hidden — milestone covers same issue
 
@@ -594,7 +607,7 @@ export function ArchiveTab() {
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
                         <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>{fileName}</Text>
-                        <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={() => setAddedFiles(prev => { const n = new Map(prev); n.delete(fileName); return n })} aria-label="Remove">
+                        <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={() => setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } })} aria-label="Remove">
                           <IconX size={11} />
                         </ActionIcon>
                       </div>
@@ -629,7 +642,7 @@ export function ArchiveTab() {
                       minWidth: 0,
                       cursor: 'pointer',
                     }}
-                    onClick={() => setEditFileModal(fileName)}
+                    onClick={() => setArchive(prev => ({ ...prev, editFileModal: fileName }))}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
                       <Anchor
@@ -654,7 +667,7 @@ export function ArchiveTab() {
                         variant="transparent"
                         color="dark"
                         style={{ flexShrink: 0, marginTop: 1 }}
-                        onClick={e => { e.stopPropagation(); setAddedFiles(prev => { const n = new Map(prev); n.delete(fileName); return n }) }}
+                        onClick={e => { e.stopPropagation(); setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } }) }}
                         aria-label="Remove"
                       >
                         <IconX size={11} />
@@ -692,11 +705,11 @@ export function ArchiveTab() {
                         minWidth: 0,
                         cursor: 'pointer',
                       }}
-                      onClick={() => setEditFileModal(fileName)}
+                      onClick={() => setArchive(prev => ({ ...prev, editFileModal: fileName }))}
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
                         <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>{fileName}</Text>
-                        <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={e => { e.stopPropagation(); setAddedFiles(prev => { const n = new Map(prev); n.delete(fileName); return n }) }} aria-label="Remove">
+                        <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={e => { e.stopPropagation(); setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } }) }} aria-label="Remove">
                           <IconX size={11} />
                         </ActionIcon>
                       </div>
@@ -711,13 +724,13 @@ export function ArchiveTab() {
                   key={`added-${fileName}`}
                   fileName={fileName}
                   commit={res.commit}
-                  onEdit={() => setEditFileModal(fileName)}
-                  onRemove={() => setAddedFiles(prev => { const n = new Map(prev); n.delete(fileName); return n })}
+                  onEdit={() => setArchive(prev => ({ ...prev, editFileModal: fileName }))}
+                  onRemove={() => setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } })}
                 />
               )
             })}
 
-            {selectedMilestones.length > 0 && (<>
+            {archive.selectedMilestones.length > 0 && (<>
             {/* ── Milestone issue cards ──────────────────────────────────── */}
             {statuses.filter(s => isStatusVisible(s)).map((s) => {
               const approved = isApprovedStatus(s)
@@ -777,29 +790,33 @@ export function ArchiveTab() {
       </div>
 
       {/* ── Edit / resolve modal (bare files + added files) ──────────────── */}
-      <FileResolveModal
-        opened={editFileModal !== null}
-        onClose={() => setEditFileModal(null)}
-        fileName={editFileModal ?? undefined}
-        referencingStatuses={referencingStatusesForFile}
-        editMode={editFileModal !== null && addedFiles.has(editFileModal) ? 'edit' : 'resolve'}
-        onResolve={handleEditResolve}
-      />
+      {archive.editFileModal !== null && (
+        <FileResolveModal
+          opened
+          onClose={() => setArchive(prev => ({ ...prev, editFileModal: null }))}
+          fileName={archive.editFileModal}
+          referencingStatuses={referencingStatusesForFile}
+          editMode={archive.addedFiles.has(archive.editFileModal) ? 'edit' : 'resolve'}
+          onResolve={handleEditResolve}
+        />
+      )}
 
       {/* ── Add-file modal (file picker + commit/issue step) ─────────────── */}
-      <FileResolveModal
-        opened={addFileModalOpen}
-        onClose={() => setAddFileModalOpen(false)}
-        claimedFiles={claimedFiles}
-        isFileClaimed={isFileClaimed}
-        onResolve={(resolution) => {
-          setAddedFiles(prev => {
-            const next = new Map(prev)
-            next.set(resolution.file_name, resolution)
-            return next
-          })
-        }}
-      />
+      {archive.addFileModalOpen && (
+        <FileResolveModal
+          opened
+          onClose={() => setArchive(prev => ({ ...prev, addFileModalOpen: false }))}
+          claimedFiles={claimedFiles}
+          isFileClaimed={isFileClaimed}
+          onResolve={(resolution) => {
+            setArchive(prev => {
+              const next = new Map(prev.addedFiles)
+              next.set(resolution.file_name, resolution)
+              return { ...prev, addedFiles: next }
+            })
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -1117,13 +1134,12 @@ function ArchiveMilestoneCard({
           multiline
           maw={300}
         >
-          <Switch
+          <ToggleField
             label="Include non-approved"
-            size="xs"
             checked={includeNonApproved}
             disabled={!!nonApprovedOverlap}
-            onChange={(e) => onIncludeNonApprovedChange(e.currentTarget.checked)}
-            styles={{ root: { marginTop: 4 } }}
+            onChange={onIncludeNonApprovedChange}
+            rootStyle={{ marginTop: 4 }}
           />
         </Tooltip>
       </div>

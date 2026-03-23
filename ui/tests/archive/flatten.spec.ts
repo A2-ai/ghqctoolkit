@@ -141,6 +141,10 @@ function main(page: import('playwright/test').Page) {
   return page.locator('main')
 }
 
+function outputPath(page: import('playwright/test').Page) {
+  return main(page).getByRole('textbox', { name: 'Output Path' })
+}
+
 async function selectMilestone(page: import('playwright/test').Page, title: string) {
   await main(page).getByPlaceholder('Search milestones…').click()
   await page.getByRole('option', { name: new RegExp(title) }).click()
@@ -411,7 +415,7 @@ test.describe('flatten toggle conflict detection', () => {
     await expect(toggle).toBeChecked()
 
     // Open Add file modal
-    await page.getByText('Add file').click()
+    await page.getByTestId('archive-add-file-card').click()
 
     const modal = page.getByRole('dialog')
     await expect(modal).toBeVisible()
@@ -431,4 +435,45 @@ test.describe('flatten toggle conflict detection', () => {
     const coreRow = coreNode.locator('xpath=..')
     await expect(coreRow).toHaveCSS('opacity', '1')
   })
+})
+
+test('archive tab preserves state across route changes until refresh', async ({ page }) => {
+  const batch: BatchIssueStatusResponse = {
+    results: [statusA1, statusA2, statusA3],
+    errors: [],
+  }
+  await setupRoutes(page, {
+    milestones: [milestoneA],
+    milestoneIssues: { 10: [issueA1, issueA2, issueA3] },
+    issueStatuses: batch,
+  })
+  await goToArchive(page)
+  await selectMilestone(page, 'Milestone A')
+  await waitForStatusLoaded(page)
+
+  const m = main(page)
+  const flattenToggle = m.getByRole('switch', { name: 'Flatten directory structure' })
+  await flattenToggle.click()
+  await expect(flattenToggle).toBeChecked()
+
+  const output = outputPath(page)
+  await output.fill('/tmp/custom-archive.tar.gz')
+  await expect(output).toHaveValue('/tmp/custom-archive.tar.gz')
+
+  await page.getByRole('button', { name: 'Configuration' }).click()
+  const archiveTabButton = page.getByRole('button', { name: 'Archive', exact: true })
+  const moreButton = page.getByRole('button', { name: 'More', exact: true })
+  if (await archiveTabButton.isVisible()) {
+    await archiveTabButton.click()
+  } else {
+    await moreButton.click()
+    await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
+  }
+
+  await expect(flattenToggle).toBeChecked()
+  await expect(output).toHaveValue('/tmp/custom-archive.tar.gz')
+
+  await page.reload()
+  await page.goto('/archive')
+  await expect(outputPath(page)).toHaveValue('')
 })

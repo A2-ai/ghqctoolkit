@@ -199,7 +199,7 @@ test('create tab preserves queued items and saved checklists across tab switches
   await expect(modal).not.toBeVisible()
 
   await page.reload()
-  await page.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByText('src/main.rs').first()).not.toBeVisible()
 
   await page.getByRole('button', { name: 'New' }).click()
@@ -207,4 +207,21 @@ test('create tab preserves queued items and saved checklists across tab switches
   await expect(modal).toBeVisible()
   await modal.getByRole('tab', { name: 'Select a Checklist' }).click()
   await expect(modal.getByRole('button', { name: 'Persistent Checklist' })).not.toBeVisible()
+})
+
+test('create issue modal closes on route change', async ({ page }) => {
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+  })
+  await page.goto('/create')
+
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+  await expect(page.getByRole('dialog', { name: 'Create QC Issue' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Configuration' }).click({ force: true })
+  await page.getByRole('button', { name: 'Create', exact: true }).click({ force: true })
+
+  await expect(page.getByRole('dialog', { name: 'Create QC Issue' })).not.toBeVisible()
+  await expect(page.getByText('Create New QC')).toBeVisible()
 })

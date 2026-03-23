@@ -1,6 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { AppLayout } from '~/components/AppLayout'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/')({
-  component: AppLayout,
+  beforeLoad: () => {
+    throw redirect({ to: '/status' })
+  },
+  component: () => null,
 })

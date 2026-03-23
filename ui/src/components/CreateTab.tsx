@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Button, Select, Text, TextInput, Textarea, Stack, Loader, Tooltip } from '@mantine/core'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMilestones } from '~/api/milestones'
@@ -15,21 +14,10 @@ import { CreateResultModal } from './CreateResultModal'
 import type { CreateOutcome } from './CreateResultModal'
 import { BatchRelevantFilesModal } from './BatchRelevantFilesModal'
 import type { RelevantFileDraft } from './CreateIssueModal'
-
-type MilestoneMode = 'select' | 'new'
+import { getDefaultCreateModalState, type CreateMilestoneMode, useUiSession } from '~/state/uiSession'
 
 export function CreateTab() {
-  const [mode, setMode] = useState<MilestoneMode>('select')
-  const [selectedMilestone, setSelectedMilestone] = useState<number | null>(null)
-  const [newName, setNewName] = useState('')
-  const [newDesc, setNewDesc] = useState('')
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editingIndex, setEditingIndex] = useState<number | null>(null)
-  const [queuedItems, setQueuedItems] = useState<QueuedItem[]>([])
-  const [isCreating, setIsCreating] = useState(false)
-  const [createOutcome, setCreateOutcome] = useState<CreateOutcome | null>(null)
-  const [resultOpen, setResultOpen] = useState(false)
-  const [batchOpen, setBatchOpen] = useState(false)
+  const { create, setCreate } = useUiSession()
   const queryClient = useQueryClient()
   const { data: repoInfo } = useRepoInfo()
   const dirtyFiles = new Set(repoInfo?.dirty_files ?? [])
@@ -38,24 +26,24 @@ export function CreateTab() {
     if (gitStatus === 'diverged') return { color: 'red',    tooltip: 'Resolve divergence before creating issues' }
     if (gitStatus === 'ahead')    return { color: 'orange', tooltip: 'Push to synchronize with remote before creating issues' }
     if (gitStatus === 'behind')   return { color: 'orange', tooltip: 'Pull to synchronize with remote before creating issues' }
-    if (queuedItems.some(item => dirtyFiles.has(item.file)))
+    if (create.queuedItems.some(item => dirtyFiles.has(item.file)))
       return { color: 'yellow', tooltip: 'Recommended to be in a clean git state before creating issues' }
     return null
   })()
   const { data: milestones = [], isLoading } = useMilestones()
   const { data: milestoneIssues = [], isLoading: issuesLoading } =
-    useIssuesForMilestone(mode === 'select' ? selectedMilestone : null)
+    useIssuesForMilestone(create.mode === 'select' ? create.selectedMilestone : null)
 
   const openMilestones = milestones.filter(m => m.state === 'open')
-  const nameConflict = newName.trim().length > 0
-    && milestones.some(m => m.title.toLowerCase() === newName.trim().toLowerCase())
-  const milestoneTitle = mode === 'select'
-    ? (milestones.find(m => m.number === selectedMilestone)?.title ?? null)
-    : (newName.trim() || null)
+  const nameConflict = create.newName.trim().length > 0
+    && milestones.some(m => m.title.toLowerCase() === create.newName.trim().toLowerCase())
+  const milestoneTitle = create.mode === 'select'
+    ? (milestones.find(m => m.number === create.selectedMilestone)?.title ?? null)
+    : (create.newName.trim() || null)
 
   // Conflict detection
-  const existingFiles = new Set(mode === 'select' ? milestoneIssues.map(i => i.title) : [])
-  const queuedFileCounts = queuedItems.reduce<Map<string, number>>((acc, item) => {
+  const existingFiles = new Set(create.mode === 'select' ? milestoneIssues.map(i => i.title) : [])
+  const queuedFileCounts = create.queuedItems.reduce<Map<string, number>>((acc, item) => {
     acc.set(item.file, (acc.get(item.file) ?? 0) + 1)
     return acc
   }, new Map())
@@ -68,67 +56,108 @@ export function CreateTab() {
     return undefined
   }
 
-  const milestoneReady = (mode === 'select' && selectedMilestone !== null) ||
-    (mode === 'new' && newName.trim().length > 0 && !nameConflict)
-  const hasConflicts = queuedItems.some(item => getConflictReason(item) !== undefined)
-  const canCreate = milestoneReady && !hasConflicts && queuedItems.length > 0
+  const milestoneReady = (create.mode === 'select' && create.selectedMilestone !== null) ||
+    (create.mode === 'new' && create.newName.trim().length > 0 && !nameConflict)
+  const hasConflicts = create.queuedItems.some(item => getConflictReason(item) !== undefined)
+  const canCreate = milestoneReady && !hasConflicts && create.queuedItems.length > 0
 
   function createBlockReason(): string | undefined {
     if (!milestoneReady) return 'Select or name a milestone first'
     if (hasConflicts) return 'Resolve all conflicts before creating'
-    if (queuedItems.length === 0) return 'Queue at least one issue'
+    if (create.queuedItems.length === 0) return 'Queue at least one issue'
     return undefined
   }
   const blockReason = createBlockReason()
 
   function handleBatchApply(indices: number[], draft: RelevantFileDraft) {
-    setQueuedItems(prev => prev.map((item, i) => {
-      if (!indices.includes(i)) return item
-      if (item.relevantFiles.some(rf => rf.file === draft.file)) return item
-      return { ...item, relevantFiles: [...item.relevantFiles, draft] }
+    setCreate((prev) => ({
+      ...prev,
+      queuedItems: prev.queuedItems.map((item, i) => {
+        if (!indices.includes(i)) return item
+        if (item.relevantFiles.some(rf => rf.file === draft.file)) return item
+        return { ...item, relevantFiles: [...item.relevantFiles, draft] }
+      }),
+    }))
+  }
+
+  function openNewIssueModal() {
+    setCreate((prev) => ({
+      ...prev,
+      modalOpen: true,
+      editingIndex: null,
+      modal: {
+        ...getDefaultCreateModalState(),
+        savedCustomTabs: prev.modal.savedCustomTabs,
+        checklistKey: prev.modal.checklistKey + 1,
+      },
+    }))
+  }
+
+  function openEditIssueModal(index: number) {
+    const item = create.queuedItems[index]
+    if (!item) return
+    setCreate((prev) => ({
+      ...prev,
+      modalOpen: true,
+      editingIndex: index,
+      modal: {
+        ...prev.modal,
+        selectedFile: item.file,
+        checklistDraft: { name: item.checklistName, content: item.checklistContent },
+        checklistSelected: true,
+        checklistKey: prev.modal.checklistKey + 1,
+        assignees: item.assignees,
+        relevantFiles: item.relevantFiles,
+        activeTab: 'file',
+        filePreviewOpen: false,
+        filePreviewContent: null,
+        issuePreviewOpen: false,
+        issuePreviewHtml: null,
+      },
     }))
   }
 
   async function handleCreate() {
-    setIsCreating(true)
+    setCreate((prev) => ({ ...prev, isCreating: true }))
     try {
       let milestoneNumber: number
       let resolvedTitle: string
       let milestoneCreated = false
-      if (mode === 'select') {
-        milestoneNumber = selectedMilestone!
+      if (create.mode === 'select') {
+        milestoneNumber = create.selectedMilestone!
         resolvedTitle = milestoneTitle ?? ''
       } else {
-        const ms = await postCreateMilestone(newName.trim(), newDesc.trim() || null)
+        const ms = await postCreateMilestone(create.newName.trim(), create.newDesc.trim() || null)
         milestoneNumber = ms.number
         resolvedTitle = ms.title
         milestoneCreated = true
         queryClient.invalidateQueries({ queryKey: ['milestones'] })
       }
 
-      const batchFiles = new Set(queuedItems.map((q) => q.file))
-      const requests = queuedItems.map((item) => toCreateIssueRequest(item, batchFiles))
+      const batchFiles = new Set(create.queuedItems.map((q) => q.file))
+      const requests = create.queuedItems.map((item) => toCreateIssueRequest(item, batchFiles))
       const responses = await postCreateIssues(milestoneNumber, requests)
 
       queryClient.invalidateQueries({ queryKey: ['milestones', milestoneNumber, 'issues'] })
       queryClient.invalidateQueries({ queryKey: ['milestones'] })
 
-      setCreateOutcome({
+      const outcome: CreateOutcome = {
         ok: true,
         milestoneNumber,
         milestoneTitle: resolvedTitle,
         milestoneCreated,
         created: responses.map((r, i) => ({
-          file: queuedItems[i].file,
+          file: create.queuedItems[i].file,
           issueUrl: r.issue_url,
           issueNumber: r.issue_number,
         })),
-      })
+      }
+      setCreate((prev) => ({ ...prev, createOutcome: outcome }))
     } catch (err) {
-      setCreateOutcome({ ok: false, error: (err as Error).message })
+      const outcome: CreateOutcome = { ok: false, error: (err as Error).message }
+      setCreate((prev) => ({ ...prev, createOutcome: outcome }))
     } finally {
-      setIsCreating(false)
-      setResultOpen(true)
+      setCreate((prev) => ({ ...prev, isCreating: false, resultOpen: true }))
     }
   }
 
@@ -142,19 +171,19 @@ export function CreateTab() {
             borderBottom: '1px solid var(--mantine-color-gray-3)',
             marginBottom: 4,
           }}>
-            {(['select', 'new'] as MilestoneMode[]).map(m => (
+            {(['select', 'new'] as CreateMilestoneMode[]).map(m => (
               <button
                 key={m}
-                onClick={() => setMode(m)}
+                onClick={() => setCreate((prev) => ({ ...prev, mode: m }))}
                 style={{
                   padding: '4px 10px',
                   background: 'none',
                   border: 'none',
                   cursor: 'pointer',
                   fontSize: 13,
-                  fontWeight: mode === m ? 600 : 400,
-                  color: mode === m ? '#2f7a3b' : '#555',
-                  borderBottom: mode === m ? '2px solid #2f7a3b' : '2px solid transparent',
+                  fontWeight: create.mode === m ? 600 : 400,
+                  color: create.mode === m ? '#2f7a3b' : '#555',
+                  borderBottom: create.mode === m ? '2px solid #2f7a3b' : '2px solid transparent',
                 }}
               >
                 {m === 'select' ? 'Select' : 'New'}
@@ -163,7 +192,7 @@ export function CreateTab() {
           </div>
 
           {/* Select sub-tab */}
-          {mode === 'select' && (
+          {create.mode === 'select' && (
             <Select
               label="Milestone"
               placeholder={isLoading ? 'Loading…' : 'Select a milestone'}
@@ -175,8 +204,8 @@ export function CreateTab() {
                 openIssues: ms.open_issues,
                 closedIssues: ms.closed_issues,
               }))}
-              value={selectedMilestone !== null ? String(selectedMilestone) : null}
-              onChange={v => setSelectedMilestone(v !== null ? Number(v) : null)}
+              value={create.selectedMilestone !== null ? String(create.selectedMilestone) : null}
+              onChange={v => setCreate((prev) => ({ ...prev, selectedMilestone: v !== null ? Number(v) : null }))}
               nothingFoundMessage="No open milestones"
               maxDropdownHeight={360}
               searchable
@@ -196,22 +225,28 @@ export function CreateTab() {
           )}
 
           {/* New sub-tab */}
-          {mode === 'new' && (
+          {create.mode === 'new' && (
             <>
               <TextInput
                 label="Name"
                 withAsterisk
                 size="xs"
-                value={newName}
-                onChange={e => setNewName(e.currentTarget.value)}
+                value={create.newName}
+                onChange={e => {
+                  const newName = e.currentTarget.value
+                  setCreate((prev) => ({ ...prev, newName }))
+                }}
                 error={nameConflict ? 'Name already exists' : undefined}
                 placeholder="e.g. Sprint 4"
               />
               <Textarea
                 label="Description"
                 size="xs"
-                value={newDesc}
-                onChange={e => setNewDesc(e.currentTarget.value)}
+                value={create.newDesc}
+                onChange={e => {
+                  const newDesc = e.currentTarget.value
+                  setCreate((prev) => ({ ...prev, newDesc }))
+                }}
                 placeholder="Optional"
                 rows={3}
               />
@@ -221,13 +256,13 @@ export function CreateTab() {
             </>
           )}
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Tooltip label={queuedItems.length === 0 ? 'Queue at least one issue' : ''} withArrow disabled={queuedItems.length > 0} multiline maw={220}>
+            <Tooltip label={create.queuedItems.length === 0 ? 'Queue at least one issue' : ''} withArrow disabled={create.queuedItems.length > 0} multiline maw={220}>
               <Button
                 fullWidth
                 size="sm"
                 variant="default"
-                disabled={queuedItems.length === 0}
-                onClick={() => setBatchOpen(true)}
+                disabled={create.queuedItems.length === 0}
+                onClick={() => setCreate((prev) => ({ ...prev, batchOpen: true }))}
               >
                 Batch Relevant Files
               </Button>
@@ -244,11 +279,11 @@ export function CreateTab() {
                 fullWidth
                 size="sm"
                 color={canCreate ? (createWarning?.color ?? '#2f9e44') : undefined}
-                disabled={!canCreate || isCreating}
-                loading={isCreating}
+                disabled={!canCreate || create.isCreating}
+                loading={create.isCreating}
                 onClick={handleCreate}
               >
-                {`Create ${queuedItems.length} QC Issue${queuedItems.length !== 1 ? 's' : ''}`}
+                {`Create ${create.queuedItems.length} QC Issue${create.queuedItems.length !== 1 ? 's' : ''}`}
               </Button>
             </Tooltip>
           </div>
@@ -256,43 +291,49 @@ export function CreateTab() {
       </ResizableSidebar>
 
       <BatchRelevantFilesModal
-        opened={batchOpen}
-        onClose={() => setBatchOpen(false)}
-        queuedItems={queuedItems}
+        opened={create.batchOpen}
+        onClose={() => setCreate((prev) => ({ ...prev, batchOpen: false }))}
+        queuedItems={create.queuedItems}
         onApply={handleBatchApply}
       />
 
       <CreateResultModal
-        opened={resultOpen}
-        outcome={createOutcome}
-        onClose={() => setResultOpen(false)}
+        opened={create.resultOpen}
+        outcome={create.createOutcome}
+        onClose={() => setCreate((prev) => ({ ...prev, resultOpen: false }))}
         onDone={(milestoneNumber) => {
-          setResultOpen(false)
-          setQueuedItems([])
-          setMode('select')
-          setSelectedMilestone(milestoneNumber)
-          setNewName('')
-          setNewDesc('')
+          setCreate((prev) => ({
+            ...prev,
+            resultOpen: false,
+            queuedItems: [],
+            mode: 'select',
+            selectedMilestone: milestoneNumber,
+            newName: '',
+            newDesc: '',
+          }))
         }}
       />
 
       <CreateIssueModal
-        opened={modalOpen}
-        onClose={() => { setModalOpen(false); setEditingIndex(null) }}
-        milestoneNumber={mode === 'select' ? selectedMilestone : null}
+        opened={create.modalOpen}
+        onClose={() => setCreate((prev) => ({ ...prev, modalOpen: false, editingIndex: null }))}
+        milestoneNumber={create.mode === 'select' ? create.selectedMilestone : null}
         milestoneTitle={milestoneTitle}
-        onQueue={(item) => setQueuedItems((prev) => [...prev, item])}
-        onUpdate={(index, item) => setQueuedItems((prev) => prev.map((q, i) => i === index ? item : q))}
-        queuedItems={queuedItems}
-        editItem={editingIndex !== null ? (queuedItems[editingIndex] ?? null) : null}
-        editIndex={editingIndex}
+        onQueue={(item) => setCreate((prev) => ({ ...prev, queuedItems: [...prev.queuedItems, item] }))}
+        onUpdate={(index, item) => setCreate((prev) => ({
+          ...prev,
+          queuedItems: prev.queuedItems.map((q, i) => i === index ? item : q),
+        }))}
+        queuedItems={create.queuedItems}
+        editItem={create.editingIndex !== null ? (create.queuedItems[create.editingIndex] ?? null) : null}
+        editIndex={create.editingIndex}
       />
 
       {/* Right main panel */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-        {(mode === 'new' || mode === 'select') && (
+        {(create.mode === 'new' || create.mode === 'select') && (
           <>
-            {mode === 'select' && issuesLoading && <Loader size="sm" />}
+            {create.mode === 'select' && issuesLoading && <Loader size="sm" />}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
@@ -300,20 +341,23 @@ export function CreateTab() {
               gap: 12,
             }}>
               <AddFileCard
-                onClick={() => setModalOpen(true)}
-                disabled={mode === 'select' && selectedMilestone === null}
+                onClick={openNewIssueModal}
+                disabled={create.mode === 'select' && create.selectedMilestone === null}
               />
-              {queuedItems.map((item, i) => (
+              {create.queuedItems.map((item, i) => (
                 <QueuedIssueCard
                   key={i}
                   item={item}
-                  onEdit={() => { setEditingIndex(i); setModalOpen(true) }}
-                  onRemove={() => setQueuedItems((prev) => prev.filter((_, idx) => idx !== i))}
+                  onEdit={() => openEditIssueModal(i)}
+                  onRemove={() => setCreate((prev) => ({
+                    ...prev,
+                    queuedItems: prev.queuedItems.filter((_, idx) => idx !== i),
+                  }))}
                   conflictReason={getConflictReason(item)}
                   dirty={dirtyFiles.has(item.file)}
                 />
               ))}
-              {mode === 'select' && milestoneIssues.map(issue => (
+              {create.mode === 'select' && milestoneIssues.map(issue => (
                 <ExistingIssueCard key={issue.number} issue={issue} />
               ))}
             </div>

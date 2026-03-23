@@ -98,6 +98,10 @@ function main(page: import('playwright/test').Page) {
   return page.locator('main')
 }
 
+function outputPath(page: import('playwright/test').Page) {
+  return main(page).getByRole('textbox', { name: 'Output Path' })
+}
+
 async function selectMilestone(page: import('playwright/test').Page, title: string) {
   await main(page).getByPlaceholder('Search milestones…').click()
   await page.getByRole('option', { name: new RegExp(title) }).click()
@@ -123,7 +127,7 @@ test('record tab renders core elements', async ({ page }) => {
   await expect(m.getByPlaceholder('Search milestones…')).toBeVisible()
   await expect(m.getByText('Record Structure', { exact: true })).toBeVisible()
   await expect(m.getByRole('button', { name: 'Add File' })).toBeVisible()
-  await expect(m.getByLabel('Output Path')).toBeVisible()
+  await expect(outputPath(page)).toBeVisible()
   await expect(m.getByRole('button', { name: 'Generate' })).toBeVisible()
 })
 
@@ -218,6 +222,31 @@ test('no spinner in preview area while statuses are loading', async ({ page }) =
   await expect(page.getByText('Generating preview…')).not.toBeVisible()
 })
 
+test('record tab preserves state across route changes until refresh', async ({ page }) => {
+  await setup(page)
+  await goToRecord(page)
+  await selectMilestone(page, 'Sprint 0')
+  await waitForCardLoaded(page)
+
+  const m = main(page)
+  await m.getByLabel('Tables only').click()
+  await expect(m.getByLabel('Tables only')).toBeChecked()
+
+  const output = outputPath(page)
+  await output.fill('/tmp/custom-record.pdf')
+  await expect(output).toHaveValue('/tmp/custom-record.pdf')
+
+  await page.getByRole('button', { name: 'Configuration' }).click({ force: true })
+  await page.getByRole('button', { name: 'Record' }).click({ force: true })
+
+  await expect(m.getByLabel('Tables only')).toBeChecked()
+  await expect(output).toHaveValue('/tmp/custom-record.pdf')
+
+  await page.reload()
+  await page.goto('/record')
+  await expect(outputPath(page)).toHaveValue('')
+})
+
 test('output path auto-populates from repo and milestone name', async ({ page }) => {
   await setup(page)
   await goToRecord(page)
@@ -225,7 +254,7 @@ test('output path auto-populates from repo and milestone name', async ({ page })
   await waitForCardLoaded(page)
 
   // repo=test-repo, milestone title=Sprint 0 → spaces become hyphens
-  await expect(main(page).getByLabel('Output Path')).toHaveValue('test-repo-Sprint-0.pdf')
+  await expect(outputPath(page)).toHaveValue('test-repo-Sprint-0.pdf')
 })
 
 test('output path appends -tables when tables only is toggled', async ({ page }) => {
@@ -236,7 +265,7 @@ test('output path appends -tables when tables only is toggled', async ({ page })
 
   await main(page).getByLabel('Tables only').click()
 
-  await expect(main(page).getByLabel('Output Path')).toHaveValue('test-repo-Sprint-0-tables.pdf')
+  await expect(outputPath(page)).toHaveValue('test-repo-Sprint-0-tables.pdf')
 })
 
 test('output path excludes errored milestones', async ({ page }) => {
@@ -265,9 +294,9 @@ test('output path excludes errored milestones', async ({ page }) => {
   await waitForCardLoaded(page)
 
   // Sprint 0 is errored → excluded; output path contains only Sprint 1
-  const outputPath = main(page).getByLabel('Output Path')
-  await expect(outputPath).not.toHaveValue(/Sprint-0/)
-  await expect(outputPath).toHaveValue(/Sprint-1/)
+  const output = outputPath(page)
+  await expect(output).not.toHaveValue(/Sprint-0/)
+  await expect(output).toHaveValue(/Sprint-1/)
 })
 
 test('adding a context file via browse appears in the list', async ({ page }) => {
@@ -338,7 +367,7 @@ test('generate button disabled without output path', async ({ page }) => {
   await waitForCardLoaded(page)
 
   // Clear the auto-filled output path
-  await main(page).getByLabel('Output Path').fill('')
+  await outputPath(page).fill('')
 
   await expect(main(page).getByRole('button', { name: 'Generate' })).toBeDisabled()
 })
@@ -376,4 +405,54 @@ test('preview does not re-fire when only errored milestone changes', async ({ pa
   await waitForCardLoaded(page)
 
   expect(previewCallCount).toBe(1)
+})
+
+test('record add-file modal closes on route change', async ({ page }) => {
+  await setup(page)
+  await goToRecord(page)
+
+  await page.getByRole('button', { name: 'Add File' }).click()
+  await expect(page.getByRole('dialog', { name: 'Add Context File' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Configuration' }).click({ force: true })
+  await page.getByRole('button', { name: 'Record' }).click({ force: true })
+
+  await expect(page.getByRole('dialog', { name: 'Add Context File' })).not.toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add File' })).toBeVisible()
+})
+
+test('record regenerates preview after route change without reusing stale preview key', async ({ page }) => {
+  await setup(page)
+
+  let previewCounter = 0
+  const requestedPreviewKeys: string[] = []
+
+  await page.route(/\/api\/record\/preview$/, (route) => {
+    previewCounter += 1
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ key: `key-${previewCounter}` }),
+    })
+  })
+
+  await page.route(/\/api\/record\/preview\.pdf/, (route, request) => {
+    const url = new URL(request.url())
+    const key = url.searchParams.get('key')
+    if (key) requestedPreviewKeys.push(key)
+    route.fulfill({ status: 200, contentType: 'application/pdf', body: '' })
+  })
+
+  await goToRecord(page)
+  await selectMilestone(page, 'Sprint 0')
+  await waitForCardLoaded(page)
+  await expect(page.locator('iframe[src*="key-1"]')).toBeVisible({ timeout: 10_000 })
+
+  await page.getByRole('button', { name: 'Configuration' }).click()
+  await page.getByRole('button', { name: 'Record' }).click()
+
+  await expect.poll(async () => page.locator('iframe[src*="key-1"]').count()).toBe(0)
+  await expect(page.locator('iframe[src*="key-2"]')).toBeVisible({ timeout: 10_000 })
+  expect(previewCounter).toBe(2)
+  expect(requestedPreviewKeys).toContain('key-2')
 })
