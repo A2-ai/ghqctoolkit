@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
     RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
-    get_milestone_issue_threads, interactive_milestone_status, interactive_status,
-    milestone_status, prompt_archive, prompt_context_files, prompt_milestone_record,
-    single_issue_status,
+    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, interactive_milestone_status,
+    interactive_status, milestone_status, prompt_archive, prompt_context_files,
+    prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -57,6 +57,11 @@ enum Commands {
     Configuration {
         #[command(subcommand)]
         configuration_command: ConfigurationCommands,
+    },
+    /// Authentication management commands
+    Auth {
+        #[command(subcommand)]
+        auth_command: AuthCommands,
     },
     /// Situation report
     Sitrep {
@@ -310,6 +315,29 @@ enum ConfigurationCommands {
     },
     /// Status of the configuration repository
     Status,
+}
+
+#[derive(Subcommand)]
+enum AuthCommands {
+    /// Log in to a GitHub host and optionally store a token in ghqc
+    Login {
+        /// Token to store directly instead of launching an interactive flow
+        token: Option<String>,
+
+        /// GitHub host to use, e.g. github.com or https://ghe.example.com
+        #[arg(long)]
+        host: Option<String>,
+
+        /// Skip importing into the ghqc auth store after successful gh auth login
+        #[arg(long)]
+        no_store: bool,
+    },
+    /// Remove the ghqc-stored token for a host
+    Logout {
+        /// GitHub host to use, e.g. github.com or https://ghe.example.com
+        #[arg(long)]
+        host: Option<String>,
+    },
 }
 
 #[cfg(feature = "cli")]
@@ -1038,6 +1066,18 @@ async fn main() -> Result<()> {
                 let git_info = GitInfo::from_path(&config_dir, &env).ok();
 
                 println!("{}", configuration_status(&configuration, &git_info))
+            }
+        },
+        Commands::Auth { auth_command } => match auth_command {
+            AuthCommands::Login {
+                token,
+                host,
+                no_store,
+            } => {
+                gh_auth_login(&cli.directory, host.as_deref(), token.as_deref(), no_store)?;
+            }
+            AuthCommands::Logout { host } => {
+                gh_auth_logout(&cli.directory, host.as_deref())?;
             }
         },
         Commands::Sitrep { json } => {

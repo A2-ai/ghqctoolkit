@@ -1,3 +1,4 @@
+use crate::auth::{extract_host_from_base_url, load_token, validate_github_token};
 use crate::utils::EnvProvider;
 use octocrab::Octocrab;
 use std::path::PathBuf;
@@ -9,7 +10,7 @@ pub enum AuthError {
     #[error("Failed to build octocrab client: {0}")]
     ClientBuild(#[from] octocrab::Error),
     #[error(
-        "No authentication found. Try: GITHUB_TOKEN env var, 'gh auth login', or git credential manager"
+        "No authentication found. Try: 'ghqc auth login', GITHUB_TOKEN, 'gh auth login', or git credential manager"
     )]
     NoAuth,
     #[error("IO error: {0}")]
@@ -40,9 +41,31 @@ pub fn create_authenticated_client(
 }
 
 pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
+    let stored_token = match load_token(base_url) {
+        Ok(token) => token,
+        Err(e) => {
+            log::debug!("Failed to read ghqc auth store: {}", e);
+            None
+        }
+    };
+    get_token_with_stored(base_url, env, stored_token)
+}
+
+fn get_token_with_stored(
+    base_url: &str,
+    env: &impl EnvProvider,
+    stored_token: Option<String>,
+) -> Option<String> {
     // Try authentication sources in priority order (similar to gitcreds R package)
 
-    // 1. GITHUB_TOKEN environment variable (highest priority)
+    // 1. ghqc auth store
+    log::debug!("Trying from ghqc auth store");
+    if let Some(token) = stored_token {
+        log::debug!("Using ghqc stored credentials");
+        return Some(token);
+    }
+
+    // 2. GITHUB_TOKEN environment variable
     log::debug!("Trying from GITHUB_TOKEN");
     if let Ok(token) = env.var("GITHUB_TOKEN") {
         log::debug!("Found GITHUB_TOKEN environment variable");
@@ -52,28 +75,28 @@ pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
         }
     }
 
-    // 2. gh CLI active authentication (gh auth token)
+    // 3. gh CLI active authentication (gh auth token)
     log::debug!("Trying from gh auth token command");
     if let Some(token) = get_gh_auth_token(base_url) {
         log::debug!("Using gh CLI active token");
         return Some(token);
     }
 
-    // 3. gh CLI stored authentication (config files)
+    // 4. gh CLI stored authentication (config files)
     log::debug!("Trying from gh cli stored authentication");
     if let Some(token) = get_gh_token_with_env(base_url, env) {
         log::debug!("Using gh CLI stored credentials");
         return Some(token);
     }
 
-    // 4. Git credential manager (git credential fill)
+    // 5. Git credential manager (git credential fill)
     log::debug!("Trying from git credential manager");
     if let Some(token) = get_git_credential_token(base_url) {
         log::debug!("Using git credential manager");
         return Some(token);
     }
 
-    // 5. .netrc file
+    // 6. .netrc file
     log::debug!("Trying from .netrc file");
     if let Some(token) = get_netrc_token_with_env(base_url, env) {
         log::debug!("Using .netrc file credentials");
@@ -129,7 +152,7 @@ fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<Strin
 
     let host = extract_host_from_url(base_url);
 
-    if let Some(host_config) = hosts.get(host) {
+    if let Some(host_config) = hosts.get(host.as_str()) {
         if let Some(oauth_token) = host_config.get("oauth_token") {
             if let Some(token_str) = oauth_token.as_str() {
                 return validate_github_token(token_str);
@@ -206,7 +229,7 @@ fn get_gh_auth_token(base_url: &str) -> Option<String> {
 
     // Use gh auth token --hostname <host> to get the active token
     let mut cmd = Command::new("gh");
-    cmd.args(&["auth", "token", "--hostname", host])
+    cmd.args(["auth", "token", "--hostname", host.as_str()])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -246,45 +269,6 @@ fn get_gh_auth_token(base_url: &str) -> Option<String> {
     validate_github_token(token)
 }
 
-fn validate_github_token(token: &str) -> Option<String> {
-    let token = token.trim();
-    if token.is_empty() || token.contains(char::is_whitespace) {
-        return None;
-    }
-
-    // Standard GitHub.com token prefixes
-    let has_known_prefix = token.starts_with("ghp_")
-        || token.starts_with("github_pat_")
-        || token.starts_with("gho_")
-        || token.starts_with("ghu_")
-        || token.starts_with("ghs_")
-        || token.starts_with("ghr_");
-
-    if has_known_prefix && token.len() >= 20 {
-        return Some(token.to_string());
-    }
-
-    // GHE classic tokens: 40-char hex strings (no prefix)
-    if token.len() >= 20
-        && token
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        log::debug!(
-            "Accepting non-prefixed token ({} chars) — likely GHE classic PAT",
-            token.len()
-        );
-        return Some(token.to_string());
-    }
-
-    log::debug!(
-        "Rejected token: {} chars, starts with: {}",
-        token.len(),
-        token.chars().take(6).collect::<String>()
-    );
-    None
-}
-
 fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<String> {
     let host = extract_host_from_url(base_url);
     let netrc_path = get_netrc_path_with_env(env)?;
@@ -322,12 +306,13 @@ fn get_netrc_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<St
     None
 }
 
-fn extract_host_from_url(base_url: &str) -> &str {
-    if base_url == "https://github.com" {
-        "github.com"
-    } else {
-        base_url.strip_prefix("https://").unwrap_or(base_url)
-    }
+fn extract_host_from_url(base_url: &str) -> String {
+    extract_host_from_base_url(base_url).unwrap_or_else(|_| {
+        base_url
+            .strip_prefix("https://")
+            .unwrap_or(base_url)
+            .to_string()
+    })
 }
 
 fn get_gh_config_dir_with_env(env: &impl EnvProvider) -> Option<PathBuf> {
@@ -442,9 +427,27 @@ password ghp_api_token_456
         assert_eq!(token, "ghp_test_netrc_token");
     }
 
-    #[tokio::test]
-    async fn test_environment_variable_priority() {
-        // Mock environment with GITHUB_TOKEN - this should have highest priority
+    #[test]
+    fn test_ghqc_store_priority_over_environment_variable() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GITHUB_TOKEN"))
+            .times(0);
+
+        let token = get_token_with_stored(
+            "https://github.com",
+            &mock_env,
+            Some("ghp_stored_token_1234567890123456789012345678901234567890".to_string()),
+        );
+        assert_eq!(
+            token,
+            Some("ghp_stored_token_1234567890123456789012345678901234567890".to_string())
+        );
+    }
+
+    #[test]
+    fn test_environment_variable_priority_without_store() {
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
@@ -454,14 +457,11 @@ password ghp_api_token_456
                 Ok("ghp_valid_env_token_1234567890123456789012345678901234567890".to_string())
             });
 
-        let token = get_token("https://github.com", &mock_env);
+        let token = get_token_with_stored("https://github.com", &mock_env, None);
         assert_eq!(
             token,
             Some("ghp_valid_env_token_1234567890123456789012345678901234567890".to_string())
         );
-
-        let client = create_authenticated_client("https://github.com", token);
-        assert!(client.is_ok());
     }
 
     #[test]

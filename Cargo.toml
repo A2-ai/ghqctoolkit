@@ -14,6 +14,7 @@ gix = { version = "0.73", default-features = false, features = [
   "blocking-http-transport-curl"
 ]}
 base64 = "0.22"
+url = "2.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
@@ -60,7 +61,8 @@ cli = [
     "dep:anyhow",
     "dep:clap-verbosity-flag",
     "dep:env_logger",
-    "dep:inquire"
+    "dep:inquire",
+    "dep:open"
 ]
 api = [
     "dep:axum",

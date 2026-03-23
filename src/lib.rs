@@ -1,5 +1,6 @@
 mod approve;
 mod archive;
+mod auth;
 mod cache;
 mod comment;
 mod comment_system;
@@ -32,6 +33,10 @@ pub use approve::{
     unapprove_with_impact,
 };
 pub use archive::{ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, archive};
+pub use auth::{
+    AuthStoreError, auth_store_root, canonicalize_base_url, delete_token,
+    extract_host_from_base_url, load_token, save_token, token_page_url, validate_github_token,
+};
 pub use cache::DiskCache;
 pub use cache::{
     CachedEvents, create_labels_if_needed, get_issue_comments, get_issue_events, get_repo_users,
