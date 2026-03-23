@@ -32,6 +32,10 @@ export const Route = createRootRouteWithContext<{
 })
 
 function RootShell({ children }: { children: React.ReactNode }) {
+  if (typeof document !== 'undefined') {
+    return <>{children}</>
+  }
+
   return (
     <html>
       <head>
