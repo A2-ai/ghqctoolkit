@@ -1,5 +1,6 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
+import { createdMilestone, openMilestone } from '../fixtures'
 
 // ---------------------------------------------------------------------------
 // Test 1: AddFileCard disabled when no milestone selected in 'select' mode
@@ -155,6 +156,56 @@ test('full create workflow', async ({ page }) => {
   await expect(resultModal).toBeVisible()
   await expect(resultModal.getByRole('link', { name: 'src/main.rs' })).toBeVisible()
   await expect(resultModal.getByRole('link', { name: 'src/lib.rs' })).toBeVisible()
+})
+
+test('new milestone name stays non-duplicate until success modal closes', async ({ page }) => {
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+    milestones: [openMilestone],
+    milestonesAfterCreate: [openMilestone, createdMilestone],
+    createIssuesDelayMs: 750,
+    createIssues: [{
+      issue_url: 'https://github.com/test-owner/test-repo/issues/201',
+      issue_number: 201,
+      blocking_created: [],
+      blocking_errors: [],
+    }],
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: 'New' }).click()
+
+  const milestoneName = page.getByLabel('Name').first()
+  await milestoneName.fill(createdMilestone.title)
+
+  await page.getByText('Create New QC').click()
+  const modal = page.getByRole('dialog', { name: 'Create QC Issue' })
+  await expect(modal).toBeVisible()
+  await modal.getByRole('treeitem', { name: 'src' }).click()
+  await modal.getByRole('treeitem', { name: 'main.rs' }).click()
+  await modal.getByRole('tab', { name: 'Select a Checklist' }).click()
+  await modal.getByRole('button', { name: 'Code Review' }).click()
+  await modal.getByRole('button', { name: 'Queue' }).click()
+  await expect(modal).not.toBeVisible()
+
+  const refreshedMilestones = page.waitForResponse((response) =>
+    response.url().endsWith('/api/milestones') && response.request().method() === 'GET',
+  )
+  await page.getByRole('button', { name: 'Create 1 QC Issue' }).click()
+  await refreshedMilestones
+
+  await expect(page.getByText('Name already exists')).not.toBeVisible()
+
+  const resultModal = page.getByRole('dialog', { name: '1 QC Issue Created' })
+  await expect(resultModal).toBeVisible()
+  await expect(page.getByText('Name already exists')).not.toBeVisible()
+
+  await resultModal.getByRole('button', { name: 'Done' }).click()
+  await expect(resultModal).not.toBeVisible()
+  await expect(page.getByPlaceholder('e.g. Sprint 4')).not.toBeVisible()
+  await expect(page.getByPlaceholder('Select a milestone')).toBeVisible()
+  await expect(page.getByPlaceholder('Select a milestone')).toHaveValue(createdMilestone.title)
+  await expect(page.getByRole('button', { name: /Create \d+ QC Issue/ })).toBeDisabled()
 })
 
 test('create tab preserves queued items and saved checklists across tab switches until refresh', async ({ page }) => {

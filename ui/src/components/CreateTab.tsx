@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { Button, Select, Text, TextInput, Textarea, Stack, Loader, Tooltip } from '@mantine/core'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMilestones } from '~/api/milestones'
@@ -18,6 +19,7 @@ import { getDefaultCreateModalState, type CreateMilestoneMode, useUiSession } fr
 
 export function CreateTab() {
   const { create, setCreate } = useUiSession()
+  const previousResultOpen = useRef(create.resultOpen)
   const queryClient = useQueryClient()
   const { data: repoInfo } = useRepoInfo()
   const dirtyFiles = new Set(repoInfo?.dirty_files ?? [])
@@ -35,7 +37,12 @@ export function CreateTab() {
     useIssuesForMilestone(create.mode === 'select' ? create.selectedMilestone : null)
 
   const openMilestones = milestones.filter(m => m.state === 'open')
-  const nameConflict = create.newName.trim().length > 0
+  const suppressNameConflict = create.isCreating || (
+    create.resultOpen &&
+    create.createOutcome?.ok === true &&
+    create.createOutcome.milestoneCreated
+  )
+  const nameConflict = !suppressNameConflict && create.newName.trim().length > 0
     && milestones.some(m => m.title.toLowerCase() === create.newName.trim().toLowerCase())
   const milestoneTitle = create.mode === 'select'
     ? (milestones.find(m => m.number === create.selectedMilestone)?.title ?? null)
@@ -116,6 +123,35 @@ export function CreateTab() {
       },
     }))
   }
+
+  function finishSuccessfulCreate(milestoneNumber: number) {
+    setCreate((prev) => ({
+      ...prev,
+      modalOpen: false,
+      editingIndex: null,
+      resultOpen: false,
+      batchOpen: false,
+      isCreating: false,
+      createOutcome: null,
+      queuedItems: [],
+      mode: 'select',
+      selectedMilestone: milestoneNumber,
+      newName: '',
+      newDesc: '',
+      modal: {
+        ...getDefaultCreateModalState(),
+        savedCustomTabs: prev.modal.savedCustomTabs,
+        checklistKey: prev.modal.checklistKey,
+      },
+    }))
+  }
+
+  useEffect(() => {
+    if (previousResultOpen.current && !create.resultOpen && create.createOutcome?.ok) {
+      finishSuccessfulCreate(create.createOutcome.milestoneNumber)
+    }
+    previousResultOpen.current = create.resultOpen
+  }, [create.resultOpen, create.createOutcome])
 
   async function handleCreate() {
     setCreate((prev) => ({ ...prev, isCreating: true }))
@@ -301,17 +337,7 @@ export function CreateTab() {
         opened={create.resultOpen}
         outcome={create.createOutcome}
         onClose={() => setCreate((prev) => ({ ...prev, resultOpen: false }))}
-        onDone={(milestoneNumber) => {
-          setCreate((prev) => ({
-            ...prev,
-            resultOpen: false,
-            queuedItems: [],
-            mode: 'select',
-            selectedMilestone: milestoneNumber,
-            newName: '',
-            newDesc: '',
-          }))
-        }}
+        onDone={finishSuccessfulCreate}
       />
 
       <CreateIssueModal
