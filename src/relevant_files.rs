@@ -244,19 +244,27 @@ mod tests {
 
     impl MockGitInfo {
         fn new() -> Self {
-            Self { file_contents: HashMap::new() }
+            Self {
+                file_contents: HashMap::new(),
+            }
         }
 
         fn with_file(mut self, file: &str, commit: &str, content: &str) -> Self {
-            self.file_contents
-                .insert((PathBuf::from(file), commit.to_string()), content.as_bytes().to_vec());
+            self.file_contents.insert(
+                (PathBuf::from(file), commit.to_string()),
+                content.as_bytes().to_vec(),
+            );
             self
         }
     }
 
     impl GitHelpers for MockGitInfo {
         fn file_content_url(&self, commit: &str, file: &Path) -> String {
-            format!("https://github.com/owner/repo/blob/{}/{}", &commit[..7], file.display())
+            format!(
+                "https://github.com/owner/repo/blob/{}/{}",
+                &commit[..7],
+                file.display()
+            )
         }
         fn commit_comparison_url(&self, _current: &ObjectId, _previous: &ObjectId) -> String {
             "https://github.com/owner/repo/compare/prev..current".to_string()
@@ -480,8 +488,7 @@ mod tests {
     fn test_diff_comment_body_prev_file_missing() {
         let comment = make_diff_comment("src/missing.R", "src/new.R");
         // Only curr file registered — prev read will fail
-        let git_info = MockGitInfo::new()
-            .with_file("src/new.R", CURR_COMMIT, "content\n");
+        let git_info = MockGitInfo::new().with_file("src/new.R", CURR_COMMIT, "content\n");
 
         let body = comment.generate_body(&git_info);
         // Diff section should be empty when prev file can't be read
@@ -493,8 +500,7 @@ mod tests {
     fn test_diff_comment_body_curr_file_missing() {
         let comment = make_diff_comment("src/old.R", "src/missing.R");
         // Only prev file registered — curr read will fail
-        let git_info = MockGitInfo::new()
-            .with_file("src/old.R", PREV_COMMIT, "content\n");
+        let git_info = MockGitInfo::new().with_file("src/old.R", PREV_COMMIT, "content\n");
 
         let body = comment.generate_body(&git_info);
         let diff_section = body.split("## File Difference").nth(1).unwrap_or("");
