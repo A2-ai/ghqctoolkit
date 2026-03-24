@@ -5,10 +5,11 @@ ghqc sitrep
 ```
 
 Prints a situation report summarizing the current state of the `ghqc` binary, the git repository in the working directory, and the configuration repository. Useful for diagnosing setup issues or sharing environment details when reporting a bug.
+It also reports the current authentication store and the auth sources available for the repository host.
 
 ## Output
 
-The report is divided into three sections:
+The report is divided into four sections:
 
 ### Binary
 
@@ -43,6 +44,31 @@ Milestones: 2
 | Milestones | All milestones, sorted by number of open issues (descending), then alphabetically. Each entry shows milestone state (`open`/`closed`) and open/closed issue counts. |
 
 If the directory is not a git repository, or the GitHub API cannot be reached, a descriptive error is shown instead.
+
+### Auth
+
+```
+=== Auth ===========================
+store directory: /home/user/.local/share/ghqc/auth
+stored tokens:
+  ▶ github.com (ghp_abcd...wxyz)
+
+repository host: github.com
+available auth sources
+  ▶ ✓  ghqc auth store            (ghp_abcd...wxyz)
+    ✓  GITHUB_TOKEN               (ghp_1234...7890)
+    ✗ gh auth token
+    ✗ gh stored auth
+    ✗ git credential manager
+    ✗ .netrc
+```
+
+| Field | Description |
+|---|---|
+| store directory | Path to the local `ghqc` auth store |
+| stored tokens | Hosts with tokens stored by `ghqc`, with the selected repository host highlighted when applicable |
+| repository host | Host inferred from the current repository remote |
+| available auth sources | Authentication sources checked for the repository host, shown in priority order. The active source is marked with `▶`. |
 
 ### Configuration
 
@@ -95,4 +121,5 @@ ghqc sitrep --config-dir /path/to/config
 ## See Also
 
 - [`ghqc configuration status`](configuration.md) — focused view of configuration only
+- [`ghqc auth status`](auth.md) — focused view of auth storage and source resolution
 - [`ghqc milestone status`](milestone-status.md) — detailed issue status across milestones

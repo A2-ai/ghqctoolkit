@@ -61,11 +61,21 @@ Issues are grouped into Milestones for organizational purposes.
 | [`ghqc configuration setup`](docs/configuration.md) | Clone the configuration repository |
 | [`ghqc configuration status`](docs/configuration.md) | Display configuration directory and available checklists |
 
+### Authentication
+
+`ghqc` can store GitHub tokens locally and show which authentication sources are available for the current repository host.
+
+| Command | Description |
+|---|---|
+| [`ghqc auth login`](docs/auth.md) | Log in to a GitHub host and optionally store a token in `ghqc` |
+| [`ghqc auth logout`](docs/auth.md) | Remove a token stored in the `ghqc` auth store |
+| [`ghqc auth status`](docs/auth.md) | Display stored tokens and auth source resolution for the selected host |
+
 ### Diagnostics
 
 | Command | Description |
 |---|---|
-| [`ghqc sitrep`](docs/sitrep.md) | Print a situation report: binary version, repository info, and configuration status |
+| [`ghqc sitrep`](docs/sitrep.md) | Print a situation report: binary version, repository info, auth status, and configuration status |
 
 ### Server
 
@@ -157,6 +167,7 @@ An example configuration repository is available at [a2-ai/ghqc.example_config_r
 
 ## Documentation
 
+- [Authentication](docs/auth.md)
 - [Configuration](docs/configuration.md)
 - [Issue: Create](docs/issue-create.md)
 - [Issue: Comment](docs/issue-comment.md)
