@@ -1112,7 +1112,8 @@ async fn main() -> Result<()> {
         Commands::Sitrep { json } => {
             use ghqctoolkit::cli::SitRep;
 
-            let sit_rep = SitRep::new(&cli.directory, cli.config_dir.as_ref(), auth_store.as_ref()).await;
+            let sit_rep =
+                SitRep::new(&cli.directory, cli.config_dir.as_ref(), auth_store.as_ref()).await;
             if json {
                 println!(
                     "{}",
