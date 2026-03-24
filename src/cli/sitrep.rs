@@ -96,7 +96,10 @@ impl fmt::Display for RepoSitRep {
         writeln!(
             f,
             "{} {}/{} ({})",
-            "Repository:".bold(), self.owner, self.repo, self.remote_url
+            "Repository:".bold(),
+            self.owner,
+            self.repo,
+            self.remote_url
         )?;
         match &self.branch {
             Ok(branch) => {
@@ -125,7 +128,11 @@ impl fmt::Display for RepoSitRep {
                         .join("\n  - ")
                 )
             }
-            Err(e) => writeln!(f, "{} Failed to determine milestones: {e}", "Milestones:".bold()),
+            Err(e) => writeln!(
+                f,
+                "{} Failed to determine milestones: {e}",
+                "Milestones:".bold()
+            ),
         }
     }
 }
@@ -180,9 +187,20 @@ impl fmt::Display for ConfigSitRep {
         if let (Some(owner), Some(repo), Some(remote_url)) =
             (&self.owner, &self.repo, &self.remote_url)
         {
-            writeln!(f, "{} {}/{} ({})", "Repository:".bold(), owner, repo, remote_url)?;
+            writeln!(
+                f,
+                "{} {}/{} ({})",
+                "Repository:".bold(),
+                owner,
+                repo,
+                remote_url
+            )?;
         } else {
-            writeln!(f, "{} Not determined to be git repository", "Repository:".bold())?;
+            writeln!(
+                f,
+                "{} Not determined to be git repository",
+                "Repository:".bold()
+            )?;
         }
 
         let mut checklists = self
@@ -200,7 +218,7 @@ impl fmt::Display for ConfigSitRep {
             checklists.join("\n  - ")
         )?;
 
-        writeln!(f, "{}",  "Options:".bold())?;
+        writeln!(f, "{}", "Options:".bold())?;
         let options = &self.configuration.options;
         if let Some(note) = &options.prepended_checklist_note {
             writeln!(
@@ -248,7 +266,11 @@ impl fmt::Display for BinarySitRep {
         writeln!(f, "{} {}", "Version:".bold(), self.version)?;
         match &self.path {
             Ok(p) => writeln!(f, "{} {}", "Path:".bold(), p.display()),
-            Err(e) => writeln!(f, "{} Failed to determine executable path: {e}", "Path:".bold()),
+            Err(e) => writeln!(
+                f,
+                "{} Failed to determine executable path: {e}",
+                "Path:".bold()
+            ),
         }
     }
 }
@@ -269,9 +291,12 @@ struct AuthSitRep {
 }
 
 impl AuthSitRep {
-    fn new(git_info: Option<&GitInfo>, auth_store: Option<&AuthStore>, env: &impl EnvProvider) -> Self {
-        let host = git_info
-            .and_then(|g| extract_host_from_base_url(&g.base_url).ok());
+    fn new(
+        git_info: Option<&GitInfo>,
+        auth_store: Option<&AuthStore>,
+        env: &impl EnvProvider,
+    ) -> Self {
+        let host = git_info.and_then(|g| extract_host_from_base_url(&g.base_url).ok());
 
         let (store_dir, stored_tokens) = match auth_store {
             Some(store) => (
@@ -283,7 +308,11 @@ impl AuthSitRep {
 
         let sources = if let Some(git_info) = git_info {
             let auth_sources = AuthSources::new(&git_info.base_url, env, auth_store);
-            let active = auth_sources.sorted().into_iter().next().map(|(k, _)| k.to_string());
+            let active = auth_sources
+                .sorted()
+                .into_iter()
+                .next()
+                .map(|(k, _)| k.to_string());
             auth_sources
                 .all_by_priority()
                 .into_iter()
@@ -297,7 +326,12 @@ impl AuthSitRep {
             vec![]
         };
 
-        Self { store_dir, stored_tokens, host, sources }
+        Self {
+            store_dir,
+            stored_tokens,
+            host,
+            sources,
+        }
     }
 }
 
@@ -329,14 +363,22 @@ impl fmt::Display for AuthSitRep {
         } else {
             writeln!(f, "{}", "available auth sources".bold())?;
             for entry in &self.sources {
-                let marker = if entry.is_active { "▶ ".green().to_string() } else { "  ".to_string() };
+                let marker = if entry.is_active {
+                    "▶ ".green().to_string()
+                } else {
+                    "  ".to_string()
+                };
                 match &entry.token_preview {
                     Some(preview) => writeln!(
                         f,
                         "  {}{}  {} ({})",
                         marker,
                         "✓".green(),
-                        if entry.is_active { format!("{:<26}", entry.kind).bold().to_string() } else { format!("{:<26}", entry.kind) },
+                        if entry.is_active {
+                            format!("{:<26}", entry.kind).bold().to_string()
+                        } else {
+                            format!("{:<26}", entry.kind)
+                        },
                         preview
                     )?,
                     None => writeln!(f, "    {} {}", "✗".red(), entry.kind)?,

@@ -4,10 +4,10 @@ use owo_colors::OwoColorize;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use super::section_header;
 use crate::AuthSources;
 use crate::auth::{AuthStore, canonicalize_base_url, extract_host_from_base_url, token_page_url};
 use crate::utils::StdEnvProvider;
-use super::section_header;
 
 pub fn gh_auth_login(
     directory: &Path,

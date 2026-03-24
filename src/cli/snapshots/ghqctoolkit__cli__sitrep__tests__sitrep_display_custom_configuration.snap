@@ -2,24 +2,31 @@
 source: src/cli/sitrep.rs
 expression: sitrep.to_string()
 ---
-=== Binary =========================
-Version: 0.0.0-test
-Path: /usr/local/bin/ghqc
+[36m── [39m[1m[36mBinary[39m[0m [36m────────────────────────────────────[39m
+[1mVersion:[0m 0.0.0-test
+[1mPath:[0m /usr/local/bin/ghqc
 
-=== Repository =====================
-Directory: /projects/myrepo
-Repository: owner/repo (https://github.com/owner/repo)
-Branch: main
-Milestones: 1
+[36m── [39m[1m[36mRepository[39m[0m [36m────────────────────────────────[39m
+[1mDirectory:[0m /projects/myrepo
+[1mRepository:[0m owner/repo (https://github.com/owner/repo)
+[1mBranch:[0m main
+[1mMilestones:[0m 1
   - v1.0 [open]: 4 open | 8 closed
 
-=== Configuration ==================
-Directory: src/tests/custom_configuration
-Repository: Not determined to be git repository
-Checklists: 2
+[36m── [39m[1m[36mAuth[39m[0m [36m──────────────────────────────────────[39m
+[1mstore directory:[0m /home/user/.local/share/ghqc/auth
+[1mstored tokens:[0m none
+
+[1mrepository host:[0m github.com
+[1mavailable auth sources:[0m unknown
+
+[36m── [39m[1m[36mConfiguration[39m[0m [36m─────────────────────────────[39m
+[1mDirectory:[0m src/tests/custom_configuration
+[1mRepository:[0m Not determined to be git repository
+[1mChecklists:[0m 2
   - Custom Checklist: 3 items
   - Custom: 1 items
-Options:
+[1mOptions:[0m
   - Prepended Checklist Note:
      │ Please review carefully
   - Checklist Display Name:  Custom Quality Check
