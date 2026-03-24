@@ -1150,7 +1150,7 @@ async fn main() -> Result<()> {
                 });
             let app = create_router(state);
 
-            let addr = format!("::{}", port);
+            let addr = format!(":::{}", port);
             println!("Starting API server on http://localhost:{}", port);
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;

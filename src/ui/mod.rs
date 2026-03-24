@@ -58,7 +58,7 @@ pub async fn run<G: GitProvider + 'static>(
 ) -> anyhow::Result<()> {
     let app = crate::api::create_router(state).fallback(static_handler);
 
-    let addr = format!("::{port}");
+    let addr = format!(":::{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     let url = format!("http://localhost:{port}");
