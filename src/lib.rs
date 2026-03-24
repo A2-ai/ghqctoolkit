@@ -1,5 +1,6 @@
 mod approve;
 mod archive;
+mod auth;
 mod cache;
 mod comment;
 mod comment_system;
@@ -32,6 +33,10 @@ pub use approve::{
     unapprove_with_impact,
 };
 pub use archive::{ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, archive};
+pub use auth::{
+    AuthStore, AuthStoreError, AuthToken, canonicalize_base_url, extract_host_from_base_url,
+    token_page_url, validate_github_token,
+};
 pub use cache::DiskCache;
 pub use cache::{
     CachedEvents, create_labels_if_needed, get_issue_comments, get_issue_events, get_repo_users,
@@ -44,11 +49,11 @@ pub use configuration::{
 };
 pub use create::{QCEntry, QCIssue, QCRelationship, RelevantFileEntry, batch_post_qc_entries};
 pub use git::{
-    AuthError, CommitCache, GitAuthor, GitCli, GitCliError, GitCommand, GitComment, GitCommit,
-    GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
-    GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError, GitProvider, GitRepository,
-    GitRepositoryError, GitState, GitStatus, GitStatusError, GitStatusOps, RepoUser, find_commits,
-    find_file_commits, get_git_status,
+    AuthError, AuthSourceKind, AuthSources, CommitCache, GitAuthor, GitCli, GitCliError,
+    GitCommand, GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
+    GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError,
+    GitProvider, GitRepository, GitRepositoryError, GitState, GitStatus, GitStatusError,
+    GitStatusOps, RepoUser, find_commits, find_file_commits, get_git_status,
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,

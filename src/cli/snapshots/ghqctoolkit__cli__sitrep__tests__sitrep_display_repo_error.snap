@@ -2,18 +2,25 @@
 source: src/cli/sitrep.rs
 expression: "make_sitrep(Err(\"not a git repository\".to_string())).to_string()"
 ---
-=== Binary =========================
-Version: 0.0.0-test
-Path: /usr/local/bin/ghqc
+[36m── [39m[1m[36mBinary[39m[0m [36m────────────────────────────────────[39m
+[1mVersion:[0m 0.0.0-test
+[1mPath:[0m /usr/local/bin/ghqc
 
-=== Repository =====================
+[36m── [39m[1m[36mRepository[39m[0m [36m────────────────────────────────[39m
 Failed to determine Git Repository Info for /projects/myrepo: not a git repository
-=== Configuration ==================
-Directory: /config/path    ❌ Directory not found
-Repository: owner/repo (https://github.com/owner/repo)
-Checklists: 1
+[36m── [39m[1m[36mAuth[39m[0m [36m──────────────────────────────────────[39m
+[1mstore directory:[0m /home/user/.local/share/ghqc/auth
+[1mstored tokens:[0m none
+
+[1mrepository host:[0m github.com
+[1mavailable auth sources:[0m unknown
+
+[36m── [39m[1m[36mConfiguration[39m[0m [36m─────────────────────────────[39m
+[1mDirectory:[0m /config/path    ❌ Directory not found
+[1mRepository:[0m owner/repo (https://github.com/owner/repo)
+[1mChecklists:[0m 1
   - Custom: 1 items
-Options:
+[1mOptions:[0m
   - Checklist Display Name:  checklists
   - Logo Path: logo.png
   - Checklist Directory: checklists
