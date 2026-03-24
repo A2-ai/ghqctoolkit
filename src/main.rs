@@ -1125,7 +1125,7 @@ async fn main() -> Result<()> {
         }
         #[cfg(all(feature = "api", not(feature = "ui")))]
         Commands::Serve { port } => {
-            use ghqctoolkit::api::{AppState, create_router};
+            use ghqctoolkit::api::{AppState, bind_local_server, create_router, local_server_url};
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
             let mut configuration = Configuration::from_path(&config_dir);
@@ -1150,10 +1150,8 @@ async fn main() -> Result<()> {
                 });
             let app = create_router(state);
 
-            let addr = format!(":::{}", port);
-            println!("Starting API server on http://localhost:{}", port);
-
-            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            let listener = bind_local_server(port).await?;
+            println!("Starting API server on {}", local_server_url(&listener));
             axum::serve(listener, app).await?;
         }
         #[cfg(feature = "ui")]

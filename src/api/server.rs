@@ -13,6 +13,8 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -111,4 +113,33 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(log_request))
         .with_state(state)
+}
+
+/// Bind the local HTTP server with a preference for a dual-stack IPv6 socket.
+pub async fn bind_local_server(port: u16) -> std::io::Result<TcpListener> {
+    match bind_dual_stack_ipv6(port).await {
+        Ok(listener) => Ok(listener),
+        Err(v6_err) => {
+            log::warn!(
+                "Failed to bind dual-stack IPv6 listener on port {port}: {v6_err}. Falling back to IPv4"
+            );
+            bind_ipv4(port).await
+        }
+    }
+}
+
+pub fn local_server_url(listener: &TcpListener) -> String {
+    match listener.local_addr() {
+        Ok(addr) if addr.is_ipv6() => format!("http://[::1]:{}", addr.port()),
+        Ok(addr) => format!("http://127.0.0.1:{}", addr.port()),
+        Err(_) => "http://127.0.0.1".to_string(),
+    }
+}
+
+async fn bind_dual_stack_ipv6(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))).await
+}
+
+async fn bind_ipv4(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))).await
 }

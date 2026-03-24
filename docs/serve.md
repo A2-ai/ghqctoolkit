@@ -17,7 +17,8 @@ cargo build --features cli,ui --release
 ./target/release/ghqc ui --port 8080
 ```
 
-The server starts on port **3103** by default. The browser opens automatically to `http://localhost:<port>`.
+The server starts on port **3103** by default. The browser opens automatically to a literal loopback URL:
+`http://127.0.0.1:<port>` on IPv4-only systems or `http://[::1]:<port>` when the listener is bound on IPv6.
 
 ### Web UI Tabs
 

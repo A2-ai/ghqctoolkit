@@ -193,5 +193,5 @@ jobs:
             **Checksums:**
             See `checksums.txt` for SHA256 checksums of all artifacts.
           token: ${{ secrets.GITHUB_TOKEN }}
-          prerelease: ${{ contains(github.ref, '-pre') || contains(github.ref, '-test') }}
+          prerelease: ${{ contains(github.ref, '-pre') || contains(github.ref, '-test') || contains(github.ref, '-rc') }}
           files: release-assets/*
