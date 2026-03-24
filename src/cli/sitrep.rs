@@ -4,10 +4,12 @@ use std::{
 };
 
 use octocrab::models::Milestone;
+use owo_colors::OwoColorize;
 use serde::Serialize;
 
 use crate::{
-    AuthStore, Configuration, GitHubReader, GitInfo, GitRepository, determine_config_dir,
+    AuthSources, AuthStore, Configuration, GitHubReader, GitInfo, GitRepository,
+    determine_config_dir, extract_host_from_base_url,
     utils::{EnvProvider, StdEnvProvider},
 };
 
@@ -90,18 +92,18 @@ impl RepoSitRep {
 
 impl fmt::Display for RepoSitRep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Directory: {}", self.path.display())?;
+        writeln!(f, "{} {}", "Directory:".bold(), self.path.display())?;
         writeln!(
             f,
-            "Repository: {}/{} ({})",
-            self.owner, self.repo, self.remote_url
+            "{} {}/{} ({})",
+            "Repository:".bold(), self.owner, self.repo, self.remote_url
         )?;
         match &self.branch {
             Ok(branch) => {
-                writeln!(f, "Branch: {branch}")?;
+                writeln!(f, "{} {branch}", "Branch:".bold())?;
             }
             Err(e) => {
-                writeln!(f, "Branch: Failed to determine branch: {e}")?;
+                writeln!(f, "{} Failed to determine branch: {e}", "Branch:".bold())?;
             }
         }
 
@@ -109,7 +111,8 @@ impl fmt::Display for RepoSitRep {
             Ok(milestones) => {
                 writeln!(
                     f,
-                    "Milestones: {}{}",
+                    "{} {}{}",
+                    "Milestones:".bold(),
                     if milestones.len() == 0 {
                         "None".to_string()
                     } else {
@@ -122,7 +125,7 @@ impl fmt::Display for RepoSitRep {
                         .join("\n  - ")
                 )
             }
-            Err(e) => writeln!(f, "Milestones: Failed to determine milestones: {e}"),
+            Err(e) => writeln!(f, "{} Failed to determine milestones: {e}", "Milestones:".bold()),
         }
     }
 }
@@ -164,7 +167,8 @@ impl fmt::Display for ConfigSitRep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "Directory: {}{}",
+            "{} {}{}",
+            "Directory:".bold(),
             self.configuration.path.display(),
             if self.path_exists {
                 ""
@@ -176,9 +180,9 @@ impl fmt::Display for ConfigSitRep {
         if let (Some(owner), Some(repo), Some(remote_url)) =
             (&self.owner, &self.repo, &self.remote_url)
         {
-            writeln!(f, "Repository: {}/{} ({})", owner, repo, remote_url)?;
+            writeln!(f, "{} {}/{} ({})", "Repository:".bold(), owner, repo, remote_url)?;
         } else {
-            writeln!(f, "Repository: Not determined to be git repository")?;
+            writeln!(f, "{} Not determined to be git repository", "Repository:".bold())?;
         }
 
         let mut checklists = self
@@ -190,12 +194,13 @@ impl fmt::Display for ConfigSitRep {
         checklists.sort_by(|a, b| a.cmp(b));
         writeln!(
             f,
-            "Checklists: {}\n  - {}",
+            "{} {}\n  - {}",
+            "Checklists:".bold(),
             self.configuration.checklists.len(),
             checklists.join("\n  - ")
         )?;
 
-        writeln!(f, "Options:")?;
+        writeln!(f, "{}",  "Options:".bold())?;
         let options = &self.configuration.options;
         if let Some(note) = &options.prepended_checklist_note {
             writeln!(
@@ -240,11 +245,106 @@ impl BinarySitRep {
 
 impl fmt::Display for BinarySitRep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Version: {}", self.version)?;
+        writeln!(f, "{} {}", "Version:".bold(), self.version)?;
         match &self.path {
-            Ok(p) => writeln!(f, "Path: {}", p.display()),
-            Err(e) => writeln!(f, "Path: Failed to determine executable path: {e}"),
+            Ok(p) => writeln!(f, "{} {}", "Path:".bold(), p.display()),
+            Err(e) => writeln!(f, "{} Failed to determine executable path: {e}", "Path:".bold()),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AuthSourceEntry {
+    kind: String,
+    token_preview: Option<String>,
+    is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AuthSitRep {
+    store_dir: Option<PathBuf>,
+    stored_tokens: String,
+    host: Option<String>,
+    sources: Vec<AuthSourceEntry>,
+}
+
+impl AuthSitRep {
+    fn new(git_info: Option<&GitInfo>, auth_store: Option<&AuthStore>, env: &impl EnvProvider) -> Self {
+        let host = git_info
+            .and_then(|g| extract_host_from_base_url(&g.base_url).ok());
+
+        let (store_dir, stored_tokens) = match auth_store {
+            Some(store) => (
+                Some(store.root.clone()),
+                store.display_with_selected(host.as_deref()),
+            ),
+            None => (None, "unavailable".to_string()),
+        };
+
+        let sources = if let Some(git_info) = git_info {
+            let auth_sources = AuthSources::new(&git_info.base_url, env, auth_store);
+            let active = auth_sources.sorted().into_iter().next().map(|(k, _)| k.to_string());
+            auth_sources
+                .all_by_priority()
+                .into_iter()
+                .map(|(kind, token)| AuthSourceEntry {
+                    is_active: active.as_deref() == Some(&kind.to_string()),
+                    kind: kind.to_string(),
+                    token_preview: token.map(|t| crate::auth::preview_token(t)),
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        Self { store_dir, stored_tokens, host, sources }
+    }
+}
+
+impl fmt::Display for AuthSitRep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.store_dir {
+            Some(dir) => writeln!(f, "{} {}", "store directory:".bold(), dir.display())?,
+            None => writeln!(f, "{} unavailable", "store directory:".bold())?,
+        }
+
+        if self.stored_tokens == "none" || self.stored_tokens == "unavailable" {
+            writeln!(f, "{} {}", "stored tokens:".bold(), self.stored_tokens)?;
+        } else {
+            writeln!(f, "{}", "stored tokens:".bold())?;
+            for line in self.stored_tokens.lines() {
+                writeln!(f, "  {line}")?;
+            }
+        }
+
+        writeln!(f)?;
+
+        match &self.host {
+            Some(host) => writeln!(f, "{} {host}", "repository host:".bold())?,
+            None => writeln!(f, "{} not determined", "repository host:".bold())?,
+        }
+
+        if self.sources.is_empty() {
+            writeln!(f, "{} unknown", "available auth sources:".bold())?;
+        } else {
+            writeln!(f, "{}", "available auth sources".bold())?;
+            for entry in &self.sources {
+                let marker = if entry.is_active { "▶ ".green().to_string() } else { "  ".to_string() };
+                match &entry.token_preview {
+                    Some(preview) => writeln!(
+                        f,
+                        "  {}{}  {} ({})",
+                        marker,
+                        "✓".green(),
+                        if entry.is_active { format!("{:<26}", entry.kind).bold().to_string() } else { format!("{:<26}", entry.kind) },
+                        preview
+                    )?,
+                    None => writeln!(f, "    {} {}", "✗".red(), entry.kind)?,
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -254,6 +354,7 @@ pub struct SitRep {
     directory: PathBuf,
     repository: Result<RepoSitRep, String>,
     configuration: ConfigSitRep,
+    auth: AuthSitRep,
 }
 
 impl SitRep {
@@ -263,7 +364,9 @@ impl SitRep {
         auth_store: Option<&AuthStore>,
     ) -> Self {
         let env = StdEnvProvider;
-        let repository = match GitInfo::from_path(directory.as_ref(), &env, auth_store) {
+        let git_info_result = GitInfo::from_path(directory.as_ref(), &env, auth_store);
+        let auth = AuthSitRep::new(git_info_result.as_ref().ok(), auth_store, &env);
+        let repository = match git_info_result {
             Ok(git_info) => Ok(RepoSitRep::new(git_info).await),
             Err(e) => Err(e.to_string()),
         };
@@ -282,15 +385,16 @@ impl SitRep {
             directory: directory.as_ref().to_path_buf(),
             repository,
             configuration,
+            auth,
         }
     }
 }
 
 impl fmt::Display for SitRep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "=== Binary =========================")?;
+        writeln!(f, "{}", super::section_header("Binary"))?;
         writeln!(f, "{}", self.binary)?;
-        writeln!(f, "=== Repository =====================")?;
+        writeln!(f, "{}", super::section_header("Repository"))?;
         match &self.repository {
             Ok(r) => {
                 writeln!(f, "{r}")?;
@@ -304,7 +408,9 @@ impl fmt::Display for SitRep {
             }
         }
 
-        writeln!(f, "=== Configuration ==================")?;
+        writeln!(f, "{}", super::section_header("Auth"))?;
+        writeln!(f, "{}", self.auth)?;
+        writeln!(f, "{}", super::section_header("Configuration"))?;
         writeln!(f, "{}", self.configuration)
     }
 }
@@ -422,6 +528,12 @@ mod tests {
                 path_exists: false,
                 configuration: Configuration::from_path(PathBuf::from("/config/path")),
             },
+            auth: AuthSitRep {
+                store_dir: Some(PathBuf::from("/home/user/.local/share/ghqc/auth")),
+                stored_tokens: "none".to_string(),
+                host: Some("github.com".to_string()),
+                sources: vec![],
+            },
         }
     }
 
@@ -462,6 +574,12 @@ mod tests {
             directory: PathBuf::from("/projects/myrepo"),
             repository: Ok(repo),
             configuration: ConfigSitRep::new("src/tests/custom_configuration", None),
+            auth: AuthSitRep {
+                store_dir: Some(PathBuf::from("/home/user/.local/share/ghqc/auth")),
+                stored_tokens: "none".to_string(),
+                host: Some("github.com".to_string()),
+                sources: vec![],
+            },
         };
         insta::assert_snapshot!(sitrep.to_string());
     }

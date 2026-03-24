@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use crate::AuthSources;
 use crate::auth::{AuthStore, canonicalize_base_url, extract_host_from_base_url, token_page_url};
 use crate::utils::StdEnvProvider;
+use super::section_header;
 
 pub fn gh_auth_login(
     directory: &Path,
@@ -124,20 +125,6 @@ pub fn gh_auth_status(directory: &Path, host: Option<&str>, store: &AuthStore) -
     }
 
     Ok(())
-}
-
-fn section_header(title: &str) -> String {
-    const WIDTH: usize = 50;
-    let prefix = "── ";
-    let suffix = " ";
-    let dashes = WIDTH.saturating_sub(prefix.len() + title.len() + suffix.len());
-    format!(
-        "{}{}{}{}",
-        prefix.cyan(),
-        title.cyan().bold(),
-        suffix,
-        "─".repeat(dashes).cyan()
-    )
 }
 
 fn gh_available() -> bool {

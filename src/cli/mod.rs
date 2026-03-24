@@ -6,6 +6,22 @@ mod interactive;
 mod sitrep;
 mod status;
 
+use owo_colors::OwoColorize;
+
+pub(crate) fn section_header(title: &str) -> String {
+    const WIDTH: usize = 50;
+    let prefix = "── ";
+    let suffix = " ";
+    let dashes = WIDTH.saturating_sub(prefix.len() + title.len() + suffix.len());
+    format!(
+        "{}{}{}{}",
+        prefix.cyan(),
+        title.cyan().bold(),
+        suffix,
+        "─".repeat(dashes).cyan()
+    )
+}
+
 pub use archive::{
     MilestoneSelectionFilter, generate_archive_name, get_milestone_issue_threads, prompt_archive,
 };
