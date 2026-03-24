@@ -4,6 +4,7 @@ use clap_verbosity_flag::{InfoLevel, Verbosity};
 use octocrab::models::Milestone;
 use std::path::PathBuf;
 
+use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
     RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
@@ -360,9 +361,17 @@ async fn main() -> Result<()> {
 
     let env = StdEnvProvider;
 
+    let auth_store = AuthStore::new(None::<std::path::PathBuf>)
+        .inspect_err(|e| log::warn!("Failed to initialize auth store: {e}"))
+        .map(|mut s| {
+            s.load();
+            s
+        })
+        .ok();
+
     match cli.command {
         Commands::Issue { issue_command } => {
-            let git_info = GitInfo::from_path(&cli.directory, &env)?;
+            let git_info = GitInfo::from_path(&cli.directory, &env, auth_store.as_ref())?;
 
             match issue_command {
                 IssueCommands::Create {
@@ -674,7 +683,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Milestone { milestone_command } => {
-            let git_info = GitInfo::from_path(&cli.directory, &env)?;
+            let git_info = GitInfo::from_path(&cli.directory, &env, auth_store.as_ref())?;
 
             match milestone_command {
                 MilestoneCommands::Status {
@@ -1069,30 +1078,41 @@ async fn main() -> Result<()> {
                 let config_dir = determine_config_dir(cli.config_dir, &env)?;
                 let mut configuration = Configuration::from_path(&config_dir);
                 configuration.load_checklists();
-                let git_info = GitInfo::from_path(&config_dir, &env).ok();
+                let git_info = GitInfo::from_path(&config_dir, &env, None).ok();
 
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
-        Commands::Auth { auth_command } => match auth_command {
-            AuthCommands::Login {
-                token,
-                host,
-                no_store,
-            } => {
-                gh_auth_login(&cli.directory, host.as_deref(), token.as_deref(), no_store)?;
+        Commands::Auth { auth_command } => {
+            let store = auth_store
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Auth store unavailable"))?;
+            match auth_command {
+                AuthCommands::Login {
+                    token,
+                    host,
+                    no_store,
+                } => {
+                    gh_auth_login(
+                        &cli.directory,
+                        host.as_deref(),
+                        token.as_deref(),
+                        no_store,
+                        store,
+                    )?;
+                }
+                AuthCommands::Logout { host } => {
+                    gh_auth_logout(&cli.directory, host.as_deref(), store)?;
+                }
+                AuthCommands::Status { host } => {
+                    gh_auth_status(&cli.directory, host.as_deref(), store)?;
+                }
             }
-            AuthCommands::Logout { host } => {
-                gh_auth_logout(&cli.directory, host.as_deref())?;
-            }
-            AuthCommands::Status { host } => {
-                gh_auth_status(&cli.directory, host.as_deref())?;
-            }
-        },
+        }
         Commands::Sitrep { json } => {
             use ghqctoolkit::cli::SitRep;
 
-            let sit_rep = SitRep::new(&cli.directory, cli.config_dir.as_ref()).await;
+            let sit_rep = SitRep::new(&cli.directory, cli.config_dir.as_ref(), auth_store.as_ref()).await;
             if json {
                 println!(
                     "{}",
@@ -1109,7 +1129,7 @@ async fn main() -> Result<()> {
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
             let mut configuration = Configuration::from_path(&config_dir);
             configuration.load_checklists();
-            let configuration_git_info = match GitInfo::from_path(&configuration.path, &env) {
+            let configuration_git_info = match GitInfo::from_path(&configuration.path, &env, None) {
                 Ok(g) => Some(g),
                 Err(e) => {
                     log::warn!(
@@ -1119,15 +1139,18 @@ async fn main() -> Result<()> {
                 }
             };
 
-            let git_info = GitInfo::from_path(&cli.directory, &env)?;
+            let git_info = GitInfo::from_path(&cli.directory, &env, auth_store.as_ref())?;
             let disk_cache = DiskCache::from_git_info(&git_info).ok();
 
+            let store_clone = auth_store.clone();
             let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache)
-                .with_creator(|path| GitInfo::from_path(path, &StdEnvProvider).ok());
+                .with_creator(move |path| {
+                    GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
+                });
             let app = create_router(state);
 
-            let addr = format!("0.0.0.0:{}", port);
-            println!("Starting API server on http://{}", addr);
+            let addr = format!("::{}", port);
+            println!("Starting API server on http://localhost:{}", port);
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;
             axum::serve(listener, app).await?;
@@ -1139,7 +1162,7 @@ async fn main() -> Result<()> {
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
             let mut configuration = Configuration::from_path(&config_dir);
             configuration.load_checklists();
-            let configuration_git_info = match GitInfo::from_path(&configuration.path, &env) {
+            let configuration_git_info = match GitInfo::from_path(&configuration.path, &env, None) {
                 Ok(g) => Some(g),
                 Err(e) => {
                     log::warn!(
@@ -1149,11 +1172,14 @@ async fn main() -> Result<()> {
                 }
             };
 
-            let git_info = GitInfo::from_path(&cli.directory, &env)?;
+            let git_info = GitInfo::from_path(&cli.directory, &env, auth_store.as_ref())?;
             let disk_cache = DiskCache::from_git_info(&git_info).ok();
 
+            let store_clone = auth_store.clone();
             let state = AppState::new(git_info, configuration, configuration_git_info, disk_cache)
-                .with_creator(|path| GitInfo::from_path(path, &StdEnvProvider).ok());
+                .with_creator(move |path| {
+                    GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
+                });
             ghqctoolkit::ui::run(port, state, no_open).await?;
         }
     }

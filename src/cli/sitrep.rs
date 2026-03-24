@@ -7,7 +7,7 @@ use octocrab::models::Milestone;
 use serde::Serialize;
 
 use crate::{
-    Configuration, GitHubReader, GitInfo, GitRepository, determine_config_dir,
+    AuthStore, Configuration, GitHubReader, GitInfo, GitRepository, determine_config_dir,
     utils::{EnvProvider, StdEnvProvider},
 };
 
@@ -257,9 +257,13 @@ pub struct SitRep {
 }
 
 impl SitRep {
-    pub async fn new(directory: impl AsRef<Path>, config_dir: Option<impl AsRef<Path>>) -> Self {
+    pub async fn new(
+        directory: impl AsRef<Path>,
+        config_dir: Option<impl AsRef<Path>>,
+        auth_store: Option<&AuthStore>,
+    ) -> Self {
         let env = StdEnvProvider;
-        let repository = match GitInfo::from_path(directory.as_ref(), &env) {
+        let repository = match GitInfo::from_path(directory.as_ref(), &env, auth_store) {
             Ok(git_info) => Ok(RepoSitRep::new(git_info).await),
             Err(e) => Err(e.to_string()),
         };
@@ -270,7 +274,7 @@ impl SitRep {
                     .join(".local")
                     .join("share"),
             );
-        let config_git_info = GitInfo::from_path(&config_dir, &env).ok();
+        let config_git_info = GitInfo::from_path(&config_dir, &env, None).ok();
         let configuration = ConfigSitRep::new(&config_dir, config_git_info.as_ref());
 
         Self {

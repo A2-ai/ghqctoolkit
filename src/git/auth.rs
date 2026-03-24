@@ -1,142 +1,137 @@
-use crate::auth::{extract_host_from_base_url, load_token, validate_github_token};
+use crate::auth::{AuthStore, extract_host_from_base_url, validate_github_token};
 use crate::utils::EnvProvider;
 use octocrab::Octocrab;
+use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-#[derive(thiserror::Error, Debug)]
-pub enum AuthError {
-    #[error("Failed to build octocrab client: {0}")]
-    ClientBuild(#[from] octocrab::Error),
-    #[error(
-        "No authentication found. Try: 'ghqc auth login', GITHUB_TOKEN, 'gh auth login', or git credential manager"
-    )]
-    NoAuth,
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("JSON parsing error: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("YAML parsing error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
-}
-
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(25);
 
-pub fn create_authenticated_client(
-    base_url: &str,
-    token: Option<String>,
-) -> Result<Octocrab, AuthError> {
-    match token {
-        Some(token) => build_client_with_token(base_url, token),
-        None => {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AuthSourceKind {
+    GhqcStore,
+    GithubTokenEnv,
+    GhActiveToken,
+    GhStoredAuth,
+    GitCredentialManager,
+    Netrc,
+}
+
+impl fmt::Display for AuthSourceKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::GhqcStore => "ghqc auth store",
+                Self::GithubTokenEnv => "GITHUB_TOKEN",
+                Self::GhActiveToken => "gh auth token",
+                Self::GhStoredAuth => "gh stored auth",
+                Self::GitCredentialManager => "git credential manager",
+                Self::Netrc => ".netrc",
+            }
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthSources(HashMap<AuthSourceKind, String>);
+
+impl AuthSources {
+    pub fn new(base_url: &str, env: &impl EnvProvider, auth_store: Option<&AuthStore>) -> Self {
+        let mut res = HashMap::new();
+
+        let host = extract_host_from_url(base_url);
+        if let Some(store) = auth_store {
+            if let Some(token) = store.token(&host) {
+                res.insert(AuthSourceKind::GhqcStore, token.to_string());
+            }
+        }
+
+        if let Ok(token) = env.var("GITHUB_TOKEN") {
+            res.insert(AuthSourceKind::GithubTokenEnv, token);
+        }
+
+        if let Some(token) = get_gh_auth_token(base_url) {
+            res.insert(AuthSourceKind::GhActiveToken, token);
+        }
+
+        if let Some(token) = get_gh_token_with_env(base_url, env) {
+            res.insert(AuthSourceKind::GhStoredAuth, token);
+        }
+
+        if let Some(token) = get_git_credential_token(base_url) {
+            res.insert(AuthSourceKind::GitCredentialManager, token);
+        }
+
+        if let Some(token) = get_netrc_token_with_env(base_url, env) {
+            res.insert(AuthSourceKind::Netrc, token);
+        }
+
+        AuthSources(res)
+    }
+
+    pub fn token(&self) -> Option<&str> {
+        self.sorted().first().map(|(kind, token)| {
+            log::debug!("Using authentication from {kind}");
+            token.as_str()
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn client(&self, base_url: &str) -> Result<Octocrab, AuthError> {
+        log::debug!("Creating Octocrab client");
+        let mut builder = Octocrab::builder()
+            .set_connect_timeout(Some(CONNECT_TIMEOUT))
+            .set_read_timeout(Some(READ_TIMEOUT));
+        if let Some(token) = self.token() {
+            builder = builder.personal_token(token.to_string());
+        } else {
             log::warn!(
                 "No authentication found. API access will be limited to public repositories"
             );
-            // Fall back to unauthenticated client
-            build_unauthenticated_client(base_url)
         }
-    }
-}
 
-pub fn get_token(base_url: &str, env: &impl EnvProvider) -> Option<String> {
-    let stored_token = match load_token(base_url) {
-        Ok(token) => token,
-        Err(e) => {
-            log::debug!("Failed to read ghqc auth store: {}", e);
-            None
+        if base_url == "https://github.com" {
+            builder.build()
+        } else {
+            builder
+                .base_uri(format!("{base_url}/api/v3"))
+                .and_then(|b| b.build())
         }
-    };
-    get_token_with_stored(base_url, env, stored_token)
-}
-
-fn get_token_with_stored(
-    base_url: &str,
-    env: &impl EnvProvider,
-    stored_token: Option<String>,
-) -> Option<String> {
-    // Try authentication sources in priority order (similar to gitcreds R package)
-
-    // 1. ghqc auth store
-    log::debug!("Trying from ghqc auth store");
-    if let Some(token) = stored_token {
-        log::debug!("Using ghqc stored credentials");
-        return Some(token);
+        .map_err(AuthError::ClientBuild)
     }
 
-    // 2. GITHUB_TOKEN environment variable
-    log::debug!("Trying from GITHUB_TOKEN");
-    if let Ok(token) = env.var("GITHUB_TOKEN") {
-        log::debug!("Found GITHUB_TOKEN environment variable");
-        if let Some(validated_token) = validate_github_token(&token) {
-            log::debug!("Using GITHUB_TOKEN environment variable");
-            return Some(validated_token);
-        }
+    pub fn sorted(&self) -> Vec<(&AuthSourceKind, &String)> {
+        let mut v = self.0.iter().collect::<Vec<_>>();
+        v.sort_by(|(a, _), (b, _)| a.cmp(b));
+        v
     }
 
-    // 3. gh CLI active authentication (gh auth token)
-    log::debug!("Trying from gh auth token command");
-    if let Some(token) = get_gh_auth_token(base_url) {
-        log::debug!("Using gh CLI active token");
-        return Some(token);
+    /// All auth source kinds in priority order, with their token if available.
+    pub fn all_by_priority(&self) -> Vec<(AuthSourceKind, Option<&str>)> {
+        use AuthSourceKind::*;
+        [
+            GhqcStore,
+            GithubTokenEnv,
+            GhActiveToken,
+            GhStoredAuth,
+            GitCredentialManager,
+            Netrc,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let token = self.0.get(&kind).map(|s| s.as_str());
+            (kind, token)
+        })
+        .collect()
     }
-
-    // 4. gh CLI stored authentication (config files)
-    log::debug!("Trying from gh cli stored authentication");
-    if let Some(token) = get_gh_token_with_env(base_url, env) {
-        log::debug!("Using gh CLI stored credentials");
-        return Some(token);
-    }
-
-    // 5. Git credential manager (git credential fill)
-    log::debug!("Trying from git credential manager");
-    if let Some(token) = get_git_credential_token(base_url) {
-        log::debug!("Using git credential manager");
-        return Some(token);
-    }
-
-    // 6. .netrc file
-    log::debug!("Trying from .netrc file");
-    if let Some(token) = get_netrc_token_with_env(base_url, env) {
-        log::debug!("Using .netrc file credentials");
-        return Some(token);
-    }
-
-    log::warn!("No authentication found. API access will be limited to public repositories");
-
-    None
-}
-
-fn build_client_with_token(base_url: &str, token: String) -> Result<Octocrab, AuthError> {
-    log::debug!("Creating Octocrab client (assuming proper runtime context)");
-    let builder = Octocrab::builder()
-        .set_connect_timeout(Some(CONNECT_TIMEOUT))
-        .set_read_timeout(Some(READ_TIMEOUT))
-        .personal_token(token);
-    if base_url == "https://github.com" {
-        builder.build()
-    } else {
-        builder
-            .base_uri(format!("{}/api/v3", base_url))
-            .and_then(|b| b.build())
-    }
-    .map_err(AuthError::ClientBuild)
-}
-
-fn build_unauthenticated_client(base_url: &str) -> Result<Octocrab, AuthError> {
-    log::debug!("Creating unauthenticated Octocrab client (assuming proper runtime context)");
-    let builder = Octocrab::builder()
-        .set_connect_timeout(Some(CONNECT_TIMEOUT))
-        .set_read_timeout(Some(READ_TIMEOUT));
-    if base_url == "https://github.com" {
-        builder.build()
-    } else {
-        builder
-            .base_uri(format!("{}/api/v3", base_url))
-            .and_then(|b| b.build())
-    }
-    .map_err(AuthError::ClientBuild)
 }
 
 fn get_gh_token_with_env(base_url: &str, env: &impl EnvProvider) -> Option<String> {
@@ -353,6 +348,22 @@ fn get_netrc_path_with_env(env: &impl EnvProvider) -> Option<PathBuf> {
     }
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum AuthError {
+    #[error("Failed to build octocrab client: {0}")]
+    ClientBuild(#[from] octocrab::Error),
+    #[error(
+        "No authentication found. Try: 'ghqc auth login', GITHUB_TOKEN, 'gh auth login', or git credential manager"
+    )]
+    NoAuth,
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parsing error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("YAML parsing error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,40 +438,99 @@ password ghp_api_token_456
         assert_eq!(token, "ghp_test_netrc_token");
     }
 
-    #[test]
-    fn test_ghqc_store_priority_over_environment_variable() {
-        let mut mock_env = MockEnvProvider::new();
-        mock_env
-            .expect_var()
-            .with(mockall::predicate::eq("GITHUB_TOKEN"))
-            .times(0);
-
-        let token = get_token_with_stored(
-            "https://github.com",
-            &mock_env,
-            Some("ghp_stored_token_1234567890123456789012345678901234567890".to_string()),
-        );
-        assert_eq!(
-            token,
-            Some("ghp_stored_token_1234567890123456789012345678901234567890".to_string())
-        );
+    fn make_store(tokens: &[(&str, &str)]) -> crate::auth::AuthStore {
+        use crate::auth::AuthToken;
+        use std::collections::HashMap;
+        let tokens = tokens
+            .iter()
+            .map(|(host, token)| {
+                (
+                    host.to_string(),
+                    AuthToken {
+                        host: host.to_string(),
+                        token: token.to_string(),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        crate::auth::AuthStore {
+            root: std::path::PathBuf::new(),
+            master_key: vec![],
+            tokens,
+        }
     }
 
     #[test]
-    fn test_environment_variable_priority_without_store() {
+    fn ghqc_store_selected_over_github_token_env() {
+        let store = make_store(&[(
+            "github.com",
+            "ghp_stored_token_1234567890123456789012345678901234567890",
+        )]);
         let mut mock_env = MockEnvProvider::new();
         mock_env
             .expect_var()
             .with(mockall::predicate::eq("GITHUB_TOKEN"))
             .times(1)
-            .returning(|_| {
-                Ok("ghp_valid_env_token_1234567890123456789012345678901234567890".to_string())
-            });
+            .returning(
+                |_| Ok("ghp_env_token_1234567890123456789012345678901234567890".to_string()),
+            );
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GH_CONFIG_DIR"))
+            .times(1)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("HOME"))
+            .times(2)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("USERPROFILE"))
+            .times(2)
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
-        let token = get_token_with_stored("https://github.com", &mock_env, None);
+        let sources = AuthSources::new("https://github.com", &mock_env, Some(&store));
         assert_eq!(
-            token,
-            Some("ghp_valid_env_token_1234567890123456789012345678901234567890".to_string())
+            sources.token(),
+            Some("ghp_stored_token_1234567890123456789012345678901234567890")
+        );
+        assert_eq!(
+            sources.sorted().first().map(|(k, _)| *k),
+            Some(&AuthSourceKind::GhqcStore)
+        );
+    }
+
+    #[test]
+    fn github_token_env_used_when_no_store() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GITHUB_TOKEN"))
+            .times(1)
+            .returning(
+                |_| Ok("ghp_env_token_1234567890123456789012345678901234567890".to_string()),
+            );
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GH_CONFIG_DIR"))
+            .times(1)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("HOME"))
+            .times(2)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("USERPROFILE"))
+            .times(2)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
+        let sources = AuthSources::new("https://github.com", &mock_env, None);
+        assert_eq!(
+            sources.token(),
+            Some("ghp_env_token_1234567890123456789012345678901234567890")
         );
     }
 

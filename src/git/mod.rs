@@ -13,7 +13,7 @@ mod status;
 
 pub use action::{GitCli, GitCliError, GitCommand};
 pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
-pub use auth::AuthError;
+pub use auth::{AuthError, AuthSourceKind, AuthSources};
 pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{
     CommitCache, GitAuthor, GitCommit, GitFileOps, GitFileOpsError, find_commits,
@@ -29,6 +29,7 @@ pub use provider::GitProvider;
 pub use repository::{GitRepository, GitRepositoryError};
 pub use status::{GitState, GitStatus, GitStatusError, GitStatusOps, get_git_status};
 
+use crate::auth::AuthStore;
 use crate::utils::EnvProvider;
 
 #[derive(thiserror::Error, Debug)]
@@ -55,11 +56,15 @@ pub struct GitInfo {
     pub(crate) repo: String,
     pub(crate) base_url: String,
     pub(crate) repository_path: PathBuf,
-    pub(crate) auth_token: Option<String>,
+    pub(crate) auth_sources: AuthSources,
 }
 
 impl GitInfo {
-    pub fn from_path(path: &Path, env: &impl EnvProvider) -> Result<Self, GitInfoError> {
+    pub fn from_path(
+        path: &Path,
+        env: &impl EnvProvider,
+        auth_store: Option<&AuthStore>,
+    ) -> Result<Self, GitInfoError> {
         log::debug!("Initializing GitInfo from path: {:?}", path);
 
         let repository = gix::open(path).map_err(GitInfoError::RepoOpen)?;
@@ -86,8 +91,8 @@ impl GitInfo {
         );
 
         // Get auth token but don't create Octocrab client yet
-        let auth_token = auth::get_token(&remote_info.url, env);
-        if auth_token.is_some() {
+        let auth_sources = AuthSources::new(&remote_info.url, env, auth_store);
+        if auth_sources.is_empty() {
             log::debug!("Found authentication token");
         } else {
             log::debug!("No authentication token found");
@@ -104,7 +109,7 @@ impl GitInfo {
             repo: remote_info.repo,
             base_url: remote_info.url,
             repository_path: path.to_path_buf(),
-            auth_token,
+            auth_sources,
         })
     }
 

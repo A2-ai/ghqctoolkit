@@ -75,10 +75,11 @@ impl GitHubReader for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
             log::debug!("Fetching milestones for {}/{}", owner, repo);
 
@@ -116,10 +117,11 @@ impl GitHubReader for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
 
             if let Some(id) = milestone {
@@ -174,10 +176,11 @@ impl GitHubReader for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
 
             log::debug!("Fetching issue #{} for {}/{}", issue_number, owner, repo);
@@ -204,10 +207,11 @@ impl GitHubReader for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
             log::debug!("Fetching assignees for repository {}/{}", owner, repo);
 
@@ -264,10 +268,11 @@ impl GitHubReader for GitInfo {
     ) -> impl std::future::Future<Output = Result<RepoUser, GitHubApiError>> + Send {
         let username = username.to_string();
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
             log::debug!("Fetching user details for: {}", username);
 
@@ -304,10 +309,11 @@ impl GitHubReader for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
             log::debug!("Fetching labels for repository {}/{}", owner, repo);
             let labels = octocrab
@@ -331,10 +337,11 @@ impl GitHubReader for GitInfo {
         let repo = self.repo.clone();
         let issue_number = issue.number;
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
             log::debug!(
                 "Fetching comments for issue #{} in {}/{}",
@@ -475,10 +482,11 @@ impl GitHubReader for GitInfo {
         let repo = self.repo.clone();
         let issue_number = issue.number;
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
             log::debug!(
                 "Fetching events for issue #{} in {}/{}",
@@ -534,10 +542,11 @@ impl GitHubReader for GitInfo {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
 
             log::debug!(
@@ -630,10 +639,11 @@ impl GitHubReader for GitInfo {
         &self,
     ) -> impl Future<Output = Result<Option<String>, GitHubApiError>> + Send {
         let base_url = self.base_url.clone();
-        let auth_token = self.auth_token.clone();
+        let auth_sources = self.auth_sources.clone();
 
         async move {
-            let octocrab = crate::git::auth::create_authenticated_client(&base_url, auth_token)
+            let octocrab = auth_sources
+                .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
 
             let result: Result<serde_json::Value, _> = octocrab.get("/user", None::<&()>).await;
