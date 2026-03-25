@@ -106,12 +106,24 @@ Install the latest GitHub Release to `~/.local/bin`:
 curl -fsSL https://raw.githubusercontent.com/a2-ai/ghqctoolkit/main/scripts/install.sh | bash
 ```
 
+Install a specific release tag instead:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/a2-ai/ghqctoolkit/main/scripts/install.sh | bash -s -- v0.3.1-rc1
+```
+
 ### Windows
 
 Install the latest GitHub Release to `%LOCALAPPDATA%\Programs\ghqc` and add it to your user `PATH`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+To install a specific release tag:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Version v0.3.1-rc1
 ```
 
 If you do not have the repository checked out locally, you can download and run the installer directly:

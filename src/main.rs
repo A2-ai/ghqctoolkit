@@ -76,6 +76,10 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value = "3103")]
         port: u16,
+
+        /// Force IPv4-only bind and loopback URL
+        #[arg(long)]
+        ipv4_only: bool,
     },
     #[cfg(feature = "ui")]
     /// Start the embedded UI server and open the browser
@@ -86,6 +90,9 @@ enum Commands {
         /// Do not open frontend in new tab
         #[arg(long)]
         no_open: bool,
+        /// Force IPv4-only bind and loopback URL
+        #[arg(long)]
+        ipv4_only: bool,
     },
 }
 
@@ -1124,7 +1131,7 @@ async fn main() -> Result<()> {
             }
         }
         #[cfg(all(feature = "api", not(feature = "ui")))]
-        Commands::Serve { port } => {
+        Commands::Serve { port, ipv4_only } => {
             use ghqctoolkit::api::{AppState, bind_local_server, create_router, local_server_url};
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
@@ -1150,12 +1157,16 @@ async fn main() -> Result<()> {
                 });
             let app = create_router(state);
 
-            let listener = bind_local_server(port).await?;
+            let listener = bind_local_server(port, ipv4_only).await?;
             println!("Starting API server on {}", local_server_url(&listener));
             axum::serve(listener, app).await?;
         }
         #[cfg(feature = "ui")]
-        Commands::Ui { port, no_open } => {
+        Commands::Ui {
+            port,
+            no_open,
+            ipv4_only,
+        } => {
             use ghqctoolkit::api::AppState;
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
@@ -1179,7 +1190,7 @@ async fn main() -> Result<()> {
                 .with_creator(move |path| {
                     GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
                 });
-            ghqctoolkit::ui::run(port, state, no_open).await?;
+            ghqctoolkit::ui::run(port, state, no_open, ipv4_only).await?;
         }
     }
 

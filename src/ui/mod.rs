@@ -55,10 +55,11 @@ pub async fn run<G: GitProvider + 'static>(
     port: u16,
     state: AppState<G>,
     no_open: bool,
+    ipv4_only: bool,
 ) -> anyhow::Result<()> {
     let app = crate::api::create_router(state).fallback(static_handler);
 
-    let listener = crate::api::bind_local_server(port).await?;
+    let listener = crate::api::bind_local_server(port, ipv4_only).await?;
 
     let url = crate::api::local_server_url(&listener);
     log::info!("ghqc UI running at {url}");

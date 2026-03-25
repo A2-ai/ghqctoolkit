@@ -115,8 +115,14 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .with_state(state)
 }
 
-/// Bind the local HTTP server with a preference for a dual-stack IPv6 socket.
-pub async fn bind_local_server(port: u16) -> std::io::Result<TcpListener> {
+/// Bind the local HTTP server.
+///
+/// When `ipv4_only` is false, prefer IPv6 and fall back to IPv4 if IPv6 bind fails.
+pub async fn bind_local_server(port: u16, ipv4_only: bool) -> std::io::Result<TcpListener> {
+    if ipv4_only {
+        return bind_ipv4(port).await;
+    }
+
     match bind_dual_stack_ipv6(port).await {
         Ok(listener) => Ok(listener),
         Err(v6_err) => {

@@ -3,14 +3,23 @@ set -e
 
 # Parse command line arguments
 VERBOSE=false
+RELEASE_VERSION=""
 for arg in "$@"; do
     case $arg in
         --verbose|-v)
             VERBOSE=true
-            shift
+            ;;
+        --*)
+            echo "Unknown option: $arg" >&2
+            exit 1
             ;;
         *)
-            # Unknown option
+            if [ -z "$RELEASE_VERSION" ]; then
+                RELEASE_VERSION="$arg"
+            else
+                echo "Unexpected argument: $arg" >&2
+                exit 1
+            fi
             ;;
     esac
 done
@@ -25,6 +34,11 @@ log_verbose() {
 log_verbose "=== STARTING DIAGNOSTIC MODE ==="
 log_verbose "Script arguments: $*"
 log_verbose "VERBOSE mode enabled"
+if [ -n "$RELEASE_VERSION" ]; then
+    log_verbose "Requested release: $RELEASE_VERSION"
+else
+    log_verbose "Requested release: latest"
+fi
 
 # Ensure target directory exists and cd into it
 mkdir -p ~/.local/bin && cd ~/.local/bin
@@ -199,12 +213,20 @@ fi
 
 log_verbose "Final target pattern: $arch-$os_pattern"
 
-# Fetch the latest release data from GitHub API and extract the download URL for the matching asset
-echo "Fetching download URL for $arch-$os_pattern..."
-log_verbose "=== GITHUB API QUERY ==="
-log_verbose "Fetching from: https://api.github.com/repos/a2-ai/ghqctoolkit/releases/latest"
+# Fetch the release data from GitHub API and extract the download URL for the matching asset
+if [ -n "$RELEASE_VERSION" ]; then
+    release_api_url="https://api.github.com/repos/a2-ai/ghqctoolkit/releases/tags/$RELEASE_VERSION"
+    release_label="$RELEASE_VERSION"
+else
+    release_api_url="https://api.github.com/repos/a2-ai/ghqctoolkit/releases/latest"
+    release_label="latest"
+fi
 
-github_response=$(curl -s https://api.github.com/repos/a2-ai/ghqctoolkit/releases/latest)
+echo "Fetching download URL for $arch-$os_pattern from release $release_label..."
+log_verbose "=== GITHUB API QUERY ==="
+log_verbose "Fetching from: $release_api_url"
+
+github_response=$(curl -fsSL "$release_api_url")
 log_verbose "GitHub API response length: $(echo "$github_response" | wc -c) characters"
 
 if [ "$VERBOSE" = true ]; then
@@ -220,8 +242,12 @@ log_verbose "Found asset URL: $asset_url"
 
 # Check if URL was found
 if [ -z "$asset_url" ]; then
-    echo "Error: Could not find a suitable release asset for your system ($arch-$os_pattern) on GitHub." >&2
-    echo "Please check available assets at https://github.com/a2-ai/ghqctoolkit/releases/latest" >&2
+    echo "Error: Could not find a suitable release asset for your system ($arch-$os_pattern) in release $release_label." >&2
+    if [ -n "$RELEASE_VERSION" ]; then
+        echo "Please check available assets at https://github.com/a2-ai/ghqctoolkit/releases/tag/$RELEASE_VERSION" >&2
+    else
+        echo "Please check available assets at https://github.com/a2-ai/ghqctoolkit/releases/latest" >&2
+    fi
     echo "Available targets typically include:" >&2
     echo "  - x86_64-unknown-linux-gnu" >&2
     echo "  - x86_64-unknown-linux-musl" >&2
@@ -247,9 +273,10 @@ log_verbose "Download URL: $asset_url"
 
 # Download the asset using curl, extract it, clean up, and make executable
 echo "Downloading ghqc from $asset_url"
-curl -L -o ghqc_latest.tar.gz "$asset_url" &&
-    tar -xzf ghqc_latest.tar.gz &&
-    rm ghqc_latest.tar.gz &&
+archive_name="ghqc_${release_label}.tar.gz"
+curl -L -o "$archive_name" "$asset_url" &&
+    tar -xzf "$archive_name" &&
+    rm "$archive_name" &&
     chmod +x ghqc &&
     echo "ghqc installed successfully to ~/.local/bin" ||
     (echo "Installation failed." >&2 && exit 1)

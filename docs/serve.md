@@ -5,7 +5,7 @@
 ## ghqc ui
 
 ```shell
-ghqc ui [--port PORT]
+ghqc ui [--port PORT] [--ipv4-only]
 ```
 
 Starts the embedded web UI server and opens the browser. Requires the binary to be built with the `ui` feature.
@@ -15,6 +15,8 @@ cargo build --features cli,ui --release
 ./target/release/ghqc ui
 # or on a custom port:
 ./target/release/ghqc ui --port 8080
+# or to force IPv4 on hosts with problematic IPv6/localhost behavior:
+./target/release/ghqc ui --ipv4-only
 ```
 
 The server starts on port **3103** by default. The browser opens automatically to a literal loopback URL:
@@ -47,7 +49,7 @@ Opening `/` redirects to `/status`.
 ## ghqc serve
 
 ```shell
-ghqc serve [--port PORT]
+ghqc serve [--port PORT] [--ipv4-only]
 ```
 
 Starts the REST API server only, without the embedded UI. Requires the binary to be built with the `api` feature (but not `ui`).
@@ -57,6 +59,8 @@ cargo build --features cli,api --release
 ./target/release/ghqc serve
 # or on a custom port:
 ./target/release/ghqc serve --port 3104
+# or to force IPv4:
+./target/release/ghqc serve --ipv4-only
 ```
 
 The server starts on port **3103** by default.
@@ -68,6 +72,7 @@ The API spec is available at `openapi/openapi.yml` in the repository.
 | Flag | Default | Description |
 |---|---|---|
 | `-p, --port` | `3103` | Port to listen on |
+| `--ipv4-only` | `false` | Force an IPv4-only listener and `127.0.0.1` loopback URL |
 | `-d, --directory` | `.` | Git project directory to serve |
 | `--config-dir` | (auto-resolved) | Configuration directory path |
 
