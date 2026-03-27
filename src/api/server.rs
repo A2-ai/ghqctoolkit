@@ -13,6 +13,8 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -111,4 +113,72 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(log_request))
         .with_state(state)
+}
+
+/// Bind the local HTTP server.
+///
+/// When `ipv4_only` is false, prefer IPv6 and fall back to IPv4 if IPv6 bind fails.
+pub async fn bind_local_server(port: u16, ipv4_only: bool) -> std::io::Result<TcpListener> {
+    if ipv4_only {
+        return bind_ipv4(port).await;
+    }
+
+    match bind_dual_stack_ipv6(port).await {
+        Ok(listener) => Ok(listener),
+        Err(v6_err) => {
+            log::warn!(
+                "Failed to bind dual-stack IPv6 listener on port {port}: {v6_err}. Falling back to IPv4"
+            );
+            bind_ipv4(port).await
+        }
+    }
+}
+
+pub async fn bind_local_server_with_url(
+    port: u16,
+    ipv4_only: bool,
+) -> std::io::Result<(TcpListener, String)> {
+    let listener = bind_local_server(port, ipv4_only).await?;
+    let url = local_server_url(&listener);
+    Ok((listener, url))
+}
+
+pub fn local_server_url(listener: &TcpListener) -> String {
+    match listener.local_addr() {
+        Ok(addr) if addr.is_ipv6() => format!("http://[::1]:{}", addr.port()),
+        Ok(addr) => format!("http://127.0.0.1:{}", addr.port()),
+        Err(_) => "http://127.0.0.1".to_string(),
+    }
+}
+
+async fn bind_dual_stack_ipv6(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))).await
+}
+
+async fn bind_ipv4(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bind_local_server_with_url_uses_ipv4_when_requested() {
+        let (_listener, url) = bind_local_server_with_url(0, true).await.unwrap();
+
+        assert!(url.starts_with("http://127.0.0.1:"));
+    }
+
+    #[tokio::test]
+    async fn bind_local_server_with_url_returns_matching_loopback_host() {
+        let (listener, url) = bind_local_server_with_url(0, false).await.unwrap();
+
+        let addr = listener.local_addr().unwrap();
+        if addr.is_ipv6() {
+            assert!(url.starts_with("http://[::1]:"));
+        } else {
+            assert!(url.starts_with("http://127.0.0.1:"));
+        }
+    }
 }

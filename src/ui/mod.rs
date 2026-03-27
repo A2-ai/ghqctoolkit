@@ -55,13 +55,11 @@ pub async fn run<G: GitProvider + 'static>(
     port: u16,
     state: AppState<G>,
     no_open: bool,
+    ipv4_only: bool,
 ) -> anyhow::Result<()> {
     let app = crate::api::create_router(state).fallback(static_handler);
 
-    let addr = format!(":::{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-
-    let url = format!("http://localhost:{port}");
+    let (listener, url) = crate::api::bind_local_server_with_url(port, ipv4_only).await?;
     log::info!("ghqc UI running at {url}");
 
     // Open the browser (non-blocking, ignore errors)

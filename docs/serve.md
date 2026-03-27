@@ -5,7 +5,7 @@
 ## ghqc ui
 
 ```shell
-ghqc ui [--port PORT]
+ghqc ui [url] [--port PORT] [--ipv4-only]
 ```
 
 Starts the embedded web UI server and opens the browser. Requires the binary to be built with the `ui` feature.
@@ -15,9 +15,18 @@ cargo build --features cli,ui --release
 ./target/release/ghqc ui
 # or on a custom port:
 ./target/release/ghqc ui --port 8080
+# or to force IPv4 on hosts with problematic IPv6/localhost behavior:
+./target/release/ghqc ui --ipv4-only
+# or to print the exact URL the UI would use and exit:
+./target/release/ghqc ui url
+./target/release/ghqc ui url --port 8080
 ```
 
-The server starts on port **3103** by default. The browser opens automatically to `http://localhost:<port>`.
+If `--port` is omitted, the UI binds a random available port. The browser opens automatically to a literal loopback URL:
+`http://127.0.0.1:<port>` on IPv4-only systems or `http://[::1]:<port>` when the listener is bound on IPv6.
+
+`ghqc ui url` uses the same bind logic as `ghqc ui`, so it prints the exact loopback URL selected on the current machine and then exits without starting the server.
+If `--port` is omitted, `ghqc ui` and `ghqc ui url` bind port `0`, letting the OS choose a random available port.
 
 ### Web UI Tabs
 
@@ -46,7 +55,7 @@ Opening `/` redirects to `/status`.
 ## ghqc serve
 
 ```shell
-ghqc serve [--port PORT]
+ghqc serve [--port PORT] [--ipv4-only]
 ```
 
 Starts the REST API server only, without the embedded UI. Requires the binary to be built with the `api` feature (but not `ui`).
@@ -56,6 +65,8 @@ cargo build --features cli,api --release
 ./target/release/ghqc serve
 # or on a custom port:
 ./target/release/ghqc serve --port 3104
+# or to force IPv4:
+./target/release/ghqc serve --ipv4-only
 ```
 
 The server starts on port **3103** by default.
@@ -66,7 +77,9 @@ The API spec is available at `openapi/openapi.yml` in the repository.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-p, --port` | `3103` | Port to listen on |
+| `-p, --port` (`ghqc ui`) | random | Port to listen on; omit to let the OS choose an available port |
+| `-p, --port` (`ghqc serve`) | `3103` | Port to listen on |
+| `--ipv4-only` | `false` | Force an IPv4-only listener and `127.0.0.1` loopback URL |
 | `-d, --directory` | `.` | Git project directory to serve |
 | `--config-dir` | (auto-resolved) | Configuration directory path |
 

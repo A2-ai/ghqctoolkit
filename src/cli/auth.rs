@@ -61,24 +61,26 @@ pub fn gh_auth_login(
         warn_no_store_ignored();
     }
 
-    eprintln!(
-        "gh was not found. ghqc will open the personal access token page for {} and then prompt for a token.",
-        host_name
-    );
+    print_manual_login_intro(&host_name)?;
     let token_url = token_page_url(&base_url)?;
     wait_for_enter()?;
     let _ = open::that(&token_url);
-    eprintln!("Token URL: {}", token_url);
+    eprintln!("{} {}", "Token page:".bold(), token_url.underline().cyan());
 
-    let token = Password::new("GitHub token:")
+    let token = Password::new(&format!("{} ", "Paste personal access token".bold()))
         .without_confirmation()
-        .with_help_message("Paste a personal access token for this host. Input is hidden.")
+        .with_display_toggle_enabled()
+        .with_help_message("Input is hidden by default. Press Ctrl+R to toggle visibility.")
         .prompt()
         .map_err(|e| anyhow!("Prompt cancelled: {e}"))?;
 
     let token = require_nonempty_token(token)?;
     store.save_token(&host_name, &token)?;
-    println!("Stored token for {}", host_name);
+    println!(
+        "{} Stored token for {}",
+        "✓".green().bold(),
+        host_name.bold()
+    );
     Ok(())
 }
 
@@ -192,17 +194,59 @@ fn validate_token_or_error(token: &str) -> Result<String> {
 
 fn warn_no_store_ignored() {
     eprintln!(
-        "Warning: --no-store only applies to the gh shell-out login flow and is ignored here."
+        "{} {}",
+        "Warning:".yellow().bold(),
+        "--no-store only applies to the gh shell-out login flow and is ignored here."
     );
 }
 
 fn wait_for_enter() -> Result<()> {
     use std::io;
-    eprintln!("Press Enter to continue.");
+    eprintln!(
+        "{} {}",
+        "Step 1".cyan().bold(),
+        "Press Enter to open the token page in your browser.".bold()
+    );
     let mut input = String::new();
     io::stdin()
         .read_line(&mut input)
         .map_err(|e| anyhow!("Failed to read confirmation input: {e}"))?;
+    Ok(())
+}
+
+fn print_manual_login_intro(host_name: &str) -> Result<()> {
+    let token_docs_url = token_page_url(&canonicalize_base_url(host_name)?)?;
+    eprintln!();
+    eprintln!("{}", section_header("Manual GitHub Login"));
+    eprintln!(
+        "{} {}",
+        "gh".bold().dimmed(),
+        "CLI was not found. Using the manual token flow.".dimmed()
+    );
+    eprintln!();
+    eprintln!("{} {}", "Host:".bold(), host_name.bold());
+    eprintln!(
+        "{} {}",
+        "Token page:".bold(),
+        token_docs_url.underline().cyan()
+    );
+    eprintln!();
+    eprintln!("{}", "What to do:".bold());
+    eprintln!(
+        "  {} Generate a personal access token for {}.",
+        "1.".cyan().bold(),
+        host_name.bold()
+    );
+    eprintln!(
+        "  {} Grant {} and any additional scopes you need for the ghqc operations you plan to run.",
+        "2.".cyan().bold(),
+        "repo read and write".bold(),
+    );
+    eprintln!(
+        "  {} Return here and paste the token when prompted.",
+        "3.".cyan().bold()
+    );
+    eprintln!();
     Ok(())
 }
 

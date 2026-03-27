@@ -81,7 +81,7 @@ Issues are grouped into Milestones for organizational purposes.
 
 | Command | Description |
 |---|---|
-| [`ghqc ui`](docs/serve.md) | Start the embedded web UI server and open the browser (`ui` feature) |
+| [`ghqc ui`](docs/serve.md) | Start the embedded web UI server and open the browser, or print its resolved URL with `ghqc ui url` (`ui` feature) |
 | [`ghqc serve`](docs/serve.md) | Start the REST API server without the embedded UI (`api` feature) |
 
 ### Web UI
@@ -96,6 +96,8 @@ Running `ghqc ui` serves an embedded React application. The UI provides:
 
 The web UI also supports direct routes for each screen: `/status`, `/create`, `/record`, `/archive`, and `/configuration`. Opening `/` redirects to `/status`.
 
+Use `ghqc ui url` to print the exact loopback URL the UI would use on the current machine without starting the server. If `--port` is omitted, the UI binds a random available port.
+
 ## Install
 
 ### Unix-like Systems
@@ -106,12 +108,24 @@ Install the latest GitHub Release to `~/.local/bin`:
 curl -fsSL https://raw.githubusercontent.com/a2-ai/ghqctoolkit/main/scripts/install.sh | bash
 ```
 
+Install a specific release tag instead:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/a2-ai/ghqctoolkit/main/scripts/install.sh | bash -s -- v0.3.1-rc1
+```
+
 ### Windows
 
 Install the latest GitHub Release to `%LOCALAPPDATA%\Programs\ghqc` and add it to your user `PATH`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+To install a specific release tag:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Version v0.3.1-rc1
 ```
 
 If you do not have the repository checked out locally, you can download and run the installer directly:

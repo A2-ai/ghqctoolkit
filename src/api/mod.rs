@@ -15,5 +15,5 @@ mod types;
 mod tests;
 
 pub use error::ApiError;
-pub use server::create_router;
+pub use server::{bind_local_server, bind_local_server_with_url, create_router, local_server_url};
 pub use state::AppState;

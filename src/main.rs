@@ -76,17 +76,33 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value = "3103")]
         port: u16,
+
+        /// Force IPv4-only bind and loopback URL
+        #[arg(long)]
+        ipv4_only: bool,
     },
     #[cfg(feature = "ui")]
     /// Start the embedded UI server and open the browser
     Ui {
-        /// Port to listen on
-        #[arg(short, long, default_value = "3103")]
+        /// Print the URL the UI would use and exit
+        #[arg(value_enum)]
+        action: Option<UiAction>,
+        /// Port to listen on. Omit to bind a random available port.
+        #[arg(short, long, default_value = "0")]
         port: u16,
         /// Do not open frontend in new tab
         #[arg(long)]
         no_open: bool,
+        /// Force IPv4-only bind and loopback URL
+        #[arg(long)]
+        ipv4_only: bool,
     },
+}
+
+#[cfg(feature = "ui")]
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum UiAction {
+    Url,
 }
 
 #[derive(Subcommand)]
@@ -1124,8 +1140,8 @@ async fn main() -> Result<()> {
             }
         }
         #[cfg(all(feature = "api", not(feature = "ui")))]
-        Commands::Serve { port } => {
-            use ghqctoolkit::api::{AppState, create_router};
+        Commands::Serve { port, ipv4_only } => {
+            use ghqctoolkit::api::{AppState, bind_local_server, create_router, local_server_url};
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
             let mut configuration = Configuration::from_path(&config_dir);
@@ -1150,15 +1166,24 @@ async fn main() -> Result<()> {
                 });
             let app = create_router(state);
 
-            let addr = format!(":::{}", port);
-            println!("Starting API server on http://localhost:{}", port);
-
-            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            let listener = bind_local_server(port, ipv4_only).await?;
+            println!("Starting API server on {}", local_server_url(&listener));
             axum::serve(listener, app).await?;
         }
         #[cfg(feature = "ui")]
-        Commands::Ui { port, no_open } => {
-            use ghqctoolkit::api::AppState;
+        Commands::Ui {
+            action,
+            port,
+            no_open,
+            ipv4_only,
+        } => {
+            use ghqctoolkit::api::{AppState, bind_local_server_with_url};
+
+            if action == Some(UiAction::Url) {
+                let (_listener, url) = bind_local_server_with_url(port, ipv4_only).await?;
+                println!("{url}");
+                return Ok(());
+            }
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
             let mut configuration = Configuration::from_path(&config_dir);
@@ -1181,11 +1206,71 @@ async fn main() -> Result<()> {
                 .with_creator(move |path| {
                     GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
                 });
-            ghqctoolkit::ui::run(port, state, no_open).await?;
+            ghqctoolkit::ui::run(port, state, no_open, ipv4_only).await?;
         }
     }
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_without_action_parses_as_launch_mode() {
+        let cli = Cli::try_parse_from(["ghqc", "ui"]).unwrap();
+
+        match cli.command {
+            Commands::Ui {
+                action,
+                port,
+                no_open,
+                ipv4_only,
+            } => {
+                assert_eq!(action, None);
+                assert_eq!(port, 0);
+                assert!(!no_open);
+                assert!(!ipv4_only);
+            }
+            _ => panic!("expected ui command"),
+        }
+    }
+
+    #[test]
+    fn ui_url_parses_with_custom_port() {
+        let cli = Cli::try_parse_from(["ghqc", "ui", "url", "--port", "8080"]).unwrap();
+
+        match cli.command {
+            Commands::Ui {
+                action,
+                port,
+                no_open,
+                ipv4_only,
+            } => {
+                assert_eq!(action, Some(UiAction::Url));
+                assert_eq!(port, 8080);
+                assert!(!no_open);
+                assert!(!ipv4_only);
+            }
+            _ => panic!("expected ui command"),
+        }
+    }
+
+    #[test]
+    fn ui_url_parses_with_ipv4_only() {
+        let cli = Cli::try_parse_from(["ghqc", "ui", "url", "--ipv4-only"]).unwrap();
+
+        match cli.command {
+            Commands::Ui {
+                action, ipv4_only, ..
+            } => {
+                assert_eq!(action, Some(UiAction::Url));
+                assert!(ipv4_only);
+            }
+            _ => panic!("expected ui command"),
+        }
+    }
 }
 
 #[cfg(not(feature = "cli"))]

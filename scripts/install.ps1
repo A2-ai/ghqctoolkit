@@ -1,4 +1,5 @@
 param(
+    [string]$Version,
     [switch]$VerboseMode
 )
 
@@ -13,11 +14,16 @@ function Write-Log {
 }
 
 $repo = "a2-ai/ghqctoolkit"
-$releaseApiUrl = "https://api.github.com/repos/$repo/releases/latest"
+$releaseApiUrl = if ([string]::IsNullOrWhiteSpace($Version)) {
+    "https://api.github.com/repos/$repo/releases/latest"
+} else {
+    "https://api.github.com/repos/$repo/releases/tags/$Version"
+}
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\ghqc"
-$zipPath = Join-Path $env:TEMP "ghqc_latest.zip"
+$zipSuffix = if ([string]::IsNullOrWhiteSpace($Version)) { "latest" } else { $Version }
+$zipPath = Join-Path $env:TEMP "ghqc_$zipSuffix.zip"
 
-Write-Log "Fetching latest release metadata from $releaseApiUrl"
+Write-Log "Fetching release metadata from $releaseApiUrl"
 $release = Invoke-RestMethod -Uri $releaseApiUrl
 
 if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
