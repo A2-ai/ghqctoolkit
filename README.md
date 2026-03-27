@@ -96,7 +96,7 @@ Running `ghqc ui` serves an embedded React application. The UI provides:
 
 The web UI also supports direct routes for each screen: `/status`, `/create`, `/record`, `/archive`, and `/configuration`. Opening `/` redirects to `/status`.
 
-Use `ghqc ui url` to print the exact loopback URL the UI would use on the current machine without starting the server.
+Use `ghqc ui url` to print the exact loopback URL the UI would use on the current machine without starting the server. If `--port` is omitted, the UI binds a random available port.
 
 ## Install
 

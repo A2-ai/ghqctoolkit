@@ -87,8 +87,8 @@ enum Commands {
         /// Print the URL the UI would use and exit
         #[arg(value_enum)]
         action: Option<UiAction>,
-        /// Port to listen on
-        #[arg(short, long, default_value = "3103")]
+        /// Port to listen on. Omit to bind a random available port.
+        #[arg(short, long, default_value = "0")]
         port: u16,
         /// Do not open frontend in new tab
         #[arg(long)]
@@ -1229,7 +1229,7 @@ mod tests {
                 ipv4_only,
             } => {
                 assert_eq!(action, None);
-                assert_eq!(port, 3103);
+                assert_eq!(port, 0);
                 assert!(!no_open);
                 assert!(!ipv4_only);
             }

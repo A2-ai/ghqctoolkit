@@ -22,10 +22,11 @@ cargo build --features cli,ui --release
 ./target/release/ghqc ui url --port 8080
 ```
 
-The server starts on port **3103** by default. The browser opens automatically to a literal loopback URL:
+If `--port` is omitted, the UI binds a random available port. The browser opens automatically to a literal loopback URL:
 `http://127.0.0.1:<port>` on IPv4-only systems or `http://[::1]:<port>` when the listener is bound on IPv6.
 
 `ghqc ui url` uses the same bind logic as `ghqc ui`, so it prints the exact loopback URL selected on the current machine and then exits without starting the server.
+If `--port` is omitted, `ghqc ui` and `ghqc ui url` bind port `0`, letting the OS choose a random available port.
 
 ### Web UI Tabs
 
@@ -76,7 +77,8 @@ The API spec is available at `openapi/openapi.yml` in the repository.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-p, --port` | `3103` | Port to listen on |
+| `-p, --port` (`ghqc ui`) | random | Port to listen on; omit to let the OS choose an available port |
+| `-p, --port` (`ghqc serve`) | `3103` | Port to listen on |
 | `--ipv4-only` | `false` | Force an IPv4-only listener and `127.0.0.1` loopback URL |
 | `-d, --directory` | `.` | Git project directory to serve |
 | `--config-dir` | (auto-resolved) | Configuration directory path |
