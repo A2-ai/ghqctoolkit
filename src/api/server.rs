@@ -134,6 +134,15 @@ pub async fn bind_local_server(port: u16, ipv4_only: bool) -> std::io::Result<Tc
     }
 }
 
+pub async fn bind_local_server_with_url(
+    port: u16,
+    ipv4_only: bool,
+) -> std::io::Result<(TcpListener, String)> {
+    let listener = bind_local_server(port, ipv4_only).await?;
+    let url = local_server_url(&listener);
+    Ok((listener, url))
+}
+
 pub fn local_server_url(listener: &TcpListener) -> String {
     match listener.local_addr() {
         Ok(addr) if addr.is_ipv6() => format!("http://[::1]:{}", addr.port()),
@@ -148,4 +157,28 @@ async fn bind_dual_stack_ipv6(port: u16) -> std::io::Result<TcpListener> {
 
 async fn bind_ipv4(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bind_local_server_with_url_uses_ipv4_when_requested() {
+        let (_listener, url) = bind_local_server_with_url(0, true).await.unwrap();
+
+        assert!(url.starts_with("http://127.0.0.1:"));
+    }
+
+    #[tokio::test]
+    async fn bind_local_server_with_url_returns_matching_loopback_host() {
+        let (listener, url) = bind_local_server_with_url(0, false).await.unwrap();
+
+        let addr = listener.local_addr().unwrap();
+        if addr.is_ipv6() {
+            assert!(url.starts_with("http://[::1]:"));
+        } else {
+            assert!(url.starts_with("http://127.0.0.1:"));
+        }
+    }
 }

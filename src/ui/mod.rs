@@ -59,9 +59,7 @@ pub async fn run<G: GitProvider + 'static>(
 ) -> anyhow::Result<()> {
     let app = crate::api::create_router(state).fallback(static_handler);
 
-    let listener = crate::api::bind_local_server(port, ipv4_only).await?;
-
-    let url = crate::api::local_server_url(&listener);
+    let (listener, url) = crate::api::bind_local_server_with_url(port, ipv4_only).await?;
     log::info!("ghqc UI running at {url}");
 
     // Open the browser (non-blocking, ignore errors)

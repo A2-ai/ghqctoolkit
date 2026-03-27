@@ -5,7 +5,7 @@
 ## ghqc ui
 
 ```shell
-ghqc ui [--port PORT] [--ipv4-only]
+ghqc ui [url] [--port PORT] [--ipv4-only]
 ```
 
 Starts the embedded web UI server and opens the browser. Requires the binary to be built with the `ui` feature.
@@ -17,10 +17,15 @@ cargo build --features cli,ui --release
 ./target/release/ghqc ui --port 8080
 # or to force IPv4 on hosts with problematic IPv6/localhost behavior:
 ./target/release/ghqc ui --ipv4-only
+# or to print the exact URL the UI would use and exit:
+./target/release/ghqc ui url
+./target/release/ghqc ui url --port 8080
 ```
 
 The server starts on port **3103** by default. The browser opens automatically to a literal loopback URL:
 `http://127.0.0.1:<port>` on IPv4-only systems or `http://[::1]:<port>` when the listener is bound on IPv6.
+
+`ghqc ui url` uses the same bind logic as `ghqc ui`, so it prints the exact loopback URL selected on the current machine and then exits without starting the server.
 
 ### Web UI Tabs
 

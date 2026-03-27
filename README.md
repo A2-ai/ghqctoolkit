@@ -81,7 +81,7 @@ Issues are grouped into Milestones for organizational purposes.
 
 | Command | Description |
 |---|---|
-| [`ghqc ui`](docs/serve.md) | Start the embedded web UI server and open the browser (`ui` feature) |
+| [`ghqc ui`](docs/serve.md) | Start the embedded web UI server and open the browser, or print its resolved URL with `ghqc ui url` (`ui` feature) |
 | [`ghqc serve`](docs/serve.md) | Start the REST API server without the embedded UI (`api` feature) |
 
 ### Web UI
@@ -95,6 +95,8 @@ Running `ghqc ui` serves an embedded React application. The UI provides:
 - **Configuration tab** — Configuration repo setup and status
 
 The web UI also supports direct routes for each screen: `/status`, `/create`, `/record`, `/archive`, and `/configuration`. Opening `/` redirects to `/status`.
+
+Use `ghqc ui url` to print the exact loopback URL the UI would use on the current machine without starting the server.
 
 ## Install
 
