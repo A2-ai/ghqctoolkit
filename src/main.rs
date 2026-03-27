@@ -8,7 +8,7 @@ use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
     RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
-    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status,
+    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token,
     interactive_milestone_status, interactive_status, milestone_status, prompt_archive,
     prompt_context_files, prompt_milestone_record, single_issue_status,
 };
@@ -61,6 +61,9 @@ enum Commands {
     },
     /// Authentication management commands
     Auth {
+        /// GitHub host to use, e.g. github.com or https://ghe.example.com
+        #[arg(long, global = true)]
+        host: Option<String>,
         #[command(subcommand)]
         auth_command: AuthCommands,
     },
@@ -341,26 +344,16 @@ enum AuthCommands {
         /// Token to store directly instead of launching an interactive flow
         token: Option<String>,
 
-        /// GitHub host to use, e.g. github.com or https://ghe.example.com
-        #[arg(long)]
-        host: Option<String>,
-
         /// Skip importing into the ghqc auth store after successful gh auth login
         #[arg(long)]
         no_store: bool,
     },
     /// Remove the ghqc-stored token for a host
-    Logout {
-        /// GitHub host to use, e.g. github.com or https://ghe.example.com
-        #[arg(long)]
-        host: Option<String>,
-    },
+    Logout,
     /// Show ghqc auth storage status
-    Status {
-        /// GitHub host to use, e.g. github.com or https://ghe.example.com
-        #[arg(long)]
-        host: Option<String>,
-    },
+    Status,
+    /// Print the resolved token
+    Token,
 }
 
 #[cfg(feature = "cli")]
@@ -1099,16 +1092,12 @@ async fn main() -> Result<()> {
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
-        Commands::Auth { auth_command } => {
+        Commands::Auth { host, auth_command } => {
             let store = auth_store
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Auth store unavailable"))?;
             match auth_command {
-                AuthCommands::Login {
-                    token,
-                    host,
-                    no_store,
-                } => {
+                AuthCommands::Login { token, no_store } => {
                     gh_auth_login(
                         &cli.directory,
                         host.as_deref(),
@@ -1117,11 +1106,14 @@ async fn main() -> Result<()> {
                         store,
                     )?;
                 }
-                AuthCommands::Logout { host } => {
+                AuthCommands::Logout => {
                     gh_auth_logout(&cli.directory, host.as_deref(), store)?;
                 }
-                AuthCommands::Status { host } => {
+                AuthCommands::Status => {
                     gh_auth_status(&cli.directory, host.as_deref(), store)?;
+                }
+                AuthCommands::Token => {
+                    println!("{}", gh_auth_token(&cli.directory, host.as_deref(), store)?);
                 }
             }
         }
