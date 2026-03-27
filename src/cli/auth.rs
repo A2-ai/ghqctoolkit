@@ -29,7 +29,7 @@ pub fn gh_auth_login(
         return Ok(());
     }
 
-    if !gh_available() {
+    if gh_available() {
         run_gh_login(&host_name)?;
         if no_store {
             println!(
