@@ -280,6 +280,8 @@ test('review include diff disabled when clean', async ({ page }) => {
   await page.getByRole('tab', { name: 'Review', exact: true }).click()
   const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
   await expect(reviewPanel.getByRole('checkbox', { name: 'Include diff' })).toBeDisabled()
+  await expect(reviewPanel.getByRole('checkbox', { name: 'Stash file after post' })).toBeDisabled()
+  await expect(reviewPanel.getByRole('checkbox', { name: 'Stash file after post' })).not.toBeChecked()
 })
 
 // ---------------------------------------------------------------------------
@@ -305,6 +307,39 @@ test('review post shows success modal', async ({ page }) => {
   await reviewPanel.getByRole('button', { name: 'Post' }).click()
 
   await expect(page.getByRole('heading', { name: 'Comment Posted' })).toBeVisible()
+  await expect(page.getByText('Stashed local changes for src/single.rs')).toBeVisible()
+})
+
+test('review tab enables auto-stash by default and sends opt-out when unchecked', async ({ page }) => {
+  await setupAndOpenModal(page, dirtyModalIssue, dirtyModalStatus)
+
+  let autoStash: boolean | null = null
+  await page.route(/\/api\/issues\/\d+\/review/, async (route, request) => {
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as { auto_stash?: boolean }
+      autoStash = body.auto_stash ?? null
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888',
+          stash: { status: 'skipped', message: 'Auto-stash disabled' },
+        }),
+      })
+      return
+    }
+    await route.continue()
+  })
+
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
+  const stashToggle = reviewPanel.getByRole('checkbox', { name: 'Stash file after post' })
+  await expect(stashToggle).toBeChecked()
+  await stashToggle.uncheck()
+  await reviewPanel.getByRole('button', { name: 'Post' }).click()
+
+  expect(autoStash).toBe(false)
+  await expect(page.getByText('Auto-stash disabled')).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------

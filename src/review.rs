@@ -2,10 +2,12 @@ use std::path::PathBuf;
 
 use gix::ObjectId;
 use octocrab::models::issues::Issue;
+use serde::{Deserialize, Serialize};
 
 use crate::comment_system::CommentBody;
 use crate::diff_utils;
 use crate::git::{GitFileOps, GitHelpers};
+use crate::{FileStashOutcome, GitRepository};
 
 #[derive(Debug, Clone)]
 pub struct QCReview {
@@ -14,7 +16,24 @@ pub struct QCReview {
     pub commit: ObjectId, // Commit to compare against (defaults to HEAD)
     pub note: Option<String>,
     pub no_diff: bool,
+    pub stash_after_review: bool,
     pub working_dir: PathBuf, // Working directory path for reading local files
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStashStatus {
+    Stashed,
+    NoChanges,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewStashResult {
+    pub status: ReviewStashStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 impl CommentBody for QCReview {
@@ -92,6 +111,40 @@ impl QCReview {
     }
 }
 
+pub fn stash_review_file(
+    git_info: &impl GitRepository,
+    issue_number: u64,
+    file: &std::path::Path,
+    auto_stash: bool,
+) -> ReviewStashResult {
+    if !auto_stash {
+        return ReviewStashResult {
+            status: ReviewStashStatus::Skipped,
+            message: Some("Auto-stash disabled".to_string()),
+        };
+    }
+
+    let message = format!("ghqc review #{} {}", issue_number, file.display());
+    match git_info.stash_file(file, &message) {
+        Ok(FileStashOutcome::Stashed) => ReviewStashResult {
+            status: ReviewStashStatus::Stashed,
+            message: Some(format!("Stashed local changes for {}", file.display())),
+        },
+        Ok(FileStashOutcome::NoChanges) => ReviewStashResult {
+            status: ReviewStashStatus::NoChanges,
+            message: Some(format!("No stashable local changes for {}", file.display())),
+        },
+        Err(err) => ReviewStashResult {
+            status: ReviewStashStatus::Failed,
+            message: Some(format!(
+                "Failed to stash local changes for {}: {}",
+                file.display(),
+                err
+            )),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +154,47 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::str::FromStr;
+
+    #[derive(Clone)]
+    struct MockGitRepo {
+        stash_result: Result<FileStashOutcome, String>,
+    }
+
+    impl crate::GitRepository for MockGitRepo {
+        fn commit(&self) -> Result<String, crate::GitRepositoryError> {
+            Ok("abc".to_string())
+        }
+
+        fn branch(&self) -> Result<String, crate::GitRepositoryError> {
+            Ok("main".to_string())
+        }
+
+        fn owner(&self) -> &str {
+            "owner"
+        }
+
+        fn repo(&self) -> &str {
+            "repo"
+        }
+
+        fn path(&self) -> &std::path::Path {
+            std::path::Path::new(".")
+        }
+
+        fn fetch(&self) -> Result<bool, crate::GitRepositoryError> {
+            Ok(false)
+        }
+
+        fn stash_file(
+            &self,
+            _file: &std::path::Path,
+            _message: &str,
+        ) -> Result<FileStashOutcome, crate::GitRepositoryError> {
+            self.stash_result
+                .clone()
+                .map_err(crate::GitRepositoryError::StashError)
+        }
+    }
 
     struct MockGitInfo {
         file_contents: HashMap<(PathBuf, String), String>,
@@ -195,7 +289,8 @@ mod tests {
             issue,
             commit,
             note: Some("Testing commit-to-local diff".to_string()),
-            no_diff: true,                                // Skip diff for this test
+            no_diff: true, // Skip diff for this test
+            stash_after_review: true,
             working_dir: PathBuf::from("/tmp/test-repo"), // Test working directory
         };
 
@@ -207,5 +302,28 @@ mod tests {
         assert!(body.contains(
             "[file at commit](https://github.com/owner/repo/blob/1234567/src/example.rs)"
         ));
+    }
+
+    #[test]
+    fn test_stash_review_file_skipped_when_disabled() {
+        let git = MockGitRepo {
+            stash_result: Ok(FileStashOutcome::Stashed),
+        };
+
+        let result = stash_review_file(&git, 12, std::path::Path::new("src/lib.rs"), false);
+
+        assert_eq!(result.status, ReviewStashStatus::Skipped);
+    }
+
+    #[test]
+    fn test_stash_review_file_reports_failure_nonfatally() {
+        let git = MockGitRepo {
+            stash_result: Err("boom".to_string()),
+        };
+
+        let result = stash_review_file(&git, 12, std::path::Path::new("src/lib.rs"), true);
+
+        assert_eq!(result.status, ReviewStashStatus::Failed);
+        assert!(result.message.unwrap().contains("boom"));
     }
 }

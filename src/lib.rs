@@ -49,11 +49,11 @@ pub use configuration::{
 };
 pub use create::{QCEntry, QCIssue, QCRelationship, RelevantFileEntry, batch_post_qc_entries};
 pub use git::{
-    AuthError, AuthSourceKind, AuthSources, CommitCache, GitAuthor, GitCli, GitCliError,
-    GitCommand, GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
-    GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError,
-    GitProvider, GitRepository, GitRepositoryError, GitState, GitStatus, GitStatusError,
-    GitStatusOps, RepoUser, find_commits, find_file_commits, get_git_status,
+    AuthError, AuthSourceKind, AuthSources, CommitCache, FileStashOutcome, GitAuthor, GitCli,
+    GitCliError, GitCommand, GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError,
+    GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter, GitInfo,
+    GitInfoError, GitProvider, GitRepository, GitRepositoryError, GitState, GitStatus,
+    GitStatusError, GitStatusOps, RepoUser, find_commits, find_file_commits, get_git_status,
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,
@@ -69,4 +69,4 @@ pub use record::{
     record, render,
 };
 pub use relevant_files::{RelevantFile, RelevantFileClass};
-pub use review::QCReview;
+pub use review::{QCReview, ReviewStashResult, ReviewStashStatus, stash_review_file};

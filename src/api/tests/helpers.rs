@@ -2,8 +2,8 @@
 
 use crate::CommentBody;
 use crate::git::{
-    GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError, GitHelpers,
-    GitRepository, GitRepositoryError, GitState, GitStatusError, GitStatusOps,
+    FileStashOutcome, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError,
+    GitHelpers, GitRepository, GitRepositoryError, GitState, GitStatusError, GitStatusOps,
 };
 use crate::{GitAuthor, GitCommit, GitHubApiError, GitHubReader, GitHubWriter};
 use gix::ObjectId;
@@ -32,6 +32,9 @@ pub enum WriteCall {
     OpenIssue {
         issue_number: u64,
     },
+    StashFile {
+        file: String,
+    },
 }
 
 /// Mock implementation of all git traits for testing.
@@ -53,6 +56,7 @@ pub struct MockGitInfo {
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
     git_state: GitState,
+    stash_error: Option<String>,
 
     // Authentication
     current_user: Option<String>,
@@ -88,6 +92,7 @@ pub struct MockGitInfoBuilder {
     dirty_files: Vec<PathBuf>,
     git_state: GitState,
     current_user: Option<String>,
+    stash_error: Option<String>,
 }
 
 impl MockGitInfoBuilder {
@@ -105,6 +110,7 @@ impl MockGitInfoBuilder {
             dirty_files: Vec::new(),
             git_state: GitState::Clean,
             current_user: Some("test-user".to_string()),
+            stash_error: None,
         }
     }
 
@@ -168,6 +174,11 @@ impl MockGitInfoBuilder {
         self
     }
 
+    pub fn with_stash_error(mut self, error: impl Into<String>) -> Self {
+        self.stash_error = Some(error.into());
+        self
+    }
+
     pub fn build(self) -> MockGitInfo {
         MockGitInfo {
             owner: self.owner,
@@ -182,6 +193,7 @@ impl MockGitInfoBuilder {
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
             git_state: self.git_state,
             current_user: self.current_user,
+            stash_error: self.stash_error,
             calls: Arc::new(Mutex::new(Vec::new())),
             write_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -220,6 +232,28 @@ impl GitRepository for MockGitInfo {
 
     fn fetch(&self) -> Result<bool, GitRepositoryError> {
         Ok(false) // Mock: no changes fetched
+    }
+
+    fn stash_file(
+        &self,
+        file: &Path,
+        _message: &str,
+    ) -> Result<FileStashOutcome, GitRepositoryError> {
+        self.write_calls.lock().unwrap().push(WriteCall::StashFile {
+            file: file.display().to_string(),
+        });
+
+        if let Some(error) = &self.stash_error {
+            return Err(GitRepositoryError::StashError(error.clone()));
+        }
+
+        let mut dirty = self.dirty_files.lock().unwrap();
+        if let Some(idx) = dirty.iter().position(|path| path == file) {
+            dirty.remove(idx);
+            Ok(FileStashOutcome::Stashed)
+        } else {
+            Ok(FileStashOutcome::NoChanges)
+        }
     }
 }
 

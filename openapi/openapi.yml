@@ -309,7 +309,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CommentResponse'
+                $ref: '#/components/schemas/ReviewResponse'
 
   /preview/issue:
     post:
@@ -1175,6 +1175,14 @@ components:
         comment_url:
           type: string
 
+    ReviewResponse:
+      type: object
+      properties:
+        comment_url:
+          type: string
+        stash:
+          $ref: '#/components/schemas/ReviewStashResult'
+
     ApproveRequest:
       type: object
       required: [commit]
@@ -1238,6 +1246,19 @@ components:
         include_diff:
           type: boolean
           default: true
+        auto_stash:
+          type: boolean
+          default: true
+
+    ReviewStashResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [stashed, no_changes, skipped, failed]
+        message:
+          type: string
+          nullable: true
 
     Assignee:
       type: object

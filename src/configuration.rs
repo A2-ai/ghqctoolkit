@@ -836,6 +836,14 @@ Second Checklist:
             fn fetch(&self) -> Result<bool, crate::git::GitRepositoryError> {
                 Ok(false) // Mock: no changes fetched
             }
+
+            fn stash_file(
+                &self,
+                _file: &std::path::Path,
+                _message: &str,
+            ) -> Result<crate::git::FileStashOutcome, crate::git::GitRepositoryError> {
+                Ok(crate::git::FileStashOutcome::NoChanges)
+            }
         }
 
         impl crate::git::GitStatusOps for MockGitInfo {

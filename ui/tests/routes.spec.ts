@@ -5,6 +5,7 @@ test('root redirects to /status', async ({ page }) => {
   await setupRoutes(page)
   await page.goto('/')
   await expect(page).toHaveURL(/\/status$/)
+  await expect(page).not.toHaveURL(/\/@fs\//)
 })
 
 test('direct route loads record screen', async ({ page }) => {

@@ -742,6 +742,10 @@ impl QCReview {
         let no_diff = !inquire::Confirm::new("Include diff between commit and working directory?")
             .with_default(true)
             .prompt()?;
+        let stash_after_review =
+            inquire::Confirm::new("Stash local changes for this file after posting review?")
+                .with_default(true)
+                .prompt()?;
 
         println!();
         println!("📝 QC Review Summary:");
@@ -755,6 +759,9 @@ impl QCReview {
         if no_diff {
             println!("   ⚠️  Diff generation disabled");
         }
+        if !stash_after_review {
+            println!("   📦 Auto-stash disabled");
+        }
         println!();
 
         Ok(Self {
@@ -763,6 +770,7 @@ impl QCReview {
             commit: commit_hash,
             note,
             no_diff,
+            stash_after_review,
             working_dir: git_info.repository_path.clone(),
         })
     }
@@ -776,6 +784,7 @@ impl QCReview {
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
         no_diff: bool,
+        stash_after_review: bool,
         commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
@@ -820,6 +829,7 @@ impl QCReview {
             commit: final_commit,
             note,
             no_diff,
+            stash_after_review,
             working_dir: git_info.repository_path.clone(),
         })
     }

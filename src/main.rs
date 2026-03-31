@@ -20,7 +20,7 @@ use ghqctoolkit::{
     archive, configuration_status, create_labels_if_needed, create_staging_dir,
     determine_config_dir, fetch_milestone_issues, get_blocking_qc_status, get_git_status,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
-    unapprove_with_impact,
+    stash_review_file, unapprove_with_impact,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -244,6 +244,10 @@ enum IssueCommands {
         /// Do not include diff between commit and working directory
         #[arg(long)]
         no_diff: bool,
+
+        /// Do not stash the reviewed file after a successful review post
+        #[arg(long)]
+        no_stash_after_review: bool,
     },
     /// detailed status of the ongoing qc issue
     Status {
@@ -590,6 +594,7 @@ async fn main() -> Result<()> {
                     commit,
                     note,
                     no_diff,
+                    no_stash_after_review,
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
@@ -615,6 +620,7 @@ async fn main() -> Result<()> {
                                 cache.as_ref(),
                                 &git_info,
                                 no_diff,
+                                !no_stash_after_review,
                                 &mut commit_cache,
                             )
                             .await?
@@ -628,9 +634,18 @@ async fn main() -> Result<()> {
 
                     // Post the review comment
                     let review_url = git_info.post_comment(&review).await?;
+                    let stash = stash_review_file(
+                        &git_info,
+                        review.issue.number,
+                        &review.file,
+                        review.stash_after_review,
+                    );
 
                     println!("📝 Review comment created!");
                     println!("{}", review_url);
+                    if let Some(message) = stash.message {
+                        println!("{}", message);
+                    }
                 }
                 IssueCommands::Status { milestone, file } => {
                     let milestones = git_info.get_milestones().await?;

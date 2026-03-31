@@ -20,7 +20,7 @@ import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
-import type { BlockedIssueStatus, CommentResponse, UnapprovalResponse } from '../../src/api/issues'
+import type { BlockedIssueStatus, CommentResponse, ReviewResponse, UnapprovalResponse } from '../../src/api/issues'
 
 export interface RouteOverrides {
   repo: RepoInfo
@@ -50,7 +50,7 @@ export interface RouteOverrides {
   /** Response for POST /api/issues/:n/comment; null → 500 error */
   postCommentResponse: CommentResponse | null
   /** Response for POST /api/issues/:n/review; null → 500 error */
-  postReviewResponse: CommentResponse | null
+  postReviewResponse: ReviewResponse | null
   /** Response for POST /api/issues/:n/approve; null → 500 error */
   postApproveResponse: { approval_url: string; skipped_unapproved: number[]; skipped_errors: unknown[]; closed: boolean } | null
   /** Response for POST /api/issues/:n/unapprove; null → 500 error */
@@ -91,7 +91,10 @@ const defaultOverrides: RouteOverrides = {
   createIssues: createIssueResponses,
   createIssuesDelayMs: 0,
   postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
-  postReviewResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888' },
+  postReviewResponse: {
+    comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888',
+    stash: { status: 'stashed', message: 'Stashed local changes for src/single.rs' },
+  },
   postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
   postUnapproveResponse: { unapproval_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-66666', opened: true },
   blockedResponse: [],

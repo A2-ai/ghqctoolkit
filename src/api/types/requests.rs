@@ -182,6 +182,8 @@ pub struct ReviewRequest {
     pub note: Option<String>,
     #[serde(default = "default_true")]
     pub include_diff: bool,
+    #[serde(default = "default_true")]
+    pub auto_stash: bool,
 }
 
 fn default_true() -> bool {

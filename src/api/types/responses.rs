@@ -9,7 +9,7 @@ use octocrab::models::IssueState;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GitHubApiError, GitProvider, IssueThread,
+    GitHubApiError, GitProvider, IssueThread, ReviewStashResult,
     api::{ApiError, cache::CacheEntry},
     create::CreateResult,
     get_git_status,
@@ -410,6 +410,12 @@ pub struct BatchIssueStatusResponse {
 #[derive(Debug, Serialize)]
 pub struct CommentResponse {
     pub comment_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewResponse {
+    pub comment_url: String,
+    pub stash: ReviewStashResult,
 }
 
 /// Response for issue approval.

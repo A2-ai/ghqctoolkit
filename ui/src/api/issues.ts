@@ -100,6 +100,7 @@ export interface ReviewRequest {
   commit: string
   note: string | null
   include_diff: boolean
+  auto_stash: boolean
 }
 
 export interface ApproveRequest {
@@ -125,6 +126,16 @@ export interface UnapprovalResponse {
 
 export interface CommentResponse {
   comment_url: string
+}
+
+export interface ReviewStashResult {
+  status: 'stashed' | 'no_changes' | 'skipped' | 'failed'
+  message: string | null
+}
+
+export interface ReviewResponse {
+  comment_url: string
+  stash: ReviewStashResult
 }
 
 export async function postComment(issueNumber: number, request: CreateCommentRequest): Promise<CommentResponse> {
@@ -181,7 +192,7 @@ async function fetchIssueStatuses(issueNumbers: number[]): Promise<BatchIssueSta
   throw new Error(`Failed to fetch issue statuses: ${res.status}`)
 }
 
-export async function postReview(issueNumber: number, request: ReviewRequest): Promise<CommentResponse> {
+export async function postReview(issueNumber: number, request: ReviewRequest): Promise<ReviewResponse> {
   const res = await fetch(`${API_BASE}/issues/${issueNumber}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

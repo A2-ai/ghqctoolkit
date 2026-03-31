@@ -315,6 +315,11 @@ pub enum ExpectedWriteCall {
         #[serde(default)]
         position: Option<CallPosition>,
     },
+    StashFile {
+        file: String,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
 }
 
 /// Position assertion for write calls

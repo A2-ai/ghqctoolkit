@@ -18,7 +18,7 @@ import {
 } from '@mantine/core'
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest } from '~/api/issues'
+import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest, ReviewStashResult } from '~/api/issues'
 import { fetchSingleIssueStatus, postApprove, postComment, postReview, useInvalidateBlockingDependents } from '~/api/issues'
 import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
 import { CommitSlider } from '~/components/CommitSlider'
@@ -170,7 +170,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     setPostResultOpen(false)
     setPostResultUrl(null)
     setPostError(null)
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
     .map((c, i) => ({ ...c, origIdx: i }))
@@ -513,6 +513,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
   const [showAll, setShowAll] = useState(false)
   const [commitOrigIdx, setCommitOrigIdx] = useState(defaultCommitOrigIdx)
   const [includeDiff, setIncludeDiff] = useState(true)
+  const [autoStash, setAutoStash] = useState(status.dirty)
   const [note, setNote] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -520,6 +521,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
   const [postLoading, setPostLoading] = useState(false)
   const [postResultOpen, setPostResultOpen] = useState(false)
   const [postResultUrl, setPostResultUrl] = useState<string | null>(null)
+  const [postStashResult, setPostStashResult] = useState<ReviewStashResult | null>(null)
   const [postError, setPostError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
@@ -527,12 +529,14 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     setCommitOrigIdx(defaultCommitOrigIdx)
     setShowAll(false)
     setIncludeDiff(true)
+    setAutoStash(status.dirty)
     setNote('')
     setPreviewOpen(false)
     setPostResultOpen(false)
     setPostResultUrl(null)
+    setPostStashResult(null)
     setPostError(null)
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
     .map((c, i) => ({ ...c, origIdx: i }))
@@ -558,6 +562,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     commit: selectedCommit?.hash ?? '',
     note: note.trim() || null,
     include_diff: status.dirty ? includeDiff : false,
+    auto_stash: status.dirty ? autoStash : false,
   }
 
   async function handlePreview() {
@@ -578,9 +583,11 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     setPostLoading(true)
     setPostError(null)
     setPostResultUrl(null)
+    setPostStashResult(null)
     try {
       const result = await postReview(issue.number, reviewRequest)
       setPostResultUrl(result.comment_url)
+      setPostStashResult(result.stash)
       void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issue.number] })
       const fresh = await fetchSingleIssueStatus(issue.number)
       onStatusUpdate(fresh)
@@ -657,6 +664,21 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
                 />
               </span>
             </Tooltip>
+            <Tooltip
+              label="No local changes to stash for this file"
+              disabled={status.dirty}
+              withArrow
+              position="right"
+            >
+              <span style={{ display: 'inline-flex' }}>
+                <Checkbox
+                  label="Stash file changes from review"
+                  checked={status.dirty ? autoStash : false}
+                  disabled={!status.dirty}
+                  onChange={(e) => setAutoStash(e.currentTarget.checked)}
+                />
+              </span>
+            </Tooltip>
           </Stack>
 
           <Textarea
@@ -715,10 +737,17 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       {postError ? (
         <Text c="red" size="sm">{postError}</Text>
       ) : (
-        <Text size="sm">
-          Comment posted successfully.{' '}
-          <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
-        </Text>
+        <Stack gap="xs">
+          <Text size="sm">
+            Comment posted successfully.{' '}
+            <Anchor href={postResultUrl ?? '#'} target="_blank">View on GitHub</Anchor>
+          </Text>
+          {postStashResult?.message && (
+            <Text size="sm" c={postStashResult.status === 'failed' ? 'orange' : 'dimmed'}>
+              {postStashResult.message}
+            </Text>
+          )}
+        </Stack>
       )}
     </Modal>
     </>
@@ -770,7 +799,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     setPostResultOpen(false)
     setPostResultUrl(null)
     setPostError(null)
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const bqs = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const hasBlockingIssues = bqs.total > 0 && (bqs.not_approved.length > 0 || bqs.errors.length > 0)

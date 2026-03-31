@@ -179,6 +179,7 @@ pub async fn preview_review<G: GitProvider + 'static>(
         commit,
         note: request.note,
         no_diff: !request.include_diff,
+        stash_after_review: request.auto_stash,
         working_dir: state.git_info().path().to_path_buf(),
     };
 

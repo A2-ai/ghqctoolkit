@@ -1,7 +1,8 @@
 use crate::GitInfo;
-use crate::git::action::{GitCli, GitCommand};
+use crate::git::action::{GitCli, GitCommand, StashFileOutcome};
 #[cfg(test)]
 use mockall::automock;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(thiserror::Error, Debug)]
@@ -20,6 +21,15 @@ pub enum GitRepositoryError {
     RemoteConnectionError(String),
     #[error("Failed to fetch from remote: {0}")]
     FetchError(String),
+    #[error("Failed to stash file changes: {0}")]
+    StashError(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStashOutcome {
+    Stashed,
+    NoChanges,
 }
 
 /// Basic repository information and metadata
@@ -42,6 +52,13 @@ pub trait GitRepository {
 
     /// Fetch the repository remote. Return whether changes found
     fn fetch(&self) -> Result<bool, GitRepositoryError>;
+
+    /// Stash changes for a single file path.
+    fn stash_file(
+        &self,
+        file: &Path,
+        message: &str,
+    ) -> Result<FileStashOutcome, GitRepositoryError>;
 }
 
 impl GitRepository for GitInfo {
@@ -122,5 +139,19 @@ impl GitRepository for GitInfo {
         GitCommand
             .fetch(&self.repository_path)
             .map_err(|e| GitRepositoryError::FetchError(e.to_string()))
+    }
+
+    fn stash_file(
+        &self,
+        file: &Path,
+        message: &str,
+    ) -> Result<FileStashOutcome, GitRepositoryError> {
+        match GitCommand
+            .stash_file(&self.repository_path, file, message)
+            .map_err(|e| GitRepositoryError::StashError(e.to_string()))?
+        {
+            StashFileOutcome::Stashed => Ok(FileStashOutcome::Stashed),
+            StashFileOutcome::NoChanges => Ok(FileStashOutcome::NoChanges),
+        }
     }
 }
