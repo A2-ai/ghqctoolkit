@@ -1381,6 +1381,12 @@ components:
           type: string
         record_path:
           type: string
+        ui_repo_refresh_rate_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Effective UI repository refresh interval in seconds after config, env, and default fallback
+          example: 15
 
     RecordContextFileRequest:
       type: object

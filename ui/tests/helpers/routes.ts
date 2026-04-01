@@ -35,6 +35,8 @@ export interface RouteOverrides {
   issueStatusesCode: number
   /** checklist_display_name returned by GET /api/configuration (default: 'checklists') */
   checklistDisplayName: string
+  /** Effective repo refresh interval returned by GET /api/configuration (default: 15) */
+  uiRepoRefreshRateSeconds: number
   /** Checklists returned by GET /api/configuration */
   checklists: Checklist[]
   /** Assignees returned by /api/assignees */
@@ -84,6 +86,7 @@ const defaultOverrides: RouteOverrides = {
   },
   issueStatusesCode: 200,
   checklistDisplayName: 'checklists',
+  uiRepoRefreshRateSeconds: 15,
   checklists: defaultChecklists,
   assignees: defaultAssignees,
   fileTree: { '': rootFileTree, src: srcFileTree },
@@ -182,6 +185,7 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
         logo_found: false,
         checklist_directory: 'checklists/',
         record_path: 'records/',
+        ui_repo_refresh_rate_seconds: cfg.uiRepoRefreshRateSeconds,
       },
       checklists: cfg.checklists,
       config_repo_env: null,

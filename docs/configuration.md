@@ -71,6 +71,15 @@ Checklists can be defined as YAML files or GitHub-flavored Markdown files placed
 | `checklist_display_name` | Override the display name for "checklists" in the UI |
 | `logo_path` | Override the default logo path (`logo.png`) |
 | `checklist_directory` | Override the default checklist directory (`checklists`) |
+| `ui_repo_refresh_rate_seconds` | Override the UI repository refresh interval in seconds |
+
+`ui_repo_refresh_rate_seconds` resolves in this order:
+
+1. `options.yaml` `ui_repo_refresh_rate_seconds`
+2. `GHQC_UI_REFRESH_RATE`
+3. default `15`
+
+Missing, non-numeric, zero, and negative values fall back to the next source, ending at `15`.
 
 The **Custom** checklist is always available as a built-in fallback, regardless of the configuration repository contents.
 

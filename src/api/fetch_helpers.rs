@@ -178,7 +178,8 @@ pub(crate) fn cache_key_or_default(
 mod tests {
     use super::*;
     use crate::api::tests::helpers::MockGitInfo;
-    use crate::git::GitRepositoryError;
+    use crate::git::{FileStashOutcome, GitRepositoryError};
+    use std::path::Path;
 
     #[test]
     fn test_format_error_list_empty() {
@@ -246,6 +247,14 @@ mod tests {
 
         fn fetch(&self) -> Result<bool, GitRepositoryError> {
             Ok(false) // Mock: no changes fetched
+        }
+
+        fn stash_file(
+            &self,
+            _file: &Path,
+            _message: &str,
+        ) -> Result<FileStashOutcome, GitRepositoryError> {
+            Ok(FileStashOutcome::NoChanges)
         }
     }
 

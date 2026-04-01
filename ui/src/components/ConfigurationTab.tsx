@@ -252,6 +252,10 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
         </Text>
       ),
     },
+    {
+      label: 'UI repo refresh rate',
+      value: <Text size="sm">{opts.ui_repo_refresh_rate_seconds}s</Text>,
+    },
     ...(opts.prepended_checklist_note !== null
       ? [{ label: `${singularCap} note`, value: <Text size="sm">{opts.prepended_checklist_note}</Text> }]
       : []),

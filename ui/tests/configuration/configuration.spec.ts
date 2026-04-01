@@ -13,6 +13,7 @@ const defaultOptions = {
   logo_found: false,
   checklist_directory: 'checklists/',
   record_path: 'records/',
+  ui_repo_refresh_rate_seconds: 15,
 }
 
 const twoChecklists: Checklist[] = [
@@ -295,7 +296,7 @@ test('checklists section filters Custom and shows content on selection', async (
 // ---------------------------------------------------------------------------
 // 12. Options section renders configuration values
 // ---------------------------------------------------------------------------
-test('options section renders display name, paths, and logo status', async ({ page }) => {
+test('options section renders display name, paths, refresh rate, and logo status', async ({ page }) => {
   await setupRoutes(page)
   await mockConfiguration(page, configured)
 
@@ -306,6 +307,8 @@ test('options section renders display name, paths, and logo status', async ({ pa
   await expect(page.getByText('Code Review').first()).toBeVisible()
   await expect(page.getByText('checklists/')).toBeVisible()
   await expect(page.getByText('records/')).toBeVisible()
+  await expect(page.getByText('UI repo refresh rate')).toBeVisible()
+  await expect(page.getByText('15s')).toBeVisible()
   // logo_found=false → ✗
   await expect(page.getByText('✗')).toBeVisible()
 })

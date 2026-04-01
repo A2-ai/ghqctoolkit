@@ -507,6 +507,7 @@ pub struct ConfigurationOptions {
     pub logo_found: bool,
     pub checklist_directory: String,
     pub record_path: String,
+    pub ui_repo_refresh_rate_seconds: u64,
 }
 
 /// Configuration status response.

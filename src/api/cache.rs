@@ -307,7 +307,8 @@ pub async fn update_cache_after_unapproval<G: crate::GitProvider>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::GitRepositoryError;
+    use crate::git::{FileStashOutcome, GitRepositoryError};
+    use std::path::Path;
 
     struct MockGitRepository {
         branch: Option<String>,
@@ -347,6 +348,14 @@ mod tests {
 
         fn fetch(&self) -> Result<bool, GitRepositoryError> {
             Ok(false) // Mock: no changes fetched
+        }
+
+        fn stash_file(
+            &self,
+            _file: &Path,
+            _message: &str,
+        ) -> Result<FileStashOutcome, GitRepositoryError> {
+            Ok(FileStashOutcome::NoChanges)
         }
     }
 

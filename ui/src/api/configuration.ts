@@ -17,6 +17,7 @@ export interface ConfigurationOptions {
   logo_found: boolean
   checklist_directory: string
   record_path: string
+  ui_repo_refresh_rate_seconds: number
 }
 
 export interface ConfigurationStatus {
