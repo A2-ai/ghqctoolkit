@@ -103,30 +103,63 @@ pub fn format_markdown(
 
     let lines: Vec<&str> = with_images.lines().collect();
     let mut result = Vec::new();
-    let mut in_diff_block = false;
-    let mut in_code_block = false;
     let mut i = 0;
 
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim_start();
 
-        // Track if we're in a code block
         if trimmed.starts_with("```") {
-            if trimmed.contains("diff") {
-                in_diff_block = !in_diff_block; // Toggle diff block state
-                in_code_block = in_diff_block; // Diff blocks are also code blocks
-            } else {
-                in_diff_block = false; // Not a diff block
-                in_code_block = !in_code_block; // Toggle regular code block state
+            let fence_len = trimmed.chars().take_while(|&c| c == '`').count();
+            let lang = trimmed[fence_len..].trim();
+            let is_diff_block = lang == "diff";
+            let mut block_lines = Vec::new();
+            let mut j = i + 1;
+
+            while j < lines.len() {
+                let candidate = lines[j];
+                let candidate_trimmed = candidate.trim_start();
+                let closing_fence_len = candidate_trimmed.chars().take_while(|&c| c == '`').count();
+                if closing_fence_len >= fence_len
+                    && candidate_trimmed[closing_fence_len..].trim().is_empty()
+                {
+                    break;
+                }
+
+                if is_diff_block && (candidate.starts_with('+') || candidate.starts_with('-')) {
+                    block_lines.extend(wrap_diff_line(candidate, 80));
+                } else if candidate.len() > 75 {
+                    block_lines.extend(simple_wrap_line(candidate, 75));
+                } else {
+                    block_lines.push(candidate.to_string());
+                }
+                j += 1;
             }
-            result.push(line.to_string());
-            i += 1;
+
+            let delimiter_len = std::cmp::max(
+                3,
+                std::cmp::max(
+                    fence_len,
+                    max_backtick_run(block_lines.iter().map(|s| s.as_str())) + 1,
+                ),
+            );
+            let delimiter = "`".repeat(delimiter_len);
+            let opening = if lang.is_empty() {
+                delimiter.clone()
+            } else {
+                format!("{delimiter}{lang}")
+            };
+
+            result.push(opening);
+            result.extend(block_lines);
+            result.push(delimiter);
+
+            i = if j < lines.len() { j + 1 } else { j };
             continue;
         }
 
         // Check for setext-style headers (header text followed by === or ---)
-        if i + 1 < lines.len() && !in_diff_block {
+        if i + 1 < lines.len() {
             let next_line = lines[i + 1].trim();
             if !next_line.is_empty() {
                 let is_h1_underline = next_line.chars().all(|c| c == '=') && next_line.len() >= 3;
@@ -163,31 +196,45 @@ pub fn format_markdown(
                 // It's a Typst command like #image(), keep as-is
                 result.push(line.to_string());
             }
-        } else if in_diff_block && (line.starts_with('+') || line.starts_with('-')) {
-            // Handle diff line wrapping for long lines with +/- markers
-            result.extend(wrap_diff_line(line, 80));
-        } else if in_code_block && line.len() > 75 {
-            // We're in a code block - wrap long lines at 75 characters
-            result.extend(simple_wrap_line(line, 75));
-        } else if !in_code_block && (trimmed.starts_with("* ") || trimmed.starts_with("+ ")) {
+        } else if trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
             // Convert markdown bullet points (* or +) to Typst bullet points (-)
             // In Typst, * starts bold text, so we must use - for lists
             let indent = &line[..line.len() - trimmed.len()];
             let content = &trimmed[2..]; // Skip "* " or "+ "
             let converted = convert_inline_markdown(content);
             result.push(format!("{}- {}", indent, converted));
-        } else if !in_code_block {
+        } else {
             // Convert markdown syntax to Typst for regular content
             let converted = convert_inline_markdown(line);
             result.push(converted);
-        } else {
-            result.push(line.to_string());
         }
 
         i += 1;
     }
 
     result.join("\n")
+}
+
+fn max_backtick_run<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize {
+    lines
+        .into_iter()
+        .map(|line| {
+            let mut max_run = 0;
+            let mut current_run = 0;
+
+            for ch in line.chars() {
+                if ch == '`' {
+                    current_run += 1;
+                    max_run = max_run.max(current_run);
+                } else {
+                    current_run = 0;
+                }
+            }
+
+            max_run
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Smart line wrapping - looks for good break points within ±5 chars of max_width, otherwise breaks at max_width
@@ -846,6 +893,45 @@ Diff code block:
         assert!(result.contains("```r"));
         assert!(result.contains("```diff"));
         assert!(result.len() > markdown_with_both.len()); // Should be longer due to wrapping
+    }
+
+    #[test]
+    fn test_qc_review_diff_with_hash_comment_compiles() {
+        let markdown = r#"# QC Review
+
+@weswc
+
+## Metadata
+* comparing commit: cf7e1dd141503a64bb88c94d2fed65f8644312b1
+* [file at commit](https://github.com/a2-ai-tech-training/ghqc-demo/blob/cf7e1dd/scripts/diagnostics/model-diagnostics.qmd)
+
+## File Difference
+```diff
+@@ previous script: lines 60-65 @@
+@@  current script: lines 60-66 @@
+  60 <!-- ## Set Theme -->
+  61
+  62 ```{r set-theme, include = FALSE}
++ 63 # QC: why a black and white theme?
+  64 theme_set(theme_bw())
+  65 theme_update(
+  66     legend.title = element_blank(),
+```
+"#;
+
+        let empty_image_map = HashMap::new();
+        let formatted = format_markdown(markdown, 4, &empty_image_map);
+        let source = format!("= Test\n\n{}", formatted);
+        let (world, _staging, _cache) = create_test_world(&source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        assert!(
+            result.output.is_ok(),
+            "Compilation failed: {:?}\nFormatted source:\n{}",
+            result.output.err(),
+            source
+        );
     }
 
     // ===================
