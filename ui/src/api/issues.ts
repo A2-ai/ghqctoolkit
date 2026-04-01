@@ -451,11 +451,24 @@ export interface BlockedIssueStatus {
   qc_status: QCStatus
 }
 
+export class ApiRequestError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = status
+  }
+}
+
 export async function fetchBlockedIssues(issueNumber: number): Promise<BlockedIssueStatus[]> {
   const res = await fetch(`${API_BASE}/issues/${issueNumber}/blocked`)
   if (!res.ok) {
     const data = await res.json().catch(() => null)
-    throw new Error(data?.error ?? `Failed to fetch blocked issues: ${res.status}`)
+    throw new ApiRequestError(
+      data?.error ?? `Failed to fetch blocked issues: ${res.status}`,
+      res.status,
+    )
   }
   return res.json()
 }

@@ -6,7 +6,7 @@ import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd'
 import { IconMinus, IconPlus, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { BlockedIssueStatus, Issue, IssueStatusResponse, QCStatus } from '~/api/issues'
-import { fetchSingleIssueStatus, postUnapprove, useInvalidateBlockingDependents } from '~/api/issues'
+import { ApiRequestError, fetchBlockedIssues, fetchSingleIssueStatus, postUnapprove, useInvalidateBlockingDependents } from '~/api/issues'
 import { fetchUnapprovePreview } from '~/api/preview'
 import { wrapInGithubStyles } from '~/utils/github'
 import { STATUS_LANE_COLOR } from '~/utils/statusColors'
@@ -165,20 +165,14 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
     fetchingRef.current.add(issueNumber)
     dispatch({ type: 'LOAD_START', issueNumber })
     try {
-      const res = await fetch(`/api/issues/${issueNumber}/blocked`)
-      if (res.status === 501) {
+      const children = await fetchBlockedIssues(issueNumber)
+      dispatch({ type: 'LOAD_SUCCESS', issueNumber, children })
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 501) {
         dispatch({ type: 'BLOCKED_UNAVAILABLE', issueNumber })
         onBlockedUnavailable?.()
         return
       }
-      if (!res.ok) {
-        const data = await res.json().catch(() => null)
-        dispatch({ type: 'LOAD_ERROR', issueNumber, error: data?.error ?? `Failed to fetch blocked issues: ${res.status}` })
-        return
-      }
-      const children: BlockedIssueStatus[] = await res.json()
-      dispatch({ type: 'LOAD_SUCCESS', issueNumber, children })
-    } catch (err) {
       dispatch({ type: 'LOAD_ERROR', issueNumber, error: (err as Error).message })
     } finally {
       fetchingRef.current.delete(issueNumber)
