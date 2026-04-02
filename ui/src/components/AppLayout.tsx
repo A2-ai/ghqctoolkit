@@ -434,8 +434,18 @@ export function AppLayout() {
         </div>
       </AppShell.Navbar>
 
-      <AppShell.Main>
-        <Outlet />
+      <AppShell.Main
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: '100dvh',
+          height: '100dvh',
+          boxSizing: 'border-box',
+        }}
+      >
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <Outlet />
+        </div>
       </AppShell.Main>
     </AppShell>
   )

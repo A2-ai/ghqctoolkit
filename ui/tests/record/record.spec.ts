@@ -456,3 +456,24 @@ test('record regenerates preview after route change without reusing stale previe
   expect(previewCounter).toBe(2)
   expect(requestedPreviewKeys).toContain('key-2')
 })
+
+test('record preview expands when the window height increases', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await setup(page)
+  await goToRecord(page)
+  await selectMilestone(page, 'Sprint 0')
+  await waitForCardLoaded(page)
+
+  const preview = page.locator('iframe[src*="preview.pdf"]')
+  await expect(preview).toBeVisible({ timeout: 10_000 })
+
+  const initialBox = await preview.boundingBox()
+  expect(initialBox).not.toBeNull()
+
+  await page.setViewportSize({ width: 1280, height: 980 })
+
+  await expect.poll(async () => {
+    const box = await preview.boundingBox()
+    return Math.round(box?.height ?? 0)
+  }).toBeGreaterThan(Math.round((initialBox?.height ?? 0) + 200))
+})

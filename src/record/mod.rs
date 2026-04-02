@@ -312,7 +312,7 @@ pub async fn create_issue_information(
     }
 
     let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info, commit_cache)?;
-    let open = matches!(issue.state, octocrab::models::IssueState::Closed);
+    let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status
     let qc_status = QCStatus::determine_status(&issue_thread).to_string();
@@ -359,7 +359,7 @@ pub async fn create_issue_information(
     let events = get_issue_events(issue, cache, git_info).await?;
 
     // Issue closer (with name lookup)
-    let closed_by = if !open {
+    let closed_by = if is_closed {
         match get_issue_closer_username(&events) {
             Some(closer_login) => {
                 let closer_display = repo_users
@@ -474,7 +474,7 @@ pub async fn create_issue_information(
         initial_qc_commit: escape_typst(&initial_qc_commit),
         latest_qc_commit: escape_typst(&latest_qc_commit),
         issue_url: escape_typst(&issue.html_url.to_string()),
-        state: escape_typst(&if open { "Open" } else { "Closed" }.to_string()),
+        state: escape_typst(&if is_closed { "Closed" } else { "Open" }.to_string()),
         closed_by: closed_by.map(|c| escape_typst(&c)),
         closed_at: closed_at.map(|c| escape_typst(&c)),
         body, // body already processed with format_markdown_with_min_level which handles LaTeX
@@ -701,6 +701,205 @@ pub(crate) fn format_comments(
     }
 
     formatted_comments
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        git::{
+            GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
+            GitFileOpsError, GitHubApiError,
+        },
+        record::images::DownloadError,
+        test_utils::create_test_issue,
+    };
+    use gix::ObjectId;
+    use std::{collections::HashMap, path::Path, str::FromStr};
+
+    struct TestGitInfo {
+        comments: Vec<GitComment>,
+        events: Vec<serde_json::Value>,
+        commits: Vec<GitCommit>,
+    }
+
+    impl GitFileOps for TestGitInfo {
+        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+            Ok(self.commits.clone())
+        }
+
+        fn authors(&self, _file: &Path) -> Result<Vec<crate::git::GitAuthor>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn file_bytes_at_commit(
+            &self,
+            _file: &Path,
+            _commit: &ObjectId,
+        ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+    }
+
+    impl GitCommitAnalysis for TestGitInfo {
+        fn get_all_merge_commits(&self) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
+            Ok(Vec::new())
+        }
+
+        fn get_commit_parents(
+            &self,
+            _commit: &ObjectId,
+        ) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
+            Ok(Vec::new())
+        }
+
+        fn is_ancestor(
+            &self,
+            _ancestor: &ObjectId,
+            _descendant: &ObjectId,
+        ) -> Result<bool, GitCommitAnalysisError> {
+            Ok(false)
+        }
+
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &ObjectId,
+        ) -> Result<Vec<String>, GitCommitAnalysisError> {
+            Ok(Vec::new())
+        }
+    }
+
+    impl GitHubReader for TestGitInfo {
+        async fn get_milestones(&self) -> Result<Vec<Milestone>, GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_issues(
+            &self,
+            _milestone: Option<u64>,
+        ) -> Result<Vec<Issue>, GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_issue(&self, _issue_number: u64) -> Result<Issue, GitHubApiError> {
+            Err(GitHubApiError::NoApi)
+        }
+
+        async fn get_assignees(&self) -> Result<Vec<String>, GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_user_details(&self, username: &str) -> Result<RepoUser, GitHubApiError> {
+            Ok(RepoUser {
+                login: username.to_string(),
+                name: None,
+            })
+        }
+
+        async fn get_labels(&self) -> Result<Vec<String>, GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_issue_comments(
+            &self,
+            _issue: &Issue,
+        ) -> Result<Vec<GitComment>, GitHubApiError> {
+            Ok(self.comments.clone())
+        }
+
+        async fn get_issue_events(
+            &self,
+            _issue: &Issue,
+        ) -> Result<Vec<serde_json::Value>, GitHubApiError> {
+            Ok(self.events.clone())
+        }
+
+        async fn get_blocked_issues(
+            &self,
+            _issue_number: u64,
+        ) -> Result<Vec<Issue>, GitHubApiError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_current_user(&self) -> Result<Option<String>, GitHubApiError> {
+            Ok(None)
+        }
+    }
+
+    struct TestDownloader;
+
+    impl images::HttpDownloader for TestDownloader {
+        fn download(&self, _url: &str, _path: &Path) -> Result<(), DownloadError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn create_issue_information_sets_closed_by_for_closed_issues() {
+        let initial_commit = "1234567890abcdef1234567890abcdef12345678";
+        let mut issue = create_test_issue(
+            "owner",
+            "repo",
+            2,
+            "src/config.rs",
+            &format!(
+                "git branch: feature/test\ninitial qc commit: {}\n",
+                initial_commit
+            ),
+            Some(1),
+            "closed",
+        );
+        issue.closed_at = Some(chrono::Utc::now());
+
+        let git_info = TestGitInfo {
+            comments: Vec::new(),
+            events: vec![serde_json::json!({
+                "event": "closed",
+                "created_at": "2025-11-01T12:00:00Z",
+                "actor": {
+                    "login": "reviewer1"
+                }
+            })],
+            commits: vec![GitCommit {
+                commit: ObjectId::from_str(initial_commit).unwrap(),
+                message: "Initial commit".to_string(),
+                files: vec![PathBuf::from("src/config.rs")],
+            }],
+        };
+
+        let repo_users = vec![
+            RepoUser {
+                login: "octocat".to_string(),
+                name: Some("The Octocat".to_string()),
+            },
+            RepoUser {
+                login: "reviewer1".to_string(),
+                name: Some("Alice Reviewer".to_string()),
+            },
+        ];
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let issue_info = create_issue_information(
+            &issue,
+            "v1.0",
+            &repo_users,
+            &GitState::Clean,
+            &[],
+            None,
+            &git_info,
+            &TestDownloader,
+            staging_dir.path(),
+            &mut HashMap::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(issue_info.closed_by.as_deref(), Some("Alice Reviewer (reviewer1)"));
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
