@@ -65,6 +65,19 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const singularCap = capitalize(singular)
   const modal = create.modal
 
+  function handleSelectFile(selectedFile: string | null) {
+    setCreate((prev) => ({
+      ...prev,
+      modal: {
+        ...prev.modal,
+        selectedFile,
+        collaboratorAuthor: null,
+        collaborators: [],
+        collaboratorsSourceFile: null,
+      },
+    }))
+  }
+
   async function handleViewFile() {
     if (!modal.selectedFile) return
     setFilePreviewLoading(true)
@@ -201,7 +214,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             <Tabs.Panel value="file" keepMounted>
               <FileTreeBrowser
                 selectedFile={modal.selectedFile}
-                onSelect={(selectedFile) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, selectedFile } }))}
+                onSelect={handleSelectFile}
                 claimedFiles={claimedFiles}
               />
             </Tabs.Panel>
