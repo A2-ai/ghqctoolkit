@@ -356,6 +356,10 @@ enum AuthCommands {
         /// Token to store directly instead of launching an interactive flow
         token: Option<String>,
 
+        /// Skip using gh if found
+        #[arg(long)]
+        skip_gh: bool,
+
         /// Skip importing into the ghqc auth store after successful gh auth login
         #[arg(long)]
         no_store: bool,
@@ -1124,12 +1128,17 @@ async fn main() -> Result<()> {
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Auth store unavailable"))?;
             match auth_command {
-                AuthCommands::Login { token, no_store } => {
+                AuthCommands::Login {
+                    token,
+                    no_store,
+                    skip_gh,
+                } => {
                     gh_auth_login(
                         &cli.directory,
                         host.as_deref(),
                         token.as_deref(),
                         no_store,
+                        skip_gh,
                         store,
                     )?;
                 }

@@ -14,6 +14,7 @@ pub fn gh_auth_login(
     host: Option<&str>,
     token: Option<&str>,
     no_store: bool,
+    skip_gh: bool,
     store: &AuthStore,
 ) -> Result<()> {
     let base_url = resolve_host_from_repo_or_flag(host, directory)?;
@@ -29,7 +30,7 @@ pub fn gh_auth_login(
         return Ok(());
     }
 
-    if gh_available() {
+    if gh_available() && !skip_gh {
         run_gh_login(&host_name)?;
         if no_store {
             println!(
@@ -61,7 +62,7 @@ pub fn gh_auth_login(
         warn_no_store_ignored();
     }
 
-    print_manual_login_intro(&host_name)?;
+    print_manual_login_intro(&host_name, skip_gh)?;
     let token_url = token_page_url(&base_url)?;
     wait_for_enter()?;
     let _ = open::that(&token_url);
@@ -223,15 +224,17 @@ fn wait_for_enter() -> Result<()> {
     Ok(())
 }
 
-fn print_manual_login_intro(host_name: &str) -> Result<()> {
+fn print_manual_login_intro(host_name: &str, skip_gh: bool) -> Result<()> {
     let token_docs_url = token_page_url(&canonicalize_base_url(host_name)?)?;
     eprintln!();
     eprintln!("{}", section_header("Manual GitHub Login"));
-    eprintln!(
-        "{} {}",
-        "gh".bold().dimmed(),
-        "CLI was not found. Using the manual token flow.".dimmed()
-    );
+    if !skip_gh {
+        eprintln!(
+            "{} {}",
+            "gh".bold().dimmed(),
+            "CLI was not found. Using the manual token flow.".dimmed()
+        );
+    }
     eprintln!();
     eprintln!("{} {}", "Host:".bold(), host_name.bold());
     eprintln!(

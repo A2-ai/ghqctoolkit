@@ -1,6 +1,7 @@
 # v0.4.1 - April 2, 2026
 ## Improvements
 * Web UI's status tab has individually scrollable swimlanes
+* `--skip-gh` on `gh auth login` to skip using the `gh` CLI if found
 
 # v0.4.0 - April 2, 2026
 ## New Features
