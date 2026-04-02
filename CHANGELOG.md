@@ -1,3 +1,7 @@
+# v0.4.1 - April 2, 2026
+## Improvements
+* Web UI's status tab has individually scrollable swimlanes
+
 # v0.4.0 - April 2, 2026
 ## New Features
 * Configurable issue collaborators in both the CLI and Web UI
