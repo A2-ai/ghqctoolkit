@@ -43,6 +43,8 @@ export interface RouteOverrides {
   assignees: Assignee[]
   /** File tree responses keyed by path ('' for root, 'src' for src/, etc.) */
   fileTree: Record<string, FileTreeResponse>
+  /** Default collaborator lists keyed by file path */
+  fileCollaborators: Record<string, string[]>
   /** Milestone returned by POST /api/milestones */
   createMilestone: Milestone
   /** Issue responses returned by POST /api/milestones/:n/issues */
@@ -90,6 +92,10 @@ const defaultOverrides: RouteOverrides = {
   checklists: defaultChecklists,
   assignees: defaultAssignees,
   fileTree: { '': rootFileTree, src: srcFileTree },
+  fileCollaborators: {
+    'src/lib.rs': ['Jane Doe <jane@example.com>'],
+    'src/external.rs': ['Jane Doe <jane@example.com>'],
+  },
   createMilestone: createdMilestone,
   createIssues: createIssueResponses,
   createIssuesDelayMs: 0,
@@ -221,6 +227,20 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       status: 200,
       contentType: 'text/plain',
       body: '// mock file content',
+    })
+  })
+
+  await page.route(/\/api\/files\/collaborators/, (route, request) => {
+    const url = new URL(request.url())
+    const path = url.searchParams.get('path') ?? ''
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        path,
+        author: cfg.repo.current_user ?? null,
+        collaborators: cfg.fileCollaborators[path] ?? [],
+      }),
     })
   })
 

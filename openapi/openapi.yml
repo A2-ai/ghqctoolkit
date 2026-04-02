@@ -558,6 +558,27 @@ paths:
               schema:
                 $ref: '#/components/schemas/FileTreeResponse'
 
+  /files/collaborators:
+    get:
+      summary: Get default collaborators for a file
+      description: Returns collaborator metadata derived from the git author history for the given file.
+      operationId: getFileCollaborators
+      tags: [files]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: File path relative to repository root
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Default collaborator list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileCollaboratorsResponse'
+
   /files/content:
     get:
       summary: Get file content
@@ -1051,6 +1072,13 @@ components:
           items:
             type: string
           example: ["reviewer1", "reviewer2"]
+        collaborators:
+          type: array
+          nullable: true
+          description: Optional collaborator metadata entries in `Name <email>` format. When omitted, the server derives defaults from git history.
+          items:
+            type: string
+          example: ["Jane Doe <jane@example.com>", "John Smith <john@example.com>"]
         previous_qc:
           type: array
           description: Previous QC issues that must be approved before this one
@@ -1508,6 +1536,23 @@ components:
         kind:
           type: string
           enum: [file, directory]
+
+    FileCollaboratorsResponse:
+      type: object
+      required: [path, collaborators]
+      properties:
+        path:
+          type: string
+          description: File path that was queried
+        author:
+          type: string
+          nullable: true
+          description: Resolved issue author for the selected file. This entry is fixed metadata and not a removable collaborator.
+        collaborators:
+          type: array
+          description: Default collaborator metadata entries derived from git author history
+          items:
+            type: string
 
     ArchiveGenerateRequest:
       type: object

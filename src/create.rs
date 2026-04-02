@@ -25,7 +25,8 @@ pub struct QCIssue {
     pub title: PathBuf,
     commit: String,
     pub(crate) branch: String,
-    authors: Vec<GitAuthor>,
+    author: String,
+    collaborators: Vec<String>,
     checklist: Checklist,
     pub(crate) assignees: Vec<String>,
     relevant_files: Vec<RelevantFile>,
@@ -33,29 +34,15 @@ pub struct QCIssue {
 
 impl QCIssue {
     pub(crate) fn body(&self, git_info: &impl GitHelpers) -> String {
-        let author = self
-            .authors
-            .first()
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
-
         let mut metadata = vec![
             "## Metadata".to_string(),
             format!("initial qc commit: {}", self.commit),
             format!("git branch: {}", self.branch),
-            format!("author: {author}"),
+            format!("author: {}", self.author),
         ];
 
-        if self.authors.len() > 1 {
-            metadata.push(format!(
-                "collaborators: {}",
-                self.authors
-                    .iter()
-                    .skip(1)
-                    .map(|a| a.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        if !self.collaborators.is_empty() {
+            metadata.push(format!("collaborators: {}", self.collaborators.join(", ")));
         }
 
         // Use up to 7 characters for short commit hash, or full length if shorter
@@ -88,7 +75,8 @@ impl QCIssue {
         milestone_id: u64,
         commit: String,
         branch: String,
-        authors: Vec<GitAuthor>,
+        author: String,
+        collaborators: Vec<String>,
         assignees: Vec<String>,
         checklist: Checklist,
         relevant_files: Vec<RelevantFile>,
@@ -98,7 +86,8 @@ impl QCIssue {
             title: file.as_ref().to_path_buf(),
             commit,
             branch,
-            authors,
+            author,
+            collaborators,
             checklist,
             assignees,
             relevant_files,
@@ -113,12 +102,17 @@ impl QCIssue {
         checklist: Checklist,
         relevant_files: Vec<RelevantFile>,
     ) -> Result<Self, QCIssueError> {
+        let authors = git_info.authors(file.as_ref())?;
+        let (author, collaborators) =
+            resolve_issue_people(git_info.configured_author().as_ref(), None, &authors, None);
+
         Ok(Self::new_without_git(
             file.as_ref(),
             milestone_id,
             git_info.commit()?,
             git_info.branch()?,
-            git_info.authors(file.as_ref())?,
+            author,
+            collaborators,
             assignees,
             checklist,
             relevant_files,
@@ -254,6 +248,106 @@ impl QCIssue {
     }
 }
 
+pub fn format_git_author(author: &GitAuthor) -> String {
+    format!("{} <{}>", author.name.trim(), author.email.trim())
+}
+
+fn is_bad_collaborator_email(email: &str) -> bool {
+    static IPV4_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\d+\.\d+\.\d+\.\d+").unwrap());
+
+    email.len() > 40
+        || email.contains("ip-")
+        || email.contains("compute.internal")
+        || email.contains("pcluster")
+        || IPV4_RE.is_match(email)
+}
+
+pub fn clean_git_authors(authors: &[GitAuthor]) -> Vec<String> {
+    let mut cleaned = Vec::new();
+    let mut seen_names = HashSet::new();
+    let mut seen_emails = HashSet::new();
+
+    for author in authors {
+        let name = author.name.trim();
+        let email = author.email.trim();
+
+        if name.is_empty()
+            || email.is_empty()
+            || name == "a2aigen"
+            || is_bad_collaborator_email(email)
+        {
+            continue;
+        }
+
+        if seen_names.contains(name) || seen_emails.contains(email) {
+            continue;
+        }
+
+        seen_names.insert(name.to_string());
+        seen_emails.insert(email.to_string());
+        cleaned.push(format!("{name} <{email}>"));
+    }
+
+    cleaned
+}
+
+pub fn normalize_collaborator_entry(entry: &str) -> Option<String> {
+    static COLLABORATOR_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^(.*)<(.*)>$").unwrap());
+
+    let captures = COLLABORATOR_RE.captures(entry.trim())?;
+    let name = captures.get(1)?.as_str().trim();
+    let email = captures.get(2)?.as_str().trim();
+
+    if name.is_empty() || email.is_empty() {
+        return None;
+    }
+
+    Some(format!("{name} <{email}>"))
+}
+
+pub fn normalize_collaborator_entries(entries: &[String]) -> Result<Vec<String>, String> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for entry in entries {
+        let value = normalize_collaborator_entry(entry)
+            .ok_or_else(|| format!("Invalid collaborator entry: '{}'", entry))?;
+        if seen.insert(value.clone()) {
+            normalized.push(value);
+        }
+    }
+
+    Ok(normalized)
+}
+
+pub fn resolve_issue_people(
+    configured_author: Option<&GitAuthor>,
+    current_user: Option<&str>,
+    authors: &[GitAuthor],
+    collaborator_override: Option<Vec<String>>,
+) -> (String, Vec<String>) {
+    let author = configured_author
+        .map(format_git_author)
+        .or_else(|| {
+            current_user
+                .filter(|user| !user.trim().is_empty())
+                .map(|user| user.trim().to_string())
+        })
+        .or_else(|| authors.first().map(format_git_author))
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let collaborators = collaborator_override.unwrap_or_else(|| {
+        clean_git_authors(authors)
+            .into_iter()
+            .filter(|entry| entry != &author)
+            .collect()
+    });
+
+    (author, collaborators)
+}
+
 pub struct CreateResult {
     pub issue_url: String,
     pub issue_number: u64,
@@ -318,6 +412,8 @@ pub struct QCEntry {
     pub checklist: Checklist,
     /// Assignees for this issue
     pub assignees: Vec<String>,
+    /// Optional collaborator overrides for this issue
+    pub collaborators: Option<Vec<String>>,
     /// Related files (existing or being created in this batch)
     pub relevant_files: Vec<RelevantFileEntry>,
 }
@@ -571,9 +667,11 @@ pub async fn batch_post_qc_entries(
          impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps + GitCommitAnalysis
      ),
     milestone_id: u64,
+    current_user: Option<&str>,
 ) -> Result<Vec<CreateResult>, QCIssueError> {
     let commit = git_info.commit()?;
     let branch = git_info.branch()?;
+    let configured_author = git_info.configured_author();
 
     // Resolve creation order
     let resolution = resolve_creation_order(entries);
@@ -656,6 +754,12 @@ pub async fn batch_post_qc_entries(
 
         // Get authors for file
         let authors = git_info.authors(&entry.title)?;
+        let (author, collaborators) = resolve_issue_people(
+            configured_author.as_ref(),
+            current_user,
+            &authors,
+            entry.collaborators.clone(),
+        );
 
         // Create QCIssue
         let qc_issue = QCIssue {
@@ -663,7 +767,8 @@ pub async fn batch_post_qc_entries(
             title: entry.title.clone(),
             commit: commit.clone(),
             branch: branch.clone(),
-            authors,
+            author,
+            collaborators,
             checklist: entry.checklist.clone(),
             assignees: entry.assignees.clone(),
             relevant_files,
@@ -747,16 +852,8 @@ mod tests {
             title: PathBuf::from("src/example.rs"),
             commit: "abc123def456789".to_string(),
             branch: "feature/new-feature".to_string(),
-            authors: vec![
-                GitAuthor {
-                    name: "John Doe".to_string(),
-                    email: "john@example.com".to_string(),
-                },
-                GitAuthor {
-                    name: "Jane Smith".to_string(),
-                    email: "jane@example.com".to_string(),
-                }
-            ],
+            author: "John Doe <john@example.com>".to_string(),
+            collaborators: vec!["Jane Smith <jane@example.com>".to_string()],
             checklist: Checklist::new(
                 "Code Review Checklist".to_string(),
                 Some("NOTE"),
@@ -821,6 +918,127 @@ mod tests {
     }
 
     #[test]
+    fn test_clean_git_authors_filters_bad_entries() {
+        let authors = vec![
+            GitAuthor {
+                name: "Jane Doe".to_string(),
+                email: "jane@example.com".to_string(),
+            },
+            GitAuthor {
+                name: "Jane Doe".to_string(),
+                email: "jane2@example.com".to_string(),
+            },
+            GitAuthor {
+                name: "Infra".to_string(),
+                email: "ip-123-4-5-6".to_string(),
+            },
+            GitAuthor {
+                name: "a2aigen".to_string(),
+                email: "bot@example.com".to_string(),
+            },
+            GitAuthor {
+                name: "John Smith".to_string(),
+                email: "john@example.com".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            clean_git_authors(&authors),
+            vec![
+                "Jane Doe <jane@example.com>".to_string(),
+                "John Smith <john@example.com>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_normalize_collaborator_entries() {
+        let collaborators = vec![
+            " Jane Doe <jane@example.com> ".to_string(),
+            "Jane Doe <jane@example.com>".to_string(),
+            "John Smith <john@example.com>".to_string(),
+        ];
+
+        assert_eq!(
+            normalize_collaborator_entries(&collaborators).unwrap(),
+            vec![
+                "Jane Doe <jane@example.com>".to_string(),
+                "John Smith <john@example.com>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolve_issue_people_prefers_current_user_and_removes_exact_match() {
+        let authors = vec![GitAuthor {
+            name: "Jane Doe".to_string(),
+            email: "jane@example.com".to_string(),
+        }];
+
+        let configured_author = GitAuthor {
+            name: "Jane Doe".to_string(),
+            email: "jane@example.com".to_string(),
+        };
+
+        let (author, collaborators) = resolve_issue_people(
+            Some(&configured_author),
+            Some("someone-else"),
+            &authors,
+            None,
+        );
+
+        assert_eq!(author, "Jane Doe <jane@example.com>");
+        assert!(collaborators.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_issue_people_falls_back_to_github_user_then_git_author() {
+        let authors = vec![
+            GitAuthor {
+                name: "Jane Doe".to_string(),
+                email: "jane@example.com".to_string(),
+            },
+            GitAuthor {
+                name: "John Smith".to_string(),
+                email: "john@example.com".to_string(),
+            },
+        ];
+
+        let (author, collaborators) = resolve_issue_people(None, Some("octocat"), &authors, None);
+
+        assert_eq!(author, "octocat");
+        assert_eq!(
+            collaborators,
+            vec![
+                "Jane Doe <jane@example.com>".to_string(),
+                "John Smith <john@example.com>".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolve_issue_people_falls_back_to_first_git_author() {
+        let authors = vec![
+            GitAuthor {
+                name: "Jane Doe".to_string(),
+                email: "jane@example.com".to_string(),
+            },
+            GitAuthor {
+                name: "John Smith".to_string(),
+                email: "john@example.com".to_string(),
+            },
+        ];
+
+        let (author, collaborators) = resolve_issue_people(None, None, &authors, None);
+
+        assert_eq!(author, "Jane Doe <jane@example.com>");
+        assert_eq!(
+            collaborators,
+            vec!["John Smith <john@example.com>".to_string()]
+        );
+    }
+
+    #[test]
     fn test_blocking_issues() {
         let issue = create_test_issue();
         let blocking = issue.blocking_issues();
@@ -860,7 +1078,8 @@ mod tests {
             title: PathBuf::from("src/example.rs"),
             commit: "abc123def456789".to_string(),
             branch: "feature/new-feature".to_string(),
-            authors: vec![],
+            author: "Unknown".to_string(),
+            collaborators: vec![],
             checklist: Checklist::new("Test".to_string(), None, "- [ ] item".to_string()),
             assignees: vec![],
             relevant_files: vec![RelevantFile {
@@ -887,7 +1106,8 @@ mod tests {
             title: PathBuf::from("src/example.rs"),
             commit: "abc123def456789".to_string(),
             branch: "feature/new-feature".to_string(),
-            authors: vec![],
+            author: "Unknown".to_string(),
+            collaborators: vec![],
             checklist: Checklist::new("Test".to_string(), None, "- [ ] item".to_string()),
             assignees: vec![],
             relevant_files: vec![
@@ -1216,7 +1436,8 @@ mod tests {
             title: PathBuf::from("src/example.rs"),
             commit: "abc123def456789".to_string(),
             branch: "feature/new-feature".to_string(),
-            authors: vec![],
+            author: "Unknown".to_string(),
+            collaborators: vec![],
             checklist: Checklist::new("Test".to_string(), None, "- [ ] item".to_string()),
             assignees: vec![],
             relevant_files: vec![
@@ -1273,6 +1494,7 @@ mod tests {
             title: PathBuf::from(title),
             checklist: Checklist::new("Test".to_string(), None, "- [ ] test".to_string()),
             assignees: vec![],
+            collaborators: None,
             relevant_files,
         }
     }

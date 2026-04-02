@@ -59,8 +59,9 @@ pub async fn create_issues<G: GitProvider + 'static>(
 
     let entries = requests
         .into_iter()
-        .map(CreateIssueRequest::into)
-        .collect::<Vec<QCEntry>>();
+        .map(QCEntry::try_from)
+        .collect::<Result<Vec<QCEntry>, _>>()
+        .map_err(ApiError::BadRequest)?;
 
     // Check for duplicate filenames within the request
     let mut seen_files = HashSet::new();
@@ -126,20 +127,27 @@ pub async fn create_issues<G: GitProvider + 'static>(
         log::warn!("Failed to create issue labels: {e}. Continuing without...");
     }
 
-    let res = batch_post_qc_entries(&entries, state.git_info(), milestone_number)
-        .await
-        .map_err(|e| match e {
-            QCIssueError::DependencyResolution { errors } => ApiError::BadRequest(format!(
-                "Failed to resolve issue creation order:\n  -{}",
-                errors
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n  -")
-            )),
-            QCIssueError::GitHubApiError(e) => ApiError::GitHubApi(e.to_string()),
-            _ => ApiError::Internal(e.to_string()),
-        })?;
+    let current_user = state.git_info().get_current_user().await.ok().flatten();
+
+    let res = batch_post_qc_entries(
+        &entries,
+        state.git_info(),
+        milestone_number,
+        current_user.as_deref(),
+    )
+    .await
+    .map_err(|e| match e {
+        QCIssueError::DependencyResolution { errors } => ApiError::BadRequest(format!(
+            "Failed to resolve issue creation order:\n  -{}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n  -")
+        )),
+        QCIssueError::GitHubApiError(e) => ApiError::GitHubApi(e.to_string()),
+        _ => ApiError::Internal(e.to_string()),
+    })?;
 
     Ok((
         StatusCode::CREATED,

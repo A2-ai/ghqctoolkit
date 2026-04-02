@@ -778,10 +778,7 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn get_issues(
-            &self,
-            _milestone: Option<u64>,
-        ) -> Result<Vec<Issue>, GitHubApiError> {
+        async fn get_issues(&self, _milestone: Option<u64>) -> Result<Vec<Issue>, GitHubApiError> {
             Ok(Vec::new())
         }
 
@@ -898,7 +895,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(issue_info.closed_by.as_deref(), Some("Alice Reviewer (reviewer1)"));
+        assert_eq!(
+            issue_info.closed_by.as_deref(),
+            Some("Alice Reviewer (reviewer1)")
+        );
     }
 }
 

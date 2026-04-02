@@ -255,6 +255,10 @@ impl GitRepository for MockGitInfo {
             Ok(FileStashOutcome::NoChanges)
         }
     }
+
+    fn configured_author(&self) -> Option<crate::GitAuthor> {
+        None
+    }
 }
 
 impl GitHelpers for MockGitInfo {

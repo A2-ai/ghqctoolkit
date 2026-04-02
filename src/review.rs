@@ -194,6 +194,10 @@ mod tests {
                 .clone()
                 .map_err(crate::GitRepositoryError::StashError)
         }
+
+        fn configured_author(&self) -> Option<crate::GitAuthor> {
+            None
+        }
     }
 
     struct MockGitInfo {

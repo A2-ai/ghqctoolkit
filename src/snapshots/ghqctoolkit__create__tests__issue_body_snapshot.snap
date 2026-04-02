@@ -5,8 +5,8 @@ expression: body
 ## Metadata
 * initial qc commit: abc123def456789
 * git branch: feature/new-feature
-* author: John Doe (john@example.com)
-* collaborators: Jane Smith (jane@example.com)
+* author: John Doe <john@example.com>
+* collaborators: Jane Smith <jane@example.com>
 * [file contents at initial qc commit](https://github.com/owner/repo/blob/abc123d/src/example.rs)
 
 ## Relevant Files

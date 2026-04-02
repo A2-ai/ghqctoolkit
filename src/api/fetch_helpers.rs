@@ -256,6 +256,10 @@ mod tests {
         ) -> Result<FileStashOutcome, GitRepositoryError> {
             Ok(FileStashOutcome::NoChanges)
         }
+
+        fn configured_author(&self) -> Option<crate::GitAuthor> {
+            None
+        }
     }
 
     #[test]

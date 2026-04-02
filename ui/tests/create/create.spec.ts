@@ -158,6 +158,66 @@ test('full create workflow', async ({ page }) => {
   await expect(resultModal.getByRole('link', { name: 'src/lib.rs' })).toBeVisible()
 })
 
+test('collaborators default from file authors and are sent in create request', async ({ page }) => {
+  const requests: Array<{ collaborators?: string[] }> = []
+
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+    fileCollaborators: {
+      'src/main.rs': ['Jane Doe <jane@example.com>'],
+    },
+  })
+
+  await page.route(/\/api\/milestones\/(\d+)\/issues/, async (route, request) => {
+    if (request.method() !== 'POST') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      })
+      return
+    }
+
+    requests.push(...((await request.postDataJSON()) as Array<{ collaborators?: string[] }>))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{
+        issue_url: 'https://github.com/test-owner/test-repo/issues/301',
+        issue_number: 301,
+        blocking_created: [],
+        blocking_errors: [],
+      }]),
+    })
+  })
+
+  await page.goto('/create')
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+
+  const modal = page.getByRole('dialog', { name: 'Create QC Issue' })
+  await modal.getByRole('treeitem', { name: 'src' }).click()
+  await modal.getByRole('treeitem', { name: 'main.rs' }).click()
+  await modal.getByRole('tab', { name: 'Select a Checklist' }).click()
+  await modal.getByRole('button', { name: 'Code Review' }).click()
+  await modal.getByRole('tab', { name: 'Select Collaborators' }).click()
+  await expect(modal.getByText('Author: test-user')).toBeVisible()
+  await expect(modal.getByRole('button', { name: 'Remove Jane Doe <jane@example.com>' })).toBeVisible()
+  await modal.getByLabel('Add collaborator').fill('John Smith <john@example.com>')
+  await modal.getByRole('button', { name: 'Add' }).click()
+  await modal.getByRole('button', { name: 'Queue' }).click()
+
+  await page.getByPlaceholder('e.g. Sprint 4').fill('Milestone X')
+  await page.getByRole('button', { name: 'Create 1 QC Issue' }).click()
+
+  await expect(page.getByRole('dialog', { name: '1 QC Issue Created' })).toBeVisible()
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.collaborators).toEqual([
+    'Jane Doe <jane@example.com>',
+    'John Smith <john@example.com>',
+  ])
+})
+
 test('new milestone name stays non-duplicate until success modal closes', async ({ page }) => {
   await setupRoutes(page, {
     issueStatuses: { results: [], errors: [] },

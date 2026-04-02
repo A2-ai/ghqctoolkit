@@ -128,6 +128,14 @@ enum IssueCommands {
         #[arg(short, long)]
         assignees: Option<Vec<String>>,
 
+        /// Add collaborator metadata entry. Format: Name <email>
+        #[arg(long = "add-collaborator")]
+        add_collaborator: Vec<String>,
+
+        /// Remove collaborator metadata entry from detected defaults. Format: Name <email>
+        #[arg(long = "remove-collaborator")]
+        remove_collaborator: Vec<String>,
+
         /// Description for the milestone (only used when creating a new milestone)
         #[arg(short = 'D', long)]
         description: Option<String>,
@@ -392,6 +400,8 @@ async fn main() -> Result<()> {
                     file,
                     checklist_name,
                     assignees,
+                    add_collaborator,
+                    remove_collaborator,
                     description,
                     previous_qc,
                     gating_qc,
@@ -414,6 +424,8 @@ async fn main() -> Result<()> {
                                 file,
                                 checklist_name,
                                 assignees,
+                                add_collaborator,
+                                remove_collaborator,
                                 description,
                                 previous_qc,
                                 gating_qc,

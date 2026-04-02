@@ -1,5 +1,5 @@
-use crate::GitInfo;
 use crate::git::action::{GitCli, GitCommand, StashFileOutcome};
+use crate::{GitAuthor, GitInfo};
 #[cfg(test)]
 use mockall::automock;
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,9 @@ pub trait GitRepository {
         file: &Path,
         message: &str,
     ) -> Result<FileStashOutcome, GitRepositoryError>;
+
+    /// Get the configured local git author identity from user.name and user.email.
+    fn configured_author(&self) -> Option<GitAuthor>;
 }
 
 impl GitRepository for GitInfo {
@@ -153,5 +156,45 @@ impl GitRepository for GitInfo {
             StashFileOutcome::Stashed => Ok(FileStashOutcome::Stashed),
             StashFileOutcome::NoChanges => Ok(FileStashOutcome::NoChanges),
         }
+    }
+
+    fn configured_author(&self) -> Option<GitAuthor> {
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                &self.repository_path.to_string_lossy(),
+                "config",
+                "--get-regexp",
+                "^user\\.(name|email)$",
+            ])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut name = None;
+        let mut email = None;
+
+        for line in stdout.lines() {
+            if let Some(value) = line.strip_prefix("user.name ") {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    name = Some(trimmed.to_string());
+                }
+            } else if let Some(value) = line.strip_prefix("user.email ") {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    email = Some(trimmed.to_string());
+                }
+            }
+        }
+
+        Some(GitAuthor {
+            name: name?,
+            email: email?,
+        })
     }
 }

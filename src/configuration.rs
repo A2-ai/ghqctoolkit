@@ -964,6 +964,10 @@ Second Checklist:
             ) -> Result<crate::git::FileStashOutcome, crate::git::GitRepositoryError> {
                 Ok(crate::git::FileStashOutcome::NoChanges)
             }
+
+            fn configured_author(&self) -> Option<crate::GitAuthor> {
+                None
+            }
         }
 
         impl crate::git::GitStatusOps for MockGitInfo {

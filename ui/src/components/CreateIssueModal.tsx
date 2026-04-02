@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, Group, Modal, ScrollArea, Tabs } from '@mantine/core'
 import { FileTreeBrowser } from './FileTreeBrowser'
 import { IssuePreviewCard } from './IssuePreviewCard'
 import { ChecklistTab } from './ChecklistTab'
 import { RelevantFilesTab } from './RelevantFilesTab'
 import { ReviewersTab } from './ReviewersTab'
+import { CollaboratorsTab } from './CollaboratorsTab'
 import type { ChecklistDraft } from './ChecklistTab'
 import { useRepoInfo } from '~/api/repo'
 import { useIssuesForMilestone } from '~/api/issues'
@@ -13,6 +14,7 @@ import { capitalize } from '~/utils/displayName'
 import type { RelevantFileKind } from '~/api/issues'
 import { toCreateIssueRequest } from '~/api/create'
 import { fetchFileContent, fetchIssuePreview } from '~/api/preview'
+import { fetchFileCollaborators } from '~/api/files'
 import { wrapInGithubStyles } from '~/utils/github'
 import { useUiSession } from '~/state/uiSession'
 
@@ -36,6 +38,7 @@ export interface QueuedItem {
   createdBy: string | null
   milestoneTitle: string | null
   assignees: string[]
+  collaborators: string[]
   relevantFiles: RelevantFileDraft[]
 }
 
@@ -55,6 +58,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const { create, setCreate } = useUiSession()
   const [filePreviewLoading, setFilePreviewLoading] = useState(false)
   const [issuePreviewLoading, setIssuePreviewLoading] = useState(false)
+  const [collaboratorsLoading, setCollaboratorsLoading] = useState(false)
   const { data: repoInfo } = useRepoInfo()
   const { data: milestoneIssues = [] } = useIssuesForMilestone(milestoneNumber)
   const { singular } = useChecklistDisplayName()
@@ -90,6 +94,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       createdBy: repoInfo?.current_user ?? null,
       milestoneTitle,
       assignees: modal.assignees,
+      collaborators: modal.collaborators,
       relevantFiles: modal.relevantFiles,
     }
     // Include queued-but-no-issue-number items in the "batch" so they show as New in the preview
@@ -129,6 +134,46 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
     [milestoneIssues, queuedItems, editIndex],
   )
 
+  useEffect(() => {
+    const selectedFile = modal.selectedFile
+    if (!selectedFile || modal.collaboratorsSourceFile === selectedFile) return
+
+    let cancelled = false
+    setCollaboratorsLoading(true)
+    void fetchFileCollaborators(selectedFile)
+      .then((response) => {
+        if (cancelled) return
+        setCreate((prev) => ({
+            ...prev,
+            modal: {
+              ...prev.modal,
+              collaboratorAuthor: response.author,
+              collaborators: response.collaborators,
+              collaboratorsSourceFile: selectedFile,
+            },
+        }))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCreate((prev) => ({
+          ...prev,
+            modal: {
+              ...prev.modal,
+              collaboratorAuthor: null,
+              collaborators: [],
+              collaboratorsSourceFile: selectedFile,
+            },
+        }))
+      })
+      .finally(() => {
+        if (!cancelled) setCollaboratorsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [modal.selectedFile, modal.collaboratorsSourceFile, setCreate])
+
   return (
     <Modal
       opened={opened}
@@ -148,6 +193,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
           <Tabs.Tab value="checklist">Select a {singularCap}</Tabs.Tab>
           <Tabs.Tab value="relevant">Select Relevant Files</Tabs.Tab>
           <Tabs.Tab value="reviewers">Select Reviewer(s)</Tabs.Tab>
+          <Tabs.Tab value="collaborators">Select Collaborators</Tabs.Tab>
         </Tabs.List>
 
         <Group align="flex-start" gap="md" wrap="nowrap" pt="md">
@@ -202,6 +248,29 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
                 onChange={(assignees) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, assignees } }))}
               />
             </Tabs.Panel>
+            <Tabs.Panel value="collaborators">
+              <CollaboratorsTab
+                author={modal.collaboratorAuthor}
+                collaborators={modal.collaborators}
+                loading={collaboratorsLoading}
+                onAdd={(value) => setCreate((prev) => ({
+                  ...prev,
+                  modal: {
+                    ...prev.modal,
+                    collaborators: prev.modal.collaborators.includes(value)
+                      ? prev.modal.collaborators
+                      : [...prev.modal.collaborators, value],
+                  },
+                }))}
+                onRemove={(index) => setCreate((prev) => ({
+                  ...prev,
+                  modal: {
+                    ...prev.modal,
+                    collaborators: prev.modal.collaborators.filter((_, i) => i !== index),
+                  },
+                }))}
+              />
+            </Tabs.Panel>
           </div>
 
           <div style={{ flex: '0 0 260px' }}>
@@ -211,6 +280,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
               createdBy={repoInfo?.current_user ?? null}
               checklistName={modal.checklistSelected ? (modal.checklistDraft.name || null) : null}
               assignees={modal.assignees}
+              collaborators={modal.collaborators}
               relevantFiles={modal.relevantFiles}
             />
           </div>
@@ -244,6 +314,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
                 createdBy: repoInfo?.current_user ?? null,
                 milestoneTitle,
                 assignees: modal.assignees,
+                collaborators: modal.collaborators,
                 relevantFiles: modal.relevantFiles,
               }
               if (editIndex != null) {

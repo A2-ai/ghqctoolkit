@@ -32,8 +32,9 @@ pub use file_parser::{
     RelevantFileArgParser,
 };
 pub use interactive::{
-    prompt_assignees, prompt_checklist, prompt_context_files, prompt_existing_milestone,
-    prompt_file, prompt_issue, prompt_milestone, prompt_milestone_archive, prompt_milestone_record,
+    prompt_assignees, prompt_checklist, prompt_collaborators, prompt_context_files,
+    prompt_existing_milestone, prompt_file, prompt_issue, prompt_milestone,
+    prompt_milestone_archive, prompt_milestone_record,
 };
 pub use sitrep::SitRep;
 pub use status::{

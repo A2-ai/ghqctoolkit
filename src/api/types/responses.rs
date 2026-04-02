@@ -556,6 +556,14 @@ pub struct FileTreeResponse {
     pub entries: Vec<TreeEntry>,
 }
 
+/// Response for default file collaborators derived from git history.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileCollaboratorsResponse {
+    pub path: String,
+    pub author: Option<String>,
+    pub collaborators: Vec<String>,
+}
+
 /// Response for archive generation.
 #[derive(Debug, Serialize)]
 pub struct ArchiveGenerateResponse {

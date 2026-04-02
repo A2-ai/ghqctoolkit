@@ -82,6 +82,11 @@ export function QueuedIssueCard({ item, onEdit, onRemove, conflictReason, dirty 
           <b>Reviewer{item.assignees.length > 1 ? 's' : ''}:</b> {item.assignees.join(', ')}
         </Text>
       )}
+      {item.collaborators.length > 0 && (
+        <Text size="xs" c="dimmed">
+          <b>Collaborator{item.collaborators.length > 1 ? 's' : ''}:</b> {item.collaborators.join(', ')}
+        </Text>
+      )}
 
       {item.relevantFiles.length > 0 && (
         <>
