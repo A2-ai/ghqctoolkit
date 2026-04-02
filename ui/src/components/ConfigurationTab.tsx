@@ -224,6 +224,10 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: 'Display name', value: <Text size="sm">{opts.checklist_display_name}</Text> },
     {
+      label: 'Include collaborators',
+      value: <Text size="sm">{opts.include_collaborators ? 'Yes' : 'No'}</Text>,
+    },
+    {
       label: `${singularCap} directory`,
       value: (
         <Text size="sm" style={{ fontFamily: 'monospace' }}>
@@ -251,6 +255,10 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
           {opts.record_path}
         </Text>
       ),
+    },
+    {
+      label: 'UI repo refresh rate',
+      value: <Text size="sm">{opts.ui_repo_refresh_rate_seconds}s</Text>,
     },
     ...(opts.prepended_checklist_note !== null
       ? [{ label: `${singularCap} note`, value: <Text size="sm">{opts.prepended_checklist_note}</Text> }]

@@ -20,7 +20,7 @@ import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
-import type { BlockedIssueStatus, CommentResponse, UnapprovalResponse } from '../../src/api/issues'
+import type { BlockedIssueStatus, CommentResponse, ReviewResponse, UnapprovalResponse } from '../../src/api/issues'
 
 export interface RouteOverrides {
   repo: RepoInfo
@@ -35,12 +35,18 @@ export interface RouteOverrides {
   issueStatusesCode: number
   /** checklist_display_name returned by GET /api/configuration (default: 'checklists') */
   checklistDisplayName: string
+  /** Whether collaborators should be exposed in create flows */
+  includeCollaborators: boolean
+  /** Effective repo refresh interval returned by GET /api/configuration (default: 15) */
+  uiRepoRefreshRateSeconds: number
   /** Checklists returned by GET /api/configuration */
   checklists: Checklist[]
   /** Assignees returned by /api/assignees */
   assignees: Assignee[]
   /** File tree responses keyed by path ('' for root, 'src' for src/, etc.) */
   fileTree: Record<string, FileTreeResponse>
+  /** Default collaborator lists keyed by file path */
+  fileCollaborators: Record<string, string[]>
   /** Milestone returned by POST /api/milestones */
   createMilestone: Milestone
   /** Issue responses returned by POST /api/milestones/:n/issues */
@@ -50,7 +56,7 @@ export interface RouteOverrides {
   /** Response for POST /api/issues/:n/comment; null → 500 error */
   postCommentResponse: CommentResponse | null
   /** Response for POST /api/issues/:n/review; null → 500 error */
-  postReviewResponse: CommentResponse | null
+  postReviewResponse: ReviewResponse | null
   /** Response for POST /api/issues/:n/approve; null → 500 error */
   postApproveResponse: { approval_url: string; skipped_unapproved: number[]; skipped_errors: unknown[]; closed: boolean } | null
   /** Response for POST /api/issues/:n/unapprove; null → 500 error */
@@ -84,14 +90,23 @@ const defaultOverrides: RouteOverrides = {
   },
   issueStatusesCode: 200,
   checklistDisplayName: 'checklists',
+  includeCollaborators: true,
+  uiRepoRefreshRateSeconds: 15,
   checklists: defaultChecklists,
   assignees: defaultAssignees,
   fileTree: { '': rootFileTree, src: srcFileTree },
+  fileCollaborators: {
+    'src/lib.rs': ['Jane Doe <jane@example.com>'],
+    'src/external.rs': ['Jane Doe <jane@example.com>'],
+  },
   createMilestone: createdMilestone,
   createIssues: createIssueResponses,
   createIssuesDelayMs: 0,
   postCommentResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/71#issuecomment-99999' },
-  postReviewResponse: { comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888' },
+  postReviewResponse: {
+    comment_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-88888',
+    stash: { status: 'stashed', message: 'Stashed local changes for src/single.rs' },
+  },
   postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
   postUnapproveResponse: { unapproval_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-66666', opened: true },
   blockedResponse: [],
@@ -175,10 +190,12 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       options: {
         prepended_checklist_note: null,
         checklist_display_name: cfg.checklistDisplayName,
+        include_collaborators: cfg.includeCollaborators,
         logo_path: 'logo.png',
         logo_found: false,
         checklist_directory: 'checklists/',
         record_path: 'records/',
+        ui_repo_refresh_rate_seconds: cfg.uiRepoRefreshRateSeconds,
       },
       checklists: cfg.checklists,
       config_repo_env: null,
@@ -214,6 +231,20 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       status: 200,
       contentType: 'text/plain',
       body: '// mock file content',
+    })
+  })
+
+  await page.route(/\/api\/files\/collaborators/, (route, request) => {
+    const url = new URL(request.url())
+    const path = url.searchParams.get('path') ?? ''
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        path,
+        author: cfg.repo.current_user ?? null,
+        collaborators: cfg.fileCollaborators[path] ?? [],
+      }),
     })
   })
 

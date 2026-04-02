@@ -11,8 +11,8 @@ use std::{fmt, fs};
 
 use crate::GitHubWriter;
 use crate::{
-    Configuration, ContextPosition, QCContext, configuration::Checklist, git::RepoUser,
-    issue::IssueThread,
+    Configuration, ContextPosition, QCContext, configuration::Checklist,
+    create::normalize_collaborator_entry, git::RepoUser, issue::IssueThread,
 };
 
 /// Enum representing the type of relevant file class for interactive selection
@@ -431,6 +431,51 @@ pub fn prompt_assignees(repo_users: &[RepoUser]) -> Result<Vec<String>> {
     }
 
     Ok(assignees)
+}
+
+pub fn prompt_collaborators(defaults: &[String]) -> Result<Vec<String>> {
+    let mut collaborators = if defaults.is_empty() {
+        Vec::new()
+    } else {
+        MultiSelect::new("🤝 Select collaborators to keep:", defaults.to_vec())
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?
+    };
+
+    loop {
+        let prompt = if collaborators.is_empty() {
+            "🤝 Add collaborator (Name <email>, Enter to finish):"
+        } else {
+            "🤝 Add another collaborator (Name <email>, Enter to finish):"
+        };
+
+        let input = Text::new(prompt)
+            .with_validator(|input: &str| {
+                if input.trim().is_empty() || normalize_collaborator_entry(input).is_some() {
+                    Ok(Validation::Valid)
+                } else {
+                    Ok(Validation::Invalid(
+                        "Collaborator must use the format Name <email>".into(),
+                    ))
+                }
+            })
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Input cancelled: {}", e))?;
+
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+
+        let normalized = normalize_collaborator_entry(trimmed)
+            .ok_or_else(|| anyhow::anyhow!("Collaborator must use the format Name <email>"))?;
+
+        if !collaborators.contains(&normalized) {
+            collaborators.push(normalized);
+        }
+    }
+
+    Ok(collaborators)
 }
 
 /// Select an issue from a milestone by title with autocomplete

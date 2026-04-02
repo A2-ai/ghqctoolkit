@@ -18,12 +18,17 @@ pub struct ConfigurationOptions {
     pub prepended_checklist_note: Option<String>,
     // What to call the checklist in the app. Default: checklist
     pub checklist_display_name: String,
+    // Whether collaborator metadata should be detected and included. Default: true
+    pub include_collaborators: bool,
     // Path to the logo within the configuration repo. Default: logo
     pub logo_path: PathBuf,
     // Path to the checklist directory within the configuration repo. Default: checklists
     pub checklist_directory: PathBuf,
     // Path to the record template within the configuration repo. Default: record.typ
     pub record_path: PathBuf,
+    // UI repo refresh rate in seconds. Falls back to env var/default if not set or invalid
+    #[serde(default, deserialize_with = "deserialize_optional_positive_seconds")]
+    pub ui_repo_refresh_rate_seconds: Option<u64>,
 }
 
 impl Default for ConfigurationOptions {
@@ -31,9 +36,11 @@ impl Default for ConfigurationOptions {
         Self {
             prepended_checklist_note: None,
             checklist_display_name: "checklists".to_string(),
+            include_collaborators: true,
             logo_path: PathBuf::from("logo.png"),
             checklist_directory: PathBuf::from("checklists"),
             record_path: PathBuf::from("record.typ"),
+            ui_repo_refresh_rate_seconds: None,
         }
     }
 }
@@ -44,6 +51,16 @@ impl ConfigurationOptions {
         let content = fs::read_to_string(path)?;
         let options = serde_yaml::from_str(&content)?;
         Ok(options)
+    }
+
+    pub fn resolved_ui_repo_refresh_rate_seconds(&self, env: &impl EnvProvider) -> u64 {
+        self.ui_repo_refresh_rate_seconds
+            .or_else(|| {
+                env.var("GHQC_UI_REFRESH_RATE")
+                    .ok()
+                    .and_then(|value| parse_positive_seconds(&value))
+            })
+            .unwrap_or(15)
     }
 }
 
@@ -220,6 +237,44 @@ impl Configuration {
             .as_ref()
             .map(|s| s.as_str())
     }
+
+    pub fn include_collaborators(&self) -> bool {
+        self.options.include_collaborators
+    }
+
+    pub fn ui_repo_refresh_rate_seconds(&self, env: &impl EnvProvider) -> u64 {
+        self.options.resolved_ui_repo_refresh_rate_seconds(env)
+    }
+}
+
+fn deserialize_optional_positive_seconds<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(parse_positive_seconds_yaml))
+}
+
+fn parse_positive_seconds_yaml(value: Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64().filter(|seconds| *seconds > 0).or_else(|| {
+            number
+                .as_i64()
+                .filter(|seconds| *seconds > 0)
+                .map(|seconds| seconds as u64)
+        }),
+        Value::String(value) => parse_positive_seconds(&value),
+        _ => None,
+    }
+}
+
+fn parse_positive_seconds(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| seconds as u64)
 }
 
 fn extract_title_from_filename(path: &Path) -> Result<String, ConfigurationError> {
@@ -758,6 +813,7 @@ mod tests {
             config.options.checklist_display_name,
             "Custom Quality Check"
         );
+        assert!(!config.options.include_collaborators);
         assert_eq!(
             config.options.logo_path,
             PathBuf::from("assets/custom_logo.svg")
@@ -766,9 +822,95 @@ mod tests {
             config.options.checklist_directory,
             PathBuf::from("my_custom_checklists")
         );
+        assert_eq!(config.options.ui_repo_refresh_rate_seconds, Some(22));
 
         let custom_content = &config.checklists["Custom Checklist"];
         insta::assert_snapshot!("custom_directory_checklist", custom_content);
+    }
+
+    #[test]
+    fn test_ui_repo_refresh_rate_prefers_configuration_option() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.expect_var().times(0);
+
+        let options = ConfigurationOptions {
+            ui_repo_refresh_rate_seconds: Some(22),
+            ..ConfigurationOptions::default()
+        };
+
+        assert_eq!(options.resolved_ui_repo_refresh_rate_seconds(&mock_env), 22);
+    }
+
+    #[test]
+    fn test_ui_repo_refresh_rate_uses_env_var_when_option_missing() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_UI_REFRESH_RATE"))
+            .times(1)
+            .returning(|_| Ok("45".to_string()));
+
+        let options = ConfigurationOptions::default();
+        assert_eq!(options.resolved_ui_repo_refresh_rate_seconds(&mock_env), 45);
+    }
+
+    #[test]
+    fn test_ui_repo_refresh_rate_defaults_when_missing() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_UI_REFRESH_RATE"))
+            .times(1)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
+        let options = ConfigurationOptions::default();
+        assert_eq!(options.resolved_ui_repo_refresh_rate_seconds(&mock_env), 15);
+    }
+
+    #[test]
+    fn test_ui_repo_refresh_rate_uses_env_when_config_value_invalid() {
+        let options: ConfigurationOptions =
+            serde_yaml::from_str("ui_repo_refresh_rate_seconds: invalid").unwrap();
+
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_UI_REFRESH_RATE"))
+            .times(1)
+            .returning(|_| Ok("12".to_string()));
+
+        assert_eq!(options.ui_repo_refresh_rate_seconds, None);
+        assert_eq!(options.resolved_ui_repo_refresh_rate_seconds(&mock_env), 12);
+    }
+
+    #[test]
+    fn test_ui_repo_refresh_rate_defaults_when_all_values_invalid() {
+        let options: ConfigurationOptions =
+            serde_yaml::from_str("ui_repo_refresh_rate_seconds: 0").unwrap();
+
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_UI_REFRESH_RATE"))
+            .times(1)
+            .returning(|_| Ok("-5".to_string()));
+
+        assert_eq!(options.ui_repo_refresh_rate_seconds, None);
+        assert_eq!(options.resolved_ui_repo_refresh_rate_seconds(&mock_env), 15);
+    }
+
+    #[test]
+    fn test_include_collaborators_defaults_to_true() {
+        let options = ConfigurationOptions::default();
+        assert!(options.include_collaborators);
+    }
+
+    #[test]
+    fn test_include_collaborators_loads_from_yaml() {
+        let options: ConfigurationOptions =
+            serde_yaml::from_str("include_collaborators: false").unwrap();
+
+        assert!(!options.include_collaborators);
     }
 
     #[test]
@@ -835,6 +977,18 @@ Second Checklist:
 
             fn fetch(&self) -> Result<bool, crate::git::GitRepositoryError> {
                 Ok(false) // Mock: no changes fetched
+            }
+
+            fn stash_file(
+                &self,
+                _file: &std::path::Path,
+                _message: &str,
+            ) -> Result<crate::git::FileStashOutcome, crate::git::GitRepositoryError> {
+                Ok(crate::git::FileStashOutcome::NoChanges)
+            }
+
+            fn configured_author(&self) -> Option<crate::GitAuthor> {
+                None
             }
         }
 

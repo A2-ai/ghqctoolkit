@@ -1,18 +1,20 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, Group, Modal, ScrollArea, Tabs } from '@mantine/core'
 import { FileTreeBrowser } from './FileTreeBrowser'
 import { IssuePreviewCard } from './IssuePreviewCard'
 import { ChecklistTab } from './ChecklistTab'
 import { RelevantFilesTab } from './RelevantFilesTab'
 import { ReviewersTab } from './ReviewersTab'
+import { CollaboratorsTab } from './CollaboratorsTab'
 import type { ChecklistDraft } from './ChecklistTab'
 import { useRepoInfo } from '~/api/repo'
 import { useIssuesForMilestone } from '~/api/issues'
-import { useChecklistDisplayName } from '~/api/configuration'
+import { useChecklistDisplayName, useConfigurationStatus } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
 import type { RelevantFileKind } from '~/api/issues'
 import { toCreateIssueRequest } from '~/api/create'
 import { fetchFileContent, fetchIssuePreview } from '~/api/preview'
+import { fetchFileCollaborators } from '~/api/files'
 import { wrapInGithubStyles } from '~/utils/github'
 import { useUiSession } from '~/state/uiSession'
 
@@ -36,6 +38,7 @@ export interface QueuedItem {
   createdBy: string | null
   milestoneTitle: string | null
   assignees: string[]
+  collaborators: string[]
   relevantFiles: RelevantFileDraft[]
 }
 
@@ -55,11 +58,27 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   const { create, setCreate } = useUiSession()
   const [filePreviewLoading, setFilePreviewLoading] = useState(false)
   const [issuePreviewLoading, setIssuePreviewLoading] = useState(false)
+  const [collaboratorsLoading, setCollaboratorsLoading] = useState(false)
   const { data: repoInfo } = useRepoInfo()
   const { data: milestoneIssues = [] } = useIssuesForMilestone(milestoneNumber)
+  const { data: configStatus } = useConfigurationStatus()
   const { singular } = useChecklistDisplayName()
   const singularCap = capitalize(singular)
   const modal = create.modal
+  const includeCollaborators = configStatus?.options.include_collaborators ?? true
+
+  function handleSelectFile(selectedFile: string | null) {
+    setCreate((prev) => ({
+      ...prev,
+      modal: {
+        ...prev.modal,
+        selectedFile,
+        collaboratorAuthor: null,
+        collaborators: [],
+        collaboratorsSourceFile: null,
+      },
+    }))
+  }
 
   async function handleViewFile() {
     if (!modal.selectedFile) return
@@ -90,6 +109,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       createdBy: repoInfo?.current_user ?? null,
       milestoneTitle,
       assignees: modal.assignees,
+      collaborators: modal.collaborators,
       relevantFiles: modal.relevantFiles,
     }
     // Include queued-but-no-issue-number items in the "batch" so they show as New in the preview
@@ -97,7 +117,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       modal.selectedFile,
       ...modal.relevantFiles.filter(rf => rf.kind !== 'file' && rf.issueNumber === null).map(rf => rf.file),
     ])
-    const request = toCreateIssueRequest(item, batchFiles)
+    const request = toCreateIssueRequest(item, batchFiles, includeCollaborators)
     setIssuePreviewLoading(true)
     try {
       const html = await fetchIssuePreview(request)
@@ -129,6 +149,80 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
     [milestoneIssues, queuedItems, editIndex],
   )
 
+  useEffect(() => {
+    if (includeCollaborators) return
+    if (
+      modal.activeTab !== 'collaborators' &&
+      modal.collaborators.length === 0 &&
+      modal.collaboratorAuthor === null &&
+      modal.collaboratorsSourceFile === null
+    ) {
+      return
+    }
+
+    setCreate((prev) => ({
+      ...prev,
+      modal: {
+        ...prev.modal,
+        activeTab: prev.modal.activeTab === 'collaborators' ? 'reviewers' : prev.modal.activeTab,
+        collaborators: [],
+        collaboratorAuthor: null,
+        collaboratorsSourceFile: null,
+      },
+    }))
+  }, [
+    includeCollaborators,
+    modal.activeTab,
+    modal.collaboratorAuthor,
+    modal.collaborators,
+    modal.collaboratorsSourceFile,
+    setCreate,
+  ])
+
+  useEffect(() => {
+    if (!includeCollaborators) {
+      setCollaboratorsLoading(false)
+      return
+    }
+    const selectedFile = modal.selectedFile
+    if (!selectedFile || modal.collaboratorsSourceFile === selectedFile) return
+
+    let cancelled = false
+    setCollaboratorsLoading(true)
+    void fetchFileCollaborators(selectedFile)
+      .then((response) => {
+        if (cancelled) return
+        setCreate((prev) => ({
+            ...prev,
+            modal: {
+              ...prev.modal,
+              collaboratorAuthor: response.author,
+              collaborators: response.collaborators,
+              collaboratorsSourceFile: selectedFile,
+            },
+        }))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCreate((prev) => ({
+          ...prev,
+            modal: {
+              ...prev.modal,
+              collaboratorAuthor: null,
+              collaborators: [],
+              collaboratorsSourceFile: selectedFile,
+            },
+        }))
+      })
+      .finally(() => {
+        if (!cancelled) setCollaboratorsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [includeCollaborators, modal.selectedFile, modal.collaboratorsSourceFile, setCreate])
+
   return (
     <Modal
       opened={opened}
@@ -148,6 +242,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
           <Tabs.Tab value="checklist">Select a {singularCap}</Tabs.Tab>
           <Tabs.Tab value="relevant">Select Relevant Files</Tabs.Tab>
           <Tabs.Tab value="reviewers">Select Reviewer(s)</Tabs.Tab>
+          {includeCollaborators && <Tabs.Tab value="collaborators">Select Collaborators</Tabs.Tab>}
         </Tabs.List>
 
         <Group align="flex-start" gap="md" wrap="nowrap" pt="md">
@@ -155,7 +250,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             <Tabs.Panel value="file" keepMounted>
               <FileTreeBrowser
                 selectedFile={modal.selectedFile}
-                onSelect={(selectedFile) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, selectedFile } }))}
+                onSelect={handleSelectFile}
                 claimedFiles={claimedFiles}
               />
             </Tabs.Panel>
@@ -202,6 +297,31 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
                 onChange={(assignees) => setCreate((prev) => ({ ...prev, modal: { ...prev.modal, assignees } }))}
               />
             </Tabs.Panel>
+            {includeCollaborators && (
+              <Tabs.Panel value="collaborators">
+                <CollaboratorsTab
+                  author={modal.collaboratorAuthor}
+                  collaborators={modal.collaborators}
+                  loading={collaboratorsLoading}
+                  onAdd={(value) => setCreate((prev) => ({
+                    ...prev,
+                    modal: {
+                      ...prev.modal,
+                      collaborators: prev.modal.collaborators.includes(value)
+                        ? prev.modal.collaborators
+                        : [...prev.modal.collaborators, value],
+                    },
+                  }))}
+                  onRemove={(index) => setCreate((prev) => ({
+                    ...prev,
+                    modal: {
+                      ...prev.modal,
+                      collaborators: prev.modal.collaborators.filter((_, i) => i !== index),
+                    },
+                  }))}
+                />
+              </Tabs.Panel>
+            )}
           </div>
 
           <div style={{ flex: '0 0 260px' }}>
@@ -211,6 +331,8 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
               createdBy={repoInfo?.current_user ?? null}
               checklistName={modal.checklistSelected ? (modal.checklistDraft.name || null) : null}
               assignees={modal.assignees}
+              collaborators={modal.collaborators}
+              showCollaborators={includeCollaborators}
               relevantFiles={modal.relevantFiles}
             />
           </div>
@@ -244,6 +366,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
                 createdBy: repoInfo?.current_user ?? null,
                 milestoneTitle,
                 assignees: modal.assignees,
+                collaborators: includeCollaborators ? modal.collaborators : [],
                 relevantFiles: modal.relevantFiles,
               }
               if (editIndex != null) {

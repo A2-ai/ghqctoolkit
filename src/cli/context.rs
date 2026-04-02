@@ -5,17 +5,20 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    CommitCache, Configuration, DiskCache, GitHelpers, GitHubReader, GitHubWriter, GitInfo,
-    GitRepository, QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
+    CommitCache, Configuration, DiskCache, GitFileOps, GitHelpers, GitHubReader, GitHubWriter,
+    GitInfo, GitRepository, QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
     cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
         RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees,
-        prompt_checklist, prompt_commits, prompt_existing_milestone, prompt_file,
-        prompt_include_previous_qc_diff, prompt_issue, prompt_milestone, prompt_note,
+        prompt_checklist, prompt_collaborators, prompt_commits, prompt_existing_milestone,
+        prompt_file, prompt_include_previous_qc_diff, prompt_issue, prompt_milestone, prompt_note,
         prompt_relevant_description, prompt_relevant_file_class, prompt_relevant_file_path,
         prompt_relevant_file_source, prompt_single_commit, prompt_want_relevant_files,
     },
     comment::QCComment,
+    create::{
+        collaborator_override_for_policy, normalize_collaborator_entries, resolve_issue_people,
+    },
     issue::IssueThread,
     relevant_files::{RelevantFile, RelevantFileClass},
 };
@@ -26,6 +29,8 @@ impl QCIssue {
         file: PathBuf,
         checklist_name: String,
         assignees: Option<Vec<String>>,
+        add_collaborator: Vec<String>,
+        remove_collaborator: Vec<String>,
         description: Option<String>,
         previous_qc: Vec<IssueUrlArg>,
         gating_qc: Vec<IssueUrlArg>,
@@ -85,14 +90,45 @@ impl QCIssue {
             git_info,
         )?;
 
-        let issue = QCIssue::new(
-            file,
-            git_info,
+        let authors = git_info.authors(&file)?;
+        let configured_author = git_info.configured_author();
+        let current_user = git_info.get_current_user().await?;
+        let collaborator_additions =
+            normalize_collaborator_entries(&add_collaborator).map_err(anyhow::Error::msg)?;
+        let collaborator_removals =
+            normalize_collaborator_entries(&remove_collaborator).map_err(anyhow::Error::msg)?;
+        let should_include_collaborators = configuration.include_collaborators()
+            || !collaborator_additions.is_empty()
+            || !collaborator_removals.is_empty();
+        let (_author, default_collaborators) = resolve_issue_people(
+            configured_author.as_ref(),
+            current_user.as_deref(),
+            &authors,
+            collaborator_override_for_policy(should_include_collaborators, None),
+        );
+        let collaborators = apply_collaborator_overrides(
+            default_collaborators,
+            collaborator_additions,
+            collaborator_removals,
+        );
+        let (author, collaborators) = resolve_issue_people(
+            configured_author.as_ref(),
+            current_user.as_deref(),
+            &authors,
+            Some(collaborators),
+        );
+
+        let issue = QCIssue::new_without_git(
+            &file,
             milestone.number as u64,
+            git_info.commit()?,
+            git_info.branch()?,
+            author,
+            collaborators,
             assignees,
             checklist,
             relevant_files,
-        )?;
+        );
 
         Ok(issue)
     }
@@ -115,6 +151,26 @@ impl QCIssue {
         let file = prompt_file(project_dir, &milestone_issues)?;
         let checklist = prompt_checklist(&configuration)?;
         let assignees = prompt_assignees(&repo_users)?;
+        let authors = git_info.authors(&file)?;
+        let configured_author = git_info.configured_author();
+        let current_user = git_info.get_current_user().await?;
+        let (_, default_collaborators) = resolve_issue_people(
+            configured_author.as_ref(),
+            current_user.as_deref(),
+            &authors,
+            collaborator_override_for_policy(configuration.include_collaborators(), None),
+        );
+        let collaborators = if configuration.include_collaborators() {
+            prompt_collaborators(&default_collaborators)?
+        } else {
+            Vec::new()
+        };
+        let (author, collaborators) = resolve_issue_people(
+            configured_author.as_ref(),
+            current_user.as_deref(),
+            &authors,
+            Some(collaborators),
+        );
 
         // Prompt for relevant files
         let relevant_files = if prompt_want_relevant_files()? {
@@ -210,23 +266,51 @@ impl QCIssue {
         if !assignees.is_empty() {
             println!("   👥 Assignees: {}", assignees.join(", "));
         }
+        if !collaborators.is_empty() {
+            println!("   🤝 Collaborators: {}", collaborators.join(", "));
+        }
         if !relevant_files.is_empty() {
             println!("   🔗 Relevant files: {}", relevant_files.len());
         }
         println!();
 
         // Create the QCIssue
-        let issue = QCIssue::new(
-            file,
-            git_info,
+        let issue = QCIssue::new_without_git(
+            &file,
             milestone.number as u64,
+            git_info.commit()?,
+            git_info.branch()?,
+            author,
+            collaborators,
             assignees,
             checklist,
             relevant_files,
-        )?;
+        );
 
         Ok(issue)
     }
+}
+
+fn apply_collaborator_overrides(
+    defaults: Vec<String>,
+    additions: Vec<String>,
+    removals: Vec<String>,
+) -> Vec<String> {
+    let removals = removals
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let mut collaborators = defaults
+        .into_iter()
+        .filter(|entry| !removals.contains(entry))
+        .collect::<Vec<_>>();
+
+    for addition in additions {
+        if !collaborators.contains(&addition) {
+            collaborators.push(addition);
+        }
+    }
+
+    collaborators
 }
 
 /// Validates and converts CLI relevant file arguments to RelevantFile structs.
@@ -742,6 +826,10 @@ impl QCReview {
         let no_diff = !inquire::Confirm::new("Include diff between commit and working directory?")
             .with_default(true)
             .prompt()?;
+        let stash_after_review =
+            inquire::Confirm::new("Stash local changes for this file after posting review?")
+                .with_default(true)
+                .prompt()?;
 
         println!();
         println!("📝 QC Review Summary:");
@@ -755,6 +843,9 @@ impl QCReview {
         if no_diff {
             println!("   ⚠️  Diff generation disabled");
         }
+        if !stash_after_review {
+            println!("   📦 Auto-stash disabled");
+        }
         println!();
 
         Ok(Self {
@@ -763,6 +854,7 @@ impl QCReview {
             commit: commit_hash,
             note,
             no_diff,
+            stash_after_review,
             working_dir: git_info.repository_path.clone(),
         })
     }
@@ -776,6 +868,7 @@ impl QCReview {
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
         no_diff: bool,
+        stash_after_review: bool,
         commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
@@ -820,6 +913,7 @@ impl QCReview {
             commit: final_commit,
             note,
             no_diff,
+            stash_after_review,
             working_dir: git_info.repository_path.clone(),
         })
     }

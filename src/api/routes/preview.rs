@@ -14,7 +14,9 @@ use crate::api::types::{
     ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest,
 };
 use crate::configuration::Checklist;
-use crate::create::QCIssue;
+use crate::create::{
+    QCIssue, collaborator_override_for_policy, normalize_collaborator_entries, resolve_issue_people,
+};
 use crate::relevant_files::{RelevantFile, RelevantFileClass};
 use crate::{CommentBody, api::error::ApiError};
 use crate::{
@@ -63,6 +65,15 @@ pub async fn preview_issue<G: GitProvider + 'static>(
 ) -> Result<Html<String>, ApiError> {
     let git_info = state.git_info().clone();
     let file_path = PathBuf::from(&request.file);
+    let configured_author = state.git_info().configured_author();
+    let current_user = state.git_info().get_current_user().await.ok().flatten();
+    let include_collaborators = state.configuration.read().await.include_collaborators();
+    let collaborator_override = request
+        .collaborators
+        .as_ref()
+        .map(|entries| normalize_collaborator_entries(entries))
+        .transpose()
+        .map_err(ApiError::BadRequest)?;
 
     let (commit, branch, authors) = tokio::task::spawn_blocking(move || {
         let commit = git_info.commit().unwrap_or_else(|_| "unknown".to_string());
@@ -74,13 +85,20 @@ pub async fn preview_issue<G: GitProvider + 'static>(
     .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))?;
 
     let relevant_files = build_relevant_files(&request);
+    let (author, collaborators) = resolve_issue_people(
+        configured_author.as_ref(),
+        current_user.as_deref(),
+        &authors,
+        collaborator_override_for_policy(include_collaborators, collaborator_override),
+    );
 
     let qc_issue = QCIssue::new_without_git(
         &request.file,
         0,
         commit,
         branch,
-        authors,
+        author,
+        collaborators,
         request.assignees.clone(),
         Checklist {
             name: request.checklist_name.clone(),
@@ -179,6 +197,7 @@ pub async fn preview_review<G: GitProvider + 'static>(
         commit,
         note: request.note,
         no_diff: !request.include_diff,
+        stash_after_review: request.auto_stash,
         working_dir: state.git_info().path().to_path_buf(),
     };
 

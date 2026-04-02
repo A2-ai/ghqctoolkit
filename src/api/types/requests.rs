@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 use crate::{
     Checklist, QCEntry, QCRelationship, RelevantFile, RelevantFileClass, RelevantFileEntry,
+    create::normalize_collaborator_entries,
 };
 
 /// Request to create a new milestone.
@@ -89,6 +90,8 @@ pub struct CreateIssueRequest {
     #[serde(default)]
     pub assignees: Vec<String>,
     #[serde(default)]
+    pub collaborators: Option<Vec<String>>,
+    #[serde(default)]
     pub previous_qc: Vec<RelevantIssue>,
     #[serde(default)]
     pub gating_qc: Vec<RelevantIssue>,
@@ -98,8 +101,10 @@ pub struct CreateIssueRequest {
     pub relevant_files: Vec<RelevantFileInput>,
 }
 
-impl From<CreateIssueRequest> for QCEntry {
-    fn from(request: CreateIssueRequest) -> Self {
+impl TryFrom<CreateIssueRequest> for QCEntry {
+    type Error = String;
+
+    fn try_from(request: CreateIssueRequest) -> Result<Self, Self::Error> {
         let relevant_files = [
             request
                 .relevant_files
@@ -129,15 +134,21 @@ impl From<CreateIssueRequest> for QCEntry {
         .flatten()
         .collect::<Vec<_>>();
 
-        Self {
+        let collaborators = request
+            .collaborators
+            .map(|entries| normalize_collaborator_entries(&entries))
+            .transpose()?;
+
+        Ok(Self {
             title: PathBuf::from(&request.file),
             checklist: Checklist {
                 name: request.checklist_name,
                 content: request.checklist_content,
             },
             assignees: request.assignees,
+            collaborators,
             relevant_files,
-        }
+        })
     }
 }
 
@@ -182,6 +193,8 @@ pub struct ReviewRequest {
     pub note: Option<String>,
     #[serde(default = "default_true")]
     pub include_diff: bool,
+    #[serde(default = "default_true")]
+    pub auto_stash: bool,
 }
 
 fn default_true() -> bool {

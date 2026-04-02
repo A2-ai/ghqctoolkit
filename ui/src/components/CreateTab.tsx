@@ -16,12 +16,15 @@ import type { CreateOutcome } from './CreateResultModal'
 import { BatchRelevantFilesModal } from './BatchRelevantFilesModal'
 import type { RelevantFileDraft } from './CreateIssueModal'
 import { getDefaultCreateModalState, type CreateMilestoneMode, useUiSession } from '~/state/uiSession'
+import { useConfigurationStatus } from '~/api/configuration'
 
 export function CreateTab() {
   const { create, setCreate } = useUiSession()
   const previousResultOpen = useRef(create.resultOpen)
   const queryClient = useQueryClient()
   const { data: repoInfo } = useRepoInfo()
+  const { data: configStatus } = useConfigurationStatus()
+  const includeCollaborators = configStatus?.options.include_collaborators ?? true
   const dirtyFiles = new Set(repoInfo?.dirty_files ?? [])
   const gitStatus = repoInfo?.git_status ?? 'clean'
   const createWarning: { color: string; tooltip: string } | null = (() => {
@@ -114,6 +117,9 @@ export function CreateTab() {
         checklistSelected: true,
         checklistKey: prev.modal.checklistKey + 1,
         assignees: item.assignees,
+        collaborators: includeCollaborators ? item.collaborators : [],
+        collaboratorAuthor: includeCollaborators ? item.createdBy : null,
+        collaboratorsSourceFile: includeCollaborators ? item.file : null,
         relevantFiles: item.relevantFiles,
         activeTab: 'file',
         filePreviewOpen: false,
@@ -171,7 +177,9 @@ export function CreateTab() {
       }
 
       const batchFiles = new Set(create.queuedItems.map((q) => q.file))
-      const requests = create.queuedItems.map((item) => toCreateIssueRequest(item, batchFiles))
+      const requests = create.queuedItems.map((item) =>
+        toCreateIssueRequest(item, batchFiles, includeCollaborators),
+      )
       const responses = await postCreateIssues(milestoneNumber, requests)
 
       queryClient.invalidateQueries({ queryKey: ['milestones', milestoneNumber, 'issues'] })

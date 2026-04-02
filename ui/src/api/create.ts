@@ -25,6 +25,7 @@ export interface CreateIssueRequest {
   checklist_name: string
   checklist_content: string
   assignees?: string[]
+  collaborators?: string[]
   gating_qc?: RelevantIssue[]
   previous_qc?: RelevantIssue[]
   relevant_qc?: RelevantIssue[]
@@ -68,7 +69,11 @@ function toRelevantIssue(rf: RelevantFileDraft, batchFiles: Set<string>): Releva
   return ri
 }
 
-export function toCreateIssueRequest(item: QueuedItem, batchFiles: Set<string>): CreateIssueRequest {
+export function toCreateIssueRequest(
+  item: QueuedItem,
+  batchFiles: Set<string>,
+  includeCollaborators = true,
+): CreateIssueRequest {
   const gatingQc: RelevantIssue[] = []
   const previousQc: RelevantIssue[] = []
   const relevantQc: RelevantIssue[] = []
@@ -95,6 +100,7 @@ export function toCreateIssueRequest(item: QueuedItem, batchFiles: Set<string>):
     checklist_name: item.checklistName,
     checklist_content: item.checklistContent,
     ...(item.assignees.length > 0 && { assignees: item.assignees }),
+    collaborators: includeCollaborators ? item.collaborators : [],
     ...(gatingQc.length > 0 && { gating_qc: gatingQc }),
     ...(previousQc.length > 0 && { previous_qc: previousQc }),
     ...(relevantQc.length > 0 && { relevant_qc: relevantQc }),

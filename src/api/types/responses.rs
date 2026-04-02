@@ -9,7 +9,7 @@ use octocrab::models::IssueState;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GitHubApiError, GitProvider, IssueThread,
+    GitHubApiError, GitProvider, IssueThread, ReviewStashResult,
     api::{ApiError, cache::CacheEntry},
     create::CreateResult,
     get_git_status,
@@ -412,6 +412,12 @@ pub struct CommentResponse {
     pub comment_url: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewResponse {
+    pub comment_url: String,
+    pub stash: ReviewStashResult,
+}
+
 /// Response for issue approval.
 #[derive(Debug, Serialize)]
 pub struct ApprovalResponse {
@@ -497,10 +503,12 @@ impl ConfigGitRepository {
 pub struct ConfigurationOptions {
     pub prepended_checklist_note: Option<String>,
     pub checklist_display_name: String,
+    pub include_collaborators: bool,
     pub logo_path: String,
     pub logo_found: bool,
     pub checklist_directory: String,
     pub record_path: String,
+    pub ui_repo_refresh_rate_seconds: u64,
 }
 
 /// Configuration status response.
@@ -547,6 +555,14 @@ pub struct TreeEntry {
 pub struct FileTreeResponse {
     pub path: String,
     pub entries: Vec<TreeEntry>,
+}
+
+/// Response for default file collaborators derived from git history.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileCollaboratorsResponse {
+    pub path: String,
+    pub author: Option<String>,
+    pub collaborators: Vec<String>,
 }
 
 /// Response for archive generation.

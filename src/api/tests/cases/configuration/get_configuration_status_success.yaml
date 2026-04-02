@@ -35,3 +35,13 @@ response:
           item_fields:
             - name
             - content
+        options:
+          type: object
+          item_fields:
+            - prepended_checklist_note
+            - checklist_display_name
+            - logo_path
+            - logo_found
+            - checklist_directory
+            - record_path
+            - ui_repo_refresh_rate_seconds

@@ -14,6 +14,20 @@ pub trait GitCli {
     /// Fetch from origin. Returns whether any refs changed.
     /// Sets GIT_TERMINAL_PROMPT=0 to prevent blocking credential prompts.
     fn fetch(&self, path: &Path) -> Result<bool, GitCliError>;
+
+    /// Stash changes for a single file path.
+    fn stash_file(
+        &self,
+        path: &Path,
+        file: &Path,
+        message: &str,
+    ) -> Result<StashFileOutcome, GitCliError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashFileOutcome {
+    Stashed,
+    NoChanges,
 }
 
 /// Error types for git CLI operations
@@ -44,6 +58,15 @@ impl<T: GitCli + ?Sized> GitCli for &T {
 
     fn fetch(&self, path: &Path) -> Result<bool, GitCliError> {
         (**self).fetch(path)
+    }
+
+    fn stash_file(
+        &self,
+        path: &Path,
+        file: &Path,
+        message: &str,
+    ) -> Result<StashFileOutcome, GitCliError> {
+        (**self).stash_file(path, file, message)
     }
 }
 
@@ -129,6 +152,40 @@ impl GitCli for GitCommand {
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(GitCliError::GitCommandFailed(stderr.trim().to_string()))
+        }
+    }
+
+    fn stash_file(
+        &self,
+        path: &Path,
+        file: &Path,
+        message: &str,
+    ) -> Result<StashFileOutcome, GitCliError> {
+        log::debug!("Stashing file {} in {}", file.display(), path.display());
+
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                &path.to_string_lossy(),
+                "stash",
+                "push",
+                "-m",
+                message,
+                "--",
+                &file.to_string_lossy(),
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitCliError::GitCommandFailed(stderr.trim().to_string()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("No local changes to save") {
+            Ok(StashFileOutcome::NoChanges)
+        } else {
+            Ok(StashFileOutcome::Stashed)
         }
     }
 }

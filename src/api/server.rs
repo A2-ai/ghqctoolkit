@@ -71,6 +71,10 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         .route("/api/issues/{number}/review", post(comments::review_issue))
         // Files
         .route("/api/files/tree", get(files::list_tree))
+        .route(
+            "/api/files/collaborators",
+            get(files::get_file_collaborators),
+        )
         .route("/api/files/content", get(preview::get_file_content))
         // Previews
         .route("/api/preview/issue", post(preview::preview_issue))

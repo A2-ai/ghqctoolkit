@@ -364,8 +364,10 @@ export function RecordTab() {
                   const val = e.currentTarget.value
                   setRecord((prev) => ({
                     ...prev,
-                    outputPathUserEdited: val !== '',
-                    outputPathIsCustom: val !== '',
+                    // Treat clearing the field as an explicit user choice so the
+                    // auto-populate effect does not immediately restore a value.
+                    outputPathUserEdited: true,
+                    outputPathIsCustom: true,
                     outputPath: val,
                   }))
                 }}

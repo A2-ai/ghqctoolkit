@@ -371,7 +371,7 @@ impl fmt::Display for AuthSitRep {
                 match &entry.token_preview {
                     Some(preview) => writeln!(
                         f,
-                        "  {}{}  {} ({})",
+                        "  {}{} {} ({})",
                         marker,
                         "✓".green(),
                         if entry.is_active {

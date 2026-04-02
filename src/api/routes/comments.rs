@@ -9,10 +9,12 @@ use crate::api::routes::issues::determine_blocking_qc_status;
 use crate::api::state::AppState;
 use crate::api::types::{
     ApprovalResponse, ApproveQuery, ApproveRequest, BlockingQCError, BlockingQCItemWithStatus,
-    BlockingQCStatus, CommentResponse, CreateCommentRequest, ReviewRequest, UnapprovalResponse,
-    UnapproveRequest,
+    BlockingQCStatus, CommentResponse, CreateCommentRequest, ReviewRequest, ReviewResponse,
+    UnapprovalResponse, UnapproveRequest,
 };
-use crate::{GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, parse_blocking_qcs};
+use crate::{
+    GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, parse_blocking_qcs, stash_review_file,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -171,17 +173,19 @@ pub async fn review_issue<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Path(number): Path<u64>,
     Json(request): Json<ReviewRequest>,
-) -> Result<(StatusCode, Json<CommentResponse>), ApiError> {
+) -> Result<(StatusCode, Json<ReviewResponse>), ApiError> {
     let commit = parse_str_as_commit(&request.commit)?;
 
     let issue = state.git_info().get_issue(number).await?;
+    let review_file = PathBuf::from(&issue.title);
 
     let review = QCReview {
-        file: PathBuf::from(&issue.title),
+        file: review_file.clone(),
         issue,
         commit,
         note: request.note,
         no_diff: !request.include_diff,
+        stash_after_review: request.auto_stash,
         working_dir: state.git_info().path().to_path_buf(),
     };
 
@@ -195,7 +199,12 @@ pub async fn review_issue<G: GitProvider + 'static>(
     )
     .await;
 
-    Ok((StatusCode::CREATED, Json(CommentResponse { comment_url })))
+    let stash = stash_review_file(state.git_info(), number, &review_file, request.auto_stash);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ReviewResponse { comment_url, stash }),
+    ))
 }
 
 fn parse_str_as_commit(commit: &str) -> Result<ObjectId, ApiError> {
@@ -252,6 +261,7 @@ pub(crate) async fn get_blocking_qc_status_with_cache<G: GitProvider>(
 mod tests {
     use super::*;
     use crate::Configuration;
+    use crate::ReviewStashStatus;
     use crate::api::cache::{CacheEntry, CacheKey};
     use crate::api::state::AppState;
     use crate::api::tests::helpers::{MockGitInfo, load_test_issue};
@@ -572,5 +582,41 @@ mod tests {
         assert_eq!(status.not_approved.len(), 1);
         assert_eq!(status.not_approved[0].issue_number, 2);
         assert!(status.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_review_issue_reports_stash_failure_nonfatally() {
+        let issue = load_test_issue("test_file_issue");
+        let mock = MockGitInfo::builder()
+            .with_issue(issue.number, issue.clone())
+            .with_stash_error("stash failed")
+            .build();
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None, None);
+
+        let response = review_issue(
+            State(state),
+            Path(issue.number),
+            Json(ReviewRequest {
+                commit: "456def789abc012345678901234567890123cdef".to_string(),
+                note: Some("test".to_string()),
+                include_diff: true,
+                auto_stash: true,
+            }),
+        )
+        .await
+        .expect("review should succeed");
+
+        assert_eq!(response.0, StatusCode::CREATED);
+        assert_eq!(response.1.stash.status, ReviewStashStatus::Failed);
+        assert!(
+            response
+                .1
+                .stash
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("stash failed")
+        );
     }
 }

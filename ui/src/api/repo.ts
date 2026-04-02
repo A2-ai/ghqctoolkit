@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
+import { useConfigurationStatus } from './configuration'
 import { API_BASE } from '../config'
 
 export type GitStatus = 'clean' | 'ahead' | 'behind' | 'diverged'
@@ -31,16 +32,23 @@ async function fetchRepoInfo(): Promise<RepoInfo> {
 
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const
 const INACTIVE_MS = 5 * 60 * 1000
+const DEFAULT_REFRESH_RATE_MS = 15_000
 
 let lastActivityAt = Date.now()
 
 export function useRepoInfo() {
   const queryClient = useQueryClient()
+  const configurationQuery = useConfigurationStatus()
+  const refreshRateMs =
+    (configurationQuery.data?.options.ui_repo_refresh_rate_seconds ?? 15) * 1000
 
   const query = useQuery({
     queryKey: ['repo'],
     queryFn: fetchRepoInfo,
-    refetchInterval: () => (Date.now() - lastActivityAt < INACTIVE_MS ? 30_000 : false),
+    refetchInterval: () =>
+      (Date.now() - lastActivityAt < INACTIVE_MS
+        ? refreshRateMs || DEFAULT_REFRESH_RATE_MS
+        : false),
     refetchOnWindowFocus: true,
   })
 

@@ -129,6 +129,15 @@ pub fn gh_auth_status(directory: &Path, host: Option<&str>, store: &AuthStore) -
     Ok(())
 }
 
+pub fn gh_auth_token(directory: &Path, host: Option<&str>, store: &AuthStore) -> Result<String> {
+    let base_url = resolve_host_from_repo_or_flag(host, directory)?;
+    let auth_sources = AuthSources::new(&base_url, &StdEnvProvider, Some(store));
+    auth_sources
+        .token()
+        .map(String::from)
+        .ok_or(anyhow!("No token found for {base_url}"))
+}
+
 fn gh_available() -> bool {
     Command::new("gh")
         .arg("--version")

@@ -1,7 +1,8 @@
-use crate::GitInfo;
-use crate::git::action::{GitCli, GitCommand};
+use crate::git::action::{GitCli, GitCommand, StashFileOutcome};
+use crate::{GitAuthor, GitInfo};
 #[cfg(test)]
 use mockall::automock;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(thiserror::Error, Debug)]
@@ -20,6 +21,15 @@ pub enum GitRepositoryError {
     RemoteConnectionError(String),
     #[error("Failed to fetch from remote: {0}")]
     FetchError(String),
+    #[error("Failed to stash file changes: {0}")]
+    StashError(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStashOutcome {
+    Stashed,
+    NoChanges,
 }
 
 /// Basic repository information and metadata
@@ -42,6 +52,16 @@ pub trait GitRepository {
 
     /// Fetch the repository remote. Return whether changes found
     fn fetch(&self) -> Result<bool, GitRepositoryError>;
+
+    /// Stash changes for a single file path.
+    fn stash_file(
+        &self,
+        file: &Path,
+        message: &str,
+    ) -> Result<FileStashOutcome, GitRepositoryError>;
+
+    /// Get the configured local git author identity from user.name and user.email.
+    fn configured_author(&self) -> Option<GitAuthor>;
 }
 
 impl GitRepository for GitInfo {
@@ -122,5 +142,59 @@ impl GitRepository for GitInfo {
         GitCommand
             .fetch(&self.repository_path)
             .map_err(|e| GitRepositoryError::FetchError(e.to_string()))
+    }
+
+    fn stash_file(
+        &self,
+        file: &Path,
+        message: &str,
+    ) -> Result<FileStashOutcome, GitRepositoryError> {
+        match GitCommand
+            .stash_file(&self.repository_path, file, message)
+            .map_err(|e| GitRepositoryError::StashError(e.to_string()))?
+        {
+            StashFileOutcome::Stashed => Ok(FileStashOutcome::Stashed),
+            StashFileOutcome::NoChanges => Ok(FileStashOutcome::NoChanges),
+        }
+    }
+
+    fn configured_author(&self) -> Option<GitAuthor> {
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                &self.repository_path.to_string_lossy(),
+                "config",
+                "--get-regexp",
+                "^user\\.(name|email)$",
+            ])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut name = None;
+        let mut email = None;
+
+        for line in stdout.lines() {
+            if let Some(value) = line.strip_prefix("user.name ") {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    name = Some(trimmed.to_string());
+                }
+            } else if let Some(value) = line.strip_prefix("user.email ") {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    email = Some(trimmed.to_string());
+                }
+            }
+        }
+
+        Some(GitAuthor {
+            name: name?,
+            email: email?,
+        })
     }
 }

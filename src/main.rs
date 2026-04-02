@@ -8,7 +8,7 @@ use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
     RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
-    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status,
+    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token,
     interactive_milestone_status, interactive_status, milestone_status, prompt_archive,
     prompt_context_files, prompt_milestone_record, single_issue_status,
 };
@@ -20,7 +20,7 @@ use ghqctoolkit::{
     archive, configuration_status, create_labels_if_needed, create_staging_dir,
     determine_config_dir, fetch_milestone_issues, get_blocking_qc_status, get_git_status,
     get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
-    unapprove_with_impact,
+    stash_review_file, unapprove_with_impact,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -61,6 +61,9 @@ enum Commands {
     },
     /// Authentication management commands
     Auth {
+        /// GitHub host to use, e.g. github.com or https://ghe.example.com
+        #[arg(long, global = true)]
+        host: Option<String>,
         #[command(subcommand)]
         auth_command: AuthCommands,
     },
@@ -124,6 +127,14 @@ enum IssueCommands {
         /// Assignees for the issue (usernames)
         #[arg(short, long)]
         assignees: Option<Vec<String>>,
+
+        /// Add collaborator metadata entry. Format: Name <email>
+        #[arg(long = "add-collaborator")]
+        add_collaborator: Vec<String>,
+
+        /// Remove collaborator metadata entry from detected defaults. Format: Name <email>
+        #[arg(long = "remove-collaborator")]
+        remove_collaborator: Vec<String>,
 
         /// Description for the milestone (only used when creating a new milestone)
         #[arg(short = 'D', long)]
@@ -241,6 +252,10 @@ enum IssueCommands {
         /// Do not include diff between commit and working directory
         #[arg(long)]
         no_diff: bool,
+
+        /// Do not stash the reviewed file after a successful review post
+        #[arg(long)]
+        no_stash_after_review: bool,
     },
     /// detailed status of the ongoing qc issue
     Status {
@@ -341,26 +356,16 @@ enum AuthCommands {
         /// Token to store directly instead of launching an interactive flow
         token: Option<String>,
 
-        /// GitHub host to use, e.g. github.com or https://ghe.example.com
-        #[arg(long)]
-        host: Option<String>,
-
         /// Skip importing into the ghqc auth store after successful gh auth login
         #[arg(long)]
         no_store: bool,
     },
     /// Remove the ghqc-stored token for a host
-    Logout {
-        /// GitHub host to use, e.g. github.com or https://ghe.example.com
-        #[arg(long)]
-        host: Option<String>,
-    },
+    Logout,
     /// Show ghqc auth storage status
-    Status {
-        /// GitHub host to use, e.g. github.com or https://ghe.example.com
-        #[arg(long)]
-        host: Option<String>,
-    },
+    Status,
+    /// Print the resolved token
+    Token,
 }
 
 #[cfg(feature = "cli")]
@@ -395,6 +400,8 @@ async fn main() -> Result<()> {
                     file,
                     checklist_name,
                     assignees,
+                    add_collaborator,
+                    remove_collaborator,
                     description,
                     previous_qc,
                     gating_qc,
@@ -417,6 +424,8 @@ async fn main() -> Result<()> {
                                 file,
                                 checklist_name,
                                 assignees,
+                                add_collaborator,
+                                remove_collaborator,
                                 description,
                                 previous_qc,
                                 gating_qc,
@@ -597,6 +606,7 @@ async fn main() -> Result<()> {
                     commit,
                     note,
                     no_diff,
+                    no_stash_after_review,
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
@@ -622,6 +632,7 @@ async fn main() -> Result<()> {
                                 cache.as_ref(),
                                 &git_info,
                                 no_diff,
+                                !no_stash_after_review,
                                 &mut commit_cache,
                             )
                             .await?
@@ -635,9 +646,18 @@ async fn main() -> Result<()> {
 
                     // Post the review comment
                     let review_url = git_info.post_comment(&review).await?;
+                    let stash = stash_review_file(
+                        &git_info,
+                        review.issue.number,
+                        &review.file,
+                        review.stash_after_review,
+                    );
 
                     println!("📝 Review comment created!");
                     println!("{}", review_url);
+                    if let Some(message) = stash.message {
+                        println!("{}", message);
+                    }
                 }
                 IssueCommands::Status { milestone, file } => {
                     let milestones = git_info.get_milestones().await?;
@@ -1099,16 +1119,12 @@ async fn main() -> Result<()> {
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
-        Commands::Auth { auth_command } => {
+        Commands::Auth { host, auth_command } => {
             let store = auth_store
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Auth store unavailable"))?;
             match auth_command {
-                AuthCommands::Login {
-                    token,
-                    host,
-                    no_store,
-                } => {
+                AuthCommands::Login { token, no_store } => {
                     gh_auth_login(
                         &cli.directory,
                         host.as_deref(),
@@ -1117,11 +1133,14 @@ async fn main() -> Result<()> {
                         store,
                     )?;
                 }
-                AuthCommands::Logout { host } => {
+                AuthCommands::Logout => {
                     gh_auth_logout(&cli.directory, host.as_deref(), store)?;
                 }
-                AuthCommands::Status { host } => {
+                AuthCommands::Status => {
                     gh_auth_status(&cli.directory, host.as_deref(), store)?;
+                }
+                AuthCommands::Token => {
+                    println!("{}", gh_auth_token(&cli.directory, host.as_deref(), store)?);
                 }
             }
         }

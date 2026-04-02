@@ -21,6 +21,9 @@ export interface CreateIssueModalUiState {
   checklistKey: number
   savedCustomTabs: ChecklistDraft[]
   assignees: string[]
+  collaborators: string[]
+  collaboratorAuthor: string | null
+  collaboratorsSourceFile: string | null
   relevantFiles: RelevantFileDraft[]
   activeTab: string | null
   filePreviewOpen: boolean
@@ -105,6 +108,9 @@ const defaultCreateModalState: CreateIssueModalUiState = {
   checklistKey: 0,
   savedCustomTabs: [],
   assignees: [],
+  collaborators: [],
+  collaboratorAuthor: null,
+  collaboratorsSourceFile: null,
   relevantFiles: [],
   activeTab: 'file',
   filePreviewOpen: false,
@@ -209,6 +215,9 @@ export function getDefaultCreateModalState(): CreateIssueModalUiState {
     checklistKey: 0,
     savedCustomTabs: [],
     assignees: [],
+    collaborators: [],
+    collaboratorAuthor: null,
+    collaboratorsSourceFile: null,
     relevantFiles: [],
     activeTab: 'file',
     filePreviewOpen: false,

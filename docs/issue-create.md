@@ -55,7 +55,19 @@ Optionally assign one or more GitHub users as reviewers. Press Enter to skip or 
   Reviewer
 ```
 
-### 5. Add Relevant Files
+### 5. Edit Collaborators
+
+`ghqc` always records the issue creator as the `author` metadata entry. By default it also derives collaborator entries from the git author history for the selected file, filters out malformed or infrastructure-style email entries, and lets you trim or add collaborators before creating the issue. The author is shown separately from collaborators and is not removable from the collaborators editor.
+
+```shell
+? 🤝 Select collaborators to keep:
+> Jane Doe <jane@example.com>
+  John Smith <john@example.com>
+? 🤝 Add collaborator (Name <email>, Enter to finish):
+> Analyst Two <analyst@example.com>
+```
+
+### 6. Add Relevant Files
 
 Optionally attach related files for context. These can be supporting files or references to other QC issues. Press Enter when finished.
 
@@ -67,7 +79,7 @@ If you add a `PreviousQC` reference in interactive mode, `ghqc` will also ask wh
   scripts/file_3.qmd
 ```
 
-### 6. Issue Created
+### 7. Issue Created
 
 `ghqc` posts the issue to GitHub and prints the URL.
 
@@ -77,6 +89,7 @@ If you add a `PreviousQC` reference in interactive mode, `ghqc` will also ask wh
    📁 File: scripts/file_1.qmd
    📋 Checklist: Code Review
    👥 Assignees: QCer
+   🤝 Collaborators: Jane Doe <jane@example.com>
 
 ✅ Issue created successfully!
 https://github.com/my_organization/my_analysis/issues/4
@@ -96,11 +109,15 @@ ghqc issue create --milestone "Milestone 1" --file scripts/file_1.qmd --checklis
 | `-f, --file` | File path to create the issue for |
 | `-c, --checklist-name` | Name of the checklist to attach |
 | `-a, --assignees` | Reviewer GitHub usernames (repeatable) |
+| `--add-collaborator` | Add collaborator metadata entry, format: `Name <email>` (repeatable) |
+| `--remove-collaborator` | Remove a detected collaborator entry, format: `Name <email>` (repeatable) |
 | `-D, --description` | Description for the milestone (only used when creating a new milestone) |
 | `--previous-qc` | Previous QC issue URL, format: `<url>[::description][::no_diff]` (repeatable). By default, `ghqc` posts an automatic diff comment unless `::no_diff` is added. |
 | `--gating-qc` | Gating QC issue URL — must be approved before this issue can be approved, format: `<url>[::description]` (repeatable) |
 | `--relevant-qc` | Related QC issue URL for informational reference, format: `<url>[::description]` (repeatable) |
 | `--relevant-file` | Plain file reference with justification, format: `file_path::justification` (repeatable) |
+
+The issue body metadata always uses the authenticated issue creator as `author` when available. If the current GitHub user cannot be determined, `ghqc` falls back to the first git-derived author for the file. Collaborators default from cleaned git author history and can be edited interactively or with the collaborator flags above.
 
 ## Relevant File Categories
 

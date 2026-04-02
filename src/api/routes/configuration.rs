@@ -7,6 +7,7 @@ use crate::api::types::{
     SetupConfigurationRequest,
 };
 use crate::configuration::ConfigurationError;
+use crate::utils::StdEnvProvider;
 use crate::{Configuration, GitProvider, setup_configuration};
 use axum::{Json, extract::State};
 
@@ -38,10 +39,12 @@ pub async fn get_configuration<G: GitProvider + 'static>(
         options: ConfigurationOptions {
             prepended_checklist_note: options.prepended_checklist_note.clone(),
             checklist_display_name: options.checklist_display_name.clone(),
+            include_collaborators: options.include_collaborators,
             logo_path: options.logo_path.to_string_lossy().to_string(),
             logo_found: config.path.join(&options.logo_path).exists(),
             checklist_directory: options.checklist_directory.to_string_lossy().to_string(),
             record_path: options.record_path.to_string_lossy().to_string(),
+            ui_repo_refresh_rate_seconds: config.ui_repo_refresh_rate_seconds(&StdEnvProvider),
         },
         checklists,
         config_repo_env,
@@ -106,7 +109,49 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use serde_json::json;
+    use std::sync::{Mutex, OnceLock};
     use tower::ServiceExt;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: Tests restore the previous value before returning.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: Tests restore the previous value before returning.
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => {
+                    // SAFETY: Restores process env to its prior state for this test.
+                    unsafe { std::env::set_var(self.key, value) };
+                }
+                None => {
+                    // SAFETY: Restores process env to its prior state for this test.
+                    unsafe { std::env::remove_var(self.key) };
+                }
+            }
+        }
+    }
 
     async fn post_setup(app: axum::Router, url: &str) -> axum::http::Response<Body> {
         let body = json!({ "url": url }).to_string();
@@ -137,6 +182,9 @@ mod tests {
     /// Successful clone updates state and returns configuration status.
     #[tokio::test]
     async fn setup_success_returns_200_with_status() {
+        let _lock = env_lock().lock().unwrap();
+        let _env_guard = EnvGuard::remove("GHQC_UI_REFRESH_RATE");
+
         let mut mock_cli = MockGitCli::new();
         mock_cli.expect_clone().returning(|_, _| Ok(()));
 
@@ -154,9 +202,41 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert!(body.get("directory").is_some());
         assert!(body.get("options").is_some());
+        assert_eq!(body["options"]["include_collaborators"], true);
+        assert_eq!(body["options"]["ui_repo_refresh_rate_seconds"], 15);
         assert!(body.get("checklists").is_some());
         // creator defaults to |_| None so git_repository is absent
         assert!(body["git_repository"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_configuration_uses_env_refresh_rate_when_option_missing() {
+        let _lock = env_lock().lock().unwrap();
+        let _env_guard = EnvGuard::set("GHQC_UI_REFRESH_RATE", "27");
+
+        let mock = MockGitInfo::builder().build();
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None, None);
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/configuration")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["options"]["include_collaborators"], true);
+        assert_eq!(body["options"]["ui_repo_refresh_rate_seconds"], 27);
     }
 
     /// A failed clone (e.g. auth error) maps to 500.

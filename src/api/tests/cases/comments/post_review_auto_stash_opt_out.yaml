@@ -1,5 +1,5 @@
-name: "POST /api/issues/{number}/review - create a review"
-description: "Successfully create a comment on an existing issue"
+name: "POST /api/issues/{number}/review - opt out of auto-stash"
+description: "Successfully create a review without stashing when auto_stash is disabled"
 
 fixtures:
   milestones: []
@@ -25,8 +25,7 @@ request:
   path: "/api/issues/1/review"
   body:
     commit: "456def789abc012345678901234567890123cdef"
-    note: "Hello"
-    auto_stash: true
+    auto_stash: false
 
 response:
   status: 201
@@ -35,11 +34,9 @@ response:
     value:
       comment_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"
       stash:
-        status: "stashed"
-        message: "Stashed local changes for src/test.rs"
+        status: "skipped"
+        message: "Auto-stash disabled"
 
 assert_write_calls:
   - type: PostComment
     comment_type: "ghqctoolkit::review::QCReview"
-  - type: StashFile
-    file: "src/test.rs"
