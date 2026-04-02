@@ -22,6 +22,7 @@ Behavior depends on how authentication is provided:
 |---|---|
 | `--host <host>` | GitHub host to use, such as `github.com` or `https://ghe.example.com`. If omitted, `ghqc` resolves the host from the current repository remote. |
 | `--no-store` | Skip importing the token into the `ghqc` auth store after a successful `gh auth login`. This only applies to the `gh` login flow. |
+| `--skip-gh` | Skip looking for the `gh` cli and immediately open the personal access token page for the selected host. |
 
 ### Examples
 
