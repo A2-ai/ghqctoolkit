@@ -224,6 +224,10 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: 'Display name', value: <Text size="sm">{opts.checklist_display_name}</Text> },
     {
+      label: 'Include collaborators',
+      value: <Text size="sm">{opts.include_collaborators ? 'Yes' : 'No'}</Text>,
+    },
+    {
       label: `${singularCap} directory`,
       value: (
         <Text size="sm" style={{ fontFamily: 'monospace' }}>

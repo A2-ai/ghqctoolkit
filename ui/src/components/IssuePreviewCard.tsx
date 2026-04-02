@@ -11,6 +11,7 @@ interface Props {
   checklistName?: string | null
   assignees?: string[]
   collaborators?: string[]
+  showCollaborators?: boolean
   relevantFiles?: RelevantFileDraft[]
 }
 
@@ -29,6 +30,7 @@ export function IssuePreviewCard({
   checklistName = null,
   assignees = [],
   collaborators = [],
+  showCollaborators = true,
   relevantFiles = [],
 }: Props) {
   const title = file ? `${file}` : null
@@ -74,14 +76,16 @@ export function IssuePreviewCard({
         </Text>
       )}
 
-      {collaborators.length > 0 ? (
-        <Text size="xs" c="dimmed">
-          <b>Collaborator{collaborators.length > 1 ? 's' : ''}:</b> {collaborators.join(', ')}
-        </Text>
-      ) : (
-        <Text size="xs" c="gray.4">
-          <b>Collaborators:</b> —
-        </Text>
+      {showCollaborators && (
+        collaborators.length > 0 ? (
+          <Text size="xs" c="dimmed">
+            <b>Collaborator{collaborators.length > 1 ? 's' : ''}:</b> {collaborators.join(', ')}
+          </Text>
+        ) : (
+          <Text size="xs" c="gray.4">
+            <b>Collaborators:</b> —
+          </Text>
+        )
       )}
 
       {relevantFiles.length > 0 && (

@@ -503,6 +503,7 @@ impl ConfigGitRepository {
 pub struct ConfigurationOptions {
     pub prepended_checklist_note: Option<String>,
     pub checklist_display_name: String,
+    pub include_collaborators: bool,
     pub logo_path: String,
     pub logo_found: bool,
     pub checklist_directory: String,

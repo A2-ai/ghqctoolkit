@@ -1,2 +1,3 @@
 # Default configuration - uses all default values
 checklist_display_name: "Test Checklist"
+include_collaborators: true

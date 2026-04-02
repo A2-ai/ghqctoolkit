@@ -35,6 +35,8 @@ export interface RouteOverrides {
   issueStatusesCode: number
   /** checklist_display_name returned by GET /api/configuration (default: 'checklists') */
   checklistDisplayName: string
+  /** Whether collaborators should be exposed in create flows */
+  includeCollaborators: boolean
   /** Effective repo refresh interval returned by GET /api/configuration (default: 15) */
   uiRepoRefreshRateSeconds: number
   /** Checklists returned by GET /api/configuration */
@@ -88,6 +90,7 @@ const defaultOverrides: RouteOverrides = {
   },
   issueStatusesCode: 200,
   checklistDisplayName: 'checklists',
+  includeCollaborators: true,
   uiRepoRefreshRateSeconds: 15,
   checklists: defaultChecklists,
   assignees: defaultAssignees,
@@ -187,6 +190,7 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       options: {
         prepended_checklist_note: null,
         checklist_display_name: cfg.checklistDisplayName,
+        include_collaborators: cfg.includeCollaborators,
         logo_path: 'logo.png',
         logo_found: false,
         checklist_directory: 'checklists/',

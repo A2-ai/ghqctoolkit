@@ -18,6 +18,8 @@ pub struct ConfigurationOptions {
     pub prepended_checklist_note: Option<String>,
     // What to call the checklist in the app. Default: checklist
     pub checklist_display_name: String,
+    // Whether collaborator metadata should be detected and included. Default: true
+    pub include_collaborators: bool,
     // Path to the logo within the configuration repo. Default: logo
     pub logo_path: PathBuf,
     // Path to the checklist directory within the configuration repo. Default: checklists
@@ -34,6 +36,7 @@ impl Default for ConfigurationOptions {
         Self {
             prepended_checklist_note: None,
             checklist_display_name: "checklists".to_string(),
+            include_collaborators: true,
             logo_path: PathBuf::from("logo.png"),
             checklist_directory: PathBuf::from("checklists"),
             record_path: PathBuf::from("record.typ"),
@@ -233,6 +236,10 @@ impl Configuration {
             .prepended_checklist_note
             .as_ref()
             .map(|s| s.as_str())
+    }
+
+    pub fn include_collaborators(&self) -> bool {
+        self.options.include_collaborators
     }
 
     pub fn ui_repo_refresh_rate_seconds(&self, env: &impl EnvProvider) -> u64 {
@@ -806,6 +813,7 @@ mod tests {
             config.options.checklist_display_name,
             "Custom Quality Check"
         );
+        assert!(!config.options.include_collaborators);
         assert_eq!(
             config.options.logo_path,
             PathBuf::from("assets/custom_logo.svg")
@@ -889,6 +897,20 @@ mod tests {
 
         assert_eq!(options.ui_repo_refresh_rate_seconds, None);
         assert_eq!(options.resolved_ui_repo_refresh_rate_seconds(&mock_env), 15);
+    }
+
+    #[test]
+    fn test_include_collaborators_defaults_to_true() {
+        let options = ConfigurationOptions::default();
+        assert!(options.include_collaborators);
+    }
+
+    #[test]
+    fn test_include_collaborators_loads_from_yaml() {
+        let options: ConfigurationOptions =
+            serde_yaml::from_str("include_collaborators: false").unwrap();
+
+        assert!(!options.include_collaborators);
     }
 
     #[test]

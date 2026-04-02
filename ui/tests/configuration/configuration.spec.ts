@@ -9,6 +9,7 @@ import type { Checklist } from '../../src/api/checklists'
 const defaultOptions = {
   prepended_checklist_note: null,
   checklist_display_name: 'Code Review',
+  include_collaborators: true,
   logo_path: 'logo.png',
   logo_found: false,
   checklist_directory: 'checklists/',
@@ -296,7 +297,7 @@ test('checklists section filters Custom and shows content on selection', async (
 // ---------------------------------------------------------------------------
 // 12. Options section renders configuration values
 // ---------------------------------------------------------------------------
-test('options section renders display name, paths, refresh rate, and logo status', async ({ page }) => {
+test('options section renders display name, collaborator setting, paths, refresh rate, and logo status', async ({ page }) => {
   await setupRoutes(page)
   await mockConfiguration(page, configured)
 
@@ -305,6 +306,8 @@ test('options section renders display name, paths, refresh rate, and logo status
   await expect(page.getByText('Display name')).toBeVisible()
   // Value from options.checklist_display_name
   await expect(page.getByText('Code Review').first()).toBeVisible()
+  await expect(page.getByText('Include collaborators')).toBeVisible()
+  await expect(page.getByText('Yes')).toBeVisible()
   await expect(page.getByText('checklists/')).toBeVisible()
   await expect(page.getByText('records/')).toBeVisible()
   await expect(page.getByText('UI repo refresh rate')).toBeVisible()

@@ -14,7 +14,9 @@ use crate::api::types::{
     ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest,
 };
 use crate::configuration::Checklist;
-use crate::create::{QCIssue, normalize_collaborator_entries, resolve_issue_people};
+use crate::create::{
+    QCIssue, collaborator_override_for_policy, normalize_collaborator_entries, resolve_issue_people,
+};
 use crate::relevant_files::{RelevantFile, RelevantFileClass};
 use crate::{CommentBody, api::error::ApiError};
 use crate::{
@@ -65,6 +67,7 @@ pub async fn preview_issue<G: GitProvider + 'static>(
     let file_path = PathBuf::from(&request.file);
     let configured_author = state.git_info().configured_author();
     let current_user = state.git_info().get_current_user().await.ok().flatten();
+    let include_collaborators = state.configuration.read().await.include_collaborators();
     let collaborator_override = request
         .collaborators
         .as_ref()
@@ -86,7 +89,7 @@ pub async fn preview_issue<G: GitProvider + 'static>(
         configured_author.as_ref(),
         current_user.as_deref(),
         &authors,
-        collaborator_override,
+        collaborator_override_for_policy(include_collaborators, collaborator_override),
     );
 
     let qc_issue = QCIssue::new_without_git(

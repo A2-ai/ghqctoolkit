@@ -13,6 +13,7 @@ export interface ConfigGitRepository {
 export interface ConfigurationOptions {
   prepended_checklist_note: string | null
   checklist_display_name: string
+  include_collaborators: boolean
   logo_path: string
   logo_found: boolean
   checklist_directory: string

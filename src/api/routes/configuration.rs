@@ -39,6 +39,7 @@ pub async fn get_configuration<G: GitProvider + 'static>(
         options: ConfigurationOptions {
             prepended_checklist_note: options.prepended_checklist_note.clone(),
             checklist_display_name: options.checklist_display_name.clone(),
+            include_collaborators: options.include_collaborators,
             logo_path: options.logo_path.to_string_lossy().to_string(),
             logo_found: config.path.join(&options.logo_path).exists(),
             checklist_directory: options.checklist_directory.to_string_lossy().to_string(),
@@ -201,6 +202,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert!(body.get("directory").is_some());
         assert!(body.get("options").is_some());
+        assert_eq!(body["options"]["include_collaborators"], true);
         assert_eq!(body["options"]["ui_repo_refresh_rate_seconds"], 15);
         assert!(body.get("checklists").is_some());
         // creator defaults to |_| None so git_repository is absent
@@ -233,6 +235,7 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["options"]["include_collaborators"], true);
         assert_eq!(body["options"]["ui_repo_refresh_rate_seconds"], 27);
     }
 

@@ -62,6 +62,18 @@ pub async fn create_issues<G: GitProvider + 'static>(
         .map(QCEntry::try_from)
         .collect::<Result<Vec<QCEntry>, _>>()
         .map_err(ApiError::BadRequest)?;
+    let include_collaborators = state.configuration.read().await.include_collaborators();
+    let entries = if include_collaborators {
+        entries
+    } else {
+        entries
+            .into_iter()
+            .map(|mut entry| {
+                entry.collaborators = Some(Vec::new());
+                entry
+            })
+            .collect()
+    };
 
     // Check for duplicate filenames within the request
     let mut seen_files = HashSet::new();

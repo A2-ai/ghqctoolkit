@@ -1,5 +1,6 @@
 prepended_checklist_note: "Please review carefully"
 checklist_display_name: "Custom Quality Check"  
+include_collaborators: false
 logo_path: "assets/custom_logo.svg"
 checklist_directory: "my_custom_checklists"
 ui_repo_refresh_rate_seconds: 22

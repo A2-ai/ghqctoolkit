@@ -16,7 +16,9 @@ use crate::{
         prompt_relevant_file_source, prompt_single_commit, prompt_want_relevant_files,
     },
     comment::QCComment,
-    create::{normalize_collaborator_entries, resolve_issue_people},
+    create::{
+        collaborator_override_for_policy, normalize_collaborator_entries, resolve_issue_people,
+    },
     issue::IssueThread,
     relevant_files::{RelevantFile, RelevantFileClass},
 };
@@ -95,11 +97,14 @@ impl QCIssue {
             normalize_collaborator_entries(&add_collaborator).map_err(anyhow::Error::msg)?;
         let collaborator_removals =
             normalize_collaborator_entries(&remove_collaborator).map_err(anyhow::Error::msg)?;
+        let should_include_collaborators = configuration.include_collaborators()
+            || !collaborator_additions.is_empty()
+            || !collaborator_removals.is_empty();
         let (_author, default_collaborators) = resolve_issue_people(
             configured_author.as_ref(),
             current_user.as_deref(),
             &authors,
-            None,
+            collaborator_override_for_policy(should_include_collaborators, None),
         );
         let collaborators = apply_collaborator_overrides(
             default_collaborators,
@@ -153,9 +158,13 @@ impl QCIssue {
             configured_author.as_ref(),
             current_user.as_deref(),
             &authors,
-            None,
+            collaborator_override_for_policy(configuration.include_collaborators(), None),
         );
-        let collaborators = prompt_collaborators(&default_collaborators)?;
+        let collaborators = if configuration.include_collaborators() {
+            prompt_collaborators(&default_collaborators)?
+        } else {
+            Vec::new()
+        };
         let (author, collaborators) = resolve_issue_people(
             configured_author.as_ref(),
             current_user.as_deref(),

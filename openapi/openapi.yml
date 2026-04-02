@@ -1401,6 +1401,10 @@ components:
           nullable: true
         checklist_display_name:
           type: string
+        include_collaborators:
+          type: boolean
+          description: Whether collaborator metadata should be detected, editable, and included in issue creation flows
+          default: true
         logo_path:
           type: string
         logo_found:

@@ -348,6 +348,17 @@ pub fn resolve_issue_people(
     (author, collaborators)
 }
 
+pub fn collaborator_override_for_policy(
+    include_collaborators: bool,
+    collaborator_override: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    if include_collaborators {
+        collaborator_override
+    } else {
+        Some(Vec::new())
+    }
+}
+
 pub struct CreateResult {
     pub issue_url: String,
     pub issue_number: u64,
@@ -1035,6 +1046,30 @@ mod tests {
         assert_eq!(
             collaborators,
             vec!["John Smith <john@example.com>".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_collaborator_override_for_policy_preserves_override_when_enabled() {
+        let override_value = Some(vec!["Jane Doe <jane@example.com>".to_string()]);
+        assert_eq!(
+            collaborator_override_for_policy(true, override_value.clone()),
+            override_value
+        );
+    }
+
+    #[test]
+    fn test_collaborator_override_for_policy_forces_empty_when_disabled() {
+        assert_eq!(
+            collaborator_override_for_policy(
+                false,
+                Some(vec!["Jane Doe <jane@example.com>".to_string()])
+            ),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            collaborator_override_for_policy(false, None),
+            Some(Vec::new())
         );
     }
 

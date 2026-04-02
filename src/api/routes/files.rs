@@ -10,7 +10,7 @@ use crate::GitProvider;
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{FileCollaboratorsResponse, FileTreeResponse, TreeEntry, TreeEntryKind};
-use crate::create::resolve_issue_people;
+use crate::create::{collaborator_override_for_policy, resolve_issue_people};
 use crate::git::GitFileOpsError;
 
 #[derive(Deserialize)]
@@ -86,6 +86,7 @@ pub async fn get_file_collaborators<G: GitProvider + 'static>(
 
     let configured_author = state.git_info().configured_author();
     let current_user = state.git_info().get_current_user().await.ok().flatten();
+    let include_collaborators = state.configuration.read().await.include_collaborators();
     let fallback_author = configured_author
         .as_ref()
         .map(crate::create::format_git_author)
@@ -103,7 +104,7 @@ pub async fn get_file_collaborators<G: GitProvider + 'static>(
                     configured_author.as_ref(),
                     current_user.as_deref(),
                     &authors,
-                    None,
+                    collaborator_override_for_policy(include_collaborators, None),
                 )
             })
             .unwrap_or_else(|_| (fallback_author, Vec::new()));
