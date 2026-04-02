@@ -17,10 +17,12 @@ export function StatusTab() {
   )
 
   return (
-    <SwimLanes
-      statuses={statuses}
-      currentBranch={repoData?.branch ?? ''}
-      remoteCommit={repoData?.remote_commit ?? ''}
-    />
+    <div style={{ height: '100%', minHeight: 0 }}>
+      <SwimLanes
+        statuses={statuses}
+        currentBranch={repoData?.branch ?? ''}
+        remoteCommit={repoData?.remote_commit ?? ''}
+      />
+    </div>
   )
 }

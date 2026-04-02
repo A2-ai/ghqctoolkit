@@ -58,13 +58,13 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
   return (
     <>
     <DragDropContext onDragEnd={noop}>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', height: '100%', minHeight: 0, overflow: 'hidden' }}>
         {LANES.map((lane) => {
           const cards = byLane[lane.id]
           return (
-            <div key={lane.id} style={{ flex: 1, minWidth: 180 }}>
-              <Card withBorder>
-                <Stack>
+            <div key={lane.id} style={{ flex: 1, minWidth: 180, minHeight: 0, display: 'flex' }}>
+              <Card withBorder style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                <Stack style={{ flex: 1, minHeight: 0 }} gap="sm">
                   <div style={{ background: lane.headerColor, padding: '6px 8px', borderRadius: 4 }}>
                     <Title order={5} style={{ textAlign: 'center' }}>{lane.title}</Title>
                   </div>
@@ -73,7 +73,7 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                       <div
                         ref={provided.innerRef}
                         {...provided.droppableProps}
-                        style={{ minHeight: 120 }}
+                        style={{ minHeight: 120, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}
                       >
                         {cards.map((s, index) => (
                           <Draggable
@@ -102,13 +102,15 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                             )}
                           </Draggable>
                         ))}
+                        {cards.length === 0 && (
+                          <Text c="dimmed" size="sm" style={{ textAlign: 'center', paddingTop: 8 }}>
+                            Empty
+                          </Text>
+                        )}
                         {provided.placeholder}
                       </div>
                     )}
                   </Droppable>
-                  {cards.length === 0 && (
-                    <Text c="dimmed" size="sm" style={{ textAlign: 'center' }}>Empty</Text>
-                  )}
                 </Stack>
               </Card>
             </div>
