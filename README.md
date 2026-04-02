@@ -70,6 +70,7 @@ Issues are grouped into Milestones for organizational purposes.
 | [`ghqc auth login`](docs/auth.md) | Log in to a GitHub host and optionally store a token in `ghqc` |
 | [`ghqc auth logout`](docs/auth.md) | Remove a token stored in the `ghqc` auth store |
 | [`ghqc auth status`](docs/auth.md) | Display stored tokens and auth source resolution for the selected host |
+| [`ghqc auth token`](docs/auth.md) | Print the resolved token for the selected host |
 
 ### Diagnostics
 

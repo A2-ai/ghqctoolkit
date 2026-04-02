@@ -1,3 +1,23 @@
+# v0.4.0 - April 2, 2026
+## New Features
+* Configurable issue collaborators in both the CLI and Web UI
+* Configuration status API/UI support for surfacing the active repository options
+* `ghqc ui url` command for retrieving the local Web UI address
+* `ghqc auth token` command for retrieving the auth token that will be used
+
+## Improvements
+* Review posting can now opt out of auto-stashing local changes
+* Issue creation, preview, and record flows now refresh authentication and repository state more reliably
+* Web UI repository refresh interval is now configurable
+* Server startup now supports variable socket binding, random port assignment, and `--ipv4-only`
+* Install scripts now support installing a specific released version
+* Authentication handling improved for non-GitHub environments
+* Typst-backed record output formatting improved
+
+## Patches
+* Fixed blocking QC API request behavior during refresh-heavy workflows
+* Issue preview and detail views now better preserve sizing and collaborator state
+
 # v0.3.0 - March 24, 2026
 ## New Features
 * `ghqc auth login`, `ghqc auth logout`, and `ghqc auth status` commands for managing GitHub authentication

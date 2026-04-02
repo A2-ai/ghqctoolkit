@@ -104,9 +104,31 @@ When multiple sources are available, `ghqc` prefers them in this order:
 5. `git credential manager`
 6. `.netrc`
 
+## Token
+
+```shell
+ghqc auth token
+```
+
+Prints the resolved token for the selected host using the normal auth source priority.
+
+This is useful when another tool needs a token and you want `ghqc` to resolve it from the same sources it would use for API requests.
+
+The selected host comes from `--host` when provided, otherwise from the current repository remote.
+
+### Example
+
+```shell
+# Print the resolved token for the current repository host
+ghqc auth token
+
+# Print the resolved token for a specific host
+ghqc auth token --host github.com
+```
+
 ## Host Resolution
 
-For `login`, `logout`, and `status`, the host is resolved in this order:
+For `login`, `logout`, `status`, and `token`, the host is resolved in this order:
 
 1. `--host` flag
 2. Current repository remote (`origin` fetch URL)

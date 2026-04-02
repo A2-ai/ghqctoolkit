@@ -49,11 +49,12 @@ Choose a commit to compare the current working directory against. Defaults to HE
 
 ### 4. Add Context
 
-Optionally include a note and/or embed the diff between the commit and the current working directory in the review comment.
+Optionally include a note, embed the diff between the commit and the current working directory in the review comment, and choose whether `ghqc` should stash the reviewed file after a successful review post.
 
 ```shell
 ? 📝 Enter optional note for this review (Enter to skip):
 ? 📊 Include diff in review? (Y/n)
+? 📦 Stash local changes for this file after posting review? (Y/n)
 ```
 
 ### 5. Review Comment Posted
@@ -61,6 +62,7 @@ Optionally include a note and/or embed the diff between the commit and the curre
 ```shell
 📝 Review comment created!
 https://github.com/my_organization/my_analysis/issues/4#issuecomment-123456789
+Stashed local changes for scripts/file_1.qmd
 ```
 
 ## Non-interactive Usage
@@ -76,6 +78,7 @@ ghqc issue review --milestone "Milestone 1" --file scripts/file_1.qmd [options]
 | `-c, --commit` | Commit to compare against (defaults to HEAD) |
 | `-n, --note` | Note to include in the review comment |
 | `--no-diff` | Do not include the diff in the comment |
+| `--no-stash-after-review` | Do not stash the reviewed file after a successful review post |
 
 ## See Also
 
