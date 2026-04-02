@@ -280,8 +280,8 @@ test('review include diff disabled when clean', async ({ page }) => {
   await page.getByRole('tab', { name: 'Review', exact: true }).click()
   const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
   await expect(reviewPanel.getByRole('checkbox', { name: 'Include diff' })).toBeDisabled()
-  await expect(reviewPanel.getByRole('checkbox', { name: 'Stash file after post' })).toBeDisabled()
-  await expect(reviewPanel.getByRole('checkbox', { name: 'Stash file after post' })).not.toBeChecked()
+  await expect(reviewPanel.getByRole('checkbox', { name: 'Stash file changes from review' })).toBeDisabled()
+  await expect(reviewPanel.getByRole('checkbox', { name: 'Stash file changes from review' })).not.toBeChecked()
 })
 
 // ---------------------------------------------------------------------------
@@ -333,7 +333,7 @@ test('review tab enables auto-stash by default and sends opt-out when unchecked'
 
   await page.getByRole('tab', { name: 'Review', exact: true }).click()
   const reviewPanel = page.getByRole('tabpanel', { name: 'Review' })
-  const stashToggle = reviewPanel.getByRole('checkbox', { name: 'Stash file after post' })
+  const stashToggle = reviewPanel.getByRole('checkbox', { name: 'Stash file changes from review' })
   await expect(stashToggle).toBeChecked()
   await stashToggle.uncheck()
   await reviewPanel.getByRole('button', { name: 'Post' }).click()
