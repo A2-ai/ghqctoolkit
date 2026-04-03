@@ -34,6 +34,11 @@ static MARKDOWN_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static INLINE_CODE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`([^`\n]+)`").expect("Invalid inline code regex"));
 
+// Regex for bare URLs (http/https not already inside a markdown/HTML link)
+static BARE_URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"https?://[^\s\[\]<>()""]+"#).expect("Invalid bare URL regex")
+});
+
 /// Escape Typst special characters in user-provided text
 /// This function escapes characters that have special meaning in Typst to prevent
 /// them from being interpreted as Typst markup when they appear in user content.
@@ -130,8 +135,17 @@ fn convert_inline_markdown(text: &str) -> String {
         )
     });
 
+    // Step 2b: Convert bare URLs to Typst links (after markdown/HTML links are already protected)
+    let with_bare_urls = BARE_URL_REGEX.replace_all(&with_links, |caps: &regex::Captures| {
+        let url = &caps[0];
+        protect_link(
+            format!("#link(\"{}\")[{}]", escape_typst_string(url), url),
+            &mut protected_links,
+        )
+    });
+
     // Step 3: Convert inline markdown code to Typst raw text
-    let with_inline_code = INLINE_CODE_REGEX.replace_all(&with_links, |caps: &regex::Captures| {
+    let with_inline_code = INLINE_CODE_REGEX.replace_all(&with_bare_urls, |caps: &regex::Captures| {
         let code = &caps[1];
         protect_code(format!("`{code}`"), &mut protected_code)
     });
