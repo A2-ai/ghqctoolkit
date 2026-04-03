@@ -70,12 +70,12 @@ pub fn escape_typst(text: &str) -> String {
 /// 3. `*italic*` → `_italic_` (Typst italic)
 /// 4. Escape special characters: `@`, `<`, `>`
 fn convert_inline_markdown(text: &str) -> String {
-    const LINK_PLACEHOLDER_PREFIX: &str = "\x00TYPST_LINK_";
-    const LINK_PLACEHOLDER_SUFFIX: &str = "\x00";
-    const CODE_PLACEHOLDER_PREFIX: &str = "\x00TYPST_CODE_";
-    const CODE_PLACEHOLDER_SUFFIX: &str = "\x00";
-    const FORMAT_PLACEHOLDER_PREFIX: &str = "\x00TYPST_FORMAT_";
-    const FORMAT_PLACEHOLDER_SUFFIX: &str = "\x00";
+    const LINK_PLACEHOLDER_PREFIX: &str = "ZZZTYPSTLINK";
+    const LINK_PLACEHOLDER_SUFFIX: &str = "ZZZ";
+    const CODE_PLACEHOLDER_PREFIX: &str = "ZZZTYPSTCODE";
+    const CODE_PLACEHOLDER_SUFFIX: &str = "ZZZ";
+    const FORMAT_PLACEHOLDER_PREFIX: &str = "ZZZTYPSTFORMAT";
+    const FORMAT_PLACEHOLDER_SUFFIX: &str = "ZZZ";
 
     let mut protected_links = Vec::new();
     let mut protected_code = Vec::new();
@@ -994,6 +994,14 @@ More regular text."#;
         let inline_code = "Use `x <- 1` in the example";
         let result = format_markdown(inline_code, 4, &empty_image_map);
         assert_eq!(result, "Use `x <- 1` in the example");
+
+        // Ensure temporary placeholders never leak into final output
+        let mixed = "**Clockify code**: `ABC-123` and [branch](https://example.com)";
+        let result = format_markdown(mixed, 4, &empty_image_map);
+        assert!(!result.contains("ZZZTYPST"));
+        assert!(result.contains("#strong[Clockify code]"));
+        assert!(result.contains("`ABC-123`"));
+        assert!(result.contains(r#"#link("https://example.com")[branch]"#));
     }
 
     #[test]
