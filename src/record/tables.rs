@@ -84,21 +84,55 @@ pub fn insert_breaks(text: &str, max_width: usize) -> String {
     let mut current_line_len = 0;
 
     for word in text.split_whitespace() {
-        if current_line_len + word.len() + 1 > max_width && current_line_len > 0 {
-            result.push('\n');
-            current_line_len = 0;
-        }
+        let word_parts = split_long_token(word, max_width);
 
-        if current_line_len > 0 {
-            result.push(' ');
-            current_line_len += 1;
-        }
+        for (index, part) in word_parts.iter().enumerate() {
+            let needs_space = current_line_len > 0 && index == 0;
+            let projected_len = current_line_len + part.len() + usize::from(needs_space);
 
-        result.push_str(word);
-        current_line_len += word.len();
+            if projected_len > max_width && current_line_len > 0 {
+                result.push('\n');
+                current_line_len = 0;
+            } else if needs_space {
+                result.push(' ');
+                current_line_len += 1;
+            }
+
+            result.push_str(part);
+            current_line_len += part.len();
+
+            if index + 1 < word_parts.len() {
+                result.push('\n');
+                current_line_len = 0;
+            }
+        }
     }
 
     result
+}
+
+fn split_long_token(token: &str, max_width: usize) -> Vec<String> {
+    if token.len() <= max_width {
+        return vec![token.to_string()];
+    }
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+
+    for ch in token.chars() {
+        current.push(ch);
+
+        let break_after_separator = matches!(ch, '/' | '\\' | '-' | '_' | '.');
+        if current.len() >= max_width || (break_after_separator && current.len() >= max_width / 2) {
+            parts.push(std::mem::take(&mut current));
+        }
+    }
+
+    if !current.is_empty() {
+        parts.push(current);
+    }
+
+    parts
 }
 
 /// Tera function to render milestone table rows only (Typst format)
@@ -163,7 +197,11 @@ pub fn render_issue_summary_table_rows(args: &HashMap<String, Value>) -> TeraRes
 
         table_rows.push(format!(
             "[{}], [{}], [{}], [{}], [{}],",
-            &row.title, &row.qc_status, author_display, &qcer_display, closer_display
+            insert_breaks(&row.title, 18),
+            insert_breaks(&row.qc_status, 14),
+            insert_breaks(author_display, 14),
+            insert_breaks(&qcer_display, 14),
+            insert_breaks(closer_display, 14)
         ));
     }
 
@@ -229,6 +267,22 @@ mod tests {
         // Each line should be <= 20 characters (accounting for word boundaries)
         for line in result.lines() {
             assert!(line.len() <= 30, "Line '{}' is {} chars", line, line.len()); // Allow some flexibility for word boundaries
+        }
+    }
+
+    #[test]
+    fn test_insert_breaks_path_like_text() {
+        let text = "scripts/simulationPlotMe.qmd";
+        let result = insert_breaks(text, 12);
+
+        assert!(result.contains('\n'));
+        for line in result.lines() {
+            assert!(
+                line.len() <= 12,
+                "Path segment line '{}' is {} chars",
+                line,
+                line.len()
+            );
         }
     }
 
@@ -334,6 +388,26 @@ mod tests {
         // Should contain Typst table cells
         assert!(result_str.contains("[Test Issue 1], [In Progress], [author], [qcer1], [NA],"));
         assert!(result_str.contains("[Test Issue 2], [Approved], [author], [qcer1], [NA],"));
+    }
+
+    #[test]
+    fn test_render_issue_summary_table_rows_wraps_path_like_title() {
+        let rows = vec![create_test_issue_information(
+            "scripts/simulationPlotMe.qmd",
+            "100.0%",
+            "Awaiting review",
+        )];
+
+        let mut args = HashMap::new();
+        args.insert("data".to_string(), serde_json::to_value(&rows).unwrap());
+
+        let result = render_issue_summary_table_rows(&args).unwrap();
+        let result_str = result.as_str().unwrap();
+
+        assert!(result_str.contains("scripts/"));
+        assert!(result_str.contains(".qmd"));
+        assert!(result_str.contains('\n'));
+        assert!(result_str.contains("Awaiting\nreview"));
     }
 
     #[test]
