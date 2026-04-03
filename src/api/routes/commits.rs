@@ -62,7 +62,7 @@ pub async fn get_commits<G: GitProvider + 'static>(
     // Use the shared commit cache (same pattern as fetch_helpers.rs)
     let all_commits = {
         let mut cache = state.commit_cache.write().await;
-        find_commits(&git_info, &None, &mut *cache)
+        find_commits(&git_info, &None, None, &mut *cache)
             .map_err(|e| ApiError::Internal(e.to_string()))?
     };
 
