@@ -124,7 +124,11 @@ fn split_long_token(token: &str, max_width: usize) -> Vec<String> {
 
         // Do not break after '\' because escaped Typst sequences like '\_' must stay together.
         let break_after_separator = matches!(ch, '/' | '-' | '_' | '.');
-        if current.len() >= max_width || (break_after_separator && current.len() >= max_width / 2) {
+        let should_break_for_width = current.len() >= max_width && !current.ends_with('\\');
+        let should_break_for_separator =
+            break_after_separator && current.len() >= max_width / 2 && !current.ends_with('\\');
+
+        if should_break_for_width || should_break_for_separator {
             parts.push(std::mem::take(&mut current));
         }
     }
@@ -289,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_insert_breaks_does_not_split_typst_escape_sequences() {
-        let text = r"scripts/modeling/parent\_only/pediatric/pediatric\_adolescent\_exposure\_match\_v1.qmd";
+        let text = r"scripts/050\_PPK/nonmem\_output/diagnostic\_html/4c79/SingleModel\_Table.html";
         let result = insert_breaks(text, 18);
 
         for line in result.lines() {
