@@ -25,6 +25,15 @@ static BOLD_REGEX: LazyLock<Regex> =
 static ITALIC_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\*([^*]+)\*").expect("Invalid italic regex"));
 
+// Regex for markdown links [text](url)
+static MARKDOWN_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[([^\]]+)\]\(([^)\s]+)\)").expect("Invalid markdown link regex")
+});
+
+// Regex for inline markdown code `code`
+static INLINE_CODE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"`([^`\n]+)`").expect("Invalid inline code regex"));
+
 /// Escape Typst special characters in user-provided text
 /// This function escapes characters that have special meaning in Typst to prevent
 /// them from being interpreted as Typst markup when they appear in user content.
@@ -63,32 +72,115 @@ pub fn escape_typst(text: &str) -> String {
 fn convert_inline_markdown(text: &str) -> String {
     // Use placeholder to protect bold markers from italic conversion
     const BOLD_PLACEHOLDER: &str = "\x00TYPST_BOLD\x00";
+    const LINK_PLACEHOLDER_PREFIX: &str = "\x00TYPST_LINK_";
+    const LINK_PLACEHOLDER_SUFFIX: &str = "\x00";
+    const CODE_PLACEHOLDER_PREFIX: &str = "\x00TYPST_CODE_";
+    const CODE_PLACEHOLDER_SUFFIX: &str = "\x00";
+
+    let mut protected_links = Vec::new();
+    let mut protected_code = Vec::new();
+    let protect_link = |link: String, protected_links: &mut Vec<String>| {
+        let index = protected_links.len();
+        protected_links.push(link);
+        format!(
+            "{LINK_PLACEHOLDER_PREFIX}{index}{LINK_PLACEHOLDER_SUFFIX}"
+        )
+    };
+    let protect_code = |code: String, protected_code: &mut Vec<String>| {
+        let index = protected_code.len();
+        protected_code.push(code);
+        format!(
+            "{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}"
+        )
+    };
 
     // Step 1: Convert HTML links to Typst links
-    let with_links = HTML_LINK_REGEX.replace_all(text, |caps: &regex::Captures| {
+    let with_html_links = HTML_LINK_REGEX.replace_all(text, |caps: &regex::Captures| {
         let url = &caps[1];
         let display_text = &caps[2];
-        format!("#link(\"{}\")[{}]", url, display_text)
+        protect_link(
+            format!(
+                "#link(\"{}\")[{}]",
+                escape_typst_string(url),
+                escape_typst_inline_text(display_text)
+            ),
+            &mut protected_links,
+        )
     });
 
-    // Step 2: Replace **bold** with placeholder
-    let with_bold_placeholder = BOLD_REGEX.replace_all(&with_links, |caps: &regex::Captures| {
+    // Step 2: Convert markdown links to Typst links
+    let with_links = MARKDOWN_LINK_REGEX.replace_all(&with_html_links, |caps: &regex::Captures| {
+        let display_text = &caps[1];
+        let url = &caps[2];
+        protect_link(
+            format!(
+                "#link(\"{}\")[{}]",
+                escape_typst_string(url),
+                escape_typst_inline_text(display_text)
+            ),
+            &mut protected_links,
+        )
+    });
+
+    // Step 3: Convert inline markdown code to Typst raw text
+    let with_inline_code = INLINE_CODE_REGEX.replace_all(&with_links, |caps: &regex::Captures| {
+        let code = &caps[1];
+        protect_code(format!("`{code}`"), &mut protected_code)
+    });
+
+    // Step 4: Replace **bold** with placeholder
+    let with_bold_placeholder =
+        BOLD_REGEX.replace_all(&with_inline_code, |caps: &regex::Captures| {
         format!("{}{}{}", BOLD_PLACEHOLDER, &caps[1], BOLD_PLACEHOLDER)
     });
 
-    // Step 3: Replace *italic* with _italic_
+    // Step 5: Replace *italic* with _italic_
     let with_italic = ITALIC_REGEX.replace_all(&with_bold_placeholder, |caps: &regex::Captures| {
         format!("_{}_", &caps[1])
     });
 
-    // Step 4: Replace placeholder with Typst bold syntax
+    // Step 6: Replace placeholder with Typst bold syntax
     let with_bold = with_italic.replace(BOLD_PLACEHOLDER, "*");
 
-    // Step 5: Escape special characters that have meaning in Typst
-    with_bold
+    // Step 7: Escape special characters that have meaning in Typst
+    let escaped = escape_typst_inline_text(&with_bold);
+
+    // Step 8: Restore protected Typst links and code spans
+    let restored_links = protected_links
+        .iter()
+        .enumerate()
+        .fold(escaped, |acc, (index, link)| {
+            acc.replace(
+                &format!("{LINK_PLACEHOLDER_PREFIX}{index}{LINK_PLACEHOLDER_SUFFIX}"),
+                link,
+            )
+        });
+
+    protected_code
+        .iter()
+        .enumerate()
+        .fold(restored_links, |acc, (index, code)| {
+            acc.replace(
+                &format!("{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}"),
+                code,
+            )
+        })
+}
+
+fn escape_typst_inline_text(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('#', "\\#")
+        .replace('$', "\\$")
+        .replace('`', "\\`")
         .replace('@', "\\@")
         .replace('<', "\\<")
         .replace('>', "\\>")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+}
+
+fn escape_typst_string(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Translate markdown headers to ensure minimum level and wrap long code lines
@@ -858,6 +950,24 @@ More regular text."#;
         assert!(result.contains("*italic*"));
         assert!(result.contains("@mention"));
         assert!(result.contains("<tag>"));
+
+        // Test markdown link conversion to Typst link
+        let markdown_link = "[commit comparison](https://example.com/compare/abc..def)";
+        let result = format_markdown(markdown_link, 4, &empty_image_map);
+        assert_eq!(
+            result,
+            r#"#link("https://example.com/compare/abc..def")[commit comparison]"#
+        );
+
+        // Test markdown task checkboxes get escaped instead of being parsed as Typst content blocks
+        let task_list = "- [ ] unchecked\n- [x] checked";
+        let result = format_markdown(task_list, 4, &empty_image_map);
+        assert_eq!(result, "- \\[ \\] unchecked\n- \\[x\\] checked");
+
+        // Test inline backticks are escaped so unmatched markdown code spans do not break Typst parsing
+        let inline_code = "Use `x <- 1` in the example";
+        let result = format_markdown(inline_code, 4, &empty_image_map);
+        assert_eq!(result, "Use `x <- 1` in the example");
     }
 
     #[test]
@@ -917,6 +1027,31 @@ Diff code block:
   65 theme_update(
   66     legend.title = element_blank(),
 ```
+"#;
+
+        let empty_image_map = HashMap::new();
+        let formatted = format_markdown(markdown, 4, &empty_image_map);
+        let source = format!("= Test\n\n{}", formatted);
+        let (world, _staging, _cache) = create_test_world(&source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        assert!(
+            result.output.is_ok(),
+            "Compilation failed: {:?}\nFormatted source:\n{}",
+            result.output.err(),
+            source
+        );
+    }
+
+    #[test]
+    fn test_markdown_links_and_checkboxes_compile() {
+        let markdown = r#"=== Body
+
+- [ ] confirm prereqs
+- [x] validate output
+- [commit comparison](https://example.com/compare/abc..def)
+Use `cargo test` before approval.
 "#;
 
         let empty_image_map = HashMap::new();
