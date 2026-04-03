@@ -148,7 +148,10 @@ impl GitFileOps for GitInfo {
             }
         }
 
-        for commit_id in commit_ids {
+        let commit_len = commit_ids.len();
+        for (idx, commit_id) in commit_ids.into_iter().enumerate() {
+            log::debug!("Looking at {}/{}", idx, commit_len);
+
             let commit_obj = repo
                 .find_object(commit_id)
                 .map_err(GitFileOpsError::ObjectError)?
