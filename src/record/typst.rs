@@ -35,9 +35,8 @@ static INLINE_CODE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`([^`\n]+)`").expect("Invalid inline code regex"));
 
 // Regex for bare URLs (http/https not already inside a markdown/HTML link)
-static BARE_URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"https?://[^\s\[\]<>()""]+"#).expect("Invalid bare URL regex")
-});
+static BARE_URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"https?://[^\s\[\]<>()""]+"#).expect("Invalid bare URL regex"));
 
 /// Escape Typst special characters in user-provided text
 /// This function escapes characters that have special meaning in Typst to prevent
@@ -88,23 +87,17 @@ fn convert_inline_markdown(text: &str) -> String {
     let protect_link = |link: String, protected_links: &mut Vec<String>| {
         let index = protected_links.len();
         protected_links.push(link);
-        format!(
-            "{LINK_PLACEHOLDER_PREFIX}{index}{LINK_PLACEHOLDER_SUFFIX}"
-        )
+        format!("{LINK_PLACEHOLDER_PREFIX}{index}{LINK_PLACEHOLDER_SUFFIX}")
     };
     let protect_code = |code: String, protected_code: &mut Vec<String>| {
         let index = protected_code.len();
         protected_code.push(code);
-        format!(
-            "{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}"
-        )
+        format!("{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}")
     };
     let protect_format = |formatting: String, protected_format: &mut Vec<String>| {
         let index = protected_format.len();
         protected_format.push(formatting);
-        format!(
-            "{FORMAT_PLACEHOLDER_PREFIX}{index}{FORMAT_PLACEHOLDER_SUFFIX}"
-        )
+        format!("{FORMAT_PLACEHOLDER_PREFIX}{index}{FORMAT_PLACEHOLDER_SUFFIX}")
     };
 
     // Step 1: Convert HTML links to Typst links
@@ -145,10 +138,11 @@ fn convert_inline_markdown(text: &str) -> String {
     });
 
     // Step 3: Convert inline markdown code to Typst raw text
-    let with_inline_code = INLINE_CODE_REGEX.replace_all(&with_bare_urls, |caps: &regex::Captures| {
-        let code = &caps[1];
-        protect_code(format!("`{code}`"), &mut protected_code)
-    });
+    let with_inline_code =
+        INLINE_CODE_REGEX.replace_all(&with_bare_urls, |caps: &regex::Captures| {
+            let code = &caps[1];
+            protect_code(format!("`{code}`"), &mut protected_code)
+        });
 
     // Step 4: Convert **bold** to Typst strong text via placeholders.
     let with_bold_placeholder =
@@ -157,7 +151,7 @@ fn convert_inline_markdown(text: &str) -> String {
                 format!("#strong[{}]", escape_typst_inline_text(&caps[1])),
                 &mut protected_format,
             )
-    });
+        });
 
     // Step 5: Convert *italic* to Typst emphasis via placeholders.
     let with_italic = ITALIC_REGEX.replace_all(&with_bold_placeholder, |caps: &regex::Captures| {
@@ -181,24 +175,23 @@ fn convert_inline_markdown(text: &str) -> String {
             )
         });
 
-    let restored_code = protected_code
-        .iter()
-        .enumerate()
-        .fold(restored_links, |acc, (index, code)| {
-            acc.replace(
-                &format!("{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}"),
-                code,
-            )
-        });
+    let restored_code =
+        protected_code
+            .iter()
+            .enumerate()
+            .fold(restored_links, |acc, (index, code)| {
+                acc.replace(
+                    &format!("{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}"),
+                    code,
+                )
+            });
 
     protected_format
         .iter()
         .enumerate()
         .fold(restored_code, |acc, (index, formatting)| {
             acc.replace(
-                &format!(
-                    "{FORMAT_PLACEHOLDER_PREFIX}{index}{FORMAT_PLACEHOLDER_SUFFIX}"
-                ),
+                &format!("{FORMAT_PLACEHOLDER_PREFIX}{index}{FORMAT_PLACEHOLDER_SUFFIX}"),
                 formatting,
             )
         })
