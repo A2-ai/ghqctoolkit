@@ -70,15 +70,16 @@ pub fn escape_typst(text: &str) -> String {
 /// 3. `*italic*` → `_italic_` (Typst italic)
 /// 4. Escape special characters: `@`, `<`, `>`
 fn convert_inline_markdown(text: &str) -> String {
-    // Use placeholder to protect bold markers from italic conversion
-    const BOLD_PLACEHOLDER: &str = "\x00TYPST_BOLD\x00";
     const LINK_PLACEHOLDER_PREFIX: &str = "\x00TYPST_LINK_";
     const LINK_PLACEHOLDER_SUFFIX: &str = "\x00";
     const CODE_PLACEHOLDER_PREFIX: &str = "\x00TYPST_CODE_";
     const CODE_PLACEHOLDER_SUFFIX: &str = "\x00";
+    const FORMAT_PLACEHOLDER_PREFIX: &str = "\x00TYPST_FORMAT_";
+    const FORMAT_PLACEHOLDER_SUFFIX: &str = "\x00";
 
     let mut protected_links = Vec::new();
     let mut protected_code = Vec::new();
+    let mut protected_format = Vec::new();
     let protect_link = |link: String, protected_links: &mut Vec<String>| {
         let index = protected_links.len();
         protected_links.push(link);
@@ -91,6 +92,13 @@ fn convert_inline_markdown(text: &str) -> String {
         protected_code.push(code);
         format!(
             "{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}"
+        )
+    };
+    let protect_format = |formatting: String, protected_format: &mut Vec<String>| {
+        let index = protected_format.len();
+        protected_format.push(formatting);
+        format!(
+            "{FORMAT_PLACEHOLDER_PREFIX}{index}{FORMAT_PLACEHOLDER_SUFFIX}"
         )
     };
 
@@ -128,24 +136,27 @@ fn convert_inline_markdown(text: &str) -> String {
         protect_code(format!("`{code}`"), &mut protected_code)
     });
 
-    // Step 4: Replace **bold** with placeholder
+    // Step 4: Convert **bold** to Typst strong text via placeholders.
     let with_bold_placeholder =
         BOLD_REGEX.replace_all(&with_inline_code, |caps: &regex::Captures| {
-        format!("{}{}{}", BOLD_PLACEHOLDER, &caps[1], BOLD_PLACEHOLDER)
+            protect_format(
+                format!("#strong[{}]", escape_typst_inline_text(&caps[1])),
+                &mut protected_format,
+            )
     });
 
-    // Step 5: Replace *italic* with _italic_
+    // Step 5: Convert *italic* to Typst emphasis via placeholders.
     let with_italic = ITALIC_REGEX.replace_all(&with_bold_placeholder, |caps: &regex::Captures| {
-        format!("_{}_", &caps[1])
+        protect_format(
+            format!("#emph[{}]", escape_typst_inline_text(&caps[1])),
+            &mut protected_format,
+        )
     });
 
-    // Step 6: Replace placeholder with Typst bold syntax
-    let with_bold = with_italic.replace(BOLD_PLACEHOLDER, "*");
+    // Step 6: Escape special characters that have meaning in Typst
+    let escaped = escape_typst_inline_text(&with_italic);
 
-    // Step 7: Escape special characters that have meaning in Typst
-    let escaped = escape_typst_inline_text(&with_bold);
-
-    // Step 8: Restore protected Typst links and code spans
+    // Step 7: Restore protected Typst links, code spans, and formatting
     let restored_links = protected_links
         .iter()
         .enumerate()
@@ -156,13 +167,25 @@ fn convert_inline_markdown(text: &str) -> String {
             )
         });
 
-    protected_code
+    let restored_code = protected_code
         .iter()
         .enumerate()
         .fold(restored_links, |acc, (index, code)| {
             acc.replace(
                 &format!("{CODE_PLACEHOLDER_PREFIX}{index}{CODE_PLACEHOLDER_SUFFIX}"),
                 code,
+            )
+        });
+
+    protected_format
+        .iter()
+        .enumerate()
+        .fold(restored_code, |acc, (index, formatting)| {
+            acc.replace(
+                &format!(
+                    "{FORMAT_PLACEHOLDER_PREFIX}{index}{FORMAT_PLACEHOLDER_SUFFIX}"
+                ),
+                formatting,
             )
         })
 }
@@ -895,7 +918,7 @@ More regular text."#;
         let result = format_markdown(bullet_with_link, 4, &empty_image_map);
         assert_eq!(
             result,
-            "- [commit comparison](https://example.com/compare/abc..def)"
+            "- #link(\"https://example.com/compare/abc..def\")[commit comparison]"
         );
     }
 
@@ -906,17 +929,17 @@ More regular text."#;
         // Test **bold** -> *bold*
         let bold_text = "This is **bold text** in markdown";
         let result = format_markdown(bold_text, 4, &empty_image_map);
-        assert_eq!(result, "This is *bold text* in markdown");
+        assert_eq!(result, "This is #strong[bold text] in markdown");
 
         // Test *italic* -> _italic_
         let italic_text = "This is *italic text* in markdown";
         let result = format_markdown(italic_text, 4, &empty_image_map);
-        assert_eq!(result, "This is _italic text_ in markdown");
+        assert_eq!(result, "This is #emph[italic text] in markdown");
 
         // Test combined bold and italic
         let combined_format = "This is **bold** and *italic* text";
         let result = format_markdown(combined_format, 4, &empty_image_map);
-        assert_eq!(result, "This is *bold* and _italic_ text");
+        assert_eq!(result, "This is #strong[bold] and #emph[italic] text");
 
         // Test @ escaping
         let at_text = "@reviewer mentioned something";
@@ -931,7 +954,7 @@ More regular text."#;
         // Test combined bold and @
         let combined = "**@reviewer** wrote this";
         let result = format_markdown(combined, 4, &empty_image_map);
-        assert_eq!(result, "*\\@reviewer* wrote this");
+        assert_eq!(result, "#strong[\\@reviewer] wrote this");
 
         // Test HTML link conversion to Typst link
         let html_link = r#"<a href="https://example.com">link text</a>"#;
@@ -1052,6 +1075,50 @@ Diff code block:
 - [x] validate output
 - [commit comparison](https://example.com/compare/abc..def)
 Use `cargo test` before approval.
+"#;
+
+        let empty_image_map = HashMap::new();
+        let formatted = format_markdown(markdown, 4, &empty_image_map);
+        let source = format!("= Test\n\n{}", formatted);
+        let (world, _staging, _cache) = create_test_world(&source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        assert!(
+            result.output.is_ok(),
+            "Compilation failed: {:?}\nFormatted source:\n{}",
+            result.output.err(),
+            source
+        );
+    }
+
+    #[test]
+    fn test_issue_style_markdown_with_nested_lists_and_entities_compiles() {
+        let markdown = r#"## Metadata
+
+* git branch: [feature-branch](https://example.com/tree/abcdef)
+* author: Jane Example <jane@example.com>
+* <a href="https://example.com/blob/file.qmd" target="_blank">file contents at initial qc commit</a>
+
+## Relevant files
+
+- **config.yml**
+   - [`config.yml`](https://example.com/blob/config.yml)
+&nbsp;
+- **report.qmd**
+   - [`report.qmd`](https://example.com/blob/report.qmd)
+
+## Rendering Instructions and Other Comments
+
+[INSERT]
+
+### Technical Review
+
+- [x] Script renders free of error
+- [x] Final code chunk contains `sessioninfo::session_info()`
+- Path-like prose can appear before **bold text**
+- Bold text can appear before / trailing slash
+    - Nested bullet with `code`, [link](https://example.com), and 0.1->0.6 mg/kg
 "#;
 
         let empty_image_map = HashMap::new();
