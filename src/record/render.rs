@@ -335,6 +335,19 @@ fn render_typst_in_staging(
     cache: Option<&DiskCache>,
     http: &(impl HttpDownloader + Clone + 'static),
 ) -> Result<PathBuf, RenderError> {
+    if let Ok(cwd) = std::env::current_dir() {
+        let debug_typst_path = cwd.join("ghqc-record-debug.typ");
+        if let Err(error) = fs::write(&debug_typst_path, report) {
+            log::warn!(
+                "Failed to write debug Typst source {}: {}",
+                debug_typst_path.display(),
+                error
+            );
+        } else {
+            log::info!("Wrote debug Typst source to {}", debug_typst_path.display());
+        }
+    }
+
     let cache_dir = cache
         .map(|c| c.root.to_path_buf())
         .unwrap_or(tempdir().map_err(RenderError::Io)?.path().to_path_buf());
