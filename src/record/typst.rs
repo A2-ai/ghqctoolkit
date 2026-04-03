@@ -285,7 +285,7 @@ pub fn format_markdown(
                     let header_level = if is_h1_underline { 1 } else { 2 };
                     let new_level = std::cmp::min(std::cmp::max(header_level, min_level), 6);
                     let new_header = "=".repeat(new_level);
-                    let header_text = line.trim();
+                    let header_text = convert_inline_markdown(line.trim());
                     result.push(format!("{} {}", new_header, header_text));
                     i += 2; // Skip both the header line and the underline
                     continue;
@@ -305,7 +305,8 @@ pub fn format_markdown(
                 // Ensure header is at least at min_level
                 let new_level = std::cmp::min(std::cmp::max(header_level, min_level), 6);
                 let new_header = "=".repeat(new_level);
-                let header_text = trimmed.trim_start_matches('#').trim_start();
+                let header_text =
+                    convert_inline_markdown(trimmed.trim_start_matches('#').trim_start());
                 result.push(format!("{} {}", new_header, header_text));
             } else {
                 // It's a Typst command like #image(), keep as-is
@@ -1119,6 +1120,36 @@ Use `cargo test` before approval.
 - Path-like prose can appear before **bold text**
 - Bold text can appear before / trailing slash
     - Nested bullet with `code`, [link](https://example.com), and 0.1->0.6 mg/kg
+"#;
+
+        let empty_image_map = HashMap::new();
+        let formatted = format_markdown(markdown, 4, &empty_image_map);
+        let source = format!("= Test\n\n{}", formatted);
+        let (world, _staging, _cache) = create_test_world(&source);
+
+        let result = typst::compile::<PagedDocument>(&world);
+
+        assert!(
+            result.output.is_ok(),
+            "Compilation failed: {:?}\nFormatted source:\n{}",
+            result.output.err(),
+            source
+        );
+    }
+
+    #[test]
+    fn test_headers_with_issue_style_inline_content_compile() {
+        let markdown = r#"# Report for [feature-branch](https://example.com/tree/abcdef)
+
+## Rendering Instructions [INSERT]
+
+### Reviewer `sessioninfo::session_info()` <reviewer@example.com>
+
+Section With `code` and [link](https://example.com)
+===============================================
+
+Subsection With **bold** and *italic*
+-------------------------------------
 "#;
 
         let empty_image_map = HashMap::new();
