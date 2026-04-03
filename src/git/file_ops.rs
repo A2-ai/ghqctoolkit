@@ -151,8 +151,7 @@ impl GitFileOps for GitInfo {
             }
         }
 
-        let commit_len = commit_ids.len();
-        for (idx, commit_id) in commit_ids.into_iter().enumerate() {
+        for commit_id in commit_ids {
             let commit_obj = repo
                 .find_object(commit_id)
                 .map_err(GitFileOpsError::ObjectError)?
