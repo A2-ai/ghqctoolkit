@@ -194,6 +194,8 @@ fn escape_typst_inline_text(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('#', "\\#")
         .replace('$', "\\$")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
         .replace('`', "\\`")
         .replace('@', "\\@")
         .replace('<', "\\<")
@@ -1157,6 +1159,32 @@ Subsection With **bold** and *italic*
         let source = format!("= Test\n\n{}", formatted);
         let (world, _staging, _cache) = create_test_world(&source);
 
+        let result = typst::compile::<PagedDocument>(&world);
+
+        assert!(
+            result.output.is_ok(),
+            "Compilation failed: {:?}\nFormatted source:\n{}",
+            result.output.err(),
+            source
+        );
+    }
+
+    #[test]
+    fn test_unmatched_emphasis_delimiters_are_escaped() {
+        let empty_image_map = HashMap::new();
+
+        let markdown = r#"Text with a stray * asterisk
+Text with a stray _ underscore
+Heading with * stray delimiter
+=============================
+"#;
+
+        let formatted = format_markdown(markdown, 4, &empty_image_map);
+        assert!(formatted.contains(r"stray \* asterisk"));
+        assert!(formatted.contains(r"stray \_ underscore"));
+
+        let source = format!("= Test\n\n{}", formatted);
+        let (world, _staging, _cache) = create_test_world(&source);
         let result = typst::compile::<PagedDocument>(&world);
 
         assert!(
