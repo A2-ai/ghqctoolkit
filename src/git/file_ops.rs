@@ -122,10 +122,20 @@ impl GitFileOps for GitInfo {
 
         let revwalk = repo.rev_walk([start_id]);
 
-        for commit_info in revwalk.all().map_err(GitFileOpsError::RevWalkError)? {
-            let commit_info = commit_info.map_err(GitFileOpsError::TraverseError)?;
-            let commit_id = commit_info.id;
+        let commit_ids = revwalk
+            .all()
+            .map_err(GitFileOpsError::RevWalkError)?
+            .into_iter()
+            .filter_map(|c| c.map(|info| info.id).ok())
+            .collect::<Vec<_>>();
 
+        log::debug!(
+            "Found {} potential commits on {:?}",
+            commit_ids.len(),
+            branch
+        );
+
+        for commit_id in commit_ids {
             let commit_obj = repo
                 .find_object(commit_id)
                 .map_err(GitFileOpsError::ObjectError)?
