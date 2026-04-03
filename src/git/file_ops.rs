@@ -130,10 +130,23 @@ impl GitFileOps for GitInfo {
             .collect::<Vec<_>>();
 
         log::debug!(
-            "Found {} potential commits on {:?}",
+            "Found {} potential commits on {:?}{}",
             commit_ids.len(),
-            branch
+            branch,
+            stop_at
+                .map(|s| format!(". Looking for {}", s.to_string()[0..6].to_string()))
+                .unwrap_or_default()
         );
+
+        if let Some(stop_commit) = &stop_at {
+            if let Some((i, _)) = commit_ids
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c == &stop_commit)
+            {
+                log::debug!("Found {stop_commit} at {i}");
+            }
+        }
 
         for commit_id in commit_ids {
             let commit_obj = repo
