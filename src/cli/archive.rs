@@ -125,7 +125,7 @@ pub async fn prompt_archive(
     };
 
     let additional_files = if select_additional_files {
-        let commits = git_info.commits(&None)?;
+        let commits = git_info.commits(&None, None)?;
         let milestone_selected_files = issue_threads
             .iter()
             .map(|i| i.file.as_path())

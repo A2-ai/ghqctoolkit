@@ -1396,6 +1396,7 @@ mod tests {
         fn commits(
             &self,
             _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
         ) -> Result<Vec<crate::git::GitCommit>, GitFileOpsError> {
             Ok(vec![])
         }

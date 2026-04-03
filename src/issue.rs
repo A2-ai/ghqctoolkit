@@ -157,11 +157,15 @@ impl IssueThread {
             }
         }
 
-        // 6. Get all file commits using robust method or fallback
+        // 6. Get all file commits using robust method or fallback.
+        // Use the initial commit as a stop point so the walk terminates early on large repos.
+        let stop_at = ObjectId::from_str(&initial_commit_str).ok();
+
         let all_commits = get_commits_robust(
             git_info,
             &Some(branch.clone()),
             reference_commit.as_ref(),
+            stop_at,
             commit_cache,
         )?;
 
@@ -613,7 +617,11 @@ mod tests {
     }
 
     impl GitFileOps for SimpleMockGitInfo {
-        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+        fn commits(
+            &self,
+            _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
+        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(self
                 .commits
                 .iter()

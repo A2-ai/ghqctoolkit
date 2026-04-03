@@ -923,7 +923,7 @@ async fn main() -> Result<()> {
                     additional_file,
                 } => {
                     let selected_archive_files = if !additional_file.is_empty() {
-                        let commits = git_info.commits(&None)?;
+                        let commits = git_info.commits(&None, None)?;
                         additional_file
                             .iter()
                             .map(|file| file.into_archive_file(&commits, flatten))

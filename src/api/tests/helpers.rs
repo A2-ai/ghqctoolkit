@@ -300,7 +300,11 @@ impl GitStatusOps for MockGitInfo {
 }
 
 impl GitFileOps for MockGitInfo {
-    fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+    fn commits(
+        &self,
+        _branch: &Option<String>,
+        _stop_at: Option<ObjectId>,
+    ) -> Result<Vec<GitCommit>, GitFileOpsError> {
         // Return a commit that matches test fixtures and touches all common test files
         // This matches the initial commit from config_file_issue.json
         let commit_hash = ObjectId::from_str("456def789abc012345678901234567890123cdef")

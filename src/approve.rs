@@ -567,7 +567,11 @@ mod tests {
     }
 
     impl GitFileOps for MockGitHelpers {
-        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+        fn commits(
+            &self,
+            _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
+        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(Vec::new())
         }
 

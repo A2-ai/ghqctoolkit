@@ -724,7 +724,11 @@ mod tests {
     }
 
     impl GitFileOps for TestGitInfo {
-        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+        fn commits(
+            &self,
+            _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
+        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(self.commits.clone())
         }
 

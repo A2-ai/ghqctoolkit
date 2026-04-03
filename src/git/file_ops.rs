@@ -71,8 +71,14 @@ pub enum GitFileOpsError {
 /// File-specific git operations
 #[cfg_attr(test, automock)]
 pub trait GitFileOps {
-    /// Get all commits for a branch/reference with the files they touch
-    fn commits(&self, branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError>;
+    /// Get all commits for a branch/reference with the files they touch.
+    /// If `stop_at` is provided, the walk stops (inclusive) once that commit is reached,
+    /// avoiding unnecessary traversal of older history.
+    fn commits(
+        &self,
+        branch: &Option<String>,
+        stop_at: Option<ObjectId>,
+    ) -> Result<Vec<GitCommit>, GitFileOpsError>;
 
     /// Get all authors who have modified a file
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError>;
@@ -93,7 +99,11 @@ pub trait GitFileOps {
 }
 
 impl GitFileOps for GitInfo {
-    fn commits(&self, branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+    fn commits(
+        &self,
+        branch: &Option<String>,
+        stop_at: Option<ObjectId>,
+    ) -> Result<Vec<GitCommit>, GitFileOpsError> {
         log::debug!("Getting all commits for branch: {:?}", branch);
         let repo = self.repository()?;
         let mut commits = Vec::new();
@@ -189,11 +199,15 @@ impl GitFileOps for GitInfo {
                 }
             }
 
+            let is_stop = stop_at.map_or(false, |s| s == commit_id);
             commits.push(GitCommit {
                 commit: commit_id,
                 message: commit_message,
                 files: changed_files,
             });
+            if is_stop {
+                break;
+            }
         }
 
         log::debug!("Found {} commits for branch: {:?}", commits.len(), branch);
@@ -202,7 +216,7 @@ impl GitFileOps for GitInfo {
 
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
         let repo = self.repository()?;
-        let all_commits = self.commits(&None)?;
+        let all_commits = self.commits(&None, None)?;
 
         // Find commits that touch this file
         let file_commits = find_file_commits(file, &all_commits);
@@ -346,20 +360,42 @@ pub fn find_file_commits<P: AsRef<Path>>(file: P, commits: &[GitCommit]) -> Vec<
 /// Get commits for a branch, using `cache` to avoid redundant lookups.
 /// On a cache miss the result is fetched via `git_info.commits()` and stored before returning.
 /// Uses `""` as the cache key for `None` (HEAD).
+///
+/// When `stop_at` is provided, the cache is considered sufficient only if the stop commit is
+/// already present. If it is absent (the cached walk didn't go back far enough), a fresh walk is
+/// performed. The cache entry is replaced whenever the new walk covers more history (longer Vec).
 pub fn find_commits(
     git_info: &impl GitFileOps,
     branch: &Option<String>,
+    stop_at: Option<ObjectId>,
     cache: &mut HashMap<String, Vec<GitCommit>>,
 ) -> Result<Vec<GitCommit>, GitFileOpsError> {
-    let cache_key = branch.as_deref().unwrap_or("");
-    if let Some(cached) = cache.get(cache_key) {
-        log::debug!("Cache hit for branch commits: {:?}", branch);
-        return Ok(cached.clone());
+    let cache_key = branch.as_deref().unwrap_or("").to_string();
+
+    if let Some(cached) = cache.get(&cache_key) {
+        let sufficient = stop_at
+            .map(|s| cached.iter().any(|c| c.commit == s))
+            .unwrap_or(true);
+        if sufficient {
+            log::debug!("Cache hit for branch commits: {:?}", branch);
+            return Ok(cached.clone());
+        }
+        log::debug!(
+            "Cache insufficient for branch {:?} (stop_at not found), extending walk",
+            branch
+        );
+    } else {
+        log::debug!("Cache miss for branch commits: {:?}, fetching", branch);
     }
 
-    log::debug!("Cache miss for branch commits: {:?}, fetching", branch);
-    let commits = git_info.commits(branch)?;
-    cache.insert(cache_key.to_string(), commits.clone());
+    let commits = git_info.commits(branch, stop_at)?;
+    let should_update = cache
+        .get(&cache_key)
+        .map(|existing| commits.len() >= existing.len())
+        .unwrap_or(true);
+    if should_update {
+        cache.insert(cache_key, commits.clone());
+    }
     Ok(commits)
 }
 
@@ -496,10 +532,11 @@ pub fn get_commits_robust(
     git_info: &(impl GitFileOps + GitCommitAnalysis),
     branch: &Option<String>,
     commit: Option<&ObjectId>,
+    stop_at: Option<ObjectId>,
     cache: &mut HashMap<String, Vec<GitCommit>>,
 ) -> Result<Vec<GitCommit>, GitFileOpsError> {
     // First, try to get commits from the specified branch
-    match find_commits(git_info, branch, cache) {
+    match find_commits(git_info, branch, stop_at, cache) {
         Ok(commits) => {
             log::debug!("Found {} commits for branch {:?}", commits.len(), branch);
             return Ok(commits);
@@ -528,7 +565,7 @@ pub fn get_commits_robust(
             );
 
             // Try to get commits from the target branch
-            match find_commits(git_info, &Some(target_branch.clone()), cache) {
+            match find_commits(git_info, &Some(target_branch.clone()), stop_at, cache) {
                 Ok(commits) => {
                     log::debug!(
                         "Found {} commits for merged target branch {}",
@@ -568,7 +605,7 @@ pub fn get_commits_robust(
 
             // Try each branch until we find one that works
             for branch_name in branches_containing_commit {
-                match find_commits(git_info, &Some(branch_name.clone()), cache) {
+                match find_commits(git_info, &Some(branch_name.clone()), stop_at, cache) {
                     Ok(commits) if !commits.is_empty() => {
                         log::debug!(
                             "Found {} commits for branch {} (contains commit)",
@@ -702,7 +739,11 @@ mod tests {
     }
 
     impl GitFileOps for RobustMockGitInfo {
-        fn commits(&self, branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+        fn commits(
+            &self,
+            branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
+        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             match self.file_commits_responses.get(branch) {
                 Some(Ok(commits)) => Ok(commits
                     .iter()
@@ -787,6 +828,7 @@ mod tests {
             &git_info,
             &branch,
             Some(&initial_commit),
+            None,
             &mut HashMap::new(),
         )
         .unwrap();
@@ -828,6 +870,7 @@ mod tests {
             &git_info,
             &Some(branch.to_string()),
             Some(&initial_commit),
+            None,
             &mut HashMap::new(),
         )
         .unwrap();
@@ -868,6 +911,7 @@ mod tests {
             &git_info,
             &Some(branch.to_string()),
             Some(&initial_commit),
+            None,
             &mut HashMap::new(),
         )
         .unwrap();
@@ -901,6 +945,7 @@ mod tests {
             &git_info,
             &Some(branch.to_string()),
             Some(&initial_commit),
+            None,
             &mut HashMap::new(),
         );
 
@@ -923,6 +968,7 @@ mod tests {
             &git_info,
             &Some(branch.to_string()),
             Some(&invalid_commit),
+            None,
             &mut HashMap::new(),
         );
 
@@ -945,6 +991,7 @@ mod tests {
             &git_info,
             &Some(branch.to_string()),
             Some(&initial_commit),
+            None,
             &mut HashMap::new(),
         );
 
@@ -986,6 +1033,7 @@ mod tests {
             &git_info,
             &Some(branch.to_string()),
             Some(&initial_commit),
+            None,
             &mut HashMap::new(),
         )
         .unwrap();
