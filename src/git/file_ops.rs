@@ -129,12 +129,15 @@ impl GitFileOps for GitInfo {
             .filter_map(|c| c.map(|info| info.id).ok())
             .collect::<Vec<_>>();
 
+        let short_stop = stop_at.map(|s| s.to_string()[0..7].to_string());
+
         log::debug!(
             "Found {} potential commits on {:?}{}",
             commit_ids.len(),
             branch,
-            stop_at
-                .map(|s| format!(". Looking for {}", s.to_string()[0..6].to_string()))
+            short_stop
+                .as_ref()
+                .map(|s| format!(". Looking for {s}"))
                 .unwrap_or_default()
         );
 
@@ -144,14 +147,12 @@ impl GitFileOps for GitInfo {
                 .enumerate()
                 .find(|(_, c)| c == &stop_commit)
             {
-                log::debug!("Found {stop_commit} at {i}");
+                log::debug!("Found {} at {i}", short_stop.as_ref().unwrap());
             }
         }
 
         let commit_len = commit_ids.len();
         for (idx, commit_id) in commit_ids.into_iter().enumerate() {
-            log::debug!("Looking at {}/{}", idx, commit_len);
-
             let commit_obj = repo
                 .find_object(commit_id)
                 .map_err(GitFileOpsError::ObjectError)?
