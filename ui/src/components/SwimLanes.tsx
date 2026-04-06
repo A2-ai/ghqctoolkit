@@ -58,11 +58,11 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
   return (
     <>
     <DragDropContext onDragEnd={noop}>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', height: '100%', minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', height: '100%', minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}>
         {LANES.map((lane) => {
           const cards = byLane[lane.id]
           return (
-            <div key={lane.id} style={{ flex: 1, minWidth: 180, minHeight: 0, display: 'flex' }}>
+            <div key={lane.id} style={{ flex: 1, minWidth: 220, minHeight: 0, display: 'flex' }}>
               <Card withBorder style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
                 <Stack style={{ flex: 1, minHeight: 0 }} gap="sm">
                   <div style={{ background: lane.headerColor, padding: '6px 8px', borderRadius: 4 }}>
@@ -94,7 +94,11 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                                 data-testid={`issue-card-${s.issue.number}`}
                                 style={{
                                   cursor: 'pointer',
-                                  ...(postApprovalFileCommit(s) ? { backgroundColor: '#ffedd5' } : undefined),
+                                  ...(s.qc_status.status === 'approval_required'
+                                    ? { backgroundColor: '#fee2e2' }
+                                    : postApprovalFileCommit(s)
+                                    ? { backgroundColor: '#ffedd5' }
+                                    : undefined),
                                 }}
                               >
                                 <IssueCard status={s} currentBranch={currentBranch} remoteCommit={remoteCommit} postApprovalCommit={postApprovalFileCommit(s)} />
