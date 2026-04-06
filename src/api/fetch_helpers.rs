@@ -109,25 +109,20 @@ impl CreatedThreads {
                 .collect::<Vec<_>>();
         let comment_results = futures::future::join_all(comment_futures).await;
 
-        // Step 2: Build IssueThreads sequentially with the shared commit cache.
-        // Acquire the write lock for the duration so the populated cache persists
-        // across requests, avoiding redundant git commit walks for the same branch.
+        // Step 2: Build IssueThreads, sharing the disk cache for commit lookups.
         let mut thread_results: Vec<(&Issue, Result<IssueThread, IssueError>)> = Vec::new();
-        {
-            let mut commit_cache = app_state.commit_cache.write().await;
-            for (issue, comments_result) in comment_results {
-                let result = match comments_result {
-                    Ok(comments) => IssueThread::from_issue_comments(
-                        issue,
-                        &comments,
-                        git_info,
-                        &mut *commit_cache,
-                    ),
-                    Err(e) => Err(IssueError::GitHubApiError(e)),
-                };
-                thread_results.push((issue, result));
-            }
-        } // commit_cache lock released here
+        for (issue, comments_result) in comment_results {
+            let result = match comments_result {
+                Ok(comments) => IssueThread::from_issue_comments(
+                    issue,
+                    &comments,
+                    git_info,
+                    disk_cache,
+                ),
+                Err(e) => Err(IssueError::GitHubApiError(e)),
+            };
+            thread_results.push((issue, result));
+        }
 
         let mut created = CreatedThreads::default();
 

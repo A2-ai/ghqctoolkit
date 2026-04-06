@@ -1,14 +1,19 @@
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     fmt,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use gix::ObjectId;
 #[cfg(test)]
 use mockall::automock;
-
-use crate::{GitInfo, git::GitCommitAnalysis};
+use crate::{
+    DiskCache,
+    cache::{CachedCommit, FileChangeRecord},
+    GitInfo,
+    git::GitCommitAnalysis,
+};
 
 #[derive(Debug, Clone)]
 pub struct GitAuthor {
@@ -26,11 +31,8 @@ impl fmt::Display for GitAuthor {
 pub struct GitCommit {
     pub commit: ObjectId,
     pub message: String,
-    pub files: Vec<PathBuf>,
 }
 
-/// Cache mapping branch name (or empty string for HEAD) to their commits.
-pub type CommitCache = HashMap<String, Vec<GitCommit>>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum GitFileOpsError {
@@ -71,14 +73,23 @@ pub enum GitFileOpsError {
 /// File-specific git operations
 #[cfg_attr(test, automock)]
 pub trait GitFileOps {
-    /// Get all commits for a branch/reference with the files they touch.
-    /// If `stop_at` is provided, the walk stops (inclusive) once that commit is reached,
-    /// avoiding unnecessary traversal of older history.
+    /// Get all commits for a branch/reference (hash + message only, no file diffs).
+    /// If `stop_at` is provided, the walk stops (inclusive) once that commit is reached.
     fn commits(
         &self,
         branch: &Option<String>,
         stop_at: Option<ObjectId>,
     ) -> Result<Vec<GitCommit>, GitFileOpsError>;
+
+    /// Return the tip (HEAD) commit ID for a branch without walking history.
+    fn branch_tip(&self, branch: &Option<String>) -> Result<ObjectId, GitFileOpsError>;
+
+    /// Return the set of full commit SHAs that touch `file` on `branch` (or HEAD if None).
+    fn file_touching_commits(
+        &self,
+        branch: Option<String>,
+        file: &Path,
+    ) -> Result<HashSet<String>, GitFileOpsError>;
 
     /// Get all authors who have modified a file
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError>;
@@ -158,78 +169,15 @@ impl GitFileOps for GitInfo {
                 .try_into_commit()
                 .map_err(GitFileOpsError::CommitError)?;
 
-            // Get commit message
             let commit_message = commit_obj
                 .message_raw()
                 .map(|msg| msg.to_string())
-                .unwrap_or(String::new());
-
-            // Get files changed in this commit by comparing with parents
-            let mut changed_files = Vec::new();
-
-            if commit_obj.parent_ids().count() == 0 {
-                // Initial commit - get all files in the tree recursively
-                if let Ok(tree) = commit_obj.tree() {
-                    collect_tree_files_recursive(&tree, &mut changed_files, "")?;
-                }
-            } else {
-                // Compare this commit's tree with each parent to find changed files
-                let current_tree = commit_obj.tree().map_err(GitFileOpsError::TreeError)?;
-
-                // For merge commits, we'll collect files from all parent comparisons
-                for parent_id in commit_obj.parent_ids() {
-                    let parent_commit = repo
-                        .find_object(parent_id)
-                        .map_err(GitFileOpsError::ObjectError)?
-                        .try_into_commit()
-                        .map_err(GitFileOpsError::CommitError)?;
-
-                    let parent_tree = parent_commit.tree().map_err(GitFileOpsError::TreeError)?;
-
-                    // Find differences between trees recursively
-                    let current_files = collect_tree_files_with_oids(&current_tree)?;
-                    let parent_files = collect_tree_files_with_oids(&parent_tree)?;
-
-                    // Find differences
-                    for (path, oid) in &current_files {
-                        match parent_files.get(path) {
-                            Some(parent_oid) if parent_oid != oid => {
-                                // File modified
-                                let file_path = PathBuf::from(path);
-                                if !changed_files.contains(&file_path) {
-                                    changed_files.push(file_path);
-                                }
-                            }
-                            None => {
-                                // File added
-                                let file_path = PathBuf::from(path);
-                                if !changed_files.contains(&file_path) {
-                                    changed_files.push(file_path);
-                                }
-                            }
-                            _ => {
-                                // File unchanged
-                            }
-                        }
-                    }
-
-                    // Check for deleted files
-                    for (path, _) in &parent_files {
-                        if !current_files.contains_key(path) {
-                            let file_path = PathBuf::from(path);
-                            if !changed_files.contains(&file_path) {
-                                changed_files.push(file_path);
-                            }
-                        }
-                    }
-                }
-            }
+                .unwrap_or_default();
 
             let is_stop = stop_at.map_or(false, |s| s == commit_id);
             commits.push(GitCommit {
                 commit: commit_id,
                 message: commit_message,
-                files: changed_files,
             });
             if is_stop {
                 break;
@@ -240,12 +188,44 @@ impl GitFileOps for GitInfo {
         Ok(commits)
     }
 
+    fn branch_tip(&self, branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+        let repo = self.repository()?;
+        if let Some(branch_name) = branch.as_ref() {
+            let branch_ref_name = format!("refs/heads/{}", branch_name);
+            let branch_ref = repo
+                .find_reference(&branch_ref_name)
+                .map_err(|_| GitFileOpsError::BranchNotFound(branch_name.clone()))?;
+            Ok(branch_ref.id().detach())
+        } else {
+            repo.head_id()
+                .map(|id| id.detach())
+                .map_err(GitFileOpsError::HeadIdError)
+        }
+    }
+
+    fn file_touching_commits(
+        &self,
+        branch: Option<String>,
+        file: &Path,
+    ) -> Result<HashSet<String>, GitFileOpsError> {
+        use crate::git::action::{GitCli as _, GitCommand};
+        GitCommand
+            .file_touching_commits(&self.repository_path, branch, file)
+            .map_err(|e| GitFileOpsError::BranchNotFound(e.to_string()))
+    }
+
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
         let repo = self.repository()?;
         let all_commits = self.commits(&None, None)?;
 
-        // Find commits that touch this file
-        let file_commits = find_file_commits(file, &all_commits);
+        // Find commits that touch this file via git log subprocess
+        let touching = self
+            .file_touching_commits(None, file)
+            .unwrap_or_default();
+        let file_commits: Vec<&GitCommit> = all_commits
+            .iter()
+            .filter(|c| touching.contains(&c.commit.to_string()))
+            .collect();
 
         let mut res: Vec<GitAuthor> = Vec::new();
 
@@ -374,55 +354,133 @@ impl GitFileOps for GitInfo {
     }
 }
 
-/// Find commits that touch a specific file
-pub fn find_file_commits<P: AsRef<Path>>(file: P, commits: &[GitCommit]) -> Vec<&GitCommit> {
-    let file_path = file.as_ref();
+// ──────────────────────────────────────────────────────────────────────────────
+// Disk-cache helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+fn commits_to_cached(commits: &[GitCommit]) -> Vec<CachedCommit> {
     commits
         .iter()
-        .filter(|commit| commit.files.iter().any(|f| f == file_path))
+        .map(|c| CachedCommit {
+            hash: c.commit.to_string(),
+            message: c.message.clone(),
+            file_changes: Vec::new(),
+        })
         .collect()
 }
 
-/// Get commits for a branch, using `cache` to avoid redundant lookups.
-/// On a cache miss the result is fetched via `git_info.commits()` and stored before returning.
-/// Uses `""` as the cache key for `None` (HEAD).
+fn cached_to_commits(cached: &[CachedCommit]) -> Vec<GitCommit> {
+    cached
+        .iter()
+        .filter_map(|c| {
+            ObjectId::from_str(&c.hash).ok().map(|id| GitCommit {
+                commit: id,
+                message: c.message.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Merge `file_changes` from `old` into `new_cached` where hashes match.
+fn merge_file_changes(
+    mut new_cached: Vec<CachedCommit>,
+    old: Option<Vec<CachedCommit>>,
+) -> Vec<CachedCommit> {
+    let Some(old) = old else {
+        return new_cached;
+    };
+    let old_map: std::collections::HashMap<&str, &Vec<FileChangeRecord>> =
+        old.iter().map(|c| (c.hash.as_str(), &c.file_changes)).collect();
+    for commit in &mut new_cached {
+        if let Some(fc) = old_map.get(commit.hash.as_str()) {
+            commit.file_changes = (*fc).clone();
+        }
+    }
+    new_cached
+}
+
+fn disk_cache_key(branch: &Option<String>) -> String {
+    branch.as_deref().unwrap_or("HEAD").to_string()
+}
+
+fn save_cached(disk_cache: &DiskCache, cache_key: &str, cached: &[CachedCommit]) {
+    if let Err(e) = disk_cache.write(&["commits"], cache_key, &cached, false) {
+        log::warn!("Failed to write commit cache to disk: {}", e);
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Public API
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Get commits for a branch, backed by disk cache.
 ///
-/// When `stop_at` is provided, the cache is considered sufficient only if the stop commit is
-/// already present. If it is absent (the cached walk didn't go back far enough), a fresh walk is
-/// performed. The cache entry is replaced whenever the new walk covers more history (longer Vec).
+/// Cache validity requires:
+/// 1. The cached HEAD matches the current branch tip (all commits present).
+/// 2. `stop_at` is present somewhere in the cached list.
+///
+/// On a mismatch the full walk is re-run and the cache is updated (preserving any
+/// previously stored `file_changes` for commits that still exist in the new history).
+/// If `stop_at` is no longer reachable (force-pushed away), the walk runs without it.
 pub fn find_commits(
     git_info: &impl GitFileOps,
     branch: &Option<String>,
     stop_at: Option<ObjectId>,
-    cache: &mut HashMap<String, Vec<GitCommit>>,
+    disk_cache: Option<&DiskCache>,
 ) -> Result<Vec<GitCommit>, GitFileOpsError> {
-    let cache_key = branch.as_deref().unwrap_or("").to_string();
+    let cache_key = disk_cache_key(branch);
 
-    if let Some(cached) = cache.get(&cache_key) {
-        let sufficient = stop_at
-            .map(|s| cached.iter().any(|c| c.commit == s))
-            .unwrap_or(true);
-        if sufficient {
-            log::debug!("Cache hit for branch commits: {:?}", branch);
-            return Ok(cached.clone());
+    // ── Try disk cache ──────────────────────────────────────────────────────
+    if let Some(cache) = disk_cache {
+        let cached: Option<Vec<CachedCommit>> = cache.read(&["commits"], &cache_key);
+        if let Some(ref cached_commits) = cached {
+            // Validate: current branch tip must equal the first cached entry
+            let current_tip = git_info.branch_tip(branch).ok().map(|id| id.to_string());
+            let cached_head = cached_commits.first().map(|c| c.hash.as_str());
+
+            let tip_matches = current_tip.as_deref() == cached_head;
+
+            let stop_present = stop_at
+                .map(|s| {
+                    let s = s.to_string();
+                    cached_commits.iter().any(|c| c.hash == s)
+                })
+                .unwrap_or(true);
+
+            if tip_matches && stop_present {
+                log::debug!("Disk cache hit for branch {:?}", branch);
+                return Ok(cached_to_commits(cached_commits));
+            }
+
+            if tip_matches && !stop_present {
+                log::debug!(
+                    "Disk cache insufficient for branch {:?} (stop_at not found)",
+                    branch
+                );
+            } else {
+                log::debug!(
+                    "Disk cache stale for branch {:?} (HEAD changed or force-pushed)",
+                    branch
+                );
+            }
         }
-        log::debug!(
-            "Cache insufficient for branch {:?} (stop_at not found), extending walk",
-            branch
-        );
-    } else {
-        log::debug!("Cache miss for branch commits: {:?}, fetching", branch);
-    }
 
-    let commits = git_info.commits(branch, stop_at)?;
-    let should_update = cache
-        .get(&cache_key)
-        .map(|existing| commits.len() >= existing.len())
-        .unwrap_or(true);
-    if should_update {
-        cache.insert(cache_key, commits.clone());
+        // ── Full walk ───────────────────────────────────────────────────────
+        log::debug!("Full commit walk for branch {:?}", branch);
+        let effective_stop = stop_at.filter(|s| {
+            // If stop_at no longer exists in the repo, skip it to avoid infinite walk
+            git_info.branch_tip(&Some(s.to_string())).is_ok()
+                || git_info.commits(branch, Some(*s)).is_ok()
+        });
+        let commits = git_info.commits(branch, effective_stop)?;
+        let old_cached: Option<Vec<CachedCommit>> = cache.read(&["commits"], &cache_key);
+        let new_cached = merge_file_changes(commits_to_cached(&commits), old_cached);
+        save_cached(cache, &cache_key, &new_cached);
+        Ok(commits)
+    } else {
+        // No disk cache – plain walk
+        git_info.commits(branch, stop_at)
     }
-    Ok(commits)
 }
 
 /// Find which branch a commit was merged into using merge commit analysis
@@ -477,79 +535,6 @@ fn find_merged_into_branch(
     Ok(None)
 }
 
-/// Recursively collect all files in a tree
-fn collect_tree_files_recursive(
-    tree: &gix::Tree<'_>,
-    files: &mut Vec<PathBuf>,
-    path_prefix: &str,
-) -> Result<(), GitFileOpsError> {
-    for entry in tree.iter() {
-        let entry = entry.map_err(|e| GitFileOpsError::TreeError(e.into()))?;
-
-        let entry_name = entry.filename().to_string();
-        let full_path = if path_prefix.is_empty() {
-            entry_name.clone()
-        } else {
-            format!("{}/{}", path_prefix, entry_name)
-        };
-
-        if entry.mode().is_blob() {
-            // This is a file
-            files.push(PathBuf::from(full_path));
-        } else if entry.mode().is_tree() {
-            // This is a directory, recurse into it
-            let sub_tree = entry
-                .object()
-                .map_err(GitFileOpsError::ObjectError)?
-                .try_into_tree()
-                .map_err(GitFileOpsError::ObjectToTreeError)?;
-            collect_tree_files_recursive(&sub_tree, files, &full_path)?;
-        }
-    }
-    Ok(())
-}
-
-/// Recursively collect all files in a tree with their OIDs
-fn collect_tree_files_with_oids(
-    tree: &gix::Tree<'_>,
-) -> Result<std::collections::HashMap<String, gix::ObjectId>, GitFileOpsError> {
-    let mut files = std::collections::HashMap::new();
-    collect_tree_files_with_oids_recursive(tree, &mut files, "")?;
-    Ok(files)
-}
-
-/// Helper for recursive OID collection
-fn collect_tree_files_with_oids_recursive(
-    tree: &gix::Tree<'_>,
-    files: &mut std::collections::HashMap<String, gix::ObjectId>,
-    path_prefix: &str,
-) -> Result<(), GitFileOpsError> {
-    for entry in tree.iter() {
-        let entry = entry.map_err(|e| GitFileOpsError::TreeError(e.into()))?;
-
-        let entry_name = entry.filename().to_string();
-        let full_path = if path_prefix.is_empty() {
-            entry_name.clone()
-        } else {
-            format!("{}/{}", path_prefix, entry_name)
-        };
-
-        if entry.mode().is_blob() {
-            // This is a file
-            files.insert(full_path, entry.oid().into());
-        } else if entry.mode().is_tree() {
-            // This is a directory, recurse into it
-            let sub_tree = entry
-                .object()
-                .map_err(GitFileOpsError::ObjectError)?
-                .try_into_tree()
-                .map_err(GitFileOpsError::ObjectToTreeError)?;
-            collect_tree_files_with_oids_recursive(&sub_tree, files, &full_path)?;
-        }
-    }
-    Ok(())
-}
-
 /// Get commits with robust branch handling
 /// 1. Try the specified branch first (via `find_commits` cache)
 /// 2. If commit is provided and branch not found, find merged branch using commit analysis
@@ -559,10 +544,10 @@ pub fn get_commits_robust(
     branch: &Option<String>,
     commit: Option<&ObjectId>,
     stop_at: Option<ObjectId>,
-    cache: &mut HashMap<String, Vec<GitCommit>>,
+    disk_cache: Option<&DiskCache>,
 ) -> Result<Vec<GitCommit>, GitFileOpsError> {
     // First, try to get commits from the specified branch
-    match find_commits(git_info, branch, stop_at, cache) {
+    match find_commits(git_info, branch, stop_at, disk_cache) {
         Ok(commits) => {
             log::debug!("Found {} commits for branch {:?}", commits.len(), branch);
             return Ok(commits);
@@ -591,7 +576,7 @@ pub fn get_commits_robust(
             );
 
             // Try to get commits from the target branch
-            match find_commits(git_info, &Some(target_branch.clone()), stop_at, cache) {
+            match find_commits(git_info, &Some(target_branch.clone()), stop_at, disk_cache) {
                 Ok(commits) => {
                     log::debug!(
                         "Found {} commits for merged target branch {}",
@@ -631,7 +616,7 @@ pub fn get_commits_robust(
 
             // Try each branch until we find one that works
             for branch_name in branches_containing_commit {
-                match find_commits(git_info, &Some(branch_name.clone()), stop_at, cache) {
+                match find_commits(git_info, &Some(branch_name.clone()), stop_at, disk_cache) {
                     Ok(commits) if !commits.is_empty() => {
                         log::debug!(
                             "Found {} commits for branch {} (contains commit)",
@@ -662,6 +647,66 @@ pub fn get_commits_robust(
             "Could not determine branch from commit".to_string(),
         ))
     }
+}
+
+/// For a list of commit hashes, determine which touch `file` on `branch`.
+///
+/// Checks the disk cache first: if every commit already has a `FileChangeRecord` for `file`,
+/// returns without running git. Otherwise runs `git log -- <file>` once, updates all entries in
+/// the cache for this branch, and saves back to disk.
+pub fn find_or_cache_file_changes(
+    commit_hashes: &[String],
+    git_info: &impl GitFileOps,
+    branch: Option<String>,
+    file: &Path,
+    disk_cache: Option<&DiskCache>,
+) -> Result<HashSet<String>, GitFileOpsError> {
+    let file_str = file.to_string_lossy().to_string();
+    let cache_key = disk_cache_key(&branch);
+
+    // ── Check disk cache ────────────────────────────────────────────────────
+    if let Some(cache) = disk_cache {
+        let cached: Option<Vec<CachedCommit>> = cache.read(&["commits"], &cache_key);
+        if let Some(mut cached_commits) = cached {
+            let all_have_entry = commit_hashes.iter().all(|h| {
+                cached_commits
+                    .iter()
+                    .find(|c| &c.hash == h)
+                    .map(|c| c.file_changes.iter().any(|fc| fc.file == file_str))
+                    .unwrap_or(false)
+            });
+
+            if all_have_entry {
+                log::debug!("file_changes cache hit for {:?} on {:?}", file, branch);
+                let touching = cached_commits
+                    .iter()
+                    .filter(|c| {
+                        c.file_changes
+                            .iter()
+                            .any(|fc| fc.file == file_str && fc.changed)
+                    })
+                    .map(|c| c.hash.clone())
+                    .collect();
+                return Ok(touching);
+            }
+
+            // Cache miss for some commits – run git and update all entries
+            let touching_set = git_info.file_touching_commits(branch.clone(), file)?;
+
+            for commit in &mut cached_commits {
+                commit.file_changes.retain(|fc| fc.file != file_str);
+                commit.file_changes.push(FileChangeRecord {
+                    file: file_str.clone(),
+                    changed: touching_set.contains(&commit.hash),
+                });
+            }
+            save_cached(cache, &cache_key, &cached_commits);
+            return Ok(touching_set);
+        }
+    }
+
+    // ── No cache or cache not available – just run git ──────────────────────
+    git_info.file_touching_commits(branch, file)
 }
 
 #[cfg(test)]
@@ -776,7 +821,6 @@ mod tests {
                     .map(|(commit, message)| GitCommit {
                         commit: *commit,
                         message: message.clone(),
-                        files: vec![PathBuf::from("test_file.rs")], // Default test file
                     })
                     .collect()),
                 Some(Err(GitFileOpsError::BranchNotFound(branch_name))) => {
@@ -785,6 +829,27 @@ mod tests {
                 Some(Err(_e)) => Err(GitFileOpsError::AuthorNotFound(PathBuf::from("test"))), // Fallback error for testing
                 None => Ok(Vec::new()),
             }
+        }
+
+        fn branch_tip(&self, branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+            // Return the first commit of this branch as its tip
+            match self.file_commits_responses.get(branch) {
+                Some(Ok(commits)) => commits
+                    .first()
+                    .map(|(id, _)| *id)
+                    .ok_or_else(|| GitFileOpsError::BranchNotFound("empty branch".to_string())),
+                _ => Err(GitFileOpsError::BranchNotFound(
+                    branch.clone().unwrap_or_default(),
+                )),
+            }
+        }
+
+        fn file_touching_commits(
+            &self,
+            _branch: Option<String>,
+            _file: &Path,
+        ) -> Result<HashSet<String>, GitFileOpsError> {
+            Ok(HashSet::new())
         }
 
         fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
@@ -855,7 +920,7 @@ mod tests {
             &branch,
             Some(&initial_commit),
             None,
-            &mut HashMap::new(),
+            None,
         )
         .unwrap();
 
@@ -897,7 +962,7 @@ mod tests {
             &Some(branch.to_string()),
             Some(&initial_commit),
             None,
-            &mut HashMap::new(),
+            None,
         )
         .unwrap();
 
@@ -938,7 +1003,7 @@ mod tests {
             &Some(branch.to_string()),
             Some(&initial_commit),
             None,
-            &mut HashMap::new(),
+            None,
         )
         .unwrap();
 
@@ -972,7 +1037,7 @@ mod tests {
             &Some(branch.to_string()),
             Some(&initial_commit),
             None,
-            &mut HashMap::new(),
+            None,
         );
 
         // Should fail when no branch can be found
@@ -995,7 +1060,7 @@ mod tests {
             &Some(branch.to_string()),
             Some(&invalid_commit),
             None,
-            &mut HashMap::new(),
+            None,
         );
 
         // Should fail since no branches can be found and all fallbacks fail
@@ -1018,7 +1083,7 @@ mod tests {
             &Some(branch.to_string()),
             Some(&initial_commit),
             None,
-            &mut HashMap::new(),
+            None,
         );
 
         assert!(matches!(result, Err(GitFileOpsError::AuthorNotFound(_))));
@@ -1060,7 +1125,7 @@ mod tests {
             &Some(branch.to_string()),
             Some(&initial_commit),
             None,
-            &mut HashMap::new(),
+            None,
         )
         .unwrap();
 

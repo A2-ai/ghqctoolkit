@@ -14,7 +14,7 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, CommitCache, Configuration, ContextPosition, DiskCache,
+    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache,
     GitCommand, GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread,
     QCContext, QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation,
     archive, configuration_status, create_labels_if_needed, create_staging_dir,
@@ -477,7 +477,6 @@ async fn main() -> Result<()> {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
 
-                    let mut commit_cache = CommitCache::new();
                     let comment = match (milestone, file) {
                         (None, None) => {
                             // Interactive mode
@@ -485,7 +484,6 @@ async fn main() -> Result<()> {
                                 &milestones,
                                 cache.as_ref(),
                                 &git_info,
-                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -501,7 +499,6 @@ async fn main() -> Result<()> {
                                 cache.as_ref(),
                                 &git_info,
                                 no_diff,
-                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -526,7 +523,6 @@ async fn main() -> Result<()> {
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
-                    let mut commit_cache = CommitCache::new();
                     let approval = match (milestone, file, &note) {
                         (None, None, None) => {
                             // Interactive Mode
@@ -534,7 +530,6 @@ async fn main() -> Result<()> {
                                 &milestones,
                                 cache.as_ref(),
                                 &git_info,
-                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -547,7 +542,6 @@ async fn main() -> Result<()> {
                                 &milestones,
                                 cache.as_ref(),
                                 &git_info,
-                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -559,13 +553,11 @@ async fn main() -> Result<()> {
                     };
 
                     // Use approval with validation
-                    let mut commit_cache = CommitCache::new();
                     let result = approve_with_validation(
                         &approval,
                         &git_info,
                         cache.as_ref(),
                         force,
-                        &mut commit_cache,
                     )
                     .await?;
 
@@ -614,7 +606,6 @@ async fn main() -> Result<()> {
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
-                    let mut commit_cache = CommitCache::new();
 
                     let review = match (milestone, file) {
                         (None, None) => {
@@ -622,7 +613,6 @@ async fn main() -> Result<()> {
                                 milestones,
                                 cache.as_ref(),
                                 &git_info,
-                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -637,7 +627,6 @@ async fn main() -> Result<()> {
                                 &git_info,
                                 no_diff,
                                 !no_stash_after_review,
-                                &mut commit_cache,
                             )
                             .await?
                         }
@@ -666,7 +655,6 @@ async fn main() -> Result<()> {
                 IssueCommands::Status { milestone, file } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
-                    let mut commit_cache = CommitCache::new();
                     match (milestone, file) {
                         (Some(milestone), Some(file)) => {
                             let issue =
@@ -677,7 +665,6 @@ async fn main() -> Result<()> {
                                 &issue,
                                 cache.as_ref(),
                                 &git_info,
-                                &mut commit_cache,
                             )
                             .await?;
                             let git_status = get_git_status(&git_info)?;
@@ -687,7 +674,6 @@ async fn main() -> Result<()> {
                                 &issue_thread.blocking_qcs,
                                 &git_info,
                                 cache.as_ref(),
-                                &mut commit_cache,
                             )
                             .await;
                             println!(
@@ -709,7 +695,6 @@ async fn main() -> Result<()> {
                                 &milestones,
                                 cache.as_ref(),
                                 &git_info,
-                                &mut commit_cache,
                             )
                             .await?;
                         }

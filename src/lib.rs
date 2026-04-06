@@ -39,7 +39,8 @@ pub use auth::{
 };
 pub use cache::DiskCache;
 pub use cache::{
-    CachedEvents, create_labels_if_needed, get_issue_comments, get_issue_events, get_repo_users,
+    CachedCommit, CachedEvents, FileChangeRecord, create_labels_if_needed, get_issue_comments,
+    get_issue_events, get_repo_users,
 };
 pub use comment::QCComment;
 pub use comment_system::CommentBody;
@@ -49,11 +50,11 @@ pub use configuration::{
 };
 pub use create::{QCEntry, QCIssue, QCRelationship, RelevantFileEntry, batch_post_qc_entries};
 pub use git::{
-    AuthError, AuthSourceKind, AuthSources, CommitCache, FileStashOutcome, GitAuthor, GitCli,
-    GitCliError, GitCommand, GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError,
-    GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter, GitInfo,
-    GitInfoError, GitProvider, GitRepository, GitRepositoryError, GitState, GitStatus,
-    GitStatusError, GitStatusOps, RepoUser, find_commits, find_file_commits, get_git_status,
+    AuthError, AuthSourceKind, AuthSources, FileStashOutcome, GitAuthor, GitCli, GitCliError,
+    GitCommand, GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
+    GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError,
+    GitProvider, GitRepository, GitRepositoryError, GitState, GitStatus, GitStatusError,
+    GitStatusOps, RepoUser, find_commits, find_or_cache_file_changes, get_git_status,
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,

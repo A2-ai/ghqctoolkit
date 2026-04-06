@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     cache::{DiskCache, get_issue_comments},
     git::{
-        CommitCache, GitComment, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError,
-        GitHubReader, get_commits_robust,
+        GitComment, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+        find_or_cache_file_changes, get_commits_robust,
     },
 };
 
@@ -105,7 +105,7 @@ impl IssueThread {
         issue: &Issue,
         comments: &[GitComment],
         git_info: &(impl GitFileOps + GitCommitAnalysis),
-        commit_cache: &mut CommitCache,
+        disk_cache: Option<&DiskCache>,
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
         let issue_is_open = matches!(issue.state, IssueState::Open);
@@ -166,8 +166,19 @@ impl IssueThread {
             &Some(branch.clone()),
             reference_commit.as_ref(),
             stop_at,
-            commit_cache,
+            disk_cache,
         )?;
+
+        // Pre-compute which commits touch this issue's file (one subprocess call).
+        let commit_hashes: Vec<String> = all_commits.iter().map(|c| c.commit.to_string()).collect();
+        let file_touching = find_or_cache_file_changes(
+            &commit_hashes,
+            git_info,
+            Some(branch.clone()),
+            &file,
+            disk_cache,
+        )
+        .map_err(IssueError::GitFileOpsError)?;
 
         let mut issue_commits = Vec::new();
         let mut qc_notif_found = false;
@@ -191,7 +202,7 @@ impl IssueThread {
                     }
                 })
                 .unwrap_or_else(HashSet::new);
-            let file_changed = commit.files.contains(&file);
+            let file_changed = file_touching.contains(&commit.commit.to_string());
 
             if qc_notif_found {
                 // insert a idx 0 instead of push to re-reverse the order
@@ -232,15 +243,11 @@ impl IssueThread {
     // TODO: order the notification commits based on commit timeline
     pub async fn from_issue(
         issue: &Issue,
-        cache: Option<&DiskCache>,
+        disk_cache: Option<&DiskCache>,
         git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
-        commit_cache: &mut CommitCache,
     ) -> Result<Self, IssueError> {
-        // Get the comments (cached based on issue update time)
-        let comments = get_issue_comments(issue, cache, git_info).await?;
-
-        // Delegate to from_issue_comments with the fetched comments
-        Self::from_issue_comments(issue, &comments, git_info, commit_cache)
+        let comments = get_issue_comments(issue, disk_cache, git_info).await?;
+        Self::from_issue_comments(issue, &comments, git_info, disk_cache)
     }
 
     pub fn latest_commit(&self) -> &IssueCommit {
@@ -523,7 +530,6 @@ mod tests {
         GitFileOpsError, GitHubReader,
     };
     use octocrab::models::issues::Issue;
-    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::str::FromStr;
 
@@ -628,7 +634,6 @@ mod tests {
                 .map(|(commit, message)| GitCommit {
                     commit: *commit,
                     message: message.clone(),
-                    files: vec![PathBuf::from("test_file.rs")],
                 })
                 .collect())
         }
@@ -646,6 +651,19 @@ mod tests {
             _commit: &ObjectId,
         ) -> Result<Vec<u8>, GitFileOpsError> {
             Ok(Vec::new())
+        }
+
+        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+        }
+
+        fn file_touching_commits(
+            &self,
+            _branch: Option<String>,
+            _file: &std::path::Path,
+        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
+            // Return all commit hashes as "touching" since tests use a single file
+            Ok(self.commits.iter().map(|(id, _)| id.to_string()).collect())
         }
 
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
@@ -772,7 +790,7 @@ mod tests {
             .with_commits(create_test_commits())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
+        let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 
@@ -834,7 +852,7 @@ mod tests {
             .with_commits(create_test_commits())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
+        let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 
@@ -902,7 +920,7 @@ mod tests {
             .with_commits(test_commits.clone())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
+        let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 
@@ -982,7 +1000,7 @@ mod tests {
             .with_commits(test_commits.clone())
             .with_comments(git_comments);
 
-        let result = IssueThread::from_issue(&issue, None, &git_info, &mut HashMap::new())
+        let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 

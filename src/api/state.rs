@@ -1,7 +1,7 @@
 //! Application state for the API server.
 
 use crate::api::cache::StatusCache;
-use crate::{CommitCache, Configuration, DiskCache, GitCli, GitCommand, GitProvider};
+use crate::{Configuration, DiskCache, GitCli, GitCommand, GitProvider};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,8 +29,6 @@ pub struct AppState<G: GitProvider> {
     git_cli: Arc<dyn GitCli + Send + Sync>,
     /// Preview PDF store: UUID key → temp file path
     preview_store: Arc<Mutex<HashMap<String, PathBuf>>>,
-    /// In-memory cache for branch commit lists, shared across requests.
-    pub commit_cache: Arc<RwLock<CommitCache>>,
 }
 
 impl<G: GitProvider> AppState<G> {
@@ -47,7 +45,6 @@ impl<G: GitProvider> AppState<G> {
             configuration_git_info: Arc::new(RwLock::new(configuration_git_info)),
             disk_cache: disk_cache.map(Arc::new),
             status_cache: Arc::new(RwLock::new(StatusCache::new())),
-            commit_cache: Arc::new(RwLock::new(CommitCache::new())),
             config_git_info_creator: Arc::new(|_| None),
             git_cli: Arc::new(GitCommand),
             preview_store: Arc::new(Mutex::new(HashMap::new())),

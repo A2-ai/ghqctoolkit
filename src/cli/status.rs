@@ -6,7 +6,7 @@ use octocrab::models::Milestone;
 
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::{
-    BlockingQCStatus, ChecklistSummary, CommitCache, DiskCache, GitHubReader, GitInfo, GitState,
+    BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState,
     IssueThread, QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
 };
 
@@ -14,7 +14,6 @@ pub async fn interactive_status(
     milestones: &[Milestone],
     cache: Option<&DiskCache>,
     git_info: &GitInfo,
-    commit_cache: &mut CommitCache,
 ) -> Result<()> {
     println!("📊 Welcome to GHQC Status Mode!");
 
@@ -38,7 +37,7 @@ pub async fn interactive_status(
     let checklist_summary = analyze_issue_checklists(issue.body.as_deref());
 
     // Create IssueThread from the selected issue
-    let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+    let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
     let file_commits = issue_thread.file_commits();
 
     // Get git status for the file
@@ -47,7 +46,7 @@ pub async fn interactive_status(
     // Determine QC status
     let qc_status = QCStatus::determine_status(&issue_thread);
     let blocking_qc_status =
-        get_blocking_qc_status(&issue_thread.blocking_qcs, git_info, cache, commit_cache).await;
+        get_blocking_qc_status(&issue_thread.blocking_qcs, git_info, cache).await;
 
     // Display the status
     println!(
@@ -240,9 +239,8 @@ pub async fn interactive_milestone_status(
     }
 
     // Get status for all selected milestones
-    let mut commit_cache = CommitCache::new();
     let status_rows =
-        get_milestone_status_rows(&selected_milestones, cache, git_info, &mut commit_cache).await?;
+        get_milestone_status_rows(&selected_milestones, cache, git_info).await?;
 
     // Display results
     display_milestone_status_table(&status_rows);
@@ -263,9 +261,8 @@ pub async fn milestone_status(
     let milestone_refs: Vec<&Milestone> = milestones.iter().collect();
 
     // Get status for all milestones
-    let mut commit_cache = CommitCache::new();
     let status_rows =
-        get_milestone_status_rows(&milestone_refs, cache, git_info, &mut commit_cache).await?;
+        get_milestone_status_rows(&milestone_refs, cache, git_info).await?;
 
     // Display results
     display_milestone_status_table(&status_rows);
@@ -277,7 +274,6 @@ async fn get_milestone_status_rows(
     milestones: &[&Milestone],
     cache: Option<&DiskCache>,
     git_info: &GitInfo,
-    commit_cache: &mut CommitCache,
 ) -> Result<Vec<MilestoneStatusRow>> {
     let mut rows = Vec::new();
 
@@ -294,7 +290,7 @@ async fn get_milestone_status_rows(
         for issue in issues {
             // Create IssueThread for each issue
             if let Ok(issue_thread) =
-                IssueThread::from_issue(&issue, cache, git_info, commit_cache).await
+                IssueThread::from_issue(&issue, cache, git_info).await
             {
                 let file_commits = issue_thread.file_commits();
 
@@ -325,7 +321,6 @@ async fn get_milestone_status_rows(
                         &issue_thread.blocking_qcs,
                         git_info,
                         cache,
-                        commit_cache,
                     )
                     .await,
                 };
