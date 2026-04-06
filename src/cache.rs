@@ -162,7 +162,12 @@ impl DiskCache {
 
         let entry = CacheEntry::new(data, ttl);
         let content = serde_json::to_string_pretty(&entry)?;
-        fs::write(&file_path, content)?;
+
+        // Write to a temp file then rename for atomicity — prevents readers
+        // from seeing a partially-written file if two writers race.
+        let tmp_path = file_path.with_extension("tmp");
+        fs::write(&tmp_path, content)?;
+        fs::rename(&tmp_path, &file_path)?;
 
         Ok(())
     }
