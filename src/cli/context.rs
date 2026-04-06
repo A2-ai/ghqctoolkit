@@ -5,8 +5,8 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Configuration, DiskCache, GitFileOps, GitHelpers, GitHubReader, GitHubWriter,
-    GitInfo, GitRepository, QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
+    Configuration, DiskCache, GitFileOps, GitHelpers, GitHubReader, GitHubWriter, GitInfo,
+    GitRepository, QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
     cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
         RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees,

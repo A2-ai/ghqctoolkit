@@ -95,9 +95,7 @@ pub async fn get_commits<G: GitProvider + 'static>(
             .iter()
             .map(|c| {
                 let hash_str = c.commit.to_string();
-                let file_changed = touching
-                    .as_ref()
-                    .map_or(false, |s| s.contains(&hash_str));
+                let file_changed = touching.as_ref().map_or(false, |s| s.contains(&hash_str));
                 BranchCommit {
                     hash: hash_str,
                     message: c.message.trim().to_string(),

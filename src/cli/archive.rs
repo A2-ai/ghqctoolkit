@@ -14,8 +14,8 @@ use inquire::{
 use octocrab::models::Milestone;
 
 use crate::{
-    DiskCache, GitCommitAnalysis, GitFileOps, GitHubReader, GitRepository,
-    IssueThread, archive::ArchiveFile, get_issue_comments, git::GitCommit,
+    DiskCache, GitCommitAnalysis, GitFileOps, GitHubReader, GitRepository, IssueThread,
+    archive::ArchiveFile, get_issue_comments, git::GitCommit,
 };
 
 pub async fn prompt_archive(
@@ -252,8 +252,7 @@ pub async fn get_milestone_issue_threads(
     let mut issue_thread_results = Vec::new();
     for (issue, comments_result) in comment_results {
         let comments = comments_result?;
-        let issue_thread =
-            IssueThread::from_issue_comments(issue, &comments, git_info, cache)?;
+        let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info, cache)?;
         issue_thread_results.push(issue_thread);
     }
 

@@ -5,15 +5,14 @@ use std::{
     str::FromStr,
 };
 
+use crate::{
+    DiskCache, GitInfo,
+    cache::{CachedCommit, FileChangeRecord},
+    git::GitCommitAnalysis,
+};
 use gix::ObjectId;
 #[cfg(test)]
 use mockall::automock;
-use crate::{
-    DiskCache,
-    cache::{CachedCommit, FileChangeRecord},
-    GitInfo,
-    git::GitCommitAnalysis,
-};
 
 #[derive(Debug, Clone)]
 pub struct GitAuthor {
@@ -32,7 +31,6 @@ pub struct GitCommit {
     pub commit: ObjectId,
     pub message: String,
 }
-
 
 #[derive(thiserror::Error, Debug)]
 pub enum GitFileOpsError {
@@ -219,9 +217,7 @@ impl GitFileOps for GitInfo {
         let all_commits = self.commits(&None, None)?;
 
         // Find commits that touch this file via git log subprocess
-        let touching = self
-            .file_touching_commits(None, file)
-            .unwrap_or_default();
+        let touching = self.file_touching_commits(None, file).unwrap_or_default();
         let file_commits: Vec<&GitCommit> = all_commits
             .iter()
             .filter(|c| touching.contains(&c.commit.to_string()))
@@ -389,8 +385,10 @@ fn merge_file_changes(
     let Some(old) = old else {
         return new_cached;
     };
-    let old_map: std::collections::HashMap<&str, &Vec<FileChangeRecord>> =
-        old.iter().map(|c| (c.hash.as_str(), &c.file_changes)).collect();
+    let old_map: std::collections::HashMap<&str, &Vec<FileChangeRecord>> = old
+        .iter()
+        .map(|c| (c.hash.as_str(), &c.file_changes))
+        .collect();
     for commit in &mut new_cached {
         if let Some(fc) = old_map.get(commit.hash.as_str()) {
             commit.file_changes = (*fc).clone();
@@ -915,14 +913,8 @@ mod tests {
         let git_info = RobustMockGitInfo::new()
             .with_file_commits_result(branch.clone(), Ok(test_commits.clone()));
 
-        let result = get_commits_robust(
-            &git_info,
-            &branch,
-            Some(&initial_commit),
-            None,
-            None,
-        )
-        .unwrap();
+        let result =
+            get_commits_robust(&git_info, &branch, Some(&initial_commit), None, None).unwrap();
 
         assert_eq!(result.len(), test_commits.len());
         // Convert result to expected format for comparison

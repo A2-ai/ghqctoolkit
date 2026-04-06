@@ -10,8 +10,8 @@ use gix::ObjectId;
 use crate::{
     configuration::Checklist,
     git::{
-        GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers,
-        GitHubApiError, GitHubReader, GitHubWriter, GitRepository, GitRepositoryError,
+        GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError,
+        GitHubReader, GitHubWriter, GitRepository, GitRepositoryError,
     },
     issue::IssueThread,
     relevant_files::{
@@ -221,8 +221,7 @@ impl QCIssue {
             for (prev_file, prev_issue_number) in prev_qc_diffs {
                 if let Ok(prev_issue_obj) = git_info.get_issue(prev_issue_number).await {
                     if let Ok(thread) =
-                        IssueThread::from_issue(&prev_issue_obj, None, git_info)
-                            .await
+                        IssueThread::from_issue(&prev_issue_obj, None, git_info).await
                     {
                         let prev_commit = thread.latest_commit().hash;
                         let diff_comment = PreviousQCDiffComment {

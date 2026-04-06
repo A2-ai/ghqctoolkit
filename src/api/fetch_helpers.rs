@@ -113,12 +113,9 @@ impl CreatedThreads {
         let mut thread_results: Vec<(&Issue, Result<IssueThread, IssueError>)> = Vec::new();
         for (issue, comments_result) in comment_results {
             let result = match comments_result {
-                Ok(comments) => IssueThread::from_issue_comments(
-                    issue,
-                    &comments,
-                    git_info,
-                    disk_cache,
-                ),
+                Ok(comments) => {
+                    IssueThread::from_issue_comments(issue, &comments, git_info, disk_cache)
+                }
                 Err(e) => Err(IssueError::GitHubApiError(e)),
             };
             thread_results.push((issue, result));

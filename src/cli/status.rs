@@ -6,8 +6,8 @@ use octocrab::models::Milestone;
 
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::{
-    BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState,
-    IssueThread, QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
+    BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState, IssueThread,
+    QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
 };
 
 pub async fn interactive_status(
@@ -239,8 +239,7 @@ pub async fn interactive_milestone_status(
     }
 
     // Get status for all selected milestones
-    let status_rows =
-        get_milestone_status_rows(&selected_milestones, cache, git_info).await?;
+    let status_rows = get_milestone_status_rows(&selected_milestones, cache, git_info).await?;
 
     // Display results
     display_milestone_status_table(&status_rows);
@@ -261,8 +260,7 @@ pub async fn milestone_status(
     let milestone_refs: Vec<&Milestone> = milestones.iter().collect();
 
     // Get status for all milestones
-    let status_rows =
-        get_milestone_status_rows(&milestone_refs, cache, git_info).await?;
+    let status_rows = get_milestone_status_rows(&milestone_refs, cache, git_info).await?;
 
     // Display results
     display_milestone_status_table(&status_rows);
@@ -289,9 +287,7 @@ async fn get_milestone_status_rows(
 
         for issue in issues {
             // Create IssueThread for each issue
-            if let Ok(issue_thread) =
-                IssueThread::from_issue(&issue, cache, git_info).await
-            {
+            if let Ok(issue_thread) = IssueThread::from_issue(&issue, cache, git_info).await {
                 let file_commits = issue_thread.file_commits();
 
                 // Determine QC status

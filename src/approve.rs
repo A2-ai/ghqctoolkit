@@ -220,8 +220,7 @@ pub async fn approve_with_validation(
         .unwrap_or_default();
 
     // Check blocking QCs
-    let check_result =
-        get_unapproved_blocking_qcs(&blocking_qcs, git_info, cache).await;
+    let check_result = get_unapproved_blocking_qcs(&blocking_qcs, git_info, cache).await;
 
     // If not forcing and there are issues, return error
     if !force && !check_result.all_approved() {
