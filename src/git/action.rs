@@ -187,7 +187,20 @@ impl GitCli for GitCommand {
         );
 
         let mut cmd = std::process::Command::new("git");
-        cmd.args(["-C", &repo_path.to_string_lossy(), "log", "--format=%H"]);
+        // --full-history disables history simplification so merge commits that
+        // introduce changes to the file are included (matching the prior
+        // tree-diff behaviour which compared every commit against all parents).
+        // -m causes diffs for merge commits to be computed against each parent
+        // individually, which is required for --full-history to detect per-file
+        // changes in merge commits correctly.
+        cmd.args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "log",
+            "--format=%H",
+            "--full-history",
+            "-m",
+        ]);
         if let Some(b) = branch {
             cmd.arg(b);
         }
