@@ -12,7 +12,7 @@ use axum::{
 };
 use gix::ObjectId;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::GitProvider;
 use crate::api::error::ApiError;
@@ -69,10 +69,7 @@ fn preview_content_type(file_path: &Path) -> &'static str {
 }
 
 fn inline_content_disposition(path: &str) -> String {
-    let file_name = path
-        .trim()
-        .trim_matches('/')
-        .replace(['/', '\\', '"'], "_");
+    let file_name = path.trim().trim_matches('/').replace(['/', '\\', '"'], "_");
     let file_name = if file_name.is_empty() {
         "preview".to_string()
     } else {
