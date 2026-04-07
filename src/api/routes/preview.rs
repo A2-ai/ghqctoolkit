@@ -2,11 +2,10 @@
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     response::Html,
 };
 use gix::ObjectId;
-use serde::Deserialize;
 use std::{path::PathBuf, str::FromStr};
 
 use crate::api::state::AppState;
@@ -22,38 +21,6 @@ use crate::{CommentBody, api::error::ApiError};
 use crate::{
     GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, api::types::CreateCommentRequest,
 };
-
-#[derive(Deserialize)]
-pub struct FileContentQuery {
-    path: String,
-}
-
-/// GET /api/files/content?path=<repo-relative path>
-///
-/// Reads the file from the local filesystem and returns its content as plain text.
-pub async fn get_file_content<G: GitProvider + 'static>(
-    State(state): State<AppState<G>>,
-    Query(query): Query<FileContentQuery>,
-) -> Result<String, ApiError> {
-    let path = query.path.trim_matches('/').to_string();
-    for segment in path.split('/').filter(|s| !s.is_empty()) {
-        if segment == ".." || segment == "." {
-            return Err(ApiError::BadRequest(format!(
-                "Invalid path segment: '{}'",
-                segment
-            )));
-        }
-    }
-
-    let repo_path = state.git_info().path().to_path_buf();
-    let file_path = repo_path.join(&path);
-
-    let content = tokio::fs::read_to_string(&file_path)
-        .await
-        .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?;
-
-    Ok(content)
-}
 
 /// POST /api/preview/issue
 ///

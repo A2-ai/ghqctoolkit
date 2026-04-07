@@ -2,6 +2,32 @@ import type { CreateIssueRequest } from './create'
 import type { ApproveRequest, CreateCommentRequest, ReviewRequest, UnapproveRequest } from './issues'
 import { API_BASE } from '../config'
 
+export type FilePreviewKind = 'text' | 'pdf' | 'unsupported'
+
+export function getFilePreviewKind(path: string): FilePreviewKind {
+  const ext = path.split('.').pop()?.toLowerCase()
+  if (ext === 'pdf') return 'pdf'
+  if (ext === 'doc' || ext === 'docx' || ext === 'xls' || ext === 'xlsx') return 'unsupported'
+  return 'text'
+}
+
+export function buildFileRawUrl(path: string): string {
+  return `${API_BASE}/files/raw?path=${encodeURIComponent(path)}`
+}
+
+export function getFileExtensionLabel(path: string): string {
+  const ext = path.split('.').pop()?.trim().toLowerCase()
+  return ext ? `.${ext}` : 'this file type'
+}
+
+export async function ensureFileExists(path: string): Promise<void> {
+  const res = await fetch(buildFileRawUrl(path))
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to fetch file: ${res.status}`)
+  }
+}
+
 export async function fetchFileContent(path: string): Promise<string> {
   const res = await fetch(`${API_BASE}/files/content?path=${encodeURIComponent(path)}`)
   if (!res.ok) {

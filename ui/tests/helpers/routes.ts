@@ -234,6 +234,24 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
+  await page.route(/\/api\/files\/raw/, (route, request) => {
+    const url = new URL(request.url())
+    const path = url.searchParams.get('path') ?? ''
+    const lowerPath = path.toLowerCase()
+    const contentType = lowerPath.endsWith('.pdf')
+      ? 'application/pdf'
+      : lowerPath.endsWith('.doc')
+        ? 'application/msword'
+        : lowerPath.endsWith('.docx')
+          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          : 'application/octet-stream'
+    route.fulfill({
+      status: 200,
+      contentType,
+      body: lowerPath.endsWith('.pdf') ? '%PDF-1.7\n% mock pdf\n' : 'mock binary content',
+    })
+  })
+
   await page.route(/\/api\/files\/collaborators/, (route, request) => {
     const url = new URL(request.url())
     const path = url.searchParams.get('path') ?? ''

@@ -218,6 +218,101 @@ test('collaborators default from file authors and are sent in create request', a
   ])
 })
 
+test('pdf files open in embedded preview during issue creation', async ({ page }) => {
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+    fileTree: {
+      '': {
+        path: '',
+        entries: [
+          { name: 'docs', kind: 'directory' },
+        ],
+      },
+      docs: {
+        path: 'docs',
+        entries: [
+          { name: 'report.pdf', kind: 'file' },
+        ],
+      },
+    },
+  })
+
+  await page.goto('/create')
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+
+  const modal = page.getByRole('dialog', { name: 'Create QC Issue' })
+  await modal.getByRole('treeitem', { name: 'docs' }).click()
+  await modal.getByRole('treeitem', { name: 'report.pdf' }).click()
+  await modal.getByRole('button', { name: 'View File' }).click()
+
+  const preview = page.getByRole('dialog', { name: 'report.pdf' })
+  await expect(preview).toBeVisible()
+  const iframe = preview.getByTitle('PDF Preview')
+  await expect(iframe).toBeVisible()
+  await expect(iframe).toHaveAttribute('src', /\/api\/files\/raw\?path=docs%2Freport\.pdf/)
+})
+
+test('unsupported files show a file-type message during issue creation', async ({ page }) => {
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+    fileTree: {
+      '': {
+        path: '',
+        entries: [
+          { name: 'docs', kind: 'directory' },
+        ],
+      },
+      docs: {
+        path: 'docs',
+        entries: [
+          { name: 'plan.docx', kind: 'file' },
+        ],
+      },
+    },
+  })
+
+  await page.goto('/create')
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+
+  const modal = page.getByRole('dialog', { name: 'Create QC Issue' })
+  await modal.getByRole('treeitem', { name: 'docs' }).click()
+  await modal.getByRole('treeitem', { name: 'plan.docx' }).click()
+  await modal.getByRole('button', { name: 'View File' }).click()
+
+  const preview = page.getByRole('dialog', { name: 'plan.docx' })
+  await expect(preview).toBeVisible()
+  await expect(preview.getByText('Preview is not available for .docx files.')).toBeVisible()
+})
+
+test('missing files show a not found message during issue creation', async ({ page }) => {
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+  })
+
+  await page.route(/\/api\/files\/content\?path=src%2Fmain\.rs/, (route) => {
+    route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'File not found: src/main.rs' }),
+    })
+  })
+
+  await page.goto('/create')
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+
+  const modal = page.getByRole('dialog', { name: 'Create QC Issue' })
+  await modal.getByRole('treeitem', { name: 'src' }).click()
+  await modal.getByRole('treeitem', { name: 'main.rs' }).click()
+  await modal.getByRole('button', { name: 'View File' }).click()
+
+  const preview = page.getByRole('dialog', { name: 'main.rs' })
+  await expect(preview).toBeVisible()
+  await expect(preview.getByText('Error: File not found: src/main.rs')).toBeVisible()
+})
+
 test('collaborators are hidden and sent empty when disabled in configuration', async ({ page }) => {
   const requests: Array<{ collaborators?: string[] }> = []
 

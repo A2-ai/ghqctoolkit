@@ -123,6 +123,7 @@ export function CreateTab() {
         relevantFiles: item.relevantFiles,
         activeTab: 'file',
         filePreviewOpen: false,
+        filePreviewMode: 'text',
         filePreviewContent: null,
         issuePreviewOpen: false,
         issuePreviewHtml: null,

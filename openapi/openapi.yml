@@ -582,7 +582,7 @@ paths:
   /files/content:
     get:
       summary: Get file content
-      description: Returns the raw text content of a file at the given path.
+      description: Returns the UTF-8 text content of a file at the given path.
       operationId: getFileContent
       tags: [files]
       parameters:
@@ -599,6 +599,36 @@ paths:
             text/plain:
               schema:
                 type: string
+        '400':
+          description: File exists but is not valid UTF-8 text
+        '404':
+          description: File not found
+
+  /files/raw:
+    get:
+      summary: Get raw file bytes for preview
+      description: Returns the raw file bytes with an inline content type so the UI can embed previews such as PDFs.
+      operationId: getFileRaw
+      tags: [files]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: File path relative to repository root
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw file bytes
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
         '404':
           description: File not found
 

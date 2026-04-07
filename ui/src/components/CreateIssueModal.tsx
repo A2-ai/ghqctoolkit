@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Group, Modal, ScrollArea, Tabs } from '@mantine/core'
+import { Button, Group, Modal, ScrollArea, Tabs, Text } from '@mantine/core'
 import { FileTreeBrowser } from './FileTreeBrowser'
 import { IssuePreviewCard } from './IssuePreviewCard'
 import { ChecklistTab } from './ChecklistTab'
@@ -13,7 +13,7 @@ import { useChecklistDisplayName, useConfigurationStatus } from '~/api/configura
 import { capitalize } from '~/utils/displayName'
 import type { RelevantFileKind } from '~/api/issues'
 import { toCreateIssueRequest } from '~/api/create'
-import { fetchFileContent, fetchIssuePreview } from '~/api/preview'
+import { buildFileRawUrl, ensureFileExists, fetchFileContent, fetchIssuePreview, getFileExtensionLabel, getFilePreviewKind } from '~/api/preview'
 import { fetchFileCollaborators } from '~/api/files'
 import { wrapInGithubStyles } from '~/utils/github'
 import { useUiSession } from '~/state/uiSession'
@@ -73,6 +73,9 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
       modal: {
         ...prev.modal,
         selectedFile,
+        filePreviewMode: selectedFile ? getFilePreviewKind(selectedFile) : 'text',
+        filePreviewContent: null,
+        filePreviewOpen: false,
         collaboratorAuthor: null,
         collaborators: [],
         collaboratorsSourceFile: null,
@@ -82,17 +85,69 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
 
   async function handleViewFile() {
     if (!modal.selectedFile) return
+    const previewKind = getFilePreviewKind(modal.selectedFile)
+    if (previewKind === 'pdf') {
+      setFilePreviewLoading(true)
+      try {
+        await ensureFileExists(modal.selectedFile)
+        setCreate((prev) => ({
+          ...prev,
+          modal: { ...prev.modal, filePreviewMode: 'pdf', filePreviewContent: null, filePreviewOpen: true },
+        }))
+      } catch (err) {
+        setCreate((prev) => ({
+          ...prev,
+          modal: { ...prev.modal, filePreviewMode: 'missing', filePreviewContent: `Error: ${(err as Error).message}`, filePreviewOpen: true },
+        }))
+      } finally {
+        setFilePreviewLoading(false)
+      }
+      return
+    }
+    if (previewKind === 'unsupported') {
+      setFilePreviewLoading(true)
+      try {
+        await ensureFileExists(modal.selectedFile)
+        const extension = getFileExtensionLabel(modal.selectedFile)
+        setCreate((prev) => ({
+          ...prev,
+          modal: {
+            ...prev.modal,
+            filePreviewMode: 'unsupported',
+            filePreviewContent: `Preview is not available for ${extension} files.`,
+            filePreviewOpen: true,
+          },
+        }))
+      } catch (err) {
+        setCreate((prev) => ({
+          ...prev,
+          modal: { ...prev.modal, filePreviewMode: 'missing', filePreviewContent: `Error: ${(err as Error).message}`, filePreviewOpen: true },
+        }))
+      } finally {
+        setFilePreviewLoading(false)
+      }
+      return
+    }
     setFilePreviewLoading(true)
     try {
       const content = await fetchFileContent(modal.selectedFile)
       setCreate((prev) => ({
         ...prev,
-        modal: { ...prev.modal, filePreviewContent: content, filePreviewOpen: true },
+        modal: { ...prev.modal, filePreviewMode: 'text', filePreviewContent: content, filePreviewOpen: true },
       }))
     } catch (err) {
+      const message = (err as Error).message
+      const isMissing = message.toLowerCase().includes('not found')
       setCreate((prev) => ({
         ...prev,
-        modal: { ...prev.modal, filePreviewContent: `Error: ${(err as Error).message}`, filePreviewOpen: true },
+        modal: {
+          ...prev.modal,
+          filePreviewMode: isMissing ? 'missing' : 'unsupported',
+          filePreviewContent: isMissing
+            ? `Error: ${message}`
+            : `Preview is not available for ${getFileExtensionLabel(modal.selectedFile)} files.`,
+          filePreviewOpen: true,
+        },
       }))
     } finally {
       setFilePreviewLoading(false)
@@ -390,22 +445,56 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
         size={800}
         centered
       >
-        <ScrollArea h={500}>
-          <pre style={{
-            margin: 0,
-            padding: '12px 16px',
+        {modal.filePreviewMode === 'pdf' && modal.selectedFile ? (
+          <iframe
+            src={buildFileRawUrl(modal.selectedFile)}
+            style={{ width: '100%', height: 500, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
+            title="PDF Preview"
+          />
+        ) : modal.filePreviewMode === 'unsupported' ? (
+          <div style={{
+            minHeight: 180,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            border: '1px solid var(--mantine-color-gray-3)',
             borderRadius: 6,
-            background: '#e9ecef',
-            color: '#212529',
-            fontFamily: 'monospace',
-            fontSize: 12,
-            lineHeight: 1.6,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all',
+            background: 'var(--mantine-color-gray-0)',
           }}>
-            {modal.filePreviewContent ?? ''}
-          </pre>
-        </ScrollArea>
+            <Text size="sm">{modal.filePreviewContent}</Text>
+          </div>
+        ) : modal.filePreviewMode === 'missing' ? (
+          <div style={{
+            minHeight: 180,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            border: '1px solid var(--mantine-color-red-2)',
+            borderRadius: 6,
+            background: 'var(--mantine-color-red-0)',
+          }}>
+            <Text size="sm">{modal.filePreviewContent}</Text>
+          </div>
+        ) : (
+          <ScrollArea h={500}>
+            <pre style={{
+              margin: 0,
+              padding: '12px 16px',
+              borderRadius: 6,
+              background: '#e9ecef',
+              color: '#212529',
+              fontFamily: 'monospace',
+              fontSize: 12,
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}>
+              {modal.filePreviewContent ?? ''}
+            </pre>
+          </ScrollArea>
+        )}
       </Modal>
 
       {/* Issue body HTML preview */}
