@@ -32,10 +32,10 @@ If `--port` is omitted, `ghqc ui` and `ghqc ui url` bind port `0`, letting the O
 
 | Tab | Description |
 |---|---|
-| **Status** | Kanban board of all issues grouped by QC status. Cards are color-coded by git status: cyan (clean), yellow (ahead/behind), red (conflict). Clicking the issue title opens GitHub in a new tab; clicking the rest of the card opens the in-app issue detail modal. |
-| **Create** | Wizard for creating new QC issues: select/create milestone, browse file tree, pick checklist, assign reviewers, add relevant files. Previous QC references can optionally post an automatic diff comment, and that diff is enabled by default. Queued issues and saved custom checklists persist while you move between UI tabs, until the page is refreshed. |
+| **Status** | Kanban board of all issues grouped by QC status. Cards are color-coded by QC status: red (`approval_required`), and by git status: cyan (clean), yellow (ahead/behind), red (conflict). Clicking the issue title opens GitHub in a new tab; clicking the rest of the card opens the in-app issue detail modal. |
+| **Create** | Wizard for creating new QC issues: select/create milestone, browse file tree, pick checklist, assign reviewers, add relevant files. The selected file can be previewed inline (text, PDF, and Word files supported). Previous QC references can optionally post an automatic diff comment, and that diff can be previewed before posting. Queued issues and saved custom checklists persist while you move between UI tabs, until the page is refreshed. |
 | **Record** | PDF record generation: select milestones, upload context files (prepend or append), preview, generate and download. |
-| **Archive** | Archive generation: select milestones, set file name, generate zip archive. |
+| **Archive** | Archive generation: select milestones, set file name, generate zip archive. Files in the archive can be previewed at their recorded commit (text, PDF, and Word files supported). |
 | **Configuration** | Configuration repo setup and status. |
 
 ### Web UI Routes

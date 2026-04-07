@@ -1,3 +1,14 @@
+# v0.5.0 - April 7, 2026
+## New Features
+* File preview in the Create and Archive tabs: text, PDF, and Word files can be previewed inline; unsupported file types show a descriptive message
+* Previous QC diff comments can now be previewed before posting in the Relevant Files picker
+
+## Improvements
+* Typst record formatting now correctly renders markdown links, inline code spans, and bare URLs
+* Commit search performance improved via disk-backed caching, replacing the in-memory cache
+* Status tab: horizontal scrollbar for wide boards; issues in `approval_required` state are now highlighted red
+* Cache writes use atomic file replacement to prevent race conditions
+
 # v0.4.1 - April 2, 2026
 ## Improvements
 * Web UI's status tab has individually scrollable swimlanes
