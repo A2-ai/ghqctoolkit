@@ -12,7 +12,7 @@ use axum::{
 };
 use gix::ObjectId;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::GitProvider;
 use crate::api::error::ApiError;
@@ -68,13 +68,16 @@ fn preview_content_type(file_path: &Path) -> &'static str {
     }
 }
 
-fn inline_content_disposition(file_path: &Path) -> String {
-    let file_name = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("preview")
-        .replace('\\', "_")
-        .replace('"', "_");
+fn inline_content_disposition(path: &str) -> String {
+    let file_name = path
+        .trim()
+        .trim_matches('/')
+        .replace(['/', '\\', '"'], "_");
+    let file_name = if file_name.is_empty() {
+        "preview".to_string()
+    } else {
+        file_name
+    };
     format!("inline; filename=\"{file_name}\"")
 }
 
@@ -240,7 +243,7 @@ pub async fn get_file_raw<G: GitProvider + 'static>(
     );
     headers.insert(
         CONTENT_DISPOSITION,
-        HeaderValue::from_str(&inline_content_disposition(&file_path))
+        HeaderValue::from_str(&inline_content_disposition(&path))
             .map_err(|e| ApiError::Internal(format!("Invalid content disposition header: {e}")))?,
     );
 
@@ -280,7 +283,7 @@ mod tests {
     #[test]
     fn inline_content_disposition_sanitizes_filename() {
         assert_eq!(
-            inline_content_disposition(Path::new("unsafe\\name\".pdf")),
+            inline_content_disposition("unsafe\\name\".pdf"),
             "inline; filename=\"unsafe_name_.pdf\""
         );
     }
