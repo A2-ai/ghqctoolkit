@@ -15,10 +15,7 @@ pub(crate) struct FetchedIssues {
 }
 
 impl FetchedIssues {
-    pub(crate) async fn fetch_issues(
-        issue_numbers: &[u64],
-        git_info: &impl GitHubReader,
-    ) -> Self {
+    pub(crate) async fn fetch_issues(issue_numbers: &[u64], git_info: &impl GitHubReader) -> Self {
         let issue_futures = issue_numbers
             .iter()
             .map(|number| async move { git_info.get_issue(*number).await })
@@ -38,10 +35,7 @@ impl FetchedIssues {
         fetched
     }
 
-    pub(crate) async fn fetch_blocking_qcs(
-        &mut self,
-        git_info: &impl GitHubReader,
-    ) {
+    pub(crate) async fn fetch_blocking_qcs(&mut self, git_info: &impl GitHubReader) {
         let issue_numbers = self
             .issues
             .iter()
@@ -107,9 +101,10 @@ impl CreatedThreads {
                         issue.number,
                         IssueStatusResponse::blocking_qc_numbers(issue),
                     );
-                    created
-                        .responses
-                        .insert(issue.number, IssueStatusResponse::new(issue, &issue_thread, &dirty));
+                    created.responses.insert(
+                        issue.number,
+                        IssueStatusResponse::new(issue, &issue_thread, &dirty),
+                    );
                 }
                 Err(e) => {
                     created.thread_errors.insert(issue.number, e);

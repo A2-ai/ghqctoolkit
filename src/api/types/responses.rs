@@ -10,10 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     GitHubApiError, GitProvider, IssueThread, ReviewStashResult, analyze_issue_checklists,
-    api::ApiError,
-    create::CreateResult,
-    get_git_status,
-    parse_blocking_qcs,
+    api::ApiError, create::CreateResult, get_git_status, parse_blocking_qcs,
 };
 
 /// Health check response.
@@ -363,7 +360,8 @@ impl IssueStatusResponse {
     }
 
     pub fn blocking_qc_numbers(issue: &octocrab::models::issues::Issue) -> Vec<u64> {
-        issue.body
+        issue
+            .body
             .as_deref()
             .map(|body| {
                 parse_blocking_qcs(body)
