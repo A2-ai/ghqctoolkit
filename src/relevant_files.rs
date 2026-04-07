@@ -275,7 +275,11 @@ mod tests {
     }
 
     impl GitFileOps for MockGitInfo {
-        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+        fn commits(
+            &self,
+            _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
+        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(Vec::new())
         }
         fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
@@ -291,6 +295,18 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
         }
+        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+        }
+
+        fn file_touching_commits(
+            &self,
+            _branch: Option<String>,
+            _file: &Path,
+        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
+            Ok(std::collections::HashSet::new())
+        }
+
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
             Ok(Vec::new())
         }

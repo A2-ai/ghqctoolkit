@@ -9,10 +9,8 @@ use octocrab::models::IssueState;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GitHubApiError, GitProvider, IssueThread, ReviewStashResult,
-    api::{ApiError, cache::CacheEntry},
-    create::CreateResult,
-    get_git_status,
+    GitHubApiError, GitProvider, IssueThread, ReviewStashResult, analyze_issue_checklists,
+    api::ApiError, create::CreateResult, get_git_status, parse_blocking_qcs,
 };
 
 /// Health check response.
@@ -287,14 +285,14 @@ impl From<Vec<(String, crate::ChecklistSummary)>> for ChecklistSummary {
 }
 
 /// Blocking QC item (approved).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BlockingQCItem {
     pub issue_number: u64,
     pub file_name: String,
 }
 
 /// Blocking QC item with status (not approved).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BlockingQCItemWithStatus {
     pub issue_number: u64,
     pub file_name: String,
@@ -318,7 +316,7 @@ impl From<(u64, GitHubApiError)> for BlockingQCError {
 }
 
 /// Blocking QC status summary.
-#[derive(Debug, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct BlockingQCStatus {
     pub total: u32,
     pub approved_count: u32,
@@ -329,7 +327,7 @@ pub struct BlockingQCStatus {
 }
 
 /// Full issue status response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IssueStatusResponse {
     pub issue: Issue,
     pub qc_status: QCStatus,
@@ -341,16 +339,37 @@ pub struct IssueStatusResponse {
 }
 
 impl IssueStatusResponse {
-    pub fn from_cache_entry(entry: CacheEntry, dirty_files: &[PathBuf]) -> Self {
+    pub fn new(
+        issue: &octocrab::models::issues::Issue,
+        issue_thread: &IssueThread,
+        dirty_files: &[PathBuf],
+    ) -> Self {
         Self {
-            dirty: dirty_files.contains(&PathBuf::from(&entry.issue.title)),
-            issue: entry.issue,
-            qc_status: entry.qc_status,
-            branch: entry.branch,
-            commits: entry.commits,
-            checklist_summary: entry.checklist_summary,
+            dirty: dirty_files.contains(&PathBuf::from(&issue.title)),
+            issue: issue.clone().into(),
+            qc_status: issue_thread.into(),
+            branch: issue
+                .body
+                .as_deref()
+                .and_then(crate::parse_branch_from_body)
+                .unwrap_or("unknown".to_string()),
+            commits: issue_thread.commits.iter().map(IssueCommit::from).collect(),
+            checklist_summary: analyze_issue_checklists(issue.body.as_deref()).into(),
             blocking_qc_status: BlockingQCStatus::default(),
         }
+    }
+
+    pub fn blocking_qc_numbers(issue: &octocrab::models::issues::Issue) -> Vec<u64> {
+        issue
+            .body
+            .as_deref()
+            .map(|body| {
+                parse_blocking_qcs(body)
+                    .iter()
+                    .map(|b| b.issue_number)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 

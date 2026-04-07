@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::cache::DiskCache;
 use crate::comment_system::CommentBody;
 use crate::git::{
-    CommitCache, GitCommitAnalysis, GitFileOps, GitHelpers, GitHubApiError, GitHubReader,
-    GitHubWriter,
+    GitCommitAnalysis, GitFileOps, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter,
 };
 use crate::issue::{BlockingQC, parse_blocking_qcs};
 use crate::qc_status::get_blocking_qc_status;
@@ -186,9 +185,8 @@ pub async fn get_unapproved_blocking_qcs(
     blocking_qcs: &[BlockingQC],
     git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
     cache: Option<&DiskCache>,
-    commit_cache: &mut CommitCache,
 ) -> BlockingQCCheckResult {
-    let status = get_blocking_qc_status(blocking_qcs, git_info, cache, commit_cache).await;
+    let status = get_blocking_qc_status(blocking_qcs, git_info, cache).await;
 
     BlockingQCCheckResult {
         unapproved: status
@@ -210,7 +208,6 @@ pub async fn approve_with_validation(
     git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitAnalysis),
     cache: Option<&DiskCache>,
     force: bool,
-    commit_cache: &mut CommitCache,
 ) -> Result<ApprovalResult, ApprovalError> {
     // Parse blocking QCs directly from the issue body
     // This avoids requiring full IssueThread construction which can fail if
@@ -223,8 +220,7 @@ pub async fn approve_with_validation(
         .unwrap_or_default();
 
     // Check blocking QCs
-    let check_result =
-        get_unapproved_blocking_qcs(&blocking_qcs, git_info, cache, commit_cache).await;
+    let check_result = get_unapproved_blocking_qcs(&blocking_qcs, git_info, cache).await;
 
     // If not forcing and there are issues, return error
     if !force && !check_result.all_approved() {
@@ -567,8 +563,24 @@ mod tests {
     }
 
     impl GitFileOps for MockGitHelpers {
-        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+        fn commits(
+            &self,
+            _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
+        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(Vec::new())
+        }
+
+        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+        }
+
+        fn file_touching_commits(
+            &self,
+            _branch: Option<String>,
+            _file: &Path,
+        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
+            Ok(std::collections::HashSet::new())
         }
 
         fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {

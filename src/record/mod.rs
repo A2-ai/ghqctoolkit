@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use tera::{Context, Tera};
 
 use crate::{
-    ChecklistSummary, CommitCache, Configuration, DiskCache, GitHubReader, GitRepository,
-    GitStatusOps, RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
+    ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, GitStatusOps,
+    RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
     git::{GitComment, GitCommitAnalysis, GitFileOps, GitState},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
@@ -210,10 +210,8 @@ pub async fn get_milestone_issue_information(
 
     let mut res = HashMap::new();
     for (milestone_name, issues) in milestone_issues {
-        let mut commit_cache = CommitCache::new();
         let mut issue_information = Vec::new();
 
-        // Create detailed issue information for each issue sequentially so commit_cache is shared
         for issue in issues {
             let info = create_issue_information(
                 issue,
@@ -225,7 +223,6 @@ pub async fn get_milestone_issue_information(
                 git_info,
                 http_downloader,
                 staging_dir,
-                &mut commit_cache,
             )
             .await?;
             issue_information.push(info);
@@ -270,7 +267,6 @@ pub async fn create_issue_information(
     git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: &Path,
-    commit_cache: &mut CommitCache,
 ) -> Result<IssueInformation, RecordError> {
     // Get comments and check if we need HTML for JWT URLs
     let mut comments = get_issue_comments(issue, cache, git_info).await?;
@@ -311,7 +307,7 @@ pub async fn create_issue_information(
         );
     }
 
-    let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info, commit_cache)?;
+    let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info, cache)?;
     let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status
@@ -703,6 +699,34 @@ pub(crate) fn format_comments(
     formatted_comments
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RecordError {
+    #[error("IO Error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Template Error: {0}")]
+    Template(#[from] tera::Error),
+    #[error("GitHub API Error: {0}")]
+    GitHubApi(#[from] crate::git::GitHubApiError),
+    #[error("Issue Error: {0}")]
+    Issue(#[from] crate::issue::IssueError),
+    #[error("QC Status Error: {0}")]
+    QCStatus(#[from] crate::qc_status::QCStatusError),
+    #[error("Git Status Error: {0}")]
+    GitStatus(#[from] crate::git::GitStatusError),
+    #[error("Render Error: {0}")]
+    Render(#[from] render::RenderError),
+    #[error("Image download failed for URL {url}: {error}")]
+    ImageDownloadFailed { url: String, error: String },
+    #[error("Multiple image downloads failed: {failures:?}")]
+    MultipleImageDownloadsFailed { failures: Vec<String> },
+    #[error("Image cleanup failed: {0}")]
+    ImageCleanupFailed(String),
+    #[error(
+        "Unable to fetch HTML content for JWT URL extraction in issue #{issue_number}. Images detected but GitHub API did not provide body_html field."
+    )]
+    HtmlRequiredForJwtUrls { issue_number: u64 },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,7 +739,7 @@ mod tests {
         test_utils::create_test_issue,
     };
     use gix::ObjectId;
-    use std::{collections::HashMap, path::Path, str::FromStr};
+    use std::{path::Path, str::FromStr};
 
     struct TestGitInfo {
         comments: Vec<GitComment>,
@@ -724,7 +748,11 @@ mod tests {
     }
 
     impl GitFileOps for TestGitInfo {
-        fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+        fn commits(
+            &self,
+            _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
+        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(self.commits.clone())
         }
 
@@ -738,6 +766,19 @@ mod tests {
             _commit: &ObjectId,
         ) -> Result<Vec<u8>, GitFileOpsError> {
             Ok(Vec::new())
+        }
+
+        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+        }
+
+        fn file_touching_commits(
+            &self,
+            _branch: Option<String>,
+            _file: &Path,
+        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
+            // Return all commit hashes as touching for test purposes
+            Ok(self.commits.iter().map(|c| c.commit.to_string()).collect())
         }
 
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
@@ -864,7 +905,6 @@ mod tests {
             commits: vec![GitCommit {
                 commit: ObjectId::from_str(initial_commit).unwrap(),
                 message: "Initial commit".to_string(),
-                files: vec![PathBuf::from("src/config.rs")],
             }],
         };
 
@@ -890,7 +930,6 @@ mod tests {
             &git_info,
             &TestDownloader,
             staging_dir.path(),
-            &mut HashMap::new(),
         )
         .await
         .unwrap();
@@ -900,32 +939,4 @@ mod tests {
             Some("Alice Reviewer (reviewer1)")
         );
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RecordError {
-    #[error("IO Error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Template Error: {0}")]
-    Template(#[from] tera::Error),
-    #[error("GitHub API Error: {0}")]
-    GitHubApi(#[from] crate::git::GitHubApiError),
-    #[error("Issue Error: {0}")]
-    Issue(#[from] crate::issue::IssueError),
-    #[error("QC Status Error: {0}")]
-    QCStatus(#[from] crate::qc_status::QCStatusError),
-    #[error("Git Status Error: {0}")]
-    GitStatus(#[from] crate::git::GitStatusError),
-    #[error("Render Error: {0}")]
-    Render(#[from] render::RenderError),
-    #[error("Image download failed for URL {url}: {error}")]
-    ImageDownloadFailed { url: String, error: String },
-    #[error("Multiple image downloads failed: {failures:?}")]
-    MultipleImageDownloadsFailed { failures: Vec<String> },
-    #[error("Image cleanup failed: {0}")]
-    ImageCleanupFailed(String),
-    #[error(
-        "Unable to fetch HTML content for JWT URL extraction in issue #{issue_number}. Images detected but GitHub API did not provide body_html field."
-    )]
-    HtmlRequiredForJwtUrls { issue_number: u64 },
 }

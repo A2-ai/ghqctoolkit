@@ -74,7 +74,7 @@
 == Issue Summary
 
 #table(
-  columns: (1fr, 1fr, 1fr, 1fr, 1fr),
+  columns: (1.7fr, 1.2fr, 1fr, 1fr, 1.1fr),
   stroke: none,
   inset: 8pt,
   align: (left, left, left, left, left),

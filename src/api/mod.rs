@@ -3,7 +3,6 @@
 //! This module provides an Axum-based REST API to expose ghqctoolkit
 //! functionality for GUI consumption.
 
-mod cache;
 mod error;
 mod fetch_helpers;
 mod routes;

@@ -107,3 +107,9 @@ impl From<crate::GitStatusError> for ApiError {
         ApiError::Internal(err.to_string())
     }
 }
+
+impl From<crate::GitFileOpsError> for ApiError {
+    fn from(err: crate::GitFileOpsError) -> Self {
+        ApiError::Internal(err.to_string())
+    }
+}

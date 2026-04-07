@@ -10,8 +10,8 @@ use gix::ObjectId;
 use crate::{
     configuration::Checklist,
     git::{
-        CommitCache, GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers,
-        GitHubApiError, GitHubReader, GitHubWriter, GitRepository, GitRepositoryError,
+        GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError,
+        GitHubReader, GitHubWriter, GitRepository, GitRepositoryError,
     },
     issue::IssueThread,
     relevant_files::{
@@ -220,10 +220,8 @@ impl QCIssue {
 
             for (prev_file, prev_issue_number) in prev_qc_diffs {
                 if let Ok(prev_issue_obj) = git_info.get_issue(prev_issue_number).await {
-                    let mut commit_cache = CommitCache::new();
                     if let Ok(thread) =
-                        IssueThread::from_issue(&prev_issue_obj, None, git_info, &mut commit_cache)
-                            .await
+                        IssueThread::from_issue(&prev_issue_obj, None, git_info).await
                     {
                         let prev_commit = thread.latest_commit().hash;
                         let diff_comment = PreviousQCDiffComment {
@@ -1396,6 +1394,7 @@ mod tests {
         fn commits(
             &self,
             _branch: &Option<String>,
+            _stop_at: Option<ObjectId>,
         ) -> Result<Vec<crate::git::GitCommit>, GitFileOpsError> {
             Ok(vec![])
         }
@@ -1410,6 +1409,18 @@ mod tests {
             _commit: &gix::ObjectId,
         ) -> Result<Vec<u8>, GitFileOpsError> {
             Ok(vec![])
+        }
+
+        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+        }
+
+        fn file_touching_commits(
+            &self,
+            _branch: Option<String>,
+            _file: &std::path::Path,
+        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
+            Ok(std::collections::HashSet::new())
         }
 
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {

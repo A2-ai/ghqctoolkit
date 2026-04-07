@@ -1,10 +1,9 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use gix::Url;
-#[cfg(test)]
-use mockall::automock;
 
-#[cfg_attr(test, automock)]
+#[cfg_attr(test, mockall::automock)]
 pub trait GitCli {
     /// Clone a repository from a URL to a local path
     fn clone(&self, url: Url, path: &Path) -> Result<(), GitCliError>;
@@ -22,6 +21,16 @@ pub trait GitCli {
         file: &Path,
         message: &str,
     ) -> Result<StashFileOutcome, GitCliError>;
+
+    /// Return the set of full commit SHAs (40-char hex) that touch `file` on `branch`.
+    /// If `branch` is None, searches from HEAD.
+    /// Uses `git log --format=%H [branch] -- <file>`.
+    fn file_touching_commits(
+        &self,
+        repo_path: &Path,
+        branch: Option<String>,
+        file: &Path,
+    ) -> Result<HashSet<String>, GitCliError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +76,15 @@ impl<T: GitCli + ?Sized> GitCli for &T {
         message: &str,
     ) -> Result<StashFileOutcome, GitCliError> {
         (**self).stash_file(path, file, message)
+    }
+
+    fn file_touching_commits(
+        &self,
+        repo_path: &Path,
+        branch: Option<String>,
+        file: &Path,
+    ) -> Result<HashSet<String>, GitCliError> {
+        (**self).file_touching_commits(repo_path, branch, file)
     }
 }
 
@@ -153,6 +171,56 @@ impl GitCli for GitCommand {
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(GitCliError::GitCommandFailed(stderr.trim().to_string()))
         }
+    }
+
+    fn file_touching_commits(
+        &self,
+        repo_path: &Path,
+        branch: Option<String>,
+        file: &Path,
+    ) -> Result<HashSet<String>, GitCliError> {
+        log::debug!(
+            "Finding commits touching {:?} on {:?} in {}",
+            file,
+            branch,
+            repo_path.display()
+        );
+
+        let mut cmd = std::process::Command::new("git");
+        // --full-history disables history simplification so merge commits that
+        // introduce changes to the file are included (matching the prior
+        // tree-diff behaviour which compared every commit against all parents).
+        // -m causes diffs for merge commits to be computed against each parent
+        // individually, which is required for --full-history to detect per-file
+        // changes in merge commits correctly.
+        cmd.args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "log",
+            "--format=%H",
+            "--full-history",
+            "-m",
+        ]);
+        if let Some(b) = branch {
+            cmd.arg(b);
+        }
+        cmd.args(["--", &file.to_string_lossy()]);
+
+        let output = cmd.output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitCliError::GitCommandFailed(stderr.trim().to_string()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let hashes = stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+
+        Ok(hashes)
     }
 
     fn stash_file(

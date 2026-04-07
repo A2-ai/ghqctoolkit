@@ -14,8 +14,8 @@ use inquire::{
 use octocrab::models::Milestone;
 
 use crate::{
-    CommitCache, DiskCache, GitCommitAnalysis, GitFileOps, GitHubReader, GitRepository,
-    IssueThread, archive::ArchiveFile, get_issue_comments, git::GitCommit,
+    DiskCache, GitCommitAnalysis, GitFileOps, GitHubReader, GitRepository, IssueThread,
+    archive::ArchiveFile, get_issue_comments, git::GitCommit,
 };
 
 pub async fn prompt_archive(
@@ -125,12 +125,12 @@ pub async fn prompt_archive(
     };
 
     let additional_files = if select_additional_files {
-        let commits = git_info.commits(&None)?;
+        let commits = git_info.commits(&None, None)?;
         let milestone_selected_files = issue_threads
             .iter()
             .map(|i| i.file.as_path())
             .collect::<Vec<_>>();
-        prompt_archive_files(current_dir, &milestone_selected_files, &commits)?
+        prompt_archive_files(current_dir, &milestone_selected_files, &commits, git_info)?
     } else {
         Vec::new()
     };
@@ -248,13 +248,11 @@ pub async fn get_milestone_issue_threads(
         .collect::<Vec<_>>();
     let comment_results = future::join_all(comment_futures).await;
 
-    // Build IssueThreads sequentially so commit_cache can be shared
-    let mut commit_cache = CommitCache::new();
+    // Build IssueThreads
     let mut issue_thread_results = Vec::new();
     for (issue, comments_result) in comment_results {
         let comments = comments_result?;
-        let issue_thread =
-            IssueThread::from_issue_comments(issue, &comments, git_info, &mut commit_cache)?;
+        let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info, cache)?;
         issue_thread_results.push(issue_thread);
     }
 
@@ -266,6 +264,7 @@ fn prompt_archive_files(
     current_dir: &PathBuf,
     selected_files: &[&Path],
     commits: &[GitCommit],
+    git_info: &impl GitFileOps,
 ) -> Result<Vec<(PathBuf, ObjectId)>> {
     #[derive(Clone)]
     struct ArchiveFileCompleter {
@@ -427,9 +426,12 @@ fn prompt_archive_files(
         let file_path = PathBuf::from(trimmed_input);
 
         // Filter commits that actually change this file
+        let touching = git_info
+            .file_touching_commits(None, &file_path)
+            .map_err(|e| anyhow::anyhow!("Failed to find commits for file: {}", e))?;
         let file_changing_commits: Vec<_> = commits
             .iter()
-            .filter(|commit| commit.files.iter().any(|f| f == &file_path))
+            .filter(|commit| touching.contains(&commit.commit.to_string()))
             .collect();
 
         if file_changing_commits.is_empty() {

@@ -5,8 +5,8 @@ use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    CommitCache, Configuration, DiskCache, GitFileOps, GitHelpers, GitHubReader, GitHubWriter,
-    GitInfo, GitRepository, QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
+    Configuration, DiskCache, GitFileOps, GitHelpers, GitHubReader, GitHubWriter, GitInfo,
+    GitRepository, QCApprove, QCIssue, QCReview, QCUnapprove, RepoUser,
     cli::file_parser::{IssueUrlArg, RelevantFileArg},
     cli::interactive::{
         RelevantFileClassType, prompt_add_another_relevant_file, prompt_assignees,
@@ -415,12 +415,11 @@ impl QCComment {
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
         no_diff: bool,
-        commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let commits = &issue_thread.commits;
 
         if commits.is_empty() {
@@ -477,7 +476,6 @@ impl QCComment {
         milestones: &[Milestone],
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
-        commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         println!("💬 Welcome to GHQC Comment Mode!");
 
@@ -494,7 +492,7 @@ impl QCComment {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         // Select commits for comparison with status annotations
         let (current_commit, previous_commit) = prompt_commits(&issue_thread)?;
 
@@ -543,7 +541,6 @@ impl QCApprove {
         milestones: &[Milestone],
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
-        commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         println!("✅ Welcome to GHQC Approve Mode!");
 
@@ -573,7 +570,7 @@ impl QCApprove {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let commits = &issue_thread.commits;
 
         if commits.is_empty() {
@@ -625,14 +622,13 @@ impl QCApprove {
         milestones: &[Milestone],
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
-        commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
         if issue.state == octocrab::models::IssueState::Closed {
             bail!("")
         }
 
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let commits = &issue_thread.commits;
 
         if commits.is_empty() {
@@ -757,7 +753,6 @@ impl QCReview {
         milestones: Vec<Milestone>,
         cache: Option<&DiskCache>,
         git_info: &GitInfo,
-        commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         println!("📝 Welcome to GHQC Review Mode!");
 
@@ -774,7 +769,7 @@ impl QCReview {
         let file_path = PathBuf::from(&issue.title);
 
         // Create IssueThread to get QC-tracked commits for status/metadata
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
 
         if issue_thread.commits.is_empty() {
             return Err(anyhow!(
@@ -869,12 +864,11 @@ impl QCReview {
         git_info: &GitInfo,
         no_diff: bool,
         stash_after_review: bool,
-        commit_cache: &mut CommitCache,
     ) -> Result<Self> {
         let issue = find_issue(&milestone_name, &file, milestones, git_info).await?;
 
         // Create IssueThread to get commits from the issue's specific branch
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
 
         if issue_thread.commits.is_empty() {
             return Err(anyhow!("No commits found for file: {}", file.display()));

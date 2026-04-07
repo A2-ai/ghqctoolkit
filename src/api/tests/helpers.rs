@@ -300,7 +300,11 @@ impl GitStatusOps for MockGitInfo {
 }
 
 impl GitFileOps for MockGitInfo {
-    fn commits(&self, _branch: &Option<String>) -> Result<Vec<GitCommit>, GitFileOpsError> {
+    fn commits(
+        &self,
+        _branch: &Option<String>,
+        _stop_at: Option<ObjectId>,
+    ) -> Result<Vec<GitCommit>, GitFileOpsError> {
         // Return a commit that matches test fixtures and touches all common test files
         // This matches the initial commit from config_file_issue.json
         let commit_hash = ObjectId::from_str("456def789abc012345678901234567890123cdef")
@@ -309,12 +313,6 @@ impl GitFileOps for MockGitInfo {
         Ok(vec![GitCommit {
             commit: commit_hash,
             message: "Initial commit".to_string(),
-            files: vec![
-                PathBuf::from("src/test.rs"),
-                PathBuf::from("src/config.rs"),
-                PathBuf::from("src/main.rs"),
-                PathBuf::from("src/lib.rs"),
-            ],
         }])
     }
 
@@ -332,6 +330,21 @@ impl GitFileOps for MockGitInfo {
         _commit: &ObjectId,
     ) -> Result<Vec<u8>, GitFileOpsError> {
         Ok(vec![])
+    }
+
+    fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+        Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+    }
+
+    fn file_touching_commits(
+        &self,
+        _branch: Option<String>,
+        _file: &Path,
+    ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
+        // The mock returns one commit; treat it as touching every file
+        let commit_hash = ObjectId::from_str("456def789abc012345678901234567890123cdef")
+            .unwrap_or_else(|_| ObjectId::empty_tree(gix::hash::Kind::Sha1));
+        Ok(std::iter::once(commit_hash.to_string()).collect())
     }
 
     fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {

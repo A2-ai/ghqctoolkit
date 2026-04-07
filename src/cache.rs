@@ -29,6 +29,24 @@ pub struct CachedEvents {
     pub issue_updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A single file-change record stored in the disk cache per commit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChangeRecord {
+    /// Repo-relative file path (forward-slash separated).
+    pub file: String,
+    pub changed: bool,
+}
+
+/// Disk-serialisable representation of a commit.
+/// `file_changes` grows lazily as files are queried via `find_or_cache_file_changes`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedCommit {
+    /// Full 40-char SHA hex string.
+    pub hash: String,
+    pub message: String,
+    pub file_changes: Vec<FileChangeRecord>,
+}
+
 impl<T> CacheEntry<T> {
     pub fn new(data: T, ttl: Option<Duration>) -> Self {
         let created_at = SystemTime::now()
@@ -144,7 +162,12 @@ impl DiskCache {
 
         let entry = CacheEntry::new(data, ttl);
         let content = serde_json::to_string_pretty(&entry)?;
-        fs::write(&file_path, content)?;
+
+        // Write to a temp file then rename for atomicity — prevents readers
+        // from seeing a partially-written file if two writers race.
+        let tmp_path = file_path.with_extension("tmp");
+        fs::write(&tmp_path, content)?;
+        fs::rename(&tmp_path, &file_path)?;
 
         Ok(())
     }

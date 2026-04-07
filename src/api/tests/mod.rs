@@ -16,7 +16,6 @@ mod test_runner {
     use tower::ServiceExt;
 
     use crate::Configuration;
-    use crate::api::cache::CacheKey;
     use crate::api::tests::harness::runner::TestRunner;
     use crate::api::tests::harness::types::TestCase;
     use crate::api::tests::helpers::{MockGitInfo, load_test_issue, load_test_milestone};
@@ -124,8 +123,7 @@ mod test_runner {
     }
 
     #[tokio::test]
-    async fn test_batch_get_issue_status_cache_behavior() {
-        // Setup: Create mock with test issues
+    async fn test_batch_get_issue_status_repeat_behavior() {
         let test_issue_1 = load_test_issue("test_file_issue");
         let test_issue_2 = load_test_issue("config_file_issue");
         let milestone = load_test_milestone("v1.0");
@@ -142,7 +140,6 @@ mod test_runner {
         let state = AppState::new(mock, config, None, None);
         let app = create_router(state.clone());
 
-        // FIRST REQUEST: Cache should be empty, will populate
         let response1 = app
             .clone()
             .oneshot(
@@ -171,31 +168,6 @@ mod test_runner {
         let body1 = axum::body::to_bytes(response1.into_body(), usize::MAX)
             .await
             .unwrap();
-
-        // Verify cache was populated (scoped to release lock automatically)
-        let key1 = CacheKey {
-            issue_updated_at: test_issue_1.updated_at,
-            branch: "main".to_string(),
-            head_commit: "abc123".to_string(),
-        };
-        let key2 = CacheKey {
-            issue_updated_at: test_issue_2.updated_at,
-            branch: "main".to_string(),
-            head_commit: "abc123".to_string(),
-        };
-        {
-            let cache = state.status_cache.read().await;
-            assert!(
-                cache.get(1, &key1).is_some(),
-                "Issue 1 should be cached after first request"
-            );
-            assert!(
-                cache.get(2, &key2).is_some(),
-                "Issue 2 should be cached after first request"
-            );
-        } // cache read lock released here
-
-        // SECOND REQUEST: Should hit cache (no new fetches needed)
         let response2 = app
             .oneshot(
                 Request::builder()
@@ -245,21 +217,6 @@ mod test_runner {
             0,
             "Second request should have no errors"
         );
-
-        // Responses should be identical (proving cache hit)
-        assert_eq!(json1, json2, "Responses should be identical (cache hit)");
-
-        // Cache should still have valid entries (scoped to release lock automatically)
-        {
-            let cache = state.status_cache.read().await;
-            assert!(
-                cache.get(1, &key1).is_some(),
-                "Issue 1 should still be cached after second request"
-            );
-            assert!(
-                cache.get(2, &key2).is_some(),
-                "Issue 2 should still be cached after second request"
-            );
-        } // cache read lock released here
+        assert_eq!(json1, json2, "Repeated requests should be stable");
     }
 }

@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use crate::cache::DiskCache;
 use crate::git::{GitHubApiError, GitHubReader};
 use crate::issue::{BlockingQC, IssueError, IssueThread};
-use crate::{CommitCache, GitCommitAnalysis, GitFileOps};
+use crate::{GitCommitAnalysis, GitFileOps};
 
 static CHECKLIST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^\s*-\s*\[([xX\s])\]").expect("Failed to compile checklist regex")
@@ -136,13 +136,9 @@ impl QCStatus {
         blocking_qc: &BlockingQC,
         cache: Option<&DiskCache>,
         git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
-        commit_cache: &mut CommitCache,
     ) -> Result<Self, QCStatusError> {
-        // Fetch the issue
         let issue = git_info.get_issue(blocking_qc.issue_number).await?;
-
-        // Get comments and build IssueThread
-        let issue_thread = IssueThread::from_issue(&issue, cache, git_info, commit_cache).await?;
+        let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
         let status = QCStatus::determine_status(&issue_thread);
         Ok(status)
     }
@@ -439,7 +435,6 @@ pub async fn get_blocking_qc_status(
     blocking_qcs: &[BlockingQC],
     git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
     cache: Option<&DiskCache>,
-    commit_cache: &mut CommitCache,
 ) -> BlockingQCStatus {
     let mut status = BlockingQCStatus::default();
 
@@ -453,7 +448,7 @@ pub async fn get_blocking_qc_status(
             qc.issue_number,
             qc.file_name.display()
         );
-        let result = QCStatus::from_blocking_qc(qc, cache, git_info, commit_cache).await;
+        let result = QCStatus::from_blocking_qc(qc, cache, git_info).await;
         match result {
             Ok(s) => {
                 if s.is_approved() {

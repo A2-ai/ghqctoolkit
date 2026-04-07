@@ -1,31 +1,21 @@
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
 use octocrab::models::issues::Issue;
-use tokio::sync::RwLockReadGuard;
 
 use crate::{
-    GitHubReader, GitProvider, GitRepository, IssueError, IssueThread,
-    api::{
-        AppState,
-        cache::{CacheEntry, CacheKey, StatusCache},
-    },
+    GitHubReader, GitProvider, IssueError, IssueThread,
+    api::{AppState, types::IssueStatusResponse},
     get_issue_comments, parse_blocking_qcs,
 };
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FetchedIssues {
     pub(crate) issues: Vec<Issue>,
-    pub(crate) cached_entries: HashMap<u64, CacheEntry>,
     pub(crate) errors: HashMap<u64, String>,
 }
 
 impl FetchedIssues {
-    pub(crate) async fn fetch_issues(
-        issue_numbers: &[u64],
-        git_info: &(impl GitHubReader + GitRepository),
-        cache: &RwLockReadGuard<'_, StatusCache>,
-    ) -> Self {
+    pub(crate) async fn fetch_issues(issue_numbers: &[u64], git_info: &impl GitHubReader) -> Self {
         let issue_futures = issue_numbers
             .iter()
             .map(|number| async move { git_info.get_issue(*number).await })
@@ -35,14 +25,7 @@ impl FetchedIssues {
 
         for (result, issue_number) in issue_results.into_iter().zip(issue_numbers) {
             match result {
-                Ok(issue) => {
-                    let key = cache_key_or_default(git_info, issue.updated_at.clone());
-                    if let Some(entry) = cache.get(*issue_number, &key) {
-                        fetched.cached_entries.insert(*issue_number, entry.clone());
-                    } else {
-                        fetched.issues.push(issue);
-                    }
-                }
+                Ok(issue) => fetched.issues.push(issue),
                 Err(e) => {
                     fetched.errors.insert(*issue_number, e.to_string());
                 }
@@ -52,34 +35,20 @@ impl FetchedIssues {
         fetched
     }
 
-    pub(crate) async fn fetch_blocking_qcs(
-        &mut self,
-        git_info: &(impl GitHubReader + GitRepository),
-        cache: &RwLockReadGuard<'_, StatusCache>,
-    ) {
-        let mut issue_numbers = self
+    pub(crate) async fn fetch_blocking_qcs(&mut self, git_info: &impl GitHubReader) {
+        let issue_numbers = self
             .issues
             .iter()
             .filter_map(|issue| issue.body.as_deref())
             .flat_map(parse_blocking_qcs)
             .map(|b| b.issue_number)
             .collect::<HashSet<_>>();
-        issue_numbers.extend(
-            self.cached_entries
-                .values()
-                .flat_map(|entry| entry.blocking_qc_numbers.clone())
-                .collect::<HashSet<u64>>(),
-        );
         let blocking_qcs = issue_numbers
             .into_iter()
-            .filter(|num| {
-                !self.cached_entries.contains_key(num)
-                    && !self.issues.iter().any(|i| i.number == *num)
-            })
+            .filter(|num| !self.issues.iter().any(|i| i.number == *num))
             .collect::<Vec<_>>();
 
-        let fetched_issues = FetchedIssues::fetch_issues(&blocking_qcs, git_info, cache).await;
-        self.cached_entries.extend(fetched_issues.cached_entries);
+        let fetched_issues = FetchedIssues::fetch_issues(&blocking_qcs, git_info).await;
         self.issues.extend(fetched_issues.issues);
         self.errors.extend(fetched_issues.errors);
     }
@@ -87,7 +56,8 @@ impl FetchedIssues {
 
 #[derive(Debug, Default)]
 pub(crate) struct CreatedThreads {
-    pub entries: HashMap<u64, CacheEntry>,
+    pub responses: HashMap<u64, IssueStatusResponse>,
+    pub blocking_qc_numbers: HashMap<u64, Vec<u64>>,
     pub thread_errors: HashMap<u64, IssueError>,
 }
 
@@ -109,47 +79,38 @@ impl CreatedThreads {
                 .collect::<Vec<_>>();
         let comment_results = futures::future::join_all(comment_futures).await;
 
-        // Step 2: Build IssueThreads sequentially with the shared commit cache.
-        // Acquire the write lock for the duration so the populated cache persists
-        // across requests, avoiding redundant git commit walks for the same branch.
+        // Step 2: Build IssueThreads, sharing the disk cache for commit lookups.
         let mut thread_results: Vec<(&Issue, Result<IssueThread, IssueError>)> = Vec::new();
-        {
-            let mut commit_cache = app_state.commit_cache.write().await;
-            for (issue, comments_result) in comment_results {
-                let result = match comments_result {
-                    Ok(comments) => IssueThread::from_issue_comments(
-                        issue,
-                        &comments,
-                        git_info,
-                        &mut *commit_cache,
-                    ),
-                    Err(e) => Err(IssueError::GitHubApiError(e)),
-                };
-                thread_results.push((issue, result));
-            }
-        } // commit_cache lock released here
+        for (issue, comments_result) in comment_results {
+            let result = match comments_result {
+                Ok(comments) => {
+                    IssueThread::from_issue_comments(issue, &comments, git_info, disk_cache)
+                }
+                Err(e) => Err(IssueError::GitHubApiError(e)),
+            };
+            thread_results.push((issue, result));
+        }
 
         let mut created = CreatedThreads::default();
+        let dirty = git_info.dirty().unwrap_or_default();
 
-        // Collect entries, then acquire status cache write lock
-        {
-            let mut cache_write = app_state.status_cache.write().await;
-
-            for (issue, result) in thread_results {
-                match result {
-                    Ok(issue_thread) => {
-                        let entry = CacheEntry::new(issue, &issue_thread);
-                        let key = cache_key_or_default(git_info, issue.updated_at.clone());
-
-                        created.entries.insert(issue.number, entry.clone());
-                        cache_write.insert(issue.number, key, entry);
-                    }
-                    Err(e) => {
-                        created.thread_errors.insert(issue.number, e);
-                    }
+        for (issue, result) in thread_results {
+            match result {
+                Ok(issue_thread) => {
+                    created.blocking_qc_numbers.insert(
+                        issue.number,
+                        IssueStatusResponse::blocking_qc_numbers(issue),
+                    );
+                    created.responses.insert(
+                        issue.number,
+                        IssueStatusResponse::new(issue, &issue_thread, &dirty),
+                    );
+                }
+                Err(e) => {
+                    created.thread_errors.insert(issue.number, e);
                 }
             }
-        } // cache_write lock released here
+        }
 
         created
     }
@@ -163,23 +124,10 @@ pub(crate) fn format_error_list(errors: &HashMap<u64, impl std::fmt::Display>) -
         .join("\n  -")
 }
 
-pub(crate) fn cache_key_or_default(
-    git_info: &impl GitRepository,
-    updated_at: DateTime<Utc>,
-) -> CacheKey {
-    CacheKey::build(git_info, updated_at.clone()).unwrap_or(CacheKey {
-        issue_updated_at: updated_at,
-        branch: "unknown".to_string(),
-        head_commit: "unknown".to_string(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::tests::helpers::MockGitInfo;
-    use crate::git::{FileStashOutcome, GitRepositoryError};
-    use std::path::Path;
 
     #[test]
     fn test_format_error_list_empty() {
@@ -207,237 +155,45 @@ mod tests {
         assert!(result.contains("#2: Access denied"));
     }
 
-    #[test]
-    fn test_cache_key_or_default_success() {
-        let mock = MockGitInfo::builder()
-            .with_branch("main")
-            .with_commit("abc123")
-            .build();
-        let updated_at = Utc::now();
-
-        let key = cache_key_or_default(&mock, updated_at);
-
-        assert_eq!(key.branch, "main");
-        assert_eq!(key.head_commit, "abc123");
-        assert_eq!(key.issue_updated_at, updated_at);
-    }
-
-    struct MockGitRepoError;
-
-    impl GitRepository for MockGitRepoError {
-        fn branch(&self) -> Result<String, GitRepositoryError> {
-            Err(GitRepositoryError::DetachedHead)
-        }
-
-        fn commit(&self) -> Result<String, GitRepositoryError> {
-            Err(GitRepositoryError::DetachedHead)
-        }
-
-        fn owner(&self) -> &str {
-            "test"
-        }
-
-        fn repo(&self) -> &str {
-            "test"
-        }
-
-        fn path(&self) -> &std::path::Path {
-            std::path::Path::new("/test")
-        }
-
-        fn fetch(&self) -> Result<bool, GitRepositoryError> {
-            Ok(false) // Mock: no changes fetched
-        }
-
-        fn stash_file(
-            &self,
-            _file: &Path,
-            _message: &str,
-        ) -> Result<FileStashOutcome, GitRepositoryError> {
-            Ok(FileStashOutcome::NoChanges)
-        }
-
-        fn configured_author(&self) -> Option<crate::GitAuthor> {
-            None
-        }
-    }
-
-    #[test]
-    fn test_cache_key_or_default_fallback() {
-        let mock = MockGitRepoError;
-        let updated_at = Utc::now();
-
-        let key = cache_key_or_default(&mock, updated_at);
-
-        assert_eq!(key.branch, "unknown");
-        assert_eq!(key.head_commit, "unknown");
-        assert_eq!(key.issue_updated_at, updated_at);
-    }
-
     #[tokio::test]
-    async fn test_fetch_issues_all_cached() {
-        use crate::api::cache::StatusCache;
-
+    async fn test_fetch_issues_all_errors() {
         let mock = MockGitInfo::builder().build();
-        let cache = StatusCache::new();
-        let cache_read = tokio::sync::RwLock::new(cache);
-        let cache_guard = cache_read.read().await;
-
-        let fetched = FetchedIssues::fetch_issues(&[1, 2], &mock, &cache_guard).await;
+        let fetched = FetchedIssues::fetch_issues(&[1, 2], &mock).await;
 
         // MockGitInfo returns NotFound by default, so all should be errors
         assert_eq!(fetched.issues.len(), 0);
-        assert_eq!(fetched.cached_entries.len(), 0);
         assert_eq!(fetched.errors.len(), 2);
     }
 
     #[tokio::test]
     async fn test_fetch_issues_with_issue_data() {
-        use crate::api::cache::StatusCache;
         use crate::api::tests::helpers::load_test_issue;
 
         let test_issue = load_test_issue("test_file_issue");
         let mock = MockGitInfo::builder().with_issue(1, test_issue).build();
 
-        let cache = StatusCache::new();
-        let cache_read = tokio::sync::RwLock::new(cache);
-        let cache_guard = cache_read.read().await;
+        let fetched = FetchedIssues::fetch_issues(&[1], &mock).await;
 
-        let fetched = FetchedIssues::fetch_issues(&[1], &mock, &cache_guard).await;
-
-        // Issue 1 should be fetched since not in cache
         assert_eq!(fetched.issues.len(), 1);
         assert_eq!(fetched.issues[0].number, 1);
-        assert_eq!(fetched.cached_entries.len(), 0);
-        assert_eq!(fetched.errors.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_issues_with_cache_hit() {
-        use crate::api::cache::{CacheEntry, StatusCache};
-        use crate::api::tests::helpers::load_test_issue;
-        use crate::api::types::{ChecklistSummary, Issue, QCStatus, QCStatusEnum};
-
-        let test_issue = load_test_issue("test_file_issue");
-        let mock = MockGitInfo::builder()
-            .with_issue(1, test_issue.clone())
-            .build();
-
-        let mut cache = StatusCache::new();
-        let key = CacheKey {
-            issue_updated_at: test_issue.updated_at,
-            branch: "main".to_string(),
-            head_commit: "abc1234567890abcdef1234567890abcdef12340".to_string(),
-        };
-        let entry = CacheEntry {
-            issue: Issue {
-                number: 1,
-                title: test_issue.title.clone(),
-                state: "open".to_string(),
-                html_url: test_issue.html_url.to_string(),
-                assignees: vec![],
-                labels: vec![],
-                milestone: None,
-                created_at: test_issue.created_at,
-                updated_at: test_issue.updated_at,
-                closed_at: None,
-                created_by: "Author".to_string(),
-                branch: Some("main".to_string()),
-                checklist_name: Some("checklist".to_string()),
-                relevant_files: Vec::new(),
-            },
-            qc_status: QCStatus {
-                status: QCStatusEnum::InProgress,
-                status_detail: "In Progress".to_string(),
-                approved_commit: None,
-                initial_commit: "abc123".to_string(),
-                latest_commit: "abc123".to_string(),
-            },
-            branch: "main".to_string(),
-            commits: vec![],
-            checklist_summary: ChecklistSummary {
-                completed: 0,
-                total: 0,
-                percentage: 0.0,
-            },
-            blocking_qc_numbers: vec![],
-        };
-        cache.insert(1, key, entry);
-
-        let cache_read = tokio::sync::RwLock::new(cache);
-        let cache_guard = cache_read.read().await;
-
-        let fetched = FetchedIssues::fetch_issues(&[1], &mock, &cache_guard).await;
-
-        // Issue 1 should be in cache, not fetched
-        assert_eq!(fetched.issues.len(), 0);
-        assert_eq!(fetched.cached_entries.len(), 1);
         assert_eq!(fetched.errors.len(), 0);
     }
 
     #[tokio::test]
     async fn test_fetch_issues_mixed() {
-        use crate::api::cache::{CacheEntry, StatusCache};
         use crate::api::tests::helpers::load_test_issue;
-        use crate::api::types::{ChecklistSummary, Issue, QCStatus, QCStatusEnum};
 
         let test_issue1 = load_test_issue("test_file_issue");
         let test_issue2 = load_test_issue("config_file_issue");
         let mock = MockGitInfo::builder()
-            .with_issue(1, test_issue1.clone())
-            .with_issue(2, test_issue2.clone())
+            .with_issue(1, test_issue1)
+            .with_issue(2, test_issue2)
             .build();
 
-        let mut cache = StatusCache::new();
-        let key = CacheKey {
-            issue_updated_at: test_issue1.updated_at,
-            branch: "main".to_string(),
-            head_commit: "abc1234567890abcdef1234567890abcdef12340".to_string(),
-        };
-        let entry = CacheEntry {
-            issue: Issue {
-                number: 1,
-                title: test_issue1.title.clone(),
-                state: "open".to_string(),
-                html_url: test_issue1.html_url.to_string(),
-                assignees: vec![],
-                labels: vec![],
-                milestone: None,
-                created_at: test_issue1.created_at,
-                updated_at: test_issue1.updated_at,
-                closed_at: None,
-                created_by: "Author".to_string(),
-                branch: Some("main".to_string()),
-                checklist_name: Some("checklist".to_string()),
-                relevant_files: Vec::new(),
-            },
-            qc_status: QCStatus {
-                status: QCStatusEnum::InProgress,
-                status_detail: "In Progress".to_string(),
-                approved_commit: None,
-                initial_commit: "abc123".to_string(),
-                latest_commit: "abc123".to_string(),
-            },
-            branch: "main".to_string(),
-            commits: vec![],
-            checklist_summary: ChecklistSummary {
-                completed: 0,
-                total: 0,
-                percentage: 0.0,
-            },
-            blocking_qc_numbers: vec![],
-        };
-        cache.insert(1, key, entry);
+        let fetched = FetchedIssues::fetch_issues(&[1, 2, 3], &mock).await;
 
-        let cache_read = tokio::sync::RwLock::new(cache);
-        let cache_guard = cache_read.read().await;
-
-        let fetched = FetchedIssues::fetch_issues(&[1, 2], &mock, &cache_guard).await;
-
-        // Issue 1 in cache, issue 2 fetched
-        assert_eq!(fetched.issues.len(), 1);
-        assert_eq!(fetched.issues[0].number, 2);
-        assert_eq!(fetched.cached_entries.len(), 1);
-        assert_eq!(fetched.errors.len(), 0);
+        assert_eq!(fetched.issues.len(), 2);
+        assert_eq!(fetched.errors.len(), 1);
+        assert!(fetched.errors.contains_key(&3));
     }
 }

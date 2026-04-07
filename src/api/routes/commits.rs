@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::GitProvider;
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
-use crate::find_commits;
+use crate::{find_commits, find_or_cache_file_changes};
 
 const DEFAULT_PAGE_SIZE: usize = 10;
 const MAX_PAGE_SIZE: usize = 50;
@@ -54,17 +54,14 @@ pub async fn get_commits<G: GitProvider + 'static>(
 ) -> Result<Json<PagedCommitsResponse>, ApiError> {
     let git_info = state.git_info().clone();
     let file = params.file.clone();
+    let disk_cache = state.disk_cache();
     let page_size = params
         .page_size
         .unwrap_or(DEFAULT_PAGE_SIZE)
         .clamp(1, MAX_PAGE_SIZE);
 
-    // Use the shared commit cache (same pattern as fetch_helpers.rs)
-    let all_commits = {
-        let mut cache = state.commit_cache.write().await;
-        find_commits(&git_info, &None, &mut *cache)
-            .map_err(|e| ApiError::Internal(e.to_string()))?
-    };
+    let all_commits = find_commits(&git_info, &None, None, disk_cache)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let total = all_commits.len();
 
@@ -82,18 +79,25 @@ pub async fn get_commits<G: GitProvider + 'static>(
     let start = page * page_size;
     let end = (start + page_size).min(total);
 
+    // If a file filter is requested, resolve which commits touch it (one git call, cached).
+    let touching: Option<std::collections::HashSet<String>> = if let Some(ref f) = file {
+        let hashes: Vec<String> = all_commits.iter().map(|c| c.commit.to_string()).collect();
+        Some(
+            find_or_cache_file_changes(&hashes, &git_info, None, &PathBuf::from(f), disk_cache)
+                .map_err(ApiError::from)?,
+        )
+    } else {
+        None
+    };
+
     let commits: Vec<BranchCommit> = if start < total {
         all_commits[start..end]
             .iter()
             .map(|c| {
-                let file_changed = if let Some(ref f) = file {
-                    let file_path = PathBuf::from(f);
-                    c.files.iter().any(|p| p == &file_path)
-                } else {
-                    false
-                };
+                let hash_str = c.commit.to_string();
+                let file_changed = touching.as_ref().map_or(false, |s| s.contains(&hash_str));
                 BranchCommit {
-                    hash: c.commit.to_string(),
+                    hash: hash_str,
                     message: c.message.trim().to_string(),
                     file_changed,
                 }

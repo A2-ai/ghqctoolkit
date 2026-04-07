@@ -1,6 +1,5 @@
 //! Issue endpoints.
 
-use crate::api::cache::CacheKey;
 use crate::api::error::ApiError;
 use crate::api::fetch_helpers::{CreatedThreads, FetchedIssues, format_error_list};
 use crate::api::state::AppState;
@@ -197,50 +196,13 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
         ));
     }
 
-    let dirty = state.git_info().dirty()?;
+    let mut fetched_issues = FetchedIssues::fetch_issues(&issue_numbers, state.git_info()).await;
 
-    // Invalidate the commit cache for the current branch if HEAD has moved,
-    // so that IssueThread rebuilds include any new commits.
-    {
-        if let (Ok(branch), Ok(current_commit)) =
-            (state.git_info().branch(), state.git_info().commit())
-        {
-            let mut commit_cache = state.commit_cache.write().await;
-            if let Some(commits) = commit_cache.get(&branch) {
-                let cached_head = commits.first().map(|c| c.commit.to_string());
-                if cached_head.as_deref() != Some(&current_commit) {
-                    log::debug!(
-                        "Commit cache invalidated for branch '{}': cached HEAD {:?} != current HEAD {}",
-                        branch,
-                        cached_head,
-                        current_commit
-                    );
-                    commit_cache.remove(&branch);
-                }
-            }
-        }
-    }
-
-    let mut fetched_issues = {
-        let cache_read = state.status_cache.read().await;
-        let mut fetched_issues =
-            FetchedIssues::fetch_issues(&issue_numbers, state.git_info(), &cache_read).await;
-
-        // Don't return early on fetch errors — accumulate them as FetchFailed entries.
-
-        fetched_issues
-            .fetch_blocking_qcs(state.git_info(), &cache_read)
-            .await;
-
-        fetched_issues
-    }; // cache_read lock released here
+    // Don't return early on fetch errors — accumulate them as FetchFailed entries.
+    fetched_issues.fetch_blocking_qcs(state.git_info()).await;
 
     // Only create threads for successfully fetched issues.
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, &state).await;
-
-    fetched_issues
-        .cached_entries
-        .extend(created_threads.entries);
     fetched_issues.errors.extend(
         created_threads
             .thread_errors
@@ -253,12 +215,17 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
 
     // Preserve request ordering.
     for issue_number in &issue_numbers {
-        if let Some(entry) = fetched_issues.cached_entries.get(issue_number) {
-            let mut response = IssueStatusResponse::from_cache_entry(entry.clone(), &dirty);
+        if let Some(response) = created_threads.responses.get(issue_number) {
+            let mut response = response.clone();
             determine_blocking_qc_status(
                 &mut response.blocking_qc_status,
-                &entry.blocking_qc_numbers,
-                &fetched_issues,
+                created_threads
+                    .blocking_qc_numbers
+                    .get(issue_number)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+                &created_threads.responses,
+                &fetched_issues.errors,
             );
             responses.push(response);
         } else {
@@ -310,28 +277,29 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
 pub(crate) fn determine_blocking_qc_status(
     blocking_status: &mut BlockingQCStatus,
     blocking_numbers: &[u64],
-    fetched_issues: &FetchedIssues,
+    responses: &std::collections::HashMap<u64, IssueStatusResponse>,
+    errors: &std::collections::HashMap<u64, String>,
 ) {
     blocking_status.total = blocking_numbers.len() as u32;
     for number in blocking_numbers {
-        if let Some(entry) = fetched_issues.cached_entries.get(number) {
-            match entry.qc_status.status {
+        if let Some(response) = responses.get(number) {
+            match response.qc_status.status {
                 QCStatusEnum::Approved | QCStatusEnum::ChangesAfterApproval => {
                     blocking_status.approved_count += 1;
                     blocking_status.approved.push(BlockingQCItem {
                         issue_number: *number,
-                        file_name: entry.issue.title.clone(),
+                        file_name: response.issue.title.clone(),
                     });
                 }
                 _ => {
                     blocking_status.not_approved.push(BlockingQCItemWithStatus {
                         issue_number: *number,
-                        file_name: entry.issue.title.clone(),
-                        status: entry.qc_status.status_detail.clone(),
+                        file_name: response.issue.title.clone(),
+                        status: response.qc_status.status_detail.clone(),
                     });
                 }
             }
-        } else if let Some(error) = fetched_issues.errors.get(number) {
+        } else if let Some(error) = errors.get(number) {
             blocking_status.errors.push(BlockingQCError {
                 issue_number: *number,
                 error: error.to_string(),
@@ -369,8 +337,6 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Path(number): Path<u64>,
 ) -> Result<Json<Vec<BlockedIssueStatus>>, ApiError> {
-    let git_info = state.git_info();
-
     // APIError / NoApi mean the endpoint doesn't exist on this GitHub instance → 501 so
     // the client can fall back to the simple unapprove UI.  Other errors (e.g. client
     // creation failure) stay as 502 since they indicate a real infrastructure problem.
@@ -385,25 +351,7 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
     };
 
     let mut blocked_statuses = Vec::new();
-    let mut need_to_fetch = Vec::new();
-
-    // need to drop read lock when done
-    {
-        let cache_read = state.status_cache.read().await;
-        for issue in blocking_issues {
-            let key = CacheKey::build(git_info, issue.updated_at.clone())?;
-            if let Some(entry) = cache_read.get(issue.number, &key) {
-                blocked_statuses.push(BlockedIssueStatus {
-                    issue: issue.into(),
-                    qc_status: entry.qc_status.clone(),
-                });
-            } else {
-                need_to_fetch.push(issue);
-            }
-        }
-    }
-
-    let created_threads = CreatedThreads::create_threads(&need_to_fetch, &state).await;
+    let created_threads = CreatedThreads::create_threads(&blocking_issues, &state).await;
     if !created_threads.thread_errors.is_empty() {
         return Err(ApiError::Internal(format!(
             "Failed to determine status:\n  -{}",
@@ -412,16 +360,12 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
     }
 
     // Merge cached statuses with newly fetched ones
-    let mut statuses = blocked_statuses;
-    statuses.extend(
-        created_threads
-            .entries
-            .into_values()
-            .map(|entry| BlockedIssueStatus {
-                issue: entry.issue,
-                qc_status: entry.qc_status,
-            }),
-    );
+    blocked_statuses.extend(created_threads.responses.into_values().map(|response| {
+        BlockedIssueStatus {
+            issue: response.issue,
+            qc_status: response.qc_status,
+        }
+    }));
 
-    Ok(Json(statuses))
+    Ok(Json(blocked_statuses))
 }
