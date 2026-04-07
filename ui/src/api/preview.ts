@@ -35,6 +35,13 @@ export interface FileContentRequest {
   commit?: string | null
 }
 
+export interface PreviousQCDiffPreviewRequest {
+  current_file: string
+  previous_file: string
+  previous_issue_number: number
+  current_commit: string
+}
+
 export async function fetchFileContent({ path, commit }: FileContentRequest): Promise<string> {
   const params = new URLSearchParams({ path })
   if (commit) params.set('commit', commit)
@@ -107,6 +114,19 @@ export async function fetchIssuePreview(request: CreateIssueRequest): Promise<st
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to fetch preview: ${res.status}`)
+  }
+  return res.text()
+}
+
+export async function fetchPreviousQCDiffPreview(request: PreviousQCDiffPreviewRequest): Promise<string> {
+  const res = await fetch(`${API_BASE}/preview/previous-qc-diff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to fetch previous QC diff preview: ${res.status}`)
   }
   return res.text()
 }

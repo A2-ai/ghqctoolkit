@@ -3,6 +3,8 @@ import { Box, Button, Checkbox, Group, Loader, Modal, Select, Text, TextInput, T
 import { FileTreeBrowser } from './FileTreeBrowser'
 import type { RelevantFileDraft } from './CreateIssueModal'
 import type { RelevantFileKind } from '~/api/issues'
+import { fetchPreviousQCDiffPreview } from '~/api/preview'
+import { wrapInGithubStyles } from '~/utils/github'
 
 import type { IssueRef } from './RelevantFilesTab'
 import type { QueuedItem } from './CreateIssueModal'
@@ -16,6 +18,8 @@ interface Props {
   alreadyAdded: Set<string>
   isLoading: boolean
   editDraft?: RelevantFileDraft | null
+  currentFile: string | null
+  currentCommit: string | null
 }
 
 type Relation = 'gating' | 'relevant' | 'previous'
@@ -44,12 +48,15 @@ const TYPE_DATA_FILE_ONLY = [
   { value: 'file', label: 'File' },
 ]
 
-export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, queuedItems, alreadyAdded, isLoading, editDraft }: Props) {
+export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, queuedItems, alreadyAdded, isLoading, editDraft, currentFile, currentCommit }: Props) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null)
   const [relation, setRelation] = useState<Relation>('gating')
   const [description, setDescription] = useState('')
   const [includeDiff, setIncludeDiff] = useState(true)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
 
   function reset() {
     setSelectedFile(null)
@@ -132,6 +139,15 @@ export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, 
   const canAdd =
     selectedFile !== null &&
     (useFileType ? description.trim().length > 0 : true)
+  const canPreviewPreviousQcDiff =
+    relation === 'previous' &&
+    selectedFile !== null &&
+    selectedIssue !== null &&
+    selectedIssue !== 'queued' &&
+    selectedIssue !== 'no_issue' &&
+    includeDiff &&
+    currentFile !== null &&
+    currentCommit !== null
 
   function handleAdd() {
     if (!selectedFile || !canAdd) return
@@ -151,6 +167,26 @@ export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, 
     onAdd(draft)
     reset()
     onClose()
+  }
+
+  async function handlePreviewDiffComment() {
+    if (!canPreviewPreviousQcDiff || !selectedFile || !currentFile || !currentCommit) return
+    setPreviewLoading(true)
+    try {
+      const html = await fetchPreviousQCDiffPreview({
+        current_file: currentFile,
+        previous_file: selectedFile,
+        previous_issue_number: Number(selectedIssue),
+        current_commit: currentCommit,
+      })
+      setPreviewHtml(html)
+      setPreviewOpen(true)
+    } catch (err) {
+      setPreviewHtml(`<pre>Error: ${(err as Error).message}</pre>`)
+      setPreviewOpen(true)
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
   return (
@@ -231,13 +267,41 @@ export function RelevantFilePickerModal({ opened, onClose, onAdd, fileToIssues, 
                 />
               )}
 
-              <Button size="xs" disabled={!canAdd} onClick={handleAdd} mt="auto">
-                {editDraft ? 'Update' : 'Add'}
-              </Button>
+              <div style={{ marginTop: 'auto', display: 'grid', gap: 8 }}>
+                {issueSelected && relation === 'previous' && (
+                  <Button
+                    size="xs"
+                    variant="default"
+                    disabled={!canPreviewPreviousQcDiff}
+                    loading={previewLoading}
+                    onClick={() => void handlePreviewDiffComment()}
+                  >
+                    Preview Diff Comment
+                  </Button>
+                )}
+
+                <Button size="xs" disabled={!canAdd} onClick={handleAdd}>
+                  {editDraft ? 'Update' : 'Add'}
+                </Button>
+              </div>
             </>
           )}
         </div>
       </Group>
+
+      <Modal
+        opened={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        title="Previous QC Diff Preview"
+        size={800}
+        centered
+      >
+        <iframe
+          srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
+          style={{ width: '100%', height: 500, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
+          title="Previous QC Diff Preview"
+        />
+      </Modal>
     </Modal>
   )
 }

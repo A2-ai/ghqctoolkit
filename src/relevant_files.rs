@@ -155,7 +155,7 @@ impl CommentBody for PreviousQCDiffComment {
             "## Metadata".to_string(),
             format!(
                 "previous qc issue: [#{}: {}]({})",
-                self.issue.number,
+                self.prev_issue_number,
                 self.prev_file.display(),
                 git_info.issue_url(self.prev_issue_number)
             ),

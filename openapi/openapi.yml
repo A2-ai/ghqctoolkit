@@ -330,6 +330,29 @@ paths:
               schema:
                 type: string
 
+  /preview/previous-qc-diff:
+    post:
+      summary: Preview Previous QC diff comment as HTML
+      operationId: previewPreviousQcDiff
+      tags: [comments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviousQCDiffPreviewRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the Previous QC diff comment
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid current commit format
+        '404':
+          description: Previous QC issue or referenced file not found
+
   /preview/{number}/review:
     post:
       summary: Preview review comment body as HTML
@@ -1319,6 +1342,23 @@ components:
         auto_stash:
           type: boolean
           default: true
+
+    PreviousQCDiffPreviewRequest:
+      type: object
+      required: [current_file, previous_file, previous_issue_number, current_commit]
+      properties:
+        current_file:
+          type: string
+          description: The file for the QC currently being created
+        previous_file:
+          type: string
+          description: The file referenced as Previous QC
+        previous_issue_number:
+          type: integer
+          description: Existing Previous QC issue number
+        current_commit:
+          type: string
+          description: Current repo commit used as the new QC initial commit
 
     ReviewStashResult:
       type: object

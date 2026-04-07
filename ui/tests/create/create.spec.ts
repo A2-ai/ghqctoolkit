@@ -253,6 +253,39 @@ test('pdf files open in embedded preview during issue creation', async ({ page }
   await expect(iframe).toHaveAttribute('src', /\/api\/files\/raw\?path=docs%2Freport\.pdf/)
 })
 
+test('previous qc relevant files can preview the diff comment before adding', async ({ page }) => {
+  await setupRoutes(page, {
+    issueStatuses: { results: [], errors: [] },
+    previousQcDiffPreviewHtml: '<p>Rendered previous QC diff</p>',
+  })
+
+  await page.goto('/create')
+  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByText('Create New QC').click()
+
+  const modal = page.getByRole('dialog', { name: 'Create QC Issue' })
+  await modal.getByRole('treeitem', { name: 'src' }).click()
+  await modal.getByRole('treeitem', { name: 'main.rs' }).click()
+
+  await modal.getByRole('tab', { name: 'Select Relevant Files' }).click()
+  await modal.getByText('Add Relevant File').click()
+
+  const picker = page.getByRole('dialog', { name: 'Add Relevant File' })
+  await picker.getByRole('treeitem', { name: 'src' }).click()
+  await picker.getByRole('treeitem', { name: /lib\.rs/ }).click()
+  await picker.getByLabel('Issue').click()
+  await page.getByRole('option', { name: /#10/ }).click()
+  await picker.getByLabel('Type').click()
+  await page.getByRole('option', { name: 'Previous QC' }).click()
+
+  await expect(picker.getByRole('button', { name: 'Preview Diff Comment' })).toBeVisible()
+  await picker.getByRole('button', { name: 'Preview Diff Comment' }).click()
+
+  const preview = page.getByRole('dialog', { name: 'Previous QC Diff Preview' })
+  await expect(preview).toBeVisible()
+  await expect(preview.getByTitle('Previous QC Diff Preview')).toBeVisible()
+})
+
 test('unsupported files show a file-type message during issue creation', async ({ page }) => {
   await setupRoutes(page, {
     issueStatuses: { results: [], errors: [] },

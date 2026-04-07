@@ -10,13 +10,15 @@ use std::{path::PathBuf, str::FromStr};
 
 use crate::api::state::AppState;
 use crate::api::types::{
-    ApproveRequest, CreateIssueRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest,
+    ApproveRequest, CreateIssueRequest, PreviousQCDiffPreviewRequest, RelevantIssueClass,
+    ReviewRequest, UnapproveRequest,
 };
 use crate::configuration::Checklist;
 use crate::create::{
     QCIssue, collaborator_override_for_policy, normalize_collaborator_entries, resolve_issue_people,
 };
-use crate::relevant_files::{RelevantFile, RelevantFileClass};
+use crate::issue::IssueThread;
+use crate::relevant_files::{PreviousQCDiffComment, RelevantFile, RelevantFileClass};
 use crate::{CommentBody, api::error::ApiError};
 use crate::{
     GitProvider, QCApprove, QCComment, QCReview, QCUnapprove, api::types::CreateCommentRequest,
@@ -259,6 +261,39 @@ pub async fn preview_comment<G: GitProvider + 'static>(
     };
 
     let markdown = qc_comment.generate_body(state.git_info());
+    let html = markdown_to_html(&markdown);
+
+    Ok(Html(html))
+}
+
+/// POST /api/preview/previous-qc-diff
+///
+/// Generates the Previous QC diff comment body as HTML without posting it.
+pub async fn preview_previous_qc_diff<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Json(request): Json<PreviousQCDiffPreviewRequest>,
+) -> Result<Html<String>, ApiError> {
+    let current_commit = ObjectId::from_str(&request.current_commit)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid current commit format: {e}")))?;
+
+    let prev_issue = state
+        .git_info()
+        .get_issue(request.previous_issue_number)
+        .await?;
+    let thread = IssueThread::from_issue(&prev_issue, None, state.git_info())
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to load previous QC issue thread: {e}")))?;
+
+    let diff_comment = PreviousQCDiffComment {
+        issue: prev_issue,
+        prev_file: PathBuf::from(&request.previous_file),
+        current_file: PathBuf::from(&request.current_file),
+        prev_commit: thread.latest_commit().hash,
+        current_commit,
+        prev_issue_number: request.previous_issue_number,
+    };
+
+    let markdown = diff_comment.generate_body(state.git_info());
     let html = markdown_to_html(&markdown);
 
     Ok(Html(html))

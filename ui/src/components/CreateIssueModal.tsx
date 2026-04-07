@@ -328,6 +328,8 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             <Tabs.Panel value="relevant">
               <RelevantFilesTab
                 relevantFiles={modal.relevantFiles}
+                currentFile={modal.selectedFile}
+                currentCommit={repoInfo?.local_commit ?? null}
                 onAdd={(draft) => setCreate((prev) => ({
                   ...prev,
                   modal: { ...prev.modal, relevantFiles: [...prev.modal.relevantFiles, draft] },

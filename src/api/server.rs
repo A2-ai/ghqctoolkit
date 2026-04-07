@@ -80,6 +80,10 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         // Previews
         .route("/api/preview/issue", post(preview::preview_issue))
         .route(
+            "/api/preview/previous-qc-diff",
+            post(preview::preview_previous_qc_diff),
+        )
+        .route(
             "/api/preview/{number}/comment",
             post(preview::preview_comment),
         )
