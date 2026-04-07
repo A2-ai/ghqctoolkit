@@ -17,9 +17,11 @@ interface Props {
   onRemove: (index: number) => void
   onUpdate: (index: number, draft: RelevantFileDraft) => void
   queuedItems: QueuedItem[]
+  currentFile: string | null
+  currentCommit: string | null
 }
 
-export function RelevantFilesTab({ relevantFiles, onAdd, onRemove, onUpdate, queuedItems }: Props) {
+export function RelevantFilesTab({ relevantFiles, onAdd, onRemove, onUpdate, queuedItems, currentFile, currentCommit }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const { data: allMilestones = [] } = useMilestones()
@@ -128,6 +130,8 @@ export function RelevantFilesTab({ relevantFiles, onAdd, onRemove, onUpdate, que
         alreadyAdded={alreadyAdded}
         isLoading={isLoading}
         editDraft={editDraft}
+        currentFile={currentFile}
+        currentCommit={currentCommit}
       />
     </>
   )

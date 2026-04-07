@@ -330,6 +330,29 @@ paths:
               schema:
                 type: string
 
+  /preview/previous-qc-diff:
+    post:
+      summary: Preview Previous QC diff comment as HTML
+      operationId: previewPreviousQcDiff
+      tags: [comments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviousQCDiffPreviewRequest'
+      responses:
+        '200':
+          description: Rendered HTML body of the Previous QC diff comment
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid current commit format
+        '404':
+          description: Previous QC issue or referenced file not found
+
   /preview/{number}/review:
     post:
       summary: Preview review comment body as HTML
@@ -582,7 +605,7 @@ paths:
   /files/content:
     get:
       summary: Get file content
-      description: Returns the raw text content of a file at the given path.
+      description: Returns the UTF-8 text content of a file at the given path, optionally resolved from a specific commit.
       operationId: getFileContent
       tags: [files]
       parameters:
@@ -592,6 +615,12 @@ paths:
           description: File path relative to repository root
           schema:
             type: string
+        - name: commit
+          in: query
+          required: false
+          description: Optional git commit hash to read from instead of the working tree
+          schema:
+            type: string
       responses:
         '200':
           description: File content
@@ -599,6 +628,42 @@ paths:
             text/plain:
               schema:
                 type: string
+        '400':
+          description: Invalid path, invalid commit, or file exists but is not valid UTF-8 text
+        '404':
+          description: File not found
+
+  /files/raw:
+    get:
+      summary: Get raw file bytes for preview
+      description: Returns the raw file bytes with an inline content type so the UI can embed previews such as PDFs, optionally resolved from a specific commit.
+      operationId: getFileRaw
+      tags: [files]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: File path relative to repository root
+          schema:
+            type: string
+        - name: commit
+          in: query
+          required: false
+          description: Optional git commit hash to read from instead of the working tree
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw file bytes
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
         '404':
           description: File not found
 
@@ -1277,6 +1342,23 @@ components:
         auto_stash:
           type: boolean
           default: true
+
+    PreviousQCDiffPreviewRequest:
+      type: object
+      required: [current_file, previous_file, previous_issue_number, current_commit]
+      properties:
+        current_file:
+          type: string
+          description: The file for the QC currently being created
+        previous_file:
+          type: string
+          description: The file referenced as Previous QC
+        previous_issue_number:
+          type: integer
+          description: Existing Previous QC issue number
+        current_commit:
+          type: string
+          description: Current repo commit used as the new QC initial commit
 
     ReviewStashResult:
       type: object

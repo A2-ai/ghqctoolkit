@@ -4,6 +4,7 @@ import type { ChecklistDraft } from '~/components/ChecklistTab'
 import type { CreateOutcome } from '~/components/CreateResultModal'
 import type { QueuedItem, RelevantFileDraft } from '~/components/CreateIssueModal'
 import type { FileResolution } from '~/components/FileResolveModal'
+import type { FilePreviewKind } from '~/api/preview'
 
 export type CreateMilestoneMode = 'select' | 'new'
 
@@ -27,6 +28,7 @@ export interface CreateIssueModalUiState {
   relevantFiles: RelevantFileDraft[]
   activeTab: string | null
   filePreviewOpen: boolean
+  filePreviewMode: FilePreviewKind | 'missing'
   filePreviewContent: string | null
   issuePreviewOpen: boolean
   issuePreviewHtml: string | null
@@ -114,6 +116,7 @@ const defaultCreateModalState: CreateIssueModalUiState = {
   relevantFiles: [],
   activeTab: 'file',
   filePreviewOpen: false,
+  filePreviewMode: 'text',
   filePreviewContent: null,
   issuePreviewOpen: false,
   issuePreviewHtml: null,
@@ -221,6 +224,7 @@ export function getDefaultCreateModalState(): CreateIssueModalUiState {
     relevantFiles: [],
     activeTab: 'file',
     filePreviewOpen: false,
+    filePreviewMode: 'text',
     filePreviewContent: null,
     issuePreviewOpen: false,
     issuePreviewHtml: null,

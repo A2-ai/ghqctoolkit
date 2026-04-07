@@ -197,6 +197,15 @@ pub struct ReviewRequest {
     pub auto_stash: bool,
 }
 
+/// Request to preview a Previous QC diff comment during issue creation.
+#[derive(Debug, Deserialize)]
+pub struct PreviousQCDiffPreviewRequest {
+    pub current_file: String,
+    pub previous_file: String,
+    pub previous_issue_number: u64,
+    pub current_commit: String,
+}
+
 fn default_true() -> bool {
     true
 }

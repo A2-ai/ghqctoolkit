@@ -437,6 +437,71 @@ test.describe('flatten toggle conflict detection', () => {
   })
 })
 
+test('archive preview button requests file content for the selected commit', async ({ page }) => {
+  const batch: BatchIssueStatusResponse = {
+    results: [statusA1],
+    errors: [],
+  }
+  let previewRequest: { path?: string; commit?: string | null } | null = null
+
+  await setupRoutes(page, {
+    milestones: [milestoneA],
+    milestoneIssues: { 10: [issueA1] },
+    issueStatuses: batch,
+  })
+
+  await page.route(/\/api\/files\/content/, async (route, request) => {
+    const url = new URL(request.url())
+    previewRequest = {
+      path: url.searchParams.get('path') ?? undefined,
+      commit: url.searchParams.get('commit'),
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/plain',
+      body: `preview for ${previewRequest.path} at ${previewRequest.commit}`,
+    })
+  })
+
+  await goToArchive(page)
+  await selectMilestone(page, 'Milestone A')
+  await waitForStatusLoaded(page)
+
+  await main(page).getByRole('button', { name: 'Preview' }).first().click()
+
+  const preview = page.getByRole('dialog', { name: 'src/utils.R' })
+  await expect(preview).toBeVisible()
+  await expect(preview.getByText('preview for src/utils.R at aaa1111')).toBeVisible()
+  expect(previewRequest).toEqual({ path: 'src/utils.R', commit: 'aaa1111' })
+})
+
+test('archive preview button embeds pdf previews at the selected commit', async ({ page }) => {
+  const pdfIssue = makeIssue({ number: 110, title: 'docs/report.pdf', milestone: 'Milestone A' })
+  const pdfStatus = makeStatus(pdfIssue)
+  const batch: BatchIssueStatusResponse = {
+    results: [pdfStatus],
+    errors: [],
+  }
+
+  await setupRoutes(page, {
+    milestones: [milestoneA],
+    milestoneIssues: { 10: [pdfIssue] },
+    issueStatuses: batch,
+  })
+
+  await goToArchive(page)
+  await selectMilestone(page, 'Milestone A')
+  await waitForStatusLoaded(page)
+
+  await main(page).getByRole('button', { name: 'Preview' }).first().click()
+
+  const preview = page.getByRole('dialog', { name: 'docs/report.pdf' })
+  await expect(preview).toBeVisible()
+  const iframe = preview.getByTitle('Archive PDF Preview')
+  await expect(iframe).toBeVisible()
+  await expect(iframe).toHaveAttribute('src', /\/api\/files\/raw\?path=docs%2Freport\.pdf&commit=aaa1111/)
+})
+
 test('archive tab preserves state across route changes until refresh', async ({ page }) => {
   const batch: BatchIssueStatusResponse = {
     results: [statusA1, statusA2, statusA3],

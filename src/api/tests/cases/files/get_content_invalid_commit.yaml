@@ -1,0 +1,18 @@
+name: "GET /api/files/content - invalid commit rejected"
+description: "Returns 400 when commit is not a valid object id"
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/files/content"
+  query:
+    path: "src/main.rs"
+    commit: "not-a-commit"
+
+response:
+  status: 400
+  body:
+    match_type: partial
+    fields:
+      error: "Invalid commit hash 'not-a-commit': A hash sized 12 hexadecimal characters is invalid"

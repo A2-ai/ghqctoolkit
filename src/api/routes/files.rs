@@ -2,9 +2,17 @@
 
 use axum::{
     Json,
+    body::Body,
     extract::{Query, State},
+    http::{
+        HeaderMap, HeaderValue,
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
+    },
+    response::Response,
 };
+use gix::ObjectId;
 use serde::Deserialize;
+use std::path::Path;
 
 use crate::GitProvider;
 use crate::api::error::ApiError;
@@ -19,13 +27,22 @@ pub struct FileTreeQuery {
     path: String,
 }
 
-/// GET /api/files/tree?path=
-pub async fn list_tree<G: GitProvider + 'static>(
-    State(state): State<AppState<G>>,
-    Query(query): Query<FileTreeQuery>,
-) -> Result<Json<FileTreeResponse>, ApiError> {
-    // Sanitize: trim leading/trailing slashes, reject `.` and `..` segments
-    let path = query.path.trim_matches('/').to_string();
+#[derive(Deserialize)]
+pub struct FileRawQuery {
+    path: String,
+    #[serde(default)]
+    commit: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FileContentQuery {
+    path: String,
+    #[serde(default)]
+    commit: Option<String>,
+}
+
+fn sanitize_repo_relative_path(raw_path: &str) -> Result<String, ApiError> {
+    let path = raw_path.trim_matches('/').to_string();
     for segment in path.split('/').filter(|s| !s.is_empty()) {
         if segment == ".." || segment == "." {
             return Err(ApiError::BadRequest(format!(
@@ -34,6 +51,40 @@ pub async fn list_tree<G: GitProvider + 'static>(
             )));
         }
     }
+    Ok(path)
+}
+
+fn preview_content_type(file_path: &Path) -> &'static str {
+    match file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("pdf") => "application/pdf",
+        Some("doc") => "application/msword",
+        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        _ => "application/octet-stream",
+    }
+}
+
+fn inline_content_disposition(path: &str) -> String {
+    let file_name = path.trim().trim_matches('/').replace(['/', '\\', '"'], "_");
+    let file_name = if file_name.is_empty() {
+        "preview".to_string()
+    } else {
+        file_name
+    };
+    format!("inline; filename=\"{file_name}\"")
+}
+
+/// GET /api/files/tree?path=
+pub async fn list_tree<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Query(query): Query<FileTreeQuery>,
+) -> Result<Json<FileTreeResponse>, ApiError> {
+    // Sanitize: trim leading/trailing slashes, reject `.` and `..` segments
+    let path = sanitize_repo_relative_path(&query.path)?;
 
     let git_info = state.git_info().clone();
     let path_for_task = path.clone();
@@ -74,15 +125,7 @@ pub async fn get_file_collaborators<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
     Query(query): Query<FileTreeQuery>,
 ) -> Result<Json<FileCollaboratorsResponse>, ApiError> {
-    let path = query.path.trim_matches('/').to_string();
-    for segment in path.split('/').filter(|s| !s.is_empty()) {
-        if segment == ".." || segment == "." {
-            return Err(ApiError::BadRequest(format!(
-                "Invalid path segment: '{}'",
-                segment
-            )));
-        }
-    }
+    let path = sanitize_repo_relative_path(&query.path)?;
 
     let configured_author = state.git_info().configured_author();
     let current_user = state.git_info().get_current_user().await.ok().flatten();
@@ -114,4 +157,131 @@ pub async fn get_file_collaborators<G: GitProvider + 'static>(
         author: Some(author),
         collaborators,
     }))
+}
+
+/// GET /api/files/content?path=<repo-relative path>&commit=<optional git hash>
+///
+/// Reads the file from the local filesystem or from a specific commit and returns its content as plain text.
+pub async fn get_file_content<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Query(query): Query<FileContentQuery>,
+) -> Result<String, ApiError> {
+    let path = sanitize_repo_relative_path(&query.path)?;
+    let bytes = if let Some(commit) = query.commit {
+        let commit = ObjectId::from_hex(commit.as_bytes()).map_err(|e| {
+            ApiError::BadRequest(format!("Invalid commit hash '{}': {}", commit, e))
+        })?;
+        let git_info = state.git_info().clone();
+        let path_for_task = path.clone();
+        tokio::task::spawn_blocking(move || {
+            git_info.file_bytes_at_commit(Path::new(&path_for_task), &commit)
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))?
+        .map_err(|e| match e {
+            GitFileOpsError::FileNotFoundAtCommit(file) => {
+                ApiError::NotFound(format!("File not found at commit: {}", file.display()))
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?
+    } else {
+        let repo_path = state.git_info().path().to_path_buf();
+        let file_path = repo_path.join(&path);
+        tokio::fs::read(&file_path)
+            .await
+            .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?
+    };
+
+    String::from_utf8(bytes).map_err(|_| {
+        ApiError::BadRequest(format!(
+            "File '{}' is not valid UTF-8 text and cannot be shown in the text preview",
+            path
+        ))
+    })
+}
+
+/// GET /api/files/raw?path=<repo-relative path>&commit=<optional git hash>
+///
+/// Reads the file from the local filesystem or a specific commit and returns its raw bytes with an inline content type.
+pub async fn get_file_raw<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Query(query): Query<FileRawQuery>,
+) -> Result<Response, ApiError> {
+    let path = sanitize_repo_relative_path(&query.path)?;
+    let repo_path = state.git_info().path().to_path_buf();
+    let file_path = repo_path.join(&path);
+    let bytes = if let Some(commit) = query.commit {
+        let commit = ObjectId::from_hex(commit.as_bytes()).map_err(|e| {
+            ApiError::BadRequest(format!("Invalid commit hash '{}': {}", commit, e))
+        })?;
+        let git_info = state.git_info().clone();
+        let path_for_task = path.clone();
+        tokio::task::spawn_blocking(move || {
+            git_info.file_bytes_at_commit(Path::new(&path_for_task), &commit)
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))?
+        .map_err(|e| match e {
+            GitFileOpsError::FileNotFoundAtCommit(file) => {
+                ApiError::NotFound(format!("File not found at commit: {}", file.display()))
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?
+    } else {
+        tokio::fs::read(&file_path)
+            .await
+            .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static(preview_content_type(&file_path)),
+    );
+    headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&inline_content_disposition(&path))
+            .map_err(|e| ApiError::Internal(format!("Invalid content disposition header: {e}")))?,
+    );
+
+    let mut response = Response::new(Body::from(bytes));
+    *response.headers_mut() = headers;
+    Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{inline_content_disposition, preview_content_type, sanitize_repo_relative_path};
+    use std::path::Path;
+
+    #[test]
+    fn sanitize_repo_relative_path_rejects_dot_segments() {
+        assert!(sanitize_repo_relative_path("../secret.txt").is_err());
+        assert!(sanitize_repo_relative_path("./secret.txt").is_err());
+        assert!(sanitize_repo_relative_path("safe/path.txt").is_ok());
+    }
+
+    #[test]
+    fn preview_content_type_recognizes_pdf_and_word_files() {
+        assert_eq!(
+            preview_content_type(Path::new("report.pdf")),
+            "application/pdf"
+        );
+        assert_eq!(
+            preview_content_type(Path::new("report.docx")),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(
+            preview_content_type(Path::new("report.bin")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn inline_content_disposition_sanitizes_filename() {
+        assert_eq!(
+            inline_content_disposition("unsafe\\name\".pdf"),
+            "inline; filename=\"unsafe_name_.pdf\""
+        );
+    }
 }
