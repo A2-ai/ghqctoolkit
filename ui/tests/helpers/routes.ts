@@ -226,8 +226,8 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
-  await page.route(/\/api\/files\/content/, (route) => {
-    route.fulfill({
+  await page.route(/\/api\/files\/content/, async (route) => {
+    await route.fulfill({
       status: 200,
       contentType: 'text/plain',
       body: '// mock file content',

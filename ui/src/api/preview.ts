@@ -11,8 +11,10 @@ export function getFilePreviewKind(path: string): FilePreviewKind {
   return 'text'
 }
 
-export function buildFileRawUrl(path: string): string {
-  return `${API_BASE}/files/raw?path=${encodeURIComponent(path)}`
+export function buildFileRawUrl(path: string, commit?: string | null): string {
+  const params = new URLSearchParams({ path })
+  if (commit) params.set('commit', commit)
+  return `${API_BASE}/files/raw?${params.toString()}`
 }
 
 export function getFileExtensionLabel(path: string): string {
@@ -20,16 +22,23 @@ export function getFileExtensionLabel(path: string): string {
   return ext ? `.${ext}` : 'this file type'
 }
 
-export async function ensureFileExists(path: string): Promise<void> {
-  const res = await fetch(buildFileRawUrl(path))
+export async function ensureFileExists(path: string, commit?: string | null): Promise<void> {
+  const res = await fetch(buildFileRawUrl(path, commit))
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to fetch file: ${res.status}`)
   }
 }
 
-export async function fetchFileContent(path: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/files/content?path=${encodeURIComponent(path)}`)
+export interface FileContentRequest {
+  path: string
+  commit?: string | null
+}
+
+export async function fetchFileContent({ path, commit }: FileContentRequest): Promise<string> {
+  const params = new URLSearchParams({ path })
+  if (commit) params.set('commit', commit)
+  const res = await fetch(`${API_BASE}/files/content?${params.toString()}`)
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error ?? `Failed to fetch file: ${res.status}`)

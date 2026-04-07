@@ -291,8 +291,13 @@ test('missing files show a not found message during issue creation', async ({ pa
     issueStatuses: { results: [], errors: [] },
   })
 
-  await page.route(/\/api\/files\/content\?path=src%2Fmain\.rs/, (route) => {
-    route.fulfill({
+  await page.route(/\/api\/files\/content/, async (route, request) => {
+    const url = new URL(request.url())
+    if (url.searchParams.get('path') !== 'src/main.rs') {
+      await route.continue()
+      return
+    }
+    await route.fulfill({
       status: 404,
       contentType: 'application/json',
       body: JSON.stringify({ error: 'File not found: src/main.rs' }),

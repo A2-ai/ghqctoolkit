@@ -582,7 +582,7 @@ paths:
   /files/content:
     get:
       summary: Get file content
-      description: Returns the UTF-8 text content of a file at the given path.
+      description: Returns the UTF-8 text content of a file at the given path, optionally resolved from a specific commit.
       operationId: getFileContent
       tags: [files]
       parameters:
@@ -590,6 +590,12 @@ paths:
           in: query
           required: true
           description: File path relative to repository root
+          schema:
+            type: string
+        - name: commit
+          in: query
+          required: false
+          description: Optional git commit hash to read from instead of the working tree
           schema:
             type: string
       responses:
@@ -600,14 +606,14 @@ paths:
               schema:
                 type: string
         '400':
-          description: File exists but is not valid UTF-8 text
+          description: Invalid path, invalid commit, or file exists but is not valid UTF-8 text
         '404':
           description: File not found
 
   /files/raw:
     get:
       summary: Get raw file bytes for preview
-      description: Returns the raw file bytes with an inline content type so the UI can embed previews such as PDFs.
+      description: Returns the raw file bytes with an inline content type so the UI can embed previews such as PDFs, optionally resolved from a specific commit.
       operationId: getFileRaw
       tags: [files]
       parameters:
@@ -615,6 +621,12 @@ paths:
           in: query
           required: true
           description: File path relative to repository root
+          schema:
+            type: string
+        - name: commit
+          in: query
+          required: false
+          description: Optional git commit hash to read from instead of the working tree
           schema:
             type: string
       responses:

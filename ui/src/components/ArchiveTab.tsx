@@ -7,6 +7,7 @@ import {
   Combobox,
   InputBase,
   Loader,
+  Modal,
   Stack,
   Text,
   TextInput,
@@ -17,6 +18,7 @@ import {
   IconAlertCircle,
   IconAlertTriangle,
   IconArrowBackUp,
+  IconEye,
   IconExclamationMark,
   IconX,
 } from '@tabler/icons-react'
@@ -39,6 +41,7 @@ import { RelevantFilesList } from './RelevantFilesList'
 import { extractIssueNumber } from '~/utils'
 import { ToggleField } from './ToggleField'
 import { useUiSession } from '~/state/uiSession'
+import { buildFileRawUrl, fetchFileContent, getFileExtensionLabel, getFilePreviewKind } from '~/api/preview'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -57,6 +60,12 @@ function basename(path: string): string {
 
 export function ArchiveTab() {
   const { archive, setArchive } = useUiSession()
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewTitle, setPreviewTitle] = useState<string | null>(null)
+  const [previewContent, setPreviewContent] = useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewKind, setPreviewKind] = useState<'text' | 'pdf' | 'unsupported'>('text')
 
   function handleEditResolve(resolution: FileResolution) {
     const { file_name } = resolution
@@ -318,6 +327,38 @@ export function ArchiveTab() {
       }
       return { ...prev, addedFiles: next }
     })
+  }
+
+  async function handlePreviewFile(fileName: string, commit: string) {
+    setPreviewLoading(true)
+    setPreviewTitle(fileName)
+    try {
+      const kind = getFilePreviewKind(fileName)
+      setPreviewKind(kind)
+      if (kind === 'pdf') {
+        setPreviewUrl(buildFileRawUrl(fileName, commit))
+        setPreviewContent(null)
+        setPreviewOpen(true)
+        return
+      }
+      if (kind !== 'text') {
+        setPreviewUrl(null)
+        setPreviewContent(`Preview is not available for ${getFileExtensionLabel(fileName)} files at a specific commit.`)
+        setPreviewOpen(true)
+        return
+      }
+      setPreviewUrl(null)
+      const content = await fetchFileContent({ path: fileName, commit })
+      setPreviewContent(content)
+      setPreviewOpen(true)
+    } catch (err) {
+      setPreviewUrl(null)
+      setPreviewKind('text')
+      setPreviewContent(`Error: ${(err as Error).message}`)
+      setPreviewOpen(true)
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
   // ─── Generation ──────────────────────────────────────────────────────────
@@ -595,23 +636,38 @@ export function ArchiveTab() {
                   <Tooltip key={`added-${fileName}`} label={conflict.reason} withArrow>
                     <Stack
                       gap={5}
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 6,
-                        border: '1px solid #ff8787',
-                        backgroundColor: '#ffe3e3',
-                        height: CARD_HEIGHT,
-                        overflowY: 'auto',
-                        minWidth: 0,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 6,
+                      border: '1px solid #ff8787',
+                      backgroundColor: '#ffe3e3',
+                      height: CARD_HEIGHT,
+                      overflowY: 'auto',
+                      minWidth: 0,
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                      <div style={{ display: 'grid', gap: 5 }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
                         <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>{fileName}</Text>
                         <ActionIcon size="xs" variant="transparent" color="dark" style={{ flexShrink: 0, marginTop: 1 }} onClick={() => setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } })} aria-label="Remove">
                           <IconX size={11} />
                         </ActionIcon>
+                        </div>
+                        <Text size="xs" c="dimmed"><b>Commit:</b> {res.commit ? res.commit.slice(0, 7) : '—'}</Text>
                       </div>
-                      <Text size="xs" c="dimmed"><b>Commit:</b> {res.commit ? res.commit.slice(0, 7) : '—'}</Text>
+                      <div>
+                        {res.commit && (
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            leftSection={<IconEye size={12} />}
+                            onClick={e => { e.stopPropagation(); void handlePreviewFile(fileName, res.commit) }}
+                          >
+                            Preview
+                          </Button>
+                        )}
+                      </div>
                     </Stack>
                   </Tooltip>
                 )
@@ -641,50 +697,63 @@ export function ArchiveTab() {
                       overflowY: 'auto',
                       minWidth: 0,
                       cursor: 'pointer',
+                      justifyContent: 'space-between',
                     }}
                     onClick={() => setArchive(prev => ({ ...prev, editFileModal: fileName }))}
                   >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
-                      <Anchor
-                        href={issueStatus.issue.html_url}
-                        target="_blank"
-                        size="sm"
-                        fw={700}
-                        style={{ wordBreak: 'break-all', flex: 1, minWidth: 0 }}
-                        onClick={e => e.stopPropagation()}
-                      >
-                        {issueStatus.issue.title}
-                      </Anchor>
-                      {!approved && (
-                        <Tooltip label="Not yet approved" withArrow>
-                          <span style={{ flexShrink: 0, marginTop: 2 }}>
-                            <IconAlertTriangle size={12} color="#f59f00" />
-                          </span>
-                        </Tooltip>
+                    <div style={{ display: 'grid', gap: 5 }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+                        <Anchor
+                          href={issueStatus.issue.html_url}
+                          target="_blank"
+                          size="sm"
+                          fw={700}
+                          style={{ wordBreak: 'break-all', flex: 1, minWidth: 0 }}
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {issueStatus.issue.title}
+                        </Anchor>
+                        {!approved && (
+                          <Tooltip label="Not yet approved" withArrow>
+                            <span style={{ flexShrink: 0, marginTop: 2 }}>
+                              <IconAlertTriangle size={12} color="#f59f00" />
+                            </span>
+                          </Tooltip>
+                        )}
+                        <ActionIcon
+                          size="xs"
+                          variant="transparent"
+                          color="dark"
+                          style={{ flexShrink: 0, marginTop: 1 }}
+                          onClick={e => { e.stopPropagation(); setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } }) }}
+                          aria-label="Remove"
+                        >
+                          <IconX size={11} />
+                        </ActionIcon>
+                      </div>
+                      {issueStatus.issue.milestone && (
+                        <Text size="xs" c="dimmed"><b>Milestone:</b> {issueStatus.issue.milestone}</Text>
                       )}
-                      <ActionIcon
-                        size="xs"
-                        variant="transparent"
-                        color="dark"
-                        style={{ flexShrink: 0, marginTop: 1 }}
-                        onClick={e => { e.stopPropagation(); setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } }) }}
-                        aria-label="Remove"
-                      >
-                        <IconX size={11} />
-                      </ActionIcon>
+                      <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
+                      <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
+                      <RelevantFilesList
+                        relevantFiles={issueStatus.issue.relevant_files ?? []}
+                        claimedFiles={claimedFiles}
+                        isFileClaimed={isFileClaimed}
+                        onSelectFile={handleSelectRelevantFile}
+                        onSelectAll={handleSelectAllRelevant}
+                      />
                     </div>
-                    {issueStatus.issue.milestone && (
-                      <Text size="xs" c="dimmed"><b>Milestone:</b> {issueStatus.issue.milestone}</Text>
-                    )}
-                    <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
-                    <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
-                    <RelevantFilesList
-                      relevantFiles={issueStatus.issue.relevant_files ?? []}
-                      claimedFiles={claimedFiles}
-                      isFileClaimed={isFileClaimed}
-                      onSelectFile={handleSelectRelevantFile}
-                      onSelectAll={handleSelectAllRelevant}
-                    />
+                    <div>
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        leftSection={<IconEye size={12} />}
+                        onClick={e => { e.stopPropagation(); void handlePreviewFile(fileName, commit) }}
+                      >
+                        Preview
+                      </Button>
+                    </div>
                   </Stack>
                 )
               }
@@ -724,6 +793,7 @@ export function ArchiveTab() {
                   key={`added-${fileName}`}
                   fileName={fileName}
                   commit={res.commit}
+                  onPreview={() => void handlePreviewFile(fileName, res.commit)}
                   onEdit={() => setArchive(prev => ({ ...prev, editFileModal: fileName }))}
                   onRemove={() => setArchive(prev => { const n = new Map(prev.addedFiles); n.delete(fileName); return { ...prev, addedFiles: n } })}
                 />
@@ -750,38 +820,51 @@ export function ArchiveTab() {
                     height: CARD_HEIGHT,
                     overflowY: 'auto',
                     minWidth: 0,
+                    justifyContent: 'space-between',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
-                    <Anchor
-                      href={s.issue.html_url}
-                      target="_blank"
-                      size="sm"
-                      fw={700}
-                      style={{ wordBreak: 'break-all', flex: 1, minWidth: 0 }}
-                    >
-                      {s.issue.title}
-                    </Anchor>
-                    {!approved && (
-                      <Tooltip label="Not yet approved" withArrow>
-                        <span style={{ flexShrink: 0, marginTop: 2 }}>
-                          <IconAlertTriangle size={12} color="#f59f00" />
-                        </span>
-                      </Tooltip>
+                  <div style={{ display: 'grid', gap: 5 }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+                      <Anchor
+                        href={s.issue.html_url}
+                        target="_blank"
+                        size="sm"
+                        fw={700}
+                        style={{ wordBreak: 'break-all', flex: 1, minWidth: 0 }}
+                      >
+                        {s.issue.title}
+                      </Anchor>
+                      {!approved && (
+                        <Tooltip label="Not yet approved" withArrow>
+                          <span style={{ flexShrink: 0, marginTop: 2 }}>
+                            <IconAlertTriangle size={12} color="#f59f00" />
+                          </span>
+                        </Tooltip>
+                      )}
+                    </div>
+                    {s.issue.milestone && (
+                      <Text size="xs" c="dimmed"><b>Milestone:</b> {s.issue.milestone}</Text>
                     )}
+                    <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
+                    <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
+                    <RelevantFilesList
+                      relevantFiles={s.issue.relevant_files ?? []}
+                      claimedFiles={claimedFiles}
+                      isFileClaimed={isFileClaimed}
+                      onSelectFile={handleSelectRelevantFile}
+                      onSelectAll={handleSelectAllRelevant}
+                    />
                   </div>
-                  {s.issue.milestone && (
-                    <Text size="xs" c="dimmed"><b>Milestone:</b> {s.issue.milestone}</Text>
-                  )}
-                  <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
-                  <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
-                  <RelevantFilesList
-                    relevantFiles={s.issue.relevant_files ?? []}
-                    claimedFiles={claimedFiles}
-                    isFileClaimed={isFileClaimed}
-                    onSelectFile={handleSelectRelevantFile}
-                    onSelectAll={handleSelectAllRelevant}
-                  />
+                  <div>
+                    <Button
+                      size="compact-xs"
+                      variant="light"
+                      leftSection={<IconEye size={12} />}
+                      onClick={() => void handlePreviewFile(s.issue.title, commit)}
+                    >
+                      Preview
+                    </Button>
+                  </div>
                 </Stack>
               )
             })}
@@ -817,6 +900,46 @@ export function ArchiveTab() {
           }}
         />
       )}
+
+      <Modal
+        opened={previewOpen}
+        onClose={() => {
+          setPreviewOpen(false)
+          setPreviewUrl(null)
+        }}
+        title={previewTitle ?? 'Archive File Preview'}
+        size={800}
+        centered
+      >
+        {previewLoading ? (
+          <div style={{ minHeight: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Loader size="sm" />
+          </div>
+        ) : previewKind === 'pdf' && previewUrl ? (
+          <iframe
+            src={previewUrl}
+            style={{ width: '100%', height: 500, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
+            title="Archive PDF Preview"
+          />
+        ) : (
+          <pre style={{
+            margin: 0,
+            maxHeight: 500,
+            overflow: 'auto',
+            padding: '12px 16px',
+            borderRadius: 6,
+            background: '#e9ecef',
+            color: '#212529',
+            fontFamily: 'monospace',
+            fontSize: 12,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}>
+            {previewContent ?? ''}
+          </pre>
+        )}
+      </Modal>
     </div>
   )
 }
@@ -828,12 +951,14 @@ function ResolvedFileCard({
   fileName,
   commit,
   via,
+  onPreview,
   onEdit,
   onRemove,
 }: {
   fileName: string
   commit: string
   via?: { title: string; html_url: string }
+  onPreview: () => void
   onEdit: () => void
   onRemove: () => void
 }) {
@@ -849,33 +974,46 @@ function ResolvedFileCard({
         overflowY: 'auto',
         minWidth: 0,
         cursor: 'pointer',
+        justifyContent: 'space-between',
       }}
       onClick={onEdit}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-        <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
-          {fileName}
-        </Text>
-        <ActionIcon
-          size="xs"
-          variant="transparent"
-          color="dark"
-          style={{ flexShrink: 0, marginTop: 1 }}
-          onClick={e => { e.stopPropagation(); onRemove() }}
-          aria-label="Remove"
-        >
-          <IconX size={11} />
-        </ActionIcon>
+      <div style={{ display: 'grid', gap: 5 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+          <Text size="sm" fw={700} style={{ wordBreak: 'break-all', flex: 1 }}>
+            {fileName}
+          </Text>
+          <ActionIcon
+            size="xs"
+            variant="transparent"
+            color="dark"
+            style={{ flexShrink: 0, marginTop: 1 }}
+            onClick={e => { e.stopPropagation(); onRemove() }}
+            aria-label="Remove"
+          >
+            <IconX size={11} />
+          </ActionIcon>
+        </div>
+        {via && (
+          <Text size="xs" c="dimmed">
+            <b>Via:</b>{' '}
+            <Anchor href={via.html_url} target="_blank" size="xs" onClick={e => e.stopPropagation()}>
+              {via.title}
+            </Anchor>
+          </Text>
+        )}
+        <Text size="xs" c="dimmed"><b>Commit:</b> {commit.slice(0, 7)}</Text>
       </div>
-      {via && (
-        <Text size="xs" c="dimmed">
-          <b>Via:</b>{' '}
-          <Anchor href={via.html_url} target="_blank" size="xs" onClick={e => e.stopPropagation()}>
-            {via.title}
-          </Anchor>
-        </Text>
-      )}
-      <Text size="xs" c="dimmed"><b>Commit:</b> {commit.slice(0, 7)}</Text>
+      <div>
+        <Button
+          size="compact-xs"
+          variant="light"
+          leftSection={<IconEye size={12} />}
+          onClick={e => { e.stopPropagation(); onPreview() }}
+        >
+          Preview
+        </Button>
+      </div>
     </Stack>
   )
 }

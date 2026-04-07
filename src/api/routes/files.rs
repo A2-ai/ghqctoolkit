@@ -10,6 +10,7 @@ use axum::{
     },
     response::Response,
 };
+use gix::ObjectId;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -24,6 +25,20 @@ use crate::git::GitFileOpsError;
 pub struct FileTreeQuery {
     #[serde(default)]
     path: String,
+}
+
+#[derive(Deserialize)]
+pub struct FileRawQuery {
+    path: String,
+    #[serde(default)]
+    commit: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FileContentQuery {
+    path: String,
+    #[serde(default)]
+    commit: Option<String>,
 }
 
 fn sanitize_repo_relative_path(raw_path: &str) -> Result<String, ApiError> {
@@ -144,20 +159,38 @@ pub async fn get_file_collaborators<G: GitProvider + 'static>(
     }))
 }
 
-/// GET /api/files/content?path=<repo-relative path>
+/// GET /api/files/content?path=<repo-relative path>&commit=<optional git hash>
 ///
-/// Reads the file from the local filesystem and returns its content as plain text.
+/// Reads the file from the local filesystem or from a specific commit and returns its content as plain text.
 pub async fn get_file_content<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
-    Query(query): Query<FileTreeQuery>,
+    Query(query): Query<FileContentQuery>,
 ) -> Result<String, ApiError> {
     let path = sanitize_repo_relative_path(&query.path)?;
-    let repo_path = state.git_info().path().to_path_buf();
-    let file_path = repo_path.join(&path);
-
-    let bytes = tokio::fs::read(&file_path)
+    let bytes = if let Some(commit) = query.commit {
+        let commit = ObjectId::from_hex(commit.as_bytes()).map_err(|e| {
+            ApiError::BadRequest(format!("Invalid commit hash '{}': {}", commit, e))
+        })?;
+        let git_info = state.git_info().clone();
+        let path_for_task = path.clone();
+        tokio::task::spawn_blocking(move || {
+            git_info.file_bytes_at_commit(Path::new(&path_for_task), &commit)
+        })
         .await
-        .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?;
+        .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))?
+        .map_err(|e| match e {
+            GitFileOpsError::FileNotFoundAtCommit(file) => {
+                ApiError::NotFound(format!("File not found at commit: {}", file.display()))
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?
+    } else {
+        let repo_path = state.git_info().path().to_path_buf();
+        let file_path = repo_path.join(&path);
+        tokio::fs::read(&file_path)
+            .await
+            .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?
+    };
 
     String::from_utf8(bytes).map_err(|_| {
         ApiError::BadRequest(format!(
@@ -167,20 +200,38 @@ pub async fn get_file_content<G: GitProvider + 'static>(
     })
 }
 
-/// GET /api/files/raw?path=<repo-relative path>
+/// GET /api/files/raw?path=<repo-relative path>&commit=<optional git hash>
 ///
-/// Reads the file from the local filesystem and returns its raw bytes with an inline content type.
+/// Reads the file from the local filesystem or a specific commit and returns its raw bytes with an inline content type.
 pub async fn get_file_raw<G: GitProvider + 'static>(
     State(state): State<AppState<G>>,
-    Query(query): Query<FileTreeQuery>,
+    Query(query): Query<FileRawQuery>,
 ) -> Result<Response, ApiError> {
     let path = sanitize_repo_relative_path(&query.path)?;
     let repo_path = state.git_info().path().to_path_buf();
     let file_path = repo_path.join(&path);
-
-    let bytes = tokio::fs::read(&file_path)
+    let bytes = if let Some(commit) = query.commit {
+        let commit = ObjectId::from_hex(commit.as_bytes()).map_err(|e| {
+            ApiError::BadRequest(format!("Invalid commit hash '{}': {}", commit, e))
+        })?;
+        let git_info = state.git_info().clone();
+        let path_for_task = path.clone();
+        tokio::task::spawn_blocking(move || {
+            git_info.file_bytes_at_commit(Path::new(&path_for_task), &commit)
+        })
         .await
-        .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?;
+        .map_err(|e| ApiError::Internal(format!("Blocking task failed: {}", e)))?
+        .map_err(|e| match e {
+            GitFileOpsError::FileNotFoundAtCommit(file) => {
+                ApiError::NotFound(format!("File not found at commit: {}", file.display()))
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?
+    } else {
+        tokio::fs::read(&file_path)
+            .await
+            .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?
+    };
 
     let mut headers = HeaderMap::new();
     headers.insert(

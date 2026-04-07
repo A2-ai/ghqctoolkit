@@ -130,7 +130,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
     }
     setFilePreviewLoading(true)
     try {
-      const content = await fetchFileContent(modal.selectedFile)
+      const content = await fetchFileContent({ path: modal.selectedFile })
       setCreate((prev) => ({
         ...prev,
         modal: { ...prev.modal, filePreviewMode: 'text', filePreviewContent: content, filePreviewOpen: true },
