@@ -5,7 +5,7 @@ expression: body
 # Previous QC
 
 ## Metadata
-* previous qc issue: [#1: src/old.R](https://github.com/owner/repo/issues/42)
+* previous qc issue: [#42: src/old.R](https://github.com/owner/repo/issues/42)
 * [file at latest qc commit](https://github.com/owner/repo/blob/aaaaaaa/src/old.R)
 * latest qc commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 * new qc initial qc commit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
