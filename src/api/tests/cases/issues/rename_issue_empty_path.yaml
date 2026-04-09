@@ -1,0 +1,19 @@
+name: "POST /api/issues/{number}/rename - empty path rejected"
+description: "Rename with empty new_path returns 400"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "scripts/old_file.R"
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/1/rename"
+  body:
+    new_path: "   "
+
+response:
+  status: 400

@@ -220,6 +220,17 @@ fn validate_write_calls(
             ExpectedWriteCall::StashFile { file, position } => {
                 (WriteCall::StashFile { file: file.clone() }, position)
             }
+            ExpectedWriteCall::UpdateIssue {
+                issue_number,
+                new_title,
+                position,
+            } => (
+                WriteCall::UpdateIssue {
+                    issue_number: *issue_number,
+                    new_title: new_title.clone(),
+                },
+                position,
+            ),
         };
 
         // Check if call exists

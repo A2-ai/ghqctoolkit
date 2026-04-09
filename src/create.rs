@@ -1300,6 +1300,15 @@ mod tests {
                 }
             }
         }
+
+        fn update_issue(
+            &self,
+            _issue_number: u64,
+            _new_title: Option<String>,
+            _new_body: Option<String>,
+        ) -> impl std::future::Future<Output = Result<(), GitHubApiError>> + Send {
+            async move { Err(GitHubApiError::NoApi) }
+        }
     }
 
     impl GitHubReader for MockGitInfo {

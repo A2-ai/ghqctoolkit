@@ -320,6 +320,13 @@ pub enum ExpectedWriteCall {
         #[serde(default)]
         position: Option<CallPosition>,
     },
+    UpdateIssue {
+        issue_number: u64,
+        #[serde(default)]
+        new_title: Option<String>,
+        #[serde(default)]
+        position: Option<CallPosition>,
+    },
 }
 
 /// Position assertion for write calls

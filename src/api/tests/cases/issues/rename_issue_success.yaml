@@ -1,0 +1,31 @@
+name: "POST /api/issues/{number}/rename - success"
+description: "Rename an issue by updating its title and body"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "scripts/old_file.R"
+      body: |
+        ## Metadata
+        initial qc commit: abc1234567890abcdef1234567890abcdef12340
+        git branch: main
+        author: Test User
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/1/rename"
+  body:
+    new_path: "scripts/new_file.R"
+
+response:
+  status: 204
+
+assert_write_calls:
+  - type: UpdateIssue
+    issue_number: 1
+    new_title: "scripts/new_file.R"
+  - type: PostComment
+    comment_type: "ghqctoolkit::api::routes::issues::RenameComment"

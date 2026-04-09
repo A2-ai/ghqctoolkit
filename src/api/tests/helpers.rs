@@ -35,6 +35,10 @@ pub enum WriteCall {
     StashFile {
         file: String,
     },
+    UpdateIssue {
+        issue_number: u64,
+        new_title: Option<String>,
+    },
 }
 
 /// Mock implementation of all git traits for testing.
@@ -622,6 +626,31 @@ impl GitHubWriter for MockGitInfo {
             .lock()
             .unwrap()
             .push(WriteCall::OpenIssue { issue_number });
+        Ok(())
+    }
+
+    async fn update_issue(
+        &self,
+        issue_number: u64,
+        new_title: Option<String>,
+        new_body: Option<String>,
+    ) -> Result<(), GitHubApiError> {
+        self.write_calls
+            .lock()
+            .unwrap()
+            .push(WriteCall::UpdateIssue {
+                issue_number,
+                new_title: new_title.clone(),
+            });
+        // Also update the issue in the mock store so subsequent reads see the new title
+        if let Some(title) = new_title {
+            if let Ok(mut issues) = self.issues.lock() {
+                if let Some(issue) = issues.get_mut(&issue_number) {
+                    issue.title = title;
+                }
+            }
+        }
+        let _ = new_body; // body update tracked via write call only
         Ok(())
     }
 

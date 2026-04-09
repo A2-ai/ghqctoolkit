@@ -1768,4 +1768,167 @@ author: test"#;
         let result = determine_relationship_from_body(body, 123);
         assert_eq!(result, BlockingRelationship::Unknown);
     }
+
+    // ── parse_file_history ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_file_history_no_section() {
+        let body = "## Metadata\nsome content\n";
+        let events = parse_file_history(body);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_history_single_event() {
+        let body = "## File History\n* `old/path.R` → `new/path.R` (commit: abc1234)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].old_path, "old/path.R");
+        assert_eq!(events[0].new_path, "new/path.R");
+        assert_eq!(events[0].commit, "abc1234");
+    }
+
+    #[test]
+    fn test_parse_file_history_multiple_events() {
+        let body = "## File History\n\
+            * `a.R` → `b.R` (commit: 111aaaa)\n\
+            * `b.R` → `c.R` (commit: 222bbbb)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].old_path, "a.R");
+        assert_eq!(events[0].new_path, "b.R");
+        assert_eq!(events[0].commit, "111aaaa");
+        assert_eq!(events[1].old_path, "b.R");
+        assert_eq!(events[1].new_path, "c.R");
+        assert_eq!(events[1].commit, "222bbbb");
+    }
+
+    #[test]
+    fn test_parse_file_history_malformed_lines_skipped() {
+        let body = "## File History\n\
+            * `good.R` → `better.R` (commit: abc0001)\n\
+            * malformed line without backticks\n\
+            * `missing_arrow.R` something wrong\n\
+            * `also_good.R` → `also_better.R` (commit: abc0002)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].old_path, "good.R");
+        assert_eq!(events[1].old_path, "also_good.R");
+    }
+
+    #[test]
+    fn test_parse_file_history_terminates_at_next_section() {
+        let body = "## File History\n\
+            * `old.R` → `new.R` (commit: abc1234)\n\
+            ## Other Section\n\
+            * `should_not.R` → `be_parsed.R` (commit: 000000)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].old_path, "old.R");
+    }
+
+    // ── file_history_section ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_file_history_section_empty_slice() {
+        let section = file_history_section(&[]);
+        assert_eq!(section, "## File History\n");
+    }
+
+    #[test]
+    fn test_file_history_section_single_event() {
+        let events = vec![FileRenameEvent {
+            old_path: "src/old.R".to_string(),
+            new_path: "src/new.R".to_string(),
+            commit: "deadbeef".to_string(),
+        }];
+        let section = file_history_section(&events);
+        assert_eq!(section, "## File History\n* `src/old.R` → `src/new.R` (commit: deadbeef)\n");
+    }
+
+    #[test]
+    fn test_file_history_section_multiple_events() {
+        let events = vec![
+            FileRenameEvent {
+                old_path: "a.R".to_string(),
+                new_path: "b.R".to_string(),
+                commit: "aaa1111".to_string(),
+            },
+            FileRenameEvent {
+                old_path: "b.R".to_string(),
+                new_path: "c.R".to_string(),
+                commit: "bbb2222".to_string(),
+            },
+        ];
+        let section = file_history_section(&events);
+        assert!(section.starts_with("## File History\n"));
+        assert!(section.contains("* `a.R` → `b.R` (commit: aaa1111)\n"));
+        assert!(section.contains("* `b.R` → `c.R` (commit: bbb2222)\n"));
+    }
+
+    // ── find_checklist_start ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_find_checklist_start_finds_h1() {
+        let body = "## Metadata\nsome text\n# Checklist\n- item\n";
+        let pos = find_checklist_start(body);
+        assert!(pos.is_some());
+        let offset = pos.unwrap();
+        assert!(body[offset..].starts_with("# Checklist"));
+    }
+
+    #[test]
+    fn test_find_checklist_start_only_h2_returns_none() {
+        let body = "## Metadata\n## File History\n## Another\n";
+        let pos = find_checklist_start(body);
+        assert!(pos.is_none());
+    }
+
+    #[test]
+    fn test_find_checklist_start_empty_body() {
+        let pos = find_checklist_start("");
+        assert!(pos.is_none());
+    }
+
+    // ── splice_file_history ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_splice_file_history_no_section_with_checklist() {
+        let body = "## Metadata\nsome text\n\n# Checklist\n- [ ] item\n";
+        let history = "## File History\n* `old.R` → `new.R` (commit: abc)\n";
+        let result = splice_file_history(body, history);
+        // History must appear before the checklist
+        let history_pos = result.find("## File History").expect("history missing");
+        let checklist_pos = result.find("# Checklist").expect("checklist missing");
+        assert!(history_pos < checklist_pos);
+    }
+
+    #[test]
+    fn test_splice_file_history_no_section_no_checklist() {
+        let body = "## Metadata\nsome text\n";
+        let history = "## File History\n* `old.R` → `new.R` (commit: abc)\n";
+        let result = splice_file_history(body, history);
+        // History appended at end
+        assert!(result.contains("## File History"));
+        assert!(result.ends_with("## File History\n* `old.R` → `new.R` (commit: abc)"));
+    }
+
+    #[test]
+    fn test_splice_file_history_replaces_existing_section() {
+        let body = "## Metadata\nsome text\n\n## File History\n* `old.R` → `mid.R` (commit: 111)\n\n# Checklist\n- [ ] item\n";
+        let new_history = "## File History\n* `old.R` → `mid.R` (commit: 111)\n* `mid.R` → `new.R` (commit: 222)\n";
+        let result = splice_file_history(body, new_history);
+        // Only one File History section
+        assert_eq!(result.matches("## File History").count(), 1);
+        assert!(result.contains("commit: 222"));
+    }
+
+    #[test]
+    fn test_splice_file_history_existing_section_at_end() {
+        let body = "## Metadata\nsome text\n\n## File History\n* `old.R` → `new.R` (commit: abc)\n";
+        let new_history = "## File History\n* `old.R` → `new.R` (commit: abc)\n* `new.R` → `newest.R` (commit: def)\n";
+        let result = splice_file_history(body, new_history);
+        assert_eq!(result.matches("## File History").count(), 1);
+        assert!(result.contains("commit: def"));
+    }
 }
