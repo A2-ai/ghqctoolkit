@@ -19,6 +19,7 @@ import {
   Group,
   Loader,
   Modal,
+  ScrollArea,
   Stack,
   Tabs,
   Text,
@@ -374,11 +375,11 @@ function CommitIssueStep({
                   </Text>
                 ) : (
                   <>
-                    <div style={{ overflowX: 'auto', overflowY: 'visible' }}>
+                    <ScrollArea scrollbars="x" type="always" offsetScrollbars>
                       <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32) }}>
                         <CommitSlider commits={visibleCommits} value={commitIdx} onChange={setCommitIdx} mb={40} />
                       </div>
-                    </div>
+                    </ScrollArea>
                     {visibleCommits[commitIdx] && (
                       <Text size="xs" c="dimmed" ff="monospace" style={{ wordBreak: 'break-all' }}>
                         {visibleCommits[commitIdx].message}

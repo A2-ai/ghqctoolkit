@@ -9,6 +9,7 @@ import {
   Checkbox,
   Group,
   Modal,
+  ScrollArea,
   Slider,
   Stack,
   Tabs,
@@ -262,7 +263,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
           </div>
 
           {/* Dots row + two independent overlaid sliders */}
-          <div style={{ overflowX: 'auto', overflowY: 'visible', marginLeft: -16, marginRight: -16 }}>
+          <ScrollArea scrollbars="x" type="always" offsetScrollbars style={{ marginLeft: -16, marginRight: -16 }}>
           <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
             <div style={{ position: 'relative', height: 8 }}>
               {visibleCommits.map((c, i) => {
@@ -309,7 +310,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               )}
             </div>
           </div>
-          </div>
+          </ScrollArea>
 
           {/* Legend */}
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
