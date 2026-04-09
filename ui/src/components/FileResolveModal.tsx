@@ -374,7 +374,11 @@ function CommitIssueStep({
                   </Text>
                 ) : (
                   <>
-                    <CommitSlider commits={visibleCommits} value={commitIdx} onChange={setCommitIdx} mb={40} />
+                    <div style={{ overflowX: 'auto', overflowY: 'visible' }}>
+                      <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32) }}>
+                        <CommitSlider commits={visibleCommits} value={commitIdx} onChange={setCommitIdx} mb={40} />
+                      </div>
+                    </div>
                     {visibleCommits[commitIdx] && (
                       <Text size="xs" c="dimmed" ff="monospace" style={{ wordBreak: 'break-all' }}>
                         {visibleCommits[commitIdx].message}
