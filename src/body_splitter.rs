@@ -5,8 +5,6 @@
 //! multiple sequential parts, repeating the metadata header on each part and
 //! injecting a `(i/N)` label into the leading heading.
 
-pub const GITHUB_LIMIT: usize = 65536;
-
 /// Conservative threshold that leaves headroom for part labels.
 const SAFE_LIMIT: usize = 65200;
 
@@ -79,11 +77,7 @@ pub fn split_comment_body(title: &str, body: String) -> Vec<String> {
 
     // Available characters for the inner diff content (between code fences) per part
     let per_part_budget = SAFE_LIMIT.saturating_sub(
-        header.len()
-            + MAX_LABEL_LEN
-            + DIFF_MARKER.len()
-            + details_overhead
-            + CODE_FENCE_OVERHEAD,
+        header.len() + MAX_LABEL_LEN + DIFF_MARKER.len() + details_overhead + CODE_FENCE_OVERHEAD,
     );
 
     // Strip code fences to get the raw inner diff lines
@@ -452,7 +446,9 @@ mod tests {
         // Build a body that will exceed SAFE_LIMIT by having many large hunks
         let big_line = "  ".to_string() + &"x".repeat(1000);
         let hunk_lines: Vec<&str> = std::iter::repeat(big_line.as_str()).take(20).collect();
-        let hunks: Vec<String> = (0..80).map(|i| make_hunk(i * 25, i * 25, &hunk_lines)).collect();
+        let hunks: Vec<String> = (0..80)
+            .map(|i| make_hunk(i * 25, i * 25, &hunk_lines))
+            .collect();
         let diff = make_text_diff(&hunks);
         let body = make_comment_body("QC Notification", &diff);
 
@@ -478,7 +474,9 @@ mod tests {
     fn text_diff_no_hunk_split_across_parts() {
         let big_line = "  ".to_string() + &"x".repeat(1000);
         let hunk_lines: Vec<&str> = std::iter::repeat(big_line.as_str()).take(20).collect();
-        let hunks: Vec<String> = (0..80).map(|i| make_hunk(i * 25, i * 25, &hunk_lines)).collect();
+        let hunks: Vec<String> = (0..80)
+            .map(|i| make_hunk(i * 25, i * 25, &hunk_lines))
+            .collect();
         let diff = make_text_diff(&hunks);
         let body = make_comment_body("QC Notification", &diff);
 
@@ -500,7 +498,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(seen, all_hunk_headers.len(), "Every hunk should appear exactly once");
+        assert_eq!(
+            seen,
+            all_hunk_headers.len(),
+            "Every hunk should appear exactly once"
+        );
     }
 
     // ── Excel sheet splitting ─────────────────────────────────────────────────
@@ -513,19 +515,28 @@ mod tests {
             "- Sheet removed: OldSheet\n@@ Sheet: Sheet1 @@\n{}\n@@ Sheet: Sheet2 @@\n{}",
             sheet_content, sheet_content
         );
-        let diff = format!("{}{}{}","```diff\n", inner, "\n```");
+        let diff = format!("{}{}{}", "```diff\n", inner, "\n```");
         let body = make_comment_body("QC Notification", &diff);
 
         let parts = split_comment_body("QC Notification", body);
-        assert!(parts.len() > 1, "Expected Excel diff to be split across parts");
+        assert!(
+            parts.len() > 1,
+            "Expected Excel diff to be split across parts"
+        );
 
         // Preamble should only be in the first part
         let first_part_diff = parts[0].split("## File Difference\n").nth(1).unwrap_or("");
         assert!(first_part_diff.contains("Sheet removed: OldSheet"));
 
         // Each sheet marker should appear in exactly one part
-        let sheet1_count = parts.iter().filter(|p| p.contains("@@ Sheet: Sheet1 @@")).count();
-        let sheet2_count = parts.iter().filter(|p| p.contains("@@ Sheet: Sheet2 @@")).count();
+        let sheet1_count = parts
+            .iter()
+            .filter(|p| p.contains("@@ Sheet: Sheet1 @@"))
+            .count();
+        let sheet2_count = parts
+            .iter()
+            .filter(|p| p.contains("@@ Sheet: Sheet2 @@"))
+            .count();
         assert_eq!(sheet1_count, 1);
         assert_eq!(sheet2_count, 1);
     }
@@ -558,11 +569,11 @@ mod tests {
     fn details_wrapper_preserved_on_each_part() {
         let big_line = "  ".to_string() + &"z".repeat(1000);
         let hunk_lines: Vec<&str> = std::iter::repeat(big_line.as_str()).take(20).collect();
-        let hunks: Vec<String> = (0..80).map(|i| make_hunk(i * 25, i * 25, &hunk_lines)).collect();
+        let hunks: Vec<String> = (0..80)
+            .map(|i| make_hunk(i * 25, i * 25, &hunk_lines))
+            .collect();
         let inner_diff = make_text_diff(&hunks);
-        let wrapped_diff = format!(
-            "{}{}{}", DETAILS_PREFIX, inner_diff, DETAILS_SUFFIX
-        );
+        let wrapped_diff = format!("{}{}{}", DETAILS_PREFIX, inner_diff, DETAILS_SUFFIX);
         let body = make_comment_body("Previous QC", &wrapped_diff);
 
         let parts = split_comment_body("Previous QC", body);
@@ -585,12 +596,19 @@ mod tests {
     #[test]
     fn header_over_limit_returns_original() {
         // Craft a header that's larger than SAFE_LIMIT
-        let giant_header = format!("# QC Notification\n\n## Metadata\n* note: {}", "x".repeat(SAFE_LIMIT));
+        let giant_header = format!(
+            "# QC Notification\n\n## Metadata\n* note: {}",
+            "x".repeat(SAFE_LIMIT)
+        );
         let diff = "```diff\n+ changed\n```".to_string();
         let body = format!("{}\n\n## File Difference\n{}", giant_header, diff);
 
         let parts = split_comment_body("QC Notification", body.clone());
-        assert_eq!(parts.len(), 1, "Should return original body when header alone exceeds limit");
+        assert_eq!(
+            parts.len(),
+            1,
+            "Should return original body when header alone exceeds limit"
+        );
         assert_eq!(parts[0], body);
     }
 
@@ -598,7 +616,8 @@ mod tests {
 
     #[test]
     fn issue_body_metadata_repeats_on_continuations() {
-        let metadata = "## Metadata\n* initial qc commit: abc123\n* git branch: main\n* author: wes";
+        let metadata =
+            "## Metadata\n* initial qc commit: abc123\n* git branch: main\n* author: wes";
         let checklist = format!("# Big Checklist\n{}", "- [ ] item\n".repeat(5000));
         let body = format!("{}\n\n{}", metadata, checklist);
 
