@@ -1,3 +1,11 @@
+# v0.6.0 - April 9, 2026
+## New Features
+* File rename tracking: after issue creation, the UI detects when the associated file has been renamed and prompts to update the issue link; a `ghqc rename` CLI command is also available
+
+## Improvements
+* GitHub comment body splitting: issue bodies and review comments that exceed GitHub's character limit are automatically split into multiple comments
+* Commit history in the issue detail view is now scrollable, with the most recent commit shown by default
+
 # v0.5.0 - April 7, 2026
 ## New Features
 * File preview in the Create and Archive tabs: text, PDF, and Word files can be previewed inline; unsupported file types show a descriptive message
