@@ -264,7 +264,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
           {/* Dots row + two independent overlaid sliders */}
           <ScrollArea scrollbars="x" type="always" offsetScrollbars style={{ marginLeft: -16, marginRight: -16 }}>
-          <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
+          <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
             <div style={{ position: 'relative', height: 8 }}>
               {visibleCommits.map((c, i) => {
                 const n = visibleCommits.length
@@ -618,28 +618,30 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
-            <div style={{ position: 'relative', height: 8 }}>
-              {visibleCommits.map((c, i) => {
-                const n = visibleCommits.length
-                const pct = n > 1 ? i / (n - 1) : 0.5
-                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                return (
-                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
+          <ScrollArea scrollbars="x" type="always" offsetScrollbars style={{ marginLeft: -16, marginRight: -16 }}>
+            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
+              <div style={{ position: 'relative', height: 8 }}>
+                {visibleCommits.map((c, i) => {
+                  const n = visibleCommits.length
+                  const pct = n > 1 ? i / (n - 1) : 0.5
+                  const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                  return (
+                    <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
+                      {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
+                        <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
 
-            <CommitSlider
-              commits={visibleCommits}
-              value={sliderIdx}
-              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-            />
-          </div>
+              <CommitSlider
+                commits={visibleCommits}
+                value={sliderIdx}
+                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+              />
+            </div>
+          </ScrollArea>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
             {STATUS_ORDER.map((s) => (
@@ -915,28 +917,30 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16 }}>
-            <div style={{ position: 'relative', height: 8 }}>
-              {visibleCommits.map((c, i) => {
-                const n = visibleCommits.length
-                const pct = n > 1 ? i / (n - 1) : 0.5
-                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                return (
-                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
+          <ScrollArea scrollbars="x" type="always" offsetScrollbars style={{ marginLeft: -16, marginRight: -16 }}>
+            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
+              <div style={{ position: 'relative', height: 8 }}>
+                {visibleCommits.map((c, i) => {
+                  const n = visibleCommits.length
+                  const pct = n > 1 ? i / (n - 1) : 0.5
+                  const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                  return (
+                    <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
+                      {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
+                        <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
 
-            <CommitSlider
-              commits={visibleCommits}
-              value={sliderIdx}
-              onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-            />
-          </div>
+              <CommitSlider
+                commits={visibleCommits}
+                value={sliderIdx}
+                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
+              />
+            </div>
+          </ScrollArea>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
             {STATUS_ORDER.map((s) => (
