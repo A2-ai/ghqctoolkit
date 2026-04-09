@@ -67,6 +67,19 @@ ghqc issue status --milestone "Milestone 1" --file scripts/file_1.qmd
 | `Approved` | Issue has been approved and closed |
 | `Changes After Approval` | File changed after approval was given |
 
+## File Rename Alerts
+
+If `ghqc` detects that a file tracked by an open issue has been renamed in a committed change, it prints a warning before the status output:
+
+```shell
+⚠️  Detected 1 file rename(s):
+  `scripts/file_b.R` → `scripts/file_b_renamed.R` (issue #42)
+  Run `ghqc issue rename` to confirm.
+```
+
+Run [`ghqc issue rename`](issue-rename.md) to update the issue title and record the rename in the issue body.
+
 ## See Also
 
 - [`ghqc milestone status`](milestone-status.md) — tabular summary across multiple milestones
+- [`ghqc issue rename`](issue-rename.md) — confirm a detected file rename

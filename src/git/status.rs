@@ -333,6 +333,158 @@ impl GitStatusOps for GitInfo {
     }
 }
 
+/// Check whether a file path is tracked in the current git index of `repo_path`.
+///
+/// Uses `git ls-files <path>` — empty stdout means the file is untracked/deleted.
+fn is_file_tracked(repo_path: &std::path::Path, file: &std::path::Path) -> bool {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "ls-files",
+            "--error-unmatch",
+            &file.to_string_lossy(),
+        ])
+        .output();
+    match output {
+        Ok(o) => o.status.success(),
+        Err(e) => {
+            log::warn!(
+                "[rename] is_file_tracked {:?}: failed to spawn git: {}",
+                file,
+                e
+            );
+            false
+        }
+    }
+}
+
+/// Find the most recent rename destination for `old_path` using git log with
+/// `--follow --diff-filter=R`.
+///
+/// Returns `Some(new_path)` if git can detect a rename, `None` otherwise.
+fn find_rename_target(repo_path: &std::path::Path, old_path: &std::path::Path) -> Option<PathBuf> {
+    // git log --follow --diff-filter=R --name-status --format="" HEAD -- <old_path>
+    // Outputs lines like: R100\told_name\tnew_name  (with blank lines between entries)
+    // Strategy: combining --diff-filter=R with a pathspec only matches when the path is the
+    // *destination* of a rename, not the source. Instead we do it in two steps:
+    //   1. Find the most recent commit that touched old_path (the rename commit).
+    //   2. Inspect that specific commit for R-type diffs and look for old_path as the source.
+    // Strategy: combining --diff-filter=R with a pathspec only matches when the path is the
+    // *destination* of a rename, not the source. Instead we do it in two steps:
+    //   1. Find the most recent commit that touched old_path (the rename commit).
+    //   2. Inspect that specific commit for R-type diffs and look for old_path as the source.
+    let commit_output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "log",
+            "-1",
+            "--format=%H",
+            "--",
+            &old_path.to_string_lossy(),
+        ])
+        .output()
+        .ok()?;
+
+    if !commit_output.status.success() {
+        log::warn!(
+            "[rename] find_rename_target {:?}: git log -1 failed",
+            old_path
+        );
+        return None;
+    }
+
+    let commit_hash = String::from_utf8_lossy(&commit_output.stdout)
+        .trim()
+        .to_string();
+    if commit_hash.is_empty() {
+        return None;
+    }
+
+    let show_output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "show",
+            "--diff-filter=R",
+            "--name-status",
+            "--format=",
+            &commit_hash,
+        ])
+        .output()
+        .ok()?;
+
+    if !show_output.status.success() {
+        log::warn!(
+            "[rename] find_rename_target {:?}: git show {} failed",
+            old_path,
+            commit_hash
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&show_output.stdout);
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.starts_with('R') {
+            continue;
+        }
+        // Tab-separated: R<score>\t<old>\t<new>
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        if parts.len() == 3 && PathBuf::from(parts[1]) == old_path {
+            let new_path = PathBuf::from(parts[2]);
+            if is_file_tracked(repo_path, &new_path) {
+                log::debug!("[rename] {:?} → {:?}", old_path, new_path);
+                return Some(new_path);
+            }
+        }
+    }
+
+    None
+}
+
+/// For each path in `issue_paths` that no longer exists in the git index, attempt
+/// to find a rename using `git log --follow --diff-filter=R`.
+///
+/// Returns one `FileRenameEvent` (without commit hash) per detected rename.
+/// The commit hash field is left empty here — callers that need it should fetch
+/// it separately, or it will be populated when the rename is confirmed.
+pub fn detect_renames(
+    repo_path: &std::path::Path,
+    issue_paths: &[PathBuf],
+) -> Vec<(PathBuf, PathBuf)> {
+    let mut renames = Vec::new();
+    for old_path in issue_paths {
+        if is_file_tracked(repo_path, old_path) {
+            continue; // file still exists — no rename needed
+        }
+        if let Some(new_path) = find_rename_target(repo_path, old_path) {
+            renames.push((old_path.clone(), new_path));
+        }
+    }
+    renames
+}
+
+/// Get the short (8-char) HEAD commit hash for the given repo path.
+pub fn head_commit_hash(repo_path: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "rev-parse",
+            "--short",
+            "HEAD",
+        ])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
 /// Fetch from remote and then get repository status
 ///
 /// This function ensures the status check is performed against the actual remote state,

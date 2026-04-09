@@ -265,7 +265,14 @@ function CommitIssueStep({
   )
 
   const matchingIssueNumbers = useMemo(
-    () => allIssues.filter(i => i.title === fileName).map(i => i.number),
+    () =>
+      allIssues
+        .filter(
+          (i) =>
+            i.title === fileName ||
+            i.file_history.some((e) => e.old_path === fileName || e.new_path === fileName),
+        )
+        .map((i) => i.number),
     [allIssues, fileName],
   )
 

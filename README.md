@@ -41,6 +41,7 @@ Each file under QC has a dedicated GitHub Issue. `ghqc` manages the full issue l
 | [`ghqc issue approve`](docs/issue-approve.md) | Approve the issue at a specific commit and close it |
 | [`ghqc issue unapprove`](docs/issue-unapprove.md) | Reopen an approved issue with a reason |
 | [`ghqc issue status`](docs/issue-status.md) | Print the QC status, git status, and checklist progress |
+| [`ghqc issue rename`](docs/issue-rename.md) | Confirm a detected file rename and update the issue title |
 
 ### Milestones
 
@@ -190,6 +191,7 @@ An example configuration repository is available at [a2-ai/ghqc.example_config_r
 - [Issue: Approve](docs/issue-approve.md)
 - [Issue: Unapprove](docs/issue-unapprove.md)
 - [Issue: Status](docs/issue-status.md)
+- [Issue: Rename](docs/issue-rename.md)
 - [Milestone: Status](docs/milestone-status.md)
 - [Milestone: Record](docs/milestone-record.md)
 - [Milestone: Archive](docs/milestone-archive.md)

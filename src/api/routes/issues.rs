@@ -8,15 +8,21 @@ use crate::api::types::{
     BlockingQCItemWithStatus, BlockingQCStatus, CreateIssueRequest, CreateIssueResponse, Issue,
     IssueStatusError, IssueStatusErrorKind, IssueStatusResponse, QCStatusEnum,
 };
+use crate::comment_system::CommentBody;
 use crate::create::QCIssueError;
-use crate::git::GitHubApiError;
-use crate::{GitProvider, QCEntry, batch_post_qc_entries, create_labels_if_needed, get_repo_users};
+use crate::git::{GitFileOps, GitHelpers, GitHubApiError};
+use crate::{
+    FileRenameEvent, GitProvider, QCEntry, batch_post_qc_entries, create_labels_if_needed,
+    file_history_section, get_repo_users, head_commit_hash, parse_file_history,
+    splice_file_history,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use serde::Deserialize;
+use octocrab::models::issues::Issue as OctocrabIssue;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -368,4 +374,111 @@ pub async fn get_blocked_issues<G: GitProvider + 'static>(
     }));
 
     Ok(Json(blocked_statuses))
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RenameIssueRequest {
+    pub new_path: String,
+}
+
+/// Comment body posted to the issue timeline when a rename is confirmed.
+struct RenameComment {
+    issue: OctocrabIssue,
+    old_path: String,
+    new_path: String,
+    commit: String,
+}
+
+impl CommentBody for RenameComment {
+    fn generate_body(&self, _git_info: &(impl GitHelpers + GitFileOps)) -> String {
+        format!(
+            "# QC File Rename\n`{}` \u{2192} `{}` (commit: {})",
+            self.old_path, self.new_path, self.commit
+        )
+    }
+
+    fn issue(&self) -> &OctocrabIssue {
+        &self.issue
+    }
+
+    fn title(&self) -> &str {
+        "QC File Rename"
+    }
+}
+
+/// POST /api/issues/{number}/rename
+///
+/// Confirm a detected file rename: updates the issue title to `new_path`,
+/// appends a `## File History` entry to the issue body recording the rename,
+/// and posts a timeline comment so the rename is visible in the issue thread.
+pub async fn rename_issue<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Path(number): Path<u64>,
+    Json(request): Json<RenameIssueRequest>,
+) -> Result<StatusCode, ApiError> {
+    if request.new_path.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "new_path must not be empty".to_string(),
+        ));
+    }
+
+    // Fetch the current issue to get its title (old path) and body.
+    let raw_issue = state
+        .git_info()
+        .get_issue(number)
+        .await
+        .map_err(ApiError::from)?;
+
+    let old_path = raw_issue.title.clone();
+    let current_body = raw_issue.body.as_deref().unwrap_or("").to_string();
+
+    // Get the HEAD commit hash to record in history.
+    let repo_path = state.git_info().path().to_path_buf();
+    let commit_hash = tokio::task::spawn_blocking(move || {
+        head_commit_hash(&repo_path).unwrap_or_else(|| "unknown".to_string())
+    })
+    .await
+    .unwrap_or_else(|_| "unknown".to_string());
+
+    let new_path = request.new_path;
+
+    // Build the updated file history.
+    let mut events = parse_file_history(&current_body);
+    events.push(FileRenameEvent {
+        old_path: old_path.clone(),
+        new_path: new_path.clone(),
+        commit: commit_hash.clone(),
+    });
+    let history_section = file_history_section(&events);
+
+    // Splice history section into the body: insert before the checklist (first `# ` heading)
+    // or append if no such heading exists.
+    let new_body = splice_file_history(&current_body, &history_section);
+
+    state
+        .git_info()
+        .update_issue(number, Some(new_path.clone()), Some(new_body))
+        .await
+        .map_err(ApiError::from)?;
+
+    log::info!(
+        "Renamed issue #{number}: {:?} → {:?} (commit {})",
+        old_path,
+        new_path,
+        commit_hash
+    );
+
+    // Post a timeline comment so the rename is visible in the issue thread.
+    // A failure here is non-fatal: the title and body are already updated.
+    let rename_comment = RenameComment {
+        issue: raw_issue,
+        old_path,
+        new_path,
+        commit: commit_hash,
+    };
+    if let Err(e) = state.git_info().post_comment(&rename_comment).await {
+        log::warn!("Failed to post rename comment to issue #{number}: {e}");
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }

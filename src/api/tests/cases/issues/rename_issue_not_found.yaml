@@ -1,0 +1,13 @@
+name: "POST /api/issues/{number}/rename - issue not found"
+description: "Rename a non-existent issue returns an error (502 from mock, 404 from real GitHub)"
+
+git_state: {}
+
+request:
+  method: POST
+  path: "/api/issues/999/rename"
+  body:
+    new_path: "scripts/new_file.R"
+
+response:
+  status: 502

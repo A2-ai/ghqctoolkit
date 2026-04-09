@@ -147,6 +147,34 @@ paths:
         '404':
           description: Milestone not found
 
+  /milestones/{number}/renames:
+    get:
+      summary: List detected file renames for open issues in a milestone
+      description: |
+        Checks open issues in the milestone against the current git HEAD tree and returns
+        any files that have been renamed in a committed change. Used to prompt users to
+        confirm renames via `POST /issues/{number}/rename`.
+      operationId: listMilestoneRenames
+      tags: [milestones]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          description: Milestone number
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of detected renames (may be empty)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DetectedRename'
+        '404':
+          description: Milestone not found
+
   /issues/status:
     get:
       summary: Batch get issue statuses
@@ -452,6 +480,37 @@ paths:
             text/html:
               schema:
                 type: string
+
+  /issues/{number}/rename:
+    post:
+      summary: Confirm a detected file rename
+      description: |
+        Updates the issue title to `new_path`, appends a `## File History` entry to the
+        issue body recording the old name, new name, and HEAD commit hash, and posts a
+        timeline comment so the rename is visible in the issue thread.
+
+        This is the confirmation step after `GET /milestones/{number}/renames` detects a rename.
+      operationId: renameIssue
+      tags: [issues]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameIssueRequest'
+      responses:
+        '204':
+          description: Issue renamed successfully
+        '400':
+          description: new_path is empty or whitespace-only
+        '404':
+          description: Issue not found
 
   /issues/{number}/blocked:
     get:
@@ -1685,3 +1744,48 @@ components:
           type: string
           description: Absolute path where the archive was written
           example: "/path/to/repo-milestone.tar.gz"
+
+    DetectedRename:
+      type: object
+      required: [issue_number, old_path, new_path]
+      description: A file rename detected for an open QC issue
+      properties:
+        issue_number:
+          type: integer
+          description: The issue whose title (file path) was renamed
+        old_path:
+          type: string
+          description: The old file path (current issue title)
+          example: "scripts/file_b.R"
+        new_path:
+          type: string
+          description: The new file path detected in git history
+          example: "scripts/file_b_renamed.R"
+
+    RenameIssueRequest:
+      type: object
+      required: [new_path]
+      description: Request body for confirming a file rename
+      properties:
+        new_path:
+          type: string
+          description: The new file path to rename the issue title to
+          example: "scripts/file_b_renamed.R"
+
+    FileRenameEvent:
+      type: object
+      required: [old_path, new_path, commit]
+      description: A single rename entry recorded in an issue's File History section
+      properties:
+        old_path:
+          type: string
+          description: The file path before the rename
+          example: "scripts/file_b.R"
+        new_path:
+          type: string
+          description: The file path after the rename
+          example: "scripts/file_b_renamed.R"
+        commit:
+          type: string
+          description: The HEAD commit hash at the time the rename was confirmed
+          example: "abc1234"

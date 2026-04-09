@@ -54,6 +54,16 @@ pub trait GitHubWriter {
         blocked_issue_number: u64,
         blocking_issue_id: u64,
     ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
+
+    /// Update an issue's title and/or body via PATCH.
+    ///
+    /// Pass `None` for fields that should not change.
+    fn update_issue(
+        &self,
+        issue_number: u64,
+        new_title: Option<String>,
+        new_body: Option<String>,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send;
 }
 
 impl GitHubWriter for GitInfo {
@@ -376,6 +386,57 @@ impl GitHubWriter for GitInfo {
                 "Successfully created blocking relationship: issue #{} is now blocked by issue ID {}",
                 blocked_issue_number,
                 blocking_issue_id
+            );
+
+            Ok(())
+        }
+    }
+
+    fn update_issue(
+        &self,
+        issue_number: u64,
+        new_title: Option<String>,
+        new_body: Option<String>,
+    ) -> impl Future<Output = Result<(), GitHubApiError>> + Send {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let base_url = self.base_url.clone();
+        let auth_sources = self.auth_sources.clone();
+
+        async move {
+            let octocrab = auth_sources
+                .client(&base_url)
+                .map_err(GitHubApiError::ClientCreation)?;
+
+            log::debug!(
+                "Updating issue #{} in {}/{} (title: {:?})",
+                issue_number,
+                owner,
+                repo,
+                new_title
+            );
+
+            let mut patch = serde_json::json!({});
+            if let Some(title) = new_title {
+                patch["title"] = serde_json::Value::String(title);
+            }
+            if let Some(body) = new_body {
+                patch["body"] = serde_json::Value::String(body);
+            }
+
+            let _: serde_json::Value = octocrab
+                .patch(
+                    format!("/repos/{}/{}/issues/{}", &owner, &repo, issue_number),
+                    Some(&patch),
+                )
+                .await
+                .map_err(GitHubApiError::APIError)?;
+
+            log::debug!(
+                "Successfully updated issue #{} in {}/{}",
+                issue_number,
+                owner,
+                repo
             );
 
             Ok(())

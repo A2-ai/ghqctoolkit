@@ -1,0 +1,25 @@
+name: "GET /api/milestones/{number}/renames - no renames detected"
+description: "Returns empty array when no renames are detected (mock git has no real renames)"
+
+fixtures:
+  milestones:
+    - type: mock
+      number: 1
+      title: v1.0
+  issues:
+    - type: mock
+      number: 1
+      title: "scripts/file.R"
+      milestone: 1
+
+git_state: {}
+
+request:
+  method: GET
+  path: "/api/milestones/1/renames"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value: []

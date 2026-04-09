@@ -171,7 +171,7 @@ impl IssueThread {
 
         // Pre-compute which commits touch this issue's file (one subprocess call).
         let commit_hashes: Vec<String> = all_commits.iter().map(|c| c.commit.to_string()).collect();
-        let file_touching = find_or_cache_file_changes(
+        let mut file_touching = find_or_cache_file_changes(
             &commit_hashes,
             git_info,
             Some(branch.clone()),
@@ -179,6 +179,30 @@ impl IssueThread {
             disk_cache,
         )
         .map_err(IssueError::GitFileOpsError)?;
+
+        // Also mark commits that touched any previously-known file names from ## File History.
+        // This ensures commits made against the old filename are still flagged as file-changing.
+        let old_paths: Vec<PathBuf> = issue
+            .body
+            .as_deref()
+            .map(|body| {
+                parse_file_history(body)
+                    .into_iter()
+                    .map(|e| PathBuf::from(e.old_path))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for old_path in &old_paths {
+            let old_touching = find_or_cache_file_changes(
+                &commit_hashes,
+                git_info,
+                Some(branch.clone()),
+                old_path,
+                disk_cache,
+            )
+            .map_err(IssueError::GitFileOpsError)?;
+            file_touching.extend(old_touching);
+        }
 
         let mut issue_commits = Vec::new();
         let mut qc_notif_found = false;
@@ -502,6 +526,139 @@ pub fn determine_relationship_from_body(
 
     // Parent not found in child's body - indicates data inconsistency
     BlockingRelationship::Unknown
+}
+
+/// A single file rename event stored in the "## File History" section of an issue body.
+///
+/// Format: `* \`old_path\` → \`new_path\` (commit: abc1234)`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FileRenameEvent {
+    pub old_path: String,
+    pub new_path: String,
+    pub commit: String,
+}
+
+/// Parse file rename events from the "## File History" section of an issue body.
+///
+/// Each line has the form: `* \`old_path\` → \`new_path\` (commit: abc1234)`
+pub fn parse_file_history(body: &str) -> Vec<FileRenameEvent> {
+    let section_start = match body.find("## File History") {
+        Some(pos) => pos,
+        None => return vec![],
+    };
+
+    let section = &body[section_start..];
+    let section_end = section["## File History".len()..]
+        .find("\n## ")
+        .map(|pos| pos + "## File History".len())
+        .unwrap_or(section.len());
+    let section = &section[..section_end];
+
+    let mut events = Vec::new();
+    for line in section.lines() {
+        let line = line.trim();
+        if !line.starts_with("* `") {
+            continue;
+        }
+        // Line: * `old_path` → `new_path` (commit: abc1234)
+        let rest = &line[3..]; // skip "* `"
+        let old_end = match rest.find('`') {
+            Some(i) => i,
+            None => continue,
+        };
+        let old_path = rest[..old_end].to_string();
+
+        let after_old = &rest[old_end + 1..]; // after closing `
+        // find " → `"
+        let arrow = " \u{2192} `";
+        let new_start = match after_old.find(arrow) {
+            Some(i) => i + arrow.len(),
+            None => continue,
+        };
+        let after_arrow = &after_old[new_start..];
+        let new_end = match after_arrow.find('`') {
+            Some(i) => i,
+            None => continue,
+        };
+        let new_path = after_arrow[..new_end].to_string();
+
+        // find "(commit: ...)"
+        let commit_prefix = "(commit: ";
+        let commit = match after_arrow[new_end + 1..].find(commit_prefix) {
+            Some(i) => {
+                let commit_start = i + commit_prefix.len();
+                let rest = &after_arrow[new_end + 1 + commit_start..];
+                match rest.find(')') {
+                    Some(end) => rest[..end].to_string(),
+                    None => continue,
+                }
+            }
+            None => continue,
+        };
+
+        events.push(FileRenameEvent {
+            old_path,
+            new_path,
+            commit,
+        });
+    }
+
+    events
+}
+
+/// Insert (or replace) the `## File History` section in the issue body.
+///
+/// If the section already exists it is replaced in-place.
+/// Otherwise it is inserted immediately before the first `# ` checklist heading,
+/// or appended at the end if no such heading exists.
+pub fn splice_file_history(body: &str, history_section: &str) -> String {
+    let history_trimmed = history_section.trim_end();
+
+    if let Some(start) = body.find("## File History") {
+        let before = body[..start].trim_end();
+        let after_header = &body[start + "## File History".len()..];
+        let after = match after_header.find("\n## ") {
+            Some(p) => &after_header[p + 1..],
+            None => "",
+        };
+        return if after.is_empty() {
+            format!("{}\n{}", before, history_trimmed)
+        } else {
+            format!("{}\n{}\n\n{}", before, history_trimmed, after)
+        };
+    }
+
+    if let Some(checklist_pos) = find_checklist_start(body) {
+        let before = body[..checklist_pos].trim_end();
+        let rest = &body[checklist_pos..];
+        format!("{}\n\n{}\n\n{}", before, history_trimmed, rest)
+    } else {
+        format!("{}\n\n{}", body.trim_end(), history_trimmed)
+    }
+}
+
+/// Find the byte offset of the first `# ` heading that is NOT `## `.
+pub fn find_checklist_start(body: &str) -> Option<usize> {
+    let mut pos = 0usize;
+    for line in body.lines() {
+        if line.starts_with("# ") && !line.starts_with("## ") {
+            return Some(pos);
+        }
+        pos += line.len() + 1;
+    }
+    None
+}
+
+/// Generate the markdown for a "## File History" section.
+pub fn file_history_section(events: &[FileRenameEvent]) -> String {
+    let mut section = String::from("## File History\n");
+    for event in events {
+        section.push_str(&format!(
+            "* `{}` \u{2192} `{}` (commit: {})\n",
+            event.old_path, event.new_path, event.commit
+        ));
+    }
+    section
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1614,5 +1771,171 @@ author: test"#;
         let body = "## Metadata\n\nNo relevant files section";
         let result = determine_relationship_from_body(body, 123);
         assert_eq!(result, BlockingRelationship::Unknown);
+    }
+
+    // ── parse_file_history ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_file_history_no_section() {
+        let body = "## Metadata\nsome content\n";
+        let events = parse_file_history(body);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_history_single_event() {
+        let body = "## File History\n* `old/path.R` → `new/path.R` (commit: abc1234)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].old_path, "old/path.R");
+        assert_eq!(events[0].new_path, "new/path.R");
+        assert_eq!(events[0].commit, "abc1234");
+    }
+
+    #[test]
+    fn test_parse_file_history_multiple_events() {
+        let body = "## File History\n\
+            * `a.R` → `b.R` (commit: 111aaaa)\n\
+            * `b.R` → `c.R` (commit: 222bbbb)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].old_path, "a.R");
+        assert_eq!(events[0].new_path, "b.R");
+        assert_eq!(events[0].commit, "111aaaa");
+        assert_eq!(events[1].old_path, "b.R");
+        assert_eq!(events[1].new_path, "c.R");
+        assert_eq!(events[1].commit, "222bbbb");
+    }
+
+    #[test]
+    fn test_parse_file_history_malformed_lines_skipped() {
+        let body = "## File History\n\
+            * `good.R` → `better.R` (commit: abc0001)\n\
+            * malformed line without backticks\n\
+            * `missing_arrow.R` something wrong\n\
+            * `also_good.R` → `also_better.R` (commit: abc0002)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].old_path, "good.R");
+        assert_eq!(events[1].old_path, "also_good.R");
+    }
+
+    #[test]
+    fn test_parse_file_history_terminates_at_next_section() {
+        let body = "## File History\n\
+            * `old.R` → `new.R` (commit: abc1234)\n\
+            ## Other Section\n\
+            * `should_not.R` → `be_parsed.R` (commit: 000000)\n";
+        let events = parse_file_history(body);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].old_path, "old.R");
+    }
+
+    // ── file_history_section ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_file_history_section_empty_slice() {
+        let section = file_history_section(&[]);
+        assert_eq!(section, "## File History\n");
+    }
+
+    #[test]
+    fn test_file_history_section_single_event() {
+        let events = vec![FileRenameEvent {
+            old_path: "src/old.R".to_string(),
+            new_path: "src/new.R".to_string(),
+            commit: "deadbeef".to_string(),
+        }];
+        let section = file_history_section(&events);
+        assert_eq!(
+            section,
+            "## File History\n* `src/old.R` → `src/new.R` (commit: deadbeef)\n"
+        );
+    }
+
+    #[test]
+    fn test_file_history_section_multiple_events() {
+        let events = vec![
+            FileRenameEvent {
+                old_path: "a.R".to_string(),
+                new_path: "b.R".to_string(),
+                commit: "aaa1111".to_string(),
+            },
+            FileRenameEvent {
+                old_path: "b.R".to_string(),
+                new_path: "c.R".to_string(),
+                commit: "bbb2222".to_string(),
+            },
+        ];
+        let section = file_history_section(&events);
+        assert!(section.starts_with("## File History\n"));
+        assert!(section.contains("* `a.R` → `b.R` (commit: aaa1111)\n"));
+        assert!(section.contains("* `b.R` → `c.R` (commit: bbb2222)\n"));
+    }
+
+    // ── find_checklist_start ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_find_checklist_start_finds_h1() {
+        let body = "## Metadata\nsome text\n# Checklist\n- item\n";
+        let pos = find_checklist_start(body);
+        assert!(pos.is_some());
+        let offset = pos.unwrap();
+        assert!(body[offset..].starts_with("# Checklist"));
+    }
+
+    #[test]
+    fn test_find_checklist_start_only_h2_returns_none() {
+        let body = "## Metadata\n## File History\n## Another\n";
+        let pos = find_checklist_start(body);
+        assert!(pos.is_none());
+    }
+
+    #[test]
+    fn test_find_checklist_start_empty_body() {
+        let pos = find_checklist_start("");
+        assert!(pos.is_none());
+    }
+
+    // ── splice_file_history ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_splice_file_history_no_section_with_checklist() {
+        let body = "## Metadata\nsome text\n\n# Checklist\n- [ ] item\n";
+        let history = "## File History\n* `old.R` → `new.R` (commit: abc)\n";
+        let result = splice_file_history(body, history);
+        // History must appear before the checklist
+        let history_pos = result.find("## File History").expect("history missing");
+        let checklist_pos = result.find("# Checklist").expect("checklist missing");
+        assert!(history_pos < checklist_pos);
+    }
+
+    #[test]
+    fn test_splice_file_history_no_section_no_checklist() {
+        let body = "## Metadata\nsome text\n";
+        let history = "## File History\n* `old.R` → `new.R` (commit: abc)\n";
+        let result = splice_file_history(body, history);
+        // History appended at end
+        assert!(result.contains("## File History"));
+        assert!(result.ends_with("## File History\n* `old.R` → `new.R` (commit: abc)"));
+    }
+
+    #[test]
+    fn test_splice_file_history_replaces_existing_section() {
+        let body = "## Metadata\nsome text\n\n## File History\n* `old.R` → `mid.R` (commit: 111)\n\n# Checklist\n- [ ] item\n";
+        let new_history = "## File History\n* `old.R` → `mid.R` (commit: 111)\n* `mid.R` → `new.R` (commit: 222)\n";
+        let result = splice_file_history(body, new_history);
+        // Only one File History section
+        assert_eq!(result.matches("## File History").count(), 1);
+        assert!(result.contains("commit: 222"));
+    }
+
+    #[test]
+    fn test_splice_file_history_existing_section_at_end() {
+        let body = "## Metadata\nsome text\n\n## File History\n* `old.R` → `new.R` (commit: abc)\n";
+        let new_history = "## File History\n* `old.R` → `new.R` (commit: abc)\n* `new.R` → `newest.R` (commit: def)\n";
+        let result = splice_file_history(body, new_history);
+        assert_eq!(result.matches("## File History").count(), 1);
+        assert!(result.contains("commit: def"));
     }
 }

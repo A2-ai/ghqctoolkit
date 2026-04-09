@@ -5,6 +5,7 @@ use gix::ObjectId;
 use octocrab::models::Milestone;
 
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
+use crate::cli::rename::alert_renames;
 use crate::{
     BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState, IssueThread,
     QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
@@ -31,6 +32,9 @@ pub async fn interactive_status(
     if issues.is_empty() {
         bail!("No issues found in milestone '{}'", milestone.title);
     }
+
+    // Alert about any pending file renames (run `ghqc issue rename` to confirm).
+    alert_renames(git_info, &issues).await?;
 
     // Select issue by title
     let issue = prompt_issue(&issues)?;
@@ -284,6 +288,9 @@ async fn get_milestone_status_rows(
     for milestone in milestones {
         // Get all issues for this milestone
         let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
+
+        // Alert about any pending file renames (run `ghqc issue rename` to confirm).
+        alert_renames(git_info, &issues).await?;
 
         for issue in issues {
             // Create IssueThread for each issue

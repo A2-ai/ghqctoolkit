@@ -9,8 +9,9 @@ use octocrab::models::IssueState;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GitHubApiError, GitProvider, IssueThread, ReviewStashResult, analyze_issue_checklists,
-    api::ApiError, create::CreateResult, get_git_status, parse_blocking_qcs,
+    FileRenameEvent, GitHubApiError, GitProvider, IssueThread, ReviewStashResult,
+    analyze_issue_checklists, api::ApiError, create::CreateResult, get_git_status,
+    parse_blocking_qcs, parse_file_history,
 };
 
 /// Health check response.
@@ -65,6 +66,14 @@ pub struct RelevantFileInfo {
     pub issue_url: Option<String>,
 }
 
+/// A detected rename of a file that has an open QC issue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectedRename {
+    pub issue_number: u64,
+    pub old_path: String,
+    pub new_path: String,
+}
+
 /// Issue information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
@@ -82,6 +91,7 @@ pub struct Issue {
     pub branch: Option<String>,
     pub checklist_name: Option<String>,
     pub relevant_files: Vec<RelevantFileInfo>,
+    pub file_history: Vec<FileRenameEvent>,
 }
 
 impl From<octocrab::models::issues::Issue> for Issue {
@@ -112,6 +122,11 @@ impl From<octocrab::models::issues::Issue> for Issue {
                 .body
                 .as_deref()
                 .map(parse_relevant_file_infos)
+                .unwrap_or_default(),
+            file_history: issue
+                .body
+                .as_deref()
+                .map(parse_file_history)
                 .unwrap_or_default(),
         }
     }
