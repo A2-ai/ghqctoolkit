@@ -16,4 +16,8 @@ pub trait CommentBody {
 
     /// Get the GitHub issue this comment is associated with
     fn issue(&self) -> &Issue;
+
+    /// Short human-readable label used as the leading heading of the comment body.
+    /// Used when splitting large bodies into multiple parts, e.g. "QC Notification".
+    fn title(&self) -> &str;
 }

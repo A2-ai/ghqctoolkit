@@ -1,6 +1,7 @@
 mod approve;
 mod archive;
 mod auth;
+mod body_splitter;
 mod cache;
 mod comment;
 mod comment_system;

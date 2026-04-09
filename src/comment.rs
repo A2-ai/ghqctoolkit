@@ -70,6 +70,10 @@ impl CommentBody for QCComment {
     fn issue(&self) -> &Issue {
         &self.issue
     }
+
+    fn title(&self) -> &str {
+        "QC Notification"
+    }
 }
 
 impl QCComment {
