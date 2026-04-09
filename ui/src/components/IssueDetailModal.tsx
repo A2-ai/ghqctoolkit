@@ -179,12 +179,14 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
     )
 
+  const hasScrolledToRight = useRef(false)
   const sliderViewportRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (sliderViewportRef.current) {
+    if (!hasScrolledToRight.current && visibleCommits.length > 0 && sliderViewportRef.current) {
       sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
+      hasScrolledToRight.current = true
     }
-  }, [visibleCommits])
+  }, [visibleCommits.length])
 
   // Snap origIdx to nearest visible slider position
   const snapToVisible = (targetOrigIdx: number): number => {
@@ -271,7 +273,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
 
           {/* Dots row + two independent overlaid sliders */}
           <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-          <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
+          <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
             <div style={{ position: 'relative', height: 8 }}>
               {visibleCommits.map((c, i) => {
                 const n = visibleCommits.length
@@ -292,6 +294,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               <CommitSlider
                 commits={visibleCommits}
                 value={snapA}
+                mb={28}
                 onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
               />
               {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
@@ -320,7 +323,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
           </ScrollArea>
 
           {/* Legend */}
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
             {STATUS_ORDER.map((s) => (
               <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
@@ -554,12 +557,14 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
     )
 
+  const hasScrolledToRight = useRef(false)
   const sliderViewportRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (sliderViewportRef.current) {
+    if (!hasScrolledToRight.current && visibleCommits.length > 0 && sliderViewportRef.current) {
       sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
+      hasScrolledToRight.current = true
     }
-  }, [visibleCommits])
+  }, [visibleCommits.length])
 
   const snapToVisible = (targetOrigIdx: number): number => {
     const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
@@ -633,7 +638,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
           </div>
 
           <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
+            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
               <div style={{ position: 'relative', height: 8 }}>
                 {visibleCommits.map((c, i) => {
                   const n = visibleCommits.length
@@ -652,12 +657,13 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
               <CommitSlider
                 commits={visibleCommits}
                 value={sliderIdx}
+                mb={28}
                 onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
               />
             </div>
           </ScrollArea>
 
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
             {STATUS_ORDER.map((s) => (
               <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
@@ -829,12 +835,14 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
       showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
     )
 
+  const hasScrolledToRight = useRef(false)
   const sliderViewportRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (sliderViewportRef.current) {
+    if (!hasScrolledToRight.current && visibleCommits.length > 0 && sliderViewportRef.current) {
       sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
+      hasScrolledToRight.current = true
     }
-  }, [visibleCommits])
+  }, [visibleCommits.length])
 
   const snapToVisible = (targetOrigIdx: number): number => {
     const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
@@ -939,7 +947,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
           </div>
 
           <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
+            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
               <div style={{ position: 'relative', height: 8 }}>
                 {visibleCommits.map((c, i) => {
                   const n = visibleCommits.length
@@ -958,12 +966,13 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
               <CommitSlider
                 commits={visibleCommits}
                 value={sliderIdx}
+                mb={28}
                 onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
               />
             </div>
           </ScrollArea>
 
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: -20, justifyContent: 'center' }}>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
             {STATUS_ORDER.map((s) => (
               <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />

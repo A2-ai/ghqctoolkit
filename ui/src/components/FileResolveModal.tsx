@@ -376,8 +376,8 @@ function CommitIssueStep({
                 ) : (
                   <>
                     <ScrollArea scrollbars="x" type="always" offsetScrollbars>
-                      <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32) }}>
-                        <CommitSlider commits={visibleCommits} value={commitIdx} onChange={setCommitIdx} mb={40} />
+                      <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), paddingLeft: 16, paddingRight: 40 }}>
+                        <CommitSlider commits={visibleCommits} value={commitIdx} onChange={setCommitIdx} mb={28} />
                       </div>
                     </ScrollArea>
                     {visibleCommits[commitIdx] && (
