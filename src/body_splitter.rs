@@ -393,6 +393,7 @@ fn generic_line_split(title: &str, body: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const GITHUB_LIMIT: usize = 65536;
 
     fn make_hunk(old_start: usize, new_start: usize, lines: &[&str]) -> String {
         let mut s = format!(
