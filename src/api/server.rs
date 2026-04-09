@@ -48,12 +48,20 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
             "/api/milestones/{number}/issues",
             get(milestones::list_milestone_issues).post(issues::create_issues),
         )
+        .route(
+            "/api/milestones/{number}/renames",
+            get(milestones::list_milestone_renames),
+        )
         // Issues
         .route("/api/issues/status", get(issues::batch_get_issue_status))
         .route("/api/issues/{number}", get(issues::get_issue))
         .route(
             "/api/issues/{number}/blocked",
             get(issues::get_blocked_issues),
+        )
+        .route(
+            "/api/issues/{number}/rename",
+            post(issues::rename_issue),
         )
         // Comments & Actions
         .route(

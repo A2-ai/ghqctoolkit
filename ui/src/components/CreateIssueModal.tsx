@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Group, Modal, ScrollArea, Tabs, Text } from '@mantine/core'
+import { Alert, Button, Group, Modal, ScrollArea, Tabs, Text } from '@mantine/core'
+import { IconInfoCircle } from '@tabler/icons-react'
 import { FileTreeBrowser } from './FileTreeBrowser'
 import { IssuePreviewCard } from './IssuePreviewCard'
 import { ChecklistTab } from './ChecklistTab'
@@ -8,7 +9,7 @@ import { ReviewersTab } from './ReviewersTab'
 import { CollaboratorsTab } from './CollaboratorsTab'
 import type { ChecklistDraft } from './ChecklistTab'
 import { useRepoInfo } from '~/api/repo'
-import { useIssuesForMilestone } from '~/api/issues'
+import { useIssuesForMilestone, useRenames } from '~/api/issues'
 import { useChecklistDisplayName, useConfigurationStatus } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
 import type { RelevantFileKind } from '~/api/issues'
@@ -145,7 +146,7 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
           filePreviewMode: isMissing ? 'missing' : 'unsupported',
           filePreviewContent: isMissing
             ? `Error: ${message}`
-            : `Preview is not available for ${getFileExtensionLabel(modal.selectedFile)} files.`,
+            : `Preview is not available for ${getFileExtensionLabel(modal.selectedFile ?? '')} files.`,
           filePreviewOpen: true,
         },
       }))
@@ -194,6 +195,13 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
     modal.checklistSelected ||
     (modal.checklistDraft.name.trim().length > 0 && modal.checklistDraft.content.trim().length > 0)
   )
+
+  // Warn if the selected file matches the new_path of a detected rename —
+  // the user may want to confirm the rename instead of creating a duplicate issue.
+  const { renames } = useRenames(milestoneNumber !== null ? [milestoneNumber] : [])
+  const renameWarning = modal.selectedFile
+    ? renames.find((r) => r.new_path === modal.selectedFile)
+    : null
 
   // Issue titles ARE the file path (e.g. "scripts/file_b.R"); build a set for O(1) lookup
   const claimedFiles = useMemo<Set<string>>(
@@ -394,6 +402,16 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
             />
           </div>
         </Group>
+
+        {renameWarning && (
+          <Alert icon={<IconInfoCircle size={16} />} color="yellow" variant="light" mt="sm">
+            <Text size="sm">
+              <Text span ff="monospace" fw={600}>{renameWarning.new_path}</Text> may have been renamed from{' '}
+              <Text span ff="monospace" fw={600}>{renameWarning.old_path}</Text>, which already has QC issue #{renameWarning.issue_number}.
+              Consider confirming the rename in the Status tab instead of creating a new issue.
+            </Text>
+          </Alert>
+        )}
 
         <Group justify="flex-end" pt="sm">
           <Button

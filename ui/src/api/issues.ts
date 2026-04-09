@@ -1,4 +1,4 @@
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { API_BASE } from '../config'
 
 export type RelevantFileKind = 'blocking_qc' | 'previous_qc' | 'relevant_qc' | 'file'
@@ -7,6 +7,12 @@ export interface RelevantFileInfo {
   file_name: string
   kind: RelevantFileKind
   issue_url: string | null
+}
+
+export interface FileRenameEvent {
+  old_path: string
+  new_path: string
+  commit: string
 }
 
 export interface Issue {
@@ -24,6 +30,7 @@ export interface Issue {
   branch: string | null
   checklist_name: string | null
   relevant_files: RelevantFileInfo[]
+  file_history: FileRenameEvent[]
 }
 
 export interface IssueCommit {
@@ -485,4 +492,76 @@ export function useAllMilestoneIssues(milestoneNumbers: number[], enabled = true
     issues: queries.flatMap((q) => q.data ?? []),
     isLoading: enabled && queries.some((q) => q.isPending && q.fetchStatus !== 'idle'),
   }
+}
+
+// ---------------------------------------------------------------------------
+// File rename detection and confirmation
+// ---------------------------------------------------------------------------
+
+export interface DetectedRename {
+  issue_number: number
+  old_path: string
+  new_path: string
+}
+
+export interface DetectedRenameWithMilestone extends DetectedRename {
+  milestone_number: number
+}
+
+export async function fetchMilestoneRenames(milestoneNumber: number): Promise<DetectedRename[]> {
+  const res = await fetch(`${API_BASE}/milestones/${milestoneNumber}/renames`)
+  if (!res.ok) throw new Error(`Failed to fetch renames for milestone ${milestoneNumber}: ${res.status}`)
+  return res.json()
+}
+
+export async function postRenameIssue(issueNumber: number, newPath: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/issues/${issueNumber}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_path: newPath }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to confirm rename: ${res.status}`)
+  }
+}
+
+/** Fetch detected renames for all provided milestone numbers, merged into one list.
+ *  Each entry is annotated with the milestone_number it came from. */
+export function useRenames(milestoneNumbers: number[]) {
+  const queries = useQueries({
+    queries: milestoneNumbers.map((n) => ({
+      queryKey: ['milestones', n, 'renames'],
+      queryFn: () => fetchMilestoneRenames(n),
+      // Refresh on window focus so renames are detected promptly after a git operation.
+      staleTime: 30 * 1000,
+    })),
+  })
+  return {
+    renames: queries.flatMap((q, i) =>
+      (q.data ?? []).map((r): DetectedRenameWithMilestone => ({
+        ...r,
+        milestone_number: milestoneNumbers[i],
+      })),
+    ),
+    isLoading: queries.some((q) => q.isPending && q.fetchStatus !== 'idle'),
+  }
+}
+
+/** Mutation that confirms a rename and invalidates the affected milestone queries. */
+export function useConfirmRename(milestoneNumbers: number[]) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ issueNumber, newPath }: { issueNumber: number; newPath: string }) =>
+      postRenameIssue(issueNumber, newPath),
+    onSuccess: (_, { issueNumber }) => {
+      // Invalidate the issue's own status cache so its card title refreshes immediately.
+      void queryClient.invalidateQueries({ queryKey: ['issue', 'status', issueNumber] })
+      // Invalidate milestone issues and renames so the banner clears and issue list updates.
+      for (const n of milestoneNumbers) {
+        void queryClient.invalidateQueries({ queryKey: ['milestones', n, 'issues'] })
+        void queryClient.invalidateQueries({ queryKey: ['milestones', n, 'renames'] })
+      }
+    },
+  })
 }

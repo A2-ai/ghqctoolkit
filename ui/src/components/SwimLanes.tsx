@@ -73,7 +73,7 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                       <div
                         ref={provided.innerRef}
                         {...provided.droppableProps}
-                        style={{ minHeight: 120, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}
+                        style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}
                       >
                         {cards.map((s, index) => (
                           <Draggable

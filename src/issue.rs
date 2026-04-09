@@ -171,7 +171,7 @@ impl IssueThread {
 
         // Pre-compute which commits touch this issue's file (one subprocess call).
         let commit_hashes: Vec<String> = all_commits.iter().map(|c| c.commit.to_string()).collect();
-        let file_touching = find_or_cache_file_changes(
+        let mut file_touching = find_or_cache_file_changes(
             &commit_hashes,
             git_info,
             Some(branch.clone()),
@@ -179,6 +179,30 @@ impl IssueThread {
             disk_cache,
         )
         .map_err(IssueError::GitFileOpsError)?;
+
+        // Also mark commits that touched any previously-known file names from ## File History.
+        // This ensures commits made against the old filename are still flagged as file-changing.
+        let old_paths: Vec<PathBuf> = issue
+            .body
+            .as_deref()
+            .map(|body| {
+                parse_file_history(body)
+                    .into_iter()
+                    .map(|e| PathBuf::from(e.old_path))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for old_path in &old_paths {
+            let old_touching = find_or_cache_file_changes(
+                &commit_hashes,
+                git_info,
+                Some(branch.clone()),
+                old_path,
+                disk_cache,
+            )
+            .map_err(IssueError::GitFileOpsError)?;
+            file_touching.extend(old_touching);
+        }
 
         let mut issue_commits = Vec::new();
         let mut qc_notif_found = false;
@@ -502,6 +526,92 @@ pub fn determine_relationship_from_body(
 
     // Parent not found in child's body - indicates data inconsistency
     BlockingRelationship::Unknown
+}
+
+/// A single file rename event stored in the "## File History" section of an issue body.
+///
+/// Format: `* \`old_path\` → \`new_path\` (commit: abc1234)`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FileRenameEvent {
+    pub old_path: String,
+    pub new_path: String,
+    pub commit: String,
+}
+
+/// Parse file rename events from the "## File History" section of an issue body.
+///
+/// Each line has the form: `* \`old_path\` → \`new_path\` (commit: abc1234)`
+pub fn parse_file_history(body: &str) -> Vec<FileRenameEvent> {
+    let section_start = match body.find("## File History") {
+        Some(pos) => pos,
+        None => return vec![],
+    };
+
+    let section = &body[section_start..];
+    let section_end = section["## File History".len()..]
+        .find("\n## ")
+        .map(|pos| pos + "## File History".len())
+        .unwrap_or(section.len());
+    let section = &section[..section_end];
+
+    let mut events = Vec::new();
+    for line in section.lines() {
+        let line = line.trim();
+        if !line.starts_with("* `") {
+            continue;
+        }
+        // Line: * `old_path` → `new_path` (commit: abc1234)
+        let rest = &line[3..]; // skip "* `"
+        let old_end = match rest.find('`') {
+            Some(i) => i,
+            None => continue,
+        };
+        let old_path = rest[..old_end].to_string();
+
+        let after_old = &rest[old_end + 1..]; // after closing `
+        // find " → `"
+        let arrow = " \u{2192} `";
+        let new_start = match after_old.find(arrow) {
+            Some(i) => i + arrow.len(),
+            None => continue,
+        };
+        let after_arrow = &after_old[new_start..];
+        let new_end = match after_arrow.find('`') {
+            Some(i) => i,
+            None => continue,
+        };
+        let new_path = after_arrow[..new_end].to_string();
+
+        // find "(commit: ...)"
+        let commit_prefix = "(commit: ";
+        let commit = match after_arrow[new_end + 1..].find(commit_prefix) {
+            Some(i) => {
+                let commit_start = i + commit_prefix.len();
+                let rest = &after_arrow[new_end + 1 + commit_start..];
+                match rest.find(')') {
+                    Some(end) => rest[..end].to_string(),
+                    None => continue,
+                }
+            }
+            None => continue,
+        };
+
+        events.push(FileRenameEvent { old_path, new_path, commit });
+    }
+
+    events
+}
+
+/// Generate the markdown for a "## File History" section.
+pub fn file_history_section(events: &[FileRenameEvent]) -> String {
+    let mut section = String::from("## File History\n");
+    for event in events {
+        section.push_str(&format!(
+            "* `{}` \u{2192} `{}` (commit: {})\n",
+            event.old_path, event.new_path, event.commit
+        ));
+    }
+    section
 }
 
 #[derive(Debug, thiserror::Error)]

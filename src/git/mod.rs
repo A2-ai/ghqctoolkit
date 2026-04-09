@@ -27,7 +27,10 @@ pub use file_ops::MockGitFileOps;
 pub use helpers::GitHelpers;
 pub use provider::GitProvider;
 pub use repository::{FileStashOutcome, GitRepository, GitRepositoryError};
-pub use status::{GitState, GitStatus, GitStatusError, GitStatusOps, get_git_status};
+pub use status::{
+    GitState, GitStatus, GitStatusError, GitStatusOps, detect_renames, get_git_status,
+    head_commit_hash,
+};
 
 use crate::auth::AuthStore;
 use crate::utils::EnvProvider;

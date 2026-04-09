@@ -55,11 +55,13 @@ pub use git::{
     GitCommand, GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
     GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError,
     GitProvider, GitRepository, GitRepositoryError, GitState, GitStatus, GitStatusError,
-    GitStatusOps, RepoUser, find_commits, find_or_cache_file_changes, get_git_status,
+    GitStatusOps, RepoUser, detect_renames, find_commits, find_or_cache_file_changes,
+    get_git_status, head_commit_hash,
 };
 pub use issue::{
-    BlockingQC, BlockingRelationship, CommitStatus, IssueCommit, IssueError, IssueThread,
-    determine_relationship_from_body, parse_blocking_qcs, parse_branch_from_body,
+    BlockingQC, BlockingRelationship, CommitStatus, FileRenameEvent, IssueCommit, IssueError,
+    IssueThread, determine_relationship_from_body, file_history_section, parse_blocking_qcs,
+    parse_branch_from_body, parse_file_history,
 };
 pub use qc_status::{
     BlockingQCStatus, ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists,
