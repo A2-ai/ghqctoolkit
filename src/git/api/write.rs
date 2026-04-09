@@ -4,6 +4,7 @@ use octocrab::models::{Milestone, issues::Issue};
 
 use super::GitHubApiError;
 use crate::QCIssue;
+use crate::body_splitter;
 use crate::comment_system::CommentBody;
 use crate::git::GitInfo;
 
@@ -124,12 +125,16 @@ impl GitHubWriter for GitInfo {
             let octocrab = auth_sources
                 .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
+
+            let mut parts = body_splitter::split_issue_body(body).into_iter();
+            let first_body = parts.next().unwrap_or_default();
+
             log::debug!("Posting issue '{}' to {}/{}", title, owner, repo);
 
             let handler = octocrab.issues(owner.clone(), repo.clone());
             let builder = handler
                 .create(title.clone())
-                .body(body)
+                .body(first_body)
                 .milestone(Some(milestone_id))
                 .labels(vec!["ghqc".to_string(), branch])
                 .assignees(assignees);
@@ -143,6 +148,22 @@ impl GitHubWriter for GitInfo {
                 repo
             );
 
+            // Post any continuation parts as comments on the newly created issue
+            for (i, continuation) in parts.enumerate() {
+                log::debug!(
+                    "Posting issue body continuation {} to issue #{} in {}/{}",
+                    i + 2,
+                    issue.number,
+                    owner,
+                    repo
+                );
+                octocrab
+                    .issues(&owner, &repo)
+                    .create_comment(issue.number, continuation)
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+            }
+
             Ok(issue)
         }
     }
@@ -155,6 +176,7 @@ impl GitHubWriter for GitInfo {
         let repo = self.repo.clone();
         let issue_number = comment.issue().number;
         let body = comment.generate_body(self);
+        let title = comment.title().to_string();
         let base_url = self.base_url.clone();
         let auth_sources = self.auth_sources.clone();
 
@@ -163,28 +185,38 @@ impl GitHubWriter for GitInfo {
                 .client(&base_url)
                 .map_err(GitHubApiError::ClientCreation)?;
 
+            let parts = body_splitter::split_comment_body(&title, body);
+            let part_count = parts.len();
+            let mut last_url = String::new();
+
+            for (i, part) in parts.into_iter().enumerate() {
+                log::debug!(
+                    "Posting comment {}/{} to issue #{} in {}/{}",
+                    i + 1,
+                    part_count,
+                    issue_number,
+                    owner,
+                    repo
+                );
+
+                let posted = octocrab
+                    .issues(&owner, &repo)
+                    .create_comment(issue_number, part)
+                    .await
+                    .map_err(GitHubApiError::APIError)?;
+
+                last_url = posted.html_url.to_string();
+            }
+
             log::debug!(
-                "Posting comment to issue #{} in {}/{}",
+                "Successfully posted {} comment part(s) to issue #{} in {}/{}",
+                part_count,
                 issue_number,
                 owner,
                 repo
             );
 
-            let comment = octocrab
-                .issues(&owner, &repo)
-                .create_comment(issue_number, body)
-                .await
-                .map_err(GitHubApiError::APIError)?;
-
-            log::debug!(
-                "Successfully posted comment {} to issue #{} in {}/{}",
-                comment.id,
-                issue_number,
-                owner,
-                repo
-            );
-
-            Ok(comment.html_url.to_string())
+            Ok(last_url)
         }
     }
 

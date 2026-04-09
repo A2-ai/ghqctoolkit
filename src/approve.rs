@@ -22,6 +22,10 @@ pub struct QCApprove {
 }
 
 impl CommentBody for QCApprove {
+    fn title(&self) -> &str {
+        "QC Approved"
+    }
+
     fn generate_body(&self, git_info: &(impl GitHelpers + GitFileOps)) -> String {
         let short_sha = &self.commit.to_string()[..7];
         let metadata = vec![
@@ -55,6 +59,10 @@ pub struct QCUnapprove {
 }
 
 impl CommentBody for QCUnapprove {
+    fn title(&self) -> &str {
+        "QC Un-Approval"
+    }
+
     fn generate_body(&self, _git_info: &(impl GitHelpers + GitFileOps)) -> String {
         // Enhanced QCUnapprove now uses GitHelpers for consistency
         let metadata = vec![

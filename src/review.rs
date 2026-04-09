@@ -72,6 +72,10 @@ impl CommentBody for QCReview {
     fn issue(&self) -> &Issue {
         &self.issue
     }
+
+    fn title(&self) -> &str {
+        "QC Review"
+    }
 }
 
 impl QCReview {

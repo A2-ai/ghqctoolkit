@@ -148,6 +148,10 @@ pub struct PreviousQCDiffComment {
 }
 
 impl CommentBody for PreviousQCDiffComment {
+    fn title(&self) -> &str {
+        "Previous QC"
+    }
+
     fn generate_body(&self, git_info: &(impl GitHelpers + GitFileOps)) -> String {
         let prev_short = &self.prev_commit.to_string()[..7];
 
