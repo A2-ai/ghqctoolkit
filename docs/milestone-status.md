@@ -68,7 +68,20 @@ ghqc milestone status --all-milestones
 | Git Status | Whether the file is up to date with its tracked remote |
 | Checklist | Completed checklist items out of total |
 
+## File Rename Alerts
+
+Before computing status, `ghqc` checks open issues for files that have been renamed in a committed change. If any are found, a warning is printed above the table:
+
+```shell
+⚠️  Detected 1 file rename(s):
+  `scripts/file_b.R` → `scripts/file_b_renamed.R` (issue #42)
+  Run `ghqc issue rename` to confirm.
+```
+
+Run [`ghqc issue rename`](issue-rename.md) to update the issue title and record the rename in the issue body.
+
 ## See Also
 
 - [`ghqc issue status`](issue-status.md) — detailed status for a single issue
+- [`ghqc issue rename`](issue-rename.md) — confirm a detected file rename
 - [`ghqc milestone record`](milestone-record.md) — generate a PDF record once issues are approved

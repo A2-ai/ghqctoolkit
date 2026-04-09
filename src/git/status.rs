@@ -349,7 +349,11 @@ fn is_file_tracked(repo_path: &std::path::Path, file: &std::path::Path) -> bool 
     match output {
         Ok(o) => o.status.success(),
         Err(e) => {
-            log::warn!("[rename] is_file_tracked {:?}: failed to spawn git: {}", file, e);
+            log::warn!(
+                "[rename] is_file_tracked {:?}: failed to spawn git: {}",
+                file,
+                e
+            );
             false
         }
     }
@@ -384,11 +388,16 @@ fn find_rename_target(repo_path: &std::path::Path, old_path: &std::path::Path) -
         .ok()?;
 
     if !commit_output.status.success() {
-        log::warn!("[rename] find_rename_target {:?}: git log -1 failed", old_path);
+        log::warn!(
+            "[rename] find_rename_target {:?}: git log -1 failed",
+            old_path
+        );
         return None;
     }
 
-    let commit_hash = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+    let commit_hash = String::from_utf8_lossy(&commit_output.stdout)
+        .trim()
+        .to_string();
     if commit_hash.is_empty() {
         return None;
     }
@@ -407,7 +416,11 @@ fn find_rename_target(repo_path: &std::path::Path, old_path: &std::path::Path) -
         .ok()?;
 
     if !show_output.status.success() {
-        log::warn!("[rename] find_rename_target {:?}: git show {} failed", old_path, commit_hash);
+        log::warn!(
+            "[rename] find_rename_target {:?}: git show {} failed",
+            old_path,
+            commit_hash
+        );
         return None;
     }
 
@@ -422,7 +435,7 @@ fn find_rename_target(repo_path: &std::path::Path, old_path: &std::path::Path) -
         if parts.len() == 3 && PathBuf::from(parts[1]) == old_path {
             let new_path = PathBuf::from(parts[2]);
             if is_file_tracked(repo_path, &new_path) {
-                log::info!("[rename] {:?} → {:?}", old_path, new_path);
+                log::debug!("[rename] {:?} → {:?}", old_path, new_path);
                 return Some(new_path);
             }
         }
@@ -437,7 +450,10 @@ fn find_rename_target(repo_path: &std::path::Path, old_path: &std::path::Path) -
 /// Returns one `FileRenameEvent` (without commit hash) per detected rename.
 /// The commit hash field is left empty here — callers that need it should fetch
 /// it separately, or it will be populated when the rename is confirmed.
-pub fn detect_renames(repo_path: &std::path::Path, issue_paths: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
+pub fn detect_renames(
+    repo_path: &std::path::Path,
+    issue_paths: &[PathBuf],
+) -> Vec<(PathBuf, PathBuf)> {
     let mut renames = Vec::new();
     for old_path in issue_paths {
         if is_file_tracked(repo_path, old_path) {
@@ -453,7 +469,13 @@ pub fn detect_renames(repo_path: &std::path::Path, issue_paths: &[PathBuf]) -> V
 /// Get the short (8-char) HEAD commit hash for the given repo path.
 pub fn head_commit_hash(repo_path: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "rev-parse", "--short", "HEAD"])
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "rev-parse",
+            "--short",
+            "HEAD",
+        ])
         .output()
         .ok()?;
     if output.status.success() {
