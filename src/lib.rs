@@ -60,8 +60,8 @@ pub use git::{
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, FileRenameEvent, IssueCommit, IssueError,
-    IssueThread, determine_relationship_from_body, file_history_section, parse_blocking_qcs,
-    parse_branch_from_body, parse_file_history,
+    IssueThread, determine_relationship_from_body, file_history_section, find_checklist_start,
+    parse_blocking_qcs, parse_branch_from_body, parse_file_history, splice_file_history,
 };
 pub use qc_status::{
     BlockingQCStatus, ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists,

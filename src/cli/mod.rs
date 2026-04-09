@@ -3,6 +3,7 @@ mod auth;
 mod context;
 mod file_parser;
 mod interactive;
+pub mod rename;
 mod sitrep;
 mod status;
 
@@ -37,6 +38,7 @@ pub use interactive::{
     prompt_milestone_archive, prompt_milestone_record,
 };
 pub use sitrep::SitRep;
+pub use rename::{confirm_rename_noninteractive, interactive_rename};
 pub use status::{
     interactive_milestone_status, interactive_status, milestone_status, single_issue_status,
 };

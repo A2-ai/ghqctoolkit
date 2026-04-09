@@ -13,7 +13,7 @@ use crate::create::QCIssueError;
 use crate::git::{GitFileOps, GitHelpers, GitHubApiError};
 use crate::{
     FileRenameEvent, GitProvider, QCEntry, batch_post_qc_entries, create_labels_if_needed,
-    file_history_section, get_repo_users, head_commit_hash, parse_file_history,
+    file_history_section, get_repo_users, head_commit_hash, parse_file_history, splice_file_history,
 };
 use octocrab::models::issues::Issue as OctocrabIssue;
 use axum::{
@@ -475,47 +475,3 @@ pub async fn rename_issue<G: GitProvider + 'static>(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Insert (or replace) the `## File History` section in the issue body.
-///
-/// If the section already exists, it is replaced in-place.
-/// Otherwise it is inserted immediately before the checklist heading (`# `)
-/// or appended at the end.
-fn splice_file_history(body: &str, history_section: &str) -> String {
-    let history_trimmed = history_section.trim_end();
-
-    // If a File History section already exists, replace it in-place.
-    if let Some(start) = body.find("## File History") {
-        let before = body[..start].trim_end();
-        let after_header = &body[start + "## File History".len()..];
-        // Find the next level-2 heading (start of the following section).
-        let after = match after_header.find("\n## ") {
-            Some(p) => &after_header[p + 1..], // keep the leading newline before "## "
-            None => "",
-        };
-        if after.is_empty() {
-            return format!("{}\n{}", before, history_trimmed);
-        }
-        return format!("{}\n{}\n\n{}", before, history_trimmed, after);
-    }
-
-    // Insert before the checklist heading or append.
-    if let Some(checklist_pos) = find_checklist_start(body) {
-        let before = body[..checklist_pos].trim_end();
-        let rest = &body[checklist_pos..];
-        format!("{}\n\n{}\n\n{}", before, history_trimmed, rest)
-    } else {
-        format!("{}\n\n{}", body.trim_end(), history_trimmed)
-    }
-}
-
-/// Find the byte offset of the first `# ` heading that is NOT `## ` (the checklist heading).
-fn find_checklist_start(body: &str) -> Option<usize> {
-    let mut pos = 0usize;
-    for line in body.lines() {
-        if line.starts_with("# ") && !line.starts_with("## ") {
-            return Some(pos);
-        }
-        pos += line.len() + 1; // +1 for the '\n'
-    }
-    None
-}

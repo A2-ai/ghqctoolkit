@@ -9,8 +9,9 @@ use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
     RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
     get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token,
-    interactive_milestone_status, interactive_status, milestone_status, prompt_archive,
-    prompt_context_files, prompt_milestone_record, single_issue_status,
+    confirm_rename_noninteractive, interactive_milestone_status, interactive_rename,
+    interactive_status, milestone_status, prompt_archive, prompt_context_files,
+    prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -265,6 +266,17 @@ enum IssueCommands {
 
         /// File path of issue to check status for (will prompt if not provided)
         #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
+    /// Confirm detected file renames and update issue titles
+    Rename {
+        /// Milestone to check for renames (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path of the issue to rename (auto-detects the new path from git history).
+        /// Requires --milestone. Skips interactive prompts.
+        #[arg(short, long, requires = "milestone")]
         file: Option<PathBuf>,
     },
 }
@@ -634,6 +646,43 @@ async fn main() -> Result<()> {
                     println!("{}", review_url);
                     if let Some(message) = stash.message {
                         println!("{}", message);
+                    }
+                }
+                IssueCommands::Rename { milestone, file } => {
+                    match (milestone, file) {
+                        (Some(milestone_name), Some(old_file)) => {
+                            // Non-interactive: auto-detect the new path for the specified file.
+                            let all_milestones = git_info.get_milestones().await?;
+                            let milestone = all_milestones
+                                .iter()
+                                .find(|m| m.title == milestone_name)
+                                .ok_or_else(|| anyhow!("No milestone found with name '{milestone_name}'"))?;
+                            let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
+                            let issue = issues
+                                .iter()
+                                .find(|i| PathBuf::from(&i.title) == old_file)
+                                .ok_or_else(|| anyhow!("No open issue found for file '{}'", old_file.display()))?;
+                            confirm_rename_noninteractive(&git_info, issue, &old_file).await?;
+                            println!("✅ Issue #{} renamed.", issue.number);
+                        }
+                        (milestone_opt, None) => {
+                            // Interactive mode: prompt for milestone (or use provided), detect, confirm each.
+                            let all_milestones = git_info.get_milestones().await?;
+                            let milestones = if let Some(name) = milestone_opt {
+                                let filtered: Vec<Milestone> = all_milestones
+                                    .into_iter()
+                                    .filter(|m| m.title == name)
+                                    .collect();
+                                if filtered.is_empty() {
+                                    bail!("No milestone found with name '{name}'");
+                                }
+                                filtered
+                            } else {
+                                all_milestones
+                            };
+                            interactive_rename(&milestones, &git_info).await?;
+                        }
+                        _ => unreachable!("clap requires = constraints prevent partial args"),
                     }
                 }
                 IssueCommands::Status { milestone, file } => {

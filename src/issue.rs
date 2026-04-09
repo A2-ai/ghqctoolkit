@@ -602,6 +602,49 @@ pub fn parse_file_history(body: &str) -> Vec<FileRenameEvent> {
     events
 }
 
+/// Insert (or replace) the `## File History` section in the issue body.
+///
+/// If the section already exists it is replaced in-place.
+/// Otherwise it is inserted immediately before the first `# ` checklist heading,
+/// or appended at the end if no such heading exists.
+pub fn splice_file_history(body: &str, history_section: &str) -> String {
+    let history_trimmed = history_section.trim_end();
+
+    if let Some(start) = body.find("## File History") {
+        let before = body[..start].trim_end();
+        let after_header = &body[start + "## File History".len()..];
+        let after = match after_header.find("\n## ") {
+            Some(p) => &after_header[p + 1..],
+            None => "",
+        };
+        return if after.is_empty() {
+            format!("{}\n{}", before, history_trimmed)
+        } else {
+            format!("{}\n{}\n\n{}", before, history_trimmed, after)
+        };
+    }
+
+    if let Some(checklist_pos) = find_checklist_start(body) {
+        let before = body[..checklist_pos].trim_end();
+        let rest = &body[checklist_pos..];
+        format!("{}\n\n{}\n\n{}", before, history_trimmed, rest)
+    } else {
+        format!("{}\n\n{}", body.trim_end(), history_trimmed)
+    }
+}
+
+/// Find the byte offset of the first `# ` heading that is NOT `## `.
+pub fn find_checklist_start(body: &str) -> Option<usize> {
+    let mut pos = 0usize;
+    for line in body.lines() {
+        if line.starts_with("# ") && !line.starts_with("## ") {
+            return Some(pos);
+        }
+        pos += line.len() + 1;
+    }
+    None
+}
+
 /// Generate the markdown for a "## File History" section.
 pub fn file_history_section(events: &[FileRenameEvent]) -> String {
     let mut section = String::from("## File History\n");
