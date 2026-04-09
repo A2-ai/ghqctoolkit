@@ -1,7 +1,7 @@
 use anyhow::Result;
 use inquire::Confirm;
-use octocrab::models::issues::Issue;
 use octocrab::models::Milestone;
+use octocrab::models::issues::Issue;
 use std::path::PathBuf;
 
 use crate::cli::interactive::prompt_existing_milestone;
@@ -73,7 +73,10 @@ pub async fn alert_renames<G: GitProvider + 'static>(
     println!();
     println!("⚠️  Detected {} file rename(s):", renames.len());
     for (old_path, new_path) in &renames {
-        if let Some(issue) = open_issues.iter().find(|i| PathBuf::from(&i.title) == *old_path) {
+        if let Some(issue) = open_issues
+            .iter()
+            .find(|i| PathBuf::from(&i.title) == *old_path)
+        {
             println!(
                 "  `{}` → `{}` (issue #{})",
                 old_path.display(),
@@ -129,7 +132,10 @@ pub async fn interactive_rename<G: GitProvider + 'static>(
     .await?;
 
     if renames.is_empty() {
-        println!("No file renames detected for open issues in '{}'.", milestone.title);
+        println!(
+            "No file renames detected for open issues in '{}'.",
+            milestone.title
+        );
         return Ok(());
     }
 
@@ -189,10 +195,8 @@ pub async fn confirm_rename_noninteractive<G: GitProvider + 'static>(
 ) -> Result<()> {
     let repo_path = git_info.path().to_path_buf();
     let old_path_clone = old_path.clone();
-    let renames = tokio::task::spawn_blocking(move || {
-        detect_renames(&repo_path, &[old_path_clone])
-    })
-    .await?;
+    let renames =
+        tokio::task::spawn_blocking(move || detect_renames(&repo_path, &[old_path_clone])).await?;
 
     let new_path = renames
         .into_iter()
@@ -234,7 +238,11 @@ async fn confirm_rename<G: GitProvider>(
     let new_body = splice_file_history(&current_body, &history_section);
 
     git_info
-        .update_issue(raw_issue.number as u64, Some(new_path_str.clone()), Some(new_body))
+        .update_issue(
+            raw_issue.number as u64,
+            Some(new_path_str.clone()),
+            Some(new_body),
+        )
         .await?;
 
     log::info!(

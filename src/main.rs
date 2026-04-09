@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
-    RelevantFileArg, RelevantFileArgParser, find_issue, generate_archive_name,
-    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token,
-    confirm_rename_noninteractive, interactive_milestone_status, interactive_rename,
+    RelevantFileArg, RelevantFileArgParser, confirm_rename_noninteractive, find_issue,
+    generate_archive_name, get_milestone_issue_threads, gh_auth_login, gh_auth_logout,
+    gh_auth_status, gh_auth_token, interactive_milestone_status, interactive_rename,
     interactive_status, milestone_status, prompt_archive, prompt_context_files,
     prompt_milestone_record, single_issue_status,
 };
@@ -656,12 +656,16 @@ async fn main() -> Result<()> {
                             let milestone = all_milestones
                                 .iter()
                                 .find(|m| m.title == milestone_name)
-                                .ok_or_else(|| anyhow!("No milestone found with name '{milestone_name}'"))?;
+                                .ok_or_else(|| {
+                                    anyhow!("No milestone found with name '{milestone_name}'")
+                                })?;
                             let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
                             let issue = issues
                                 .iter()
                                 .find(|i| PathBuf::from(&i.title) == old_file)
-                                .ok_or_else(|| anyhow!("No open issue found for file '{}'", old_file.display()))?;
+                                .ok_or_else(|| {
+                                    anyhow!("No open issue found for file '{}'", old_file.display())
+                                })?;
                             confirm_rename_noninteractive(&git_info, issue, &old_file).await?;
                             println!("✅ Issue #{} renamed.", issue.number);
                         }

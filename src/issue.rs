@@ -596,7 +596,11 @@ pub fn parse_file_history(body: &str) -> Vec<FileRenameEvent> {
             None => continue,
         };
 
-        events.push(FileRenameEvent { old_path, new_path, commit });
+        events.push(FileRenameEvent {
+            old_path,
+            new_path,
+            commit,
+        });
     }
 
     events
@@ -1843,7 +1847,10 @@ author: test"#;
             commit: "deadbeef".to_string(),
         }];
         let section = file_history_section(&events);
-        assert_eq!(section, "## File History\n* `src/old.R` → `src/new.R` (commit: deadbeef)\n");
+        assert_eq!(
+            section,
+            "## File History\n* `src/old.R` → `src/new.R` (commit: deadbeef)\n"
+        );
     }
 
     #[test]

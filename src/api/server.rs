@@ -59,10 +59,7 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
             "/api/issues/{number}/blocked",
             get(issues::get_blocked_issues),
         )
-        .route(
-            "/api/issues/{number}/rename",
-            post(issues::rename_issue),
-        )
+        .route("/api/issues/{number}/rename", post(issues::rename_issue))
         // Comments & Actions
         .route(
             "/api/issues/{number}/comment",

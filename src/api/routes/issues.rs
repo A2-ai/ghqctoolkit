@@ -13,14 +13,15 @@ use crate::create::QCIssueError;
 use crate::git::{GitFileOps, GitHelpers, GitHubApiError};
 use crate::{
     FileRenameEvent, GitProvider, QCEntry, batch_post_qc_entries, create_labels_if_needed,
-    file_history_section, get_repo_users, head_commit_hash, parse_file_history, splice_file_history,
+    file_history_section, get_repo_users, head_commit_hash, parse_file_history,
+    splice_file_history,
 };
-use octocrab::models::issues::Issue as OctocrabIssue;
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
+use octocrab::models::issues::Issue as OctocrabIssue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -416,7 +417,9 @@ pub async fn rename_issue<G: GitProvider + 'static>(
     Json(request): Json<RenameIssueRequest>,
 ) -> Result<StatusCode, ApiError> {
     if request.new_path.trim().is_empty() {
-        return Err(ApiError::BadRequest("new_path must not be empty".to_string()));
+        return Err(ApiError::BadRequest(
+            "new_path must not be empty".to_string(),
+        ));
     }
 
     // Fetch the current issue to get its title (old path) and body.
@@ -458,7 +461,12 @@ pub async fn rename_issue<G: GitProvider + 'static>(
         .await
         .map_err(ApiError::from)?;
 
-    log::info!("Renamed issue #{number}: {:?} → {:?} (commit {})", old_path, new_path, commit_hash);
+    log::info!(
+        "Renamed issue #{number}: {:?} → {:?} (commit {})",
+        old_path,
+        new_path,
+        commit_hash
+    );
 
     // Post a timeline comment so the rename is visible in the issue thread.
     // A failure here is non-fatal: the title and body are already updated.
@@ -474,4 +482,3 @@ pub async fn rename_issue<G: GitProvider + 'static>(
 
     Ok(StatusCode::NO_CONTENT)
 }
-

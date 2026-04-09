@@ -79,11 +79,9 @@ pub async fn list_milestone_renames<G: GitProvider + 'static>(
     let repo_path = state.git_info().path().to_path_buf();
     let issue_paths: Vec<PathBuf> = open_issue_paths.iter().map(|(_, p)| p.clone()).collect();
 
-    let raw_renames = tokio::task::spawn_blocking(move || {
-        detect_renames(&repo_path, &issue_paths)
-    })
-    .await
-    .map_err(|e| ApiError::Internal(format!("Rename detection task failed: {}", e)))?;
+    let raw_renames = tokio::task::spawn_blocking(move || detect_renames(&repo_path, &issue_paths))
+        .await
+        .map_err(|e| ApiError::Internal(format!("Rename detection task failed: {}", e)))?;
 
     // Map old_path back to issue_number
     let response: Vec<DetectedRename> = raw_renames
