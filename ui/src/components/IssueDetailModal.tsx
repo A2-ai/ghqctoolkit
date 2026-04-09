@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -179,6 +179,13 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
     )
 
+  const sliderViewportRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (sliderViewportRef.current) {
+      sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
+    }
+  }, [visibleCommits])
+
   // Snap origIdx to nearest visible slider position
   const snapToVisible = (targetOrigIdx: number): number => {
     const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
@@ -263,7 +270,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
           </div>
 
           {/* Dots row + two independent overlaid sliders */}
-          <ScrollArea scrollbars="x" type="always" offsetScrollbars style={{ marginLeft: -16, marginRight: -16 }}>
+          <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
           <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
             <div style={{ position: 'relative', height: 8 }}>
               {visibleCommits.map((c, i) => {
@@ -547,6 +554,13 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
     )
 
+  const sliderViewportRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (sliderViewportRef.current) {
+      sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
+    }
+  }, [visibleCommits])
+
   const snapToVisible = (targetOrigIdx: number): number => {
     const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
     if (exact >= 0) return exact
@@ -618,7 +632,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
             />
           </div>
 
-          <ScrollArea scrollbars="x" type="always" offsetScrollbars style={{ marginLeft: -16, marginRight: -16 }}>
+          <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
             <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
               <div style={{ position: 'relative', height: 8 }}>
                 {visibleCommits.map((c, i) => {
@@ -815,6 +829,13 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
       showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
     )
 
+  const sliderViewportRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (sliderViewportRef.current) {
+      sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
+    }
+  }, [visibleCommits])
+
   const snapToVisible = (targetOrigIdx: number): number => {
     const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
     if (exact >= 0) return exact
@@ -917,7 +938,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
             />
           </div>
 
-          <ScrollArea scrollbars="x" type="always" offsetScrollbars style={{ marginLeft: -16, marginRight: -16 }}>
+          <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
             <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 32), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 8 }}>
               <div style={{ position: 'relative', height: 8 }}>
                 {visibleCommits.map((c, i) => {
