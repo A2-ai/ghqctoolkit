@@ -666,12 +666,12 @@ mod tests {
             .expect_var()
             .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
             .times(1)
-            .returning(|_| Ok("https://github.com/owner/my-config-repo.git".to_string()));
+            .returning(|_| Ok("https://github.com/owner/my-config-repo".to_string()));
 
         let result = determine_config_dir(None, &mock_env).unwrap();
 
         // Should extract "my-config-repo.git" from the URL and append to config dir
-        assert!(result.ends_with("my-config-repo.git"));
+        assert!(result.ends_with("my-config-repo"));
         assert!(result.to_string_lossy().contains("config")); // Should be in some config directory
     }
 
@@ -755,6 +755,27 @@ mod tests {
             result.unwrap_err(),
             ConfigurationError::ConfigDir(_)
         ));
+    }
+
+    #[test]
+    fn test_determine_config_dir_with_git_url() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_CONFIG_REPO"))
+            .times(1)
+            .returning(|_| Ok("https://github.com/org/repo.git".to_string()));
+
+        let result = determine_config_dir(None, &mock_env);
+        assert!(result.is_ok());
+        assert!(
+            result
+                .unwrap()
+                .components()
+                .last()
+                .map(|dir| dir.as_os_str().to_string_lossy() == "repo")
+                .unwrap_or_default()
+        );
     }
 
     #[test]
