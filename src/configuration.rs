@@ -487,9 +487,11 @@ pub fn determine_config_dir(
         let repo_name = url_path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                ConfigurationError::ConfigDir(format!("Cannot extract repo name from URL: {}", url))
-            })?;
+            .map(|name| name.trim_end_matches(".git"))
+            .ok_or(ConfigurationError::ConfigDir(format!(
+                "Cannot extract repo name from URL: {}",
+                url
+            )))?;
 
         let dir = config_dir?.join(repo_name);
         log::debug!("Using env var directory: {}", dir.display());
