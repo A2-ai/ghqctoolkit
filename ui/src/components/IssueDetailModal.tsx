@@ -389,7 +389,6 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       title="Comment Preview"
       size={800}
       centered
-      withinPortal={false}
       styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
     >
       <iframe
@@ -406,7 +405,6 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       title={postError ? 'Post Failed' : 'Comment Posted'}
       size="sm"
       centered
-      withinPortal={false}
     >
       {postError ? (
         <Text c="red" size="sm">{postError}</Text>
@@ -741,7 +739,6 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       title="Comment Preview"
       size={800}
       centered
-      withinPortal={false}
       styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
     >
       <iframe
@@ -757,7 +754,6 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
       title={postError ? 'Post Failed' : 'Comment Posted'}
       size="sm"
       centered
-      withinPortal={false}
     >
       {postError ? (
         <Text c="red" size="sm">{postError}</Text>
@@ -1023,7 +1019,6 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
       title="Comment Preview"
       size={800}
       centered
-      withinPortal={false}
       styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
     >
       <iframe
@@ -1039,7 +1034,6 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
       title={postError ? 'Approve Failed' : 'Approved'}
       size="sm"
       centered
-      withinPortal={false}
     >
       {postError ? (
         <Text c="red" size="sm">{postError}</Text>
