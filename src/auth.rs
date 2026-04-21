@@ -117,7 +117,7 @@ impl AuthStore {
         let read_dir = match fs::read_dir(self.hosts_dir()) {
             Ok(d) => d,
             Err(e) => {
-                log::warn!(
+                log::debug!(
                     "Failed to read {}: {e}. Skipping auth store loading...",
                     self.hosts_dir().display()
                 );
