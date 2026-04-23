@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Group, Loader, Stack, Text, TextInput, Textarea } from '@mantine/core'
+import { Alert, Button, Group, Loader, Stack, Text, TextInput, Textarea, Tooltip } from '@mantine/core'
 import { fetchChecklists } from '~/api/checklists'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
+import { Splitter, useResizableWidth } from './ResizableSplitter'
 
 export interface ChecklistDraft {
   name: string
@@ -40,6 +41,8 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
   // Editor state — reflects what's currently in the fields (may be unsaved)
   const [editorName, setEditorName] = useState('')
   const [editorContent, setEditorContent] = useState('')
+
+  const { width: listWidth, onMouseDown: onSplitterDown, dragging } = useResizableWidth(140)
 
   // Custom template stored for "+ New"
   const customRef = useRef<{ name: string; content: string } | null>(null)
@@ -176,32 +179,33 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
   if (error) return <Alert color="red">{error}</Alert>
 
   return (
-    <div style={{ display: 'flex', gap: 16 }}>
+    <div style={{ display: 'flex', gap: 8 }}>
       {/* Left: vertical tab list */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 140, flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: listWidth, flexShrink: 0 }}>
         {tabs.map((tab) => {
           const active = tab.key === activeKey
           return (
-            <button
-              key={tab.key}
-              onClick={() => { loadTab(tab.key); onSelect?.() }}
-              style={{
-                textAlign: 'left',
-                padding: '6px 10px',
-                borderRadius: 4,
-                border: `1px solid ${active ? '#2f9e44' : 'var(--mantine-color-gray-3)'}`,
-                background: active ? '#ebfbee' : 'white',
-                cursor: 'pointer',
-                fontWeight: active ? 600 : 400,
-                color: active ? '#2b8a3e' : 'inherit',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontSize: 13,
-              }}
-            >
-              {tab.savedName}
-            </button>
+            <Tooltip key={tab.key} label={tab.savedName} openDelay={300} withArrow>
+              <button
+                onClick={() => { loadTab(tab.key); onSelect?.() }}
+                style={{
+                  textAlign: 'left',
+                  padding: '6px 10px',
+                  borderRadius: 4,
+                  border: `1px solid ${active ? '#2f9e44' : 'var(--mantine-color-gray-3)'}`,
+                  background: active ? '#ebfbee' : 'white',
+                  cursor: 'pointer',
+                  fontWeight: active ? 600 : 400,
+                  color: active ? '#2b8a3e' : 'inherit',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: 13,
+                }}
+              >
+                {tab.savedName}
+              </button>
+            </Tooltip>
           )
         })}
         <button
@@ -220,6 +224,8 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
           + New
         </button>
       </div>
+
+      <Splitter onMouseDown={onSplitterDown} dragging={dragging} />
 
       {/* Right: editor */}
       <Stack gap="sm" style={{ flex: 1, minWidth: 0 }}>
