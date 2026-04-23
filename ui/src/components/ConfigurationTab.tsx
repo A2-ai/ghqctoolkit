@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Collapse, Divider, Text, TextInput, Button, Textarea } from '@mantine/core'
+import { Collapse, Divider, Text, TextInput, Button, Textarea, Tooltip } from '@mantine/core'
 import { IconChevronRight } from '@tabler/icons-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useConfigurationStatus, useChecklistDisplayName, setupConfiguration } from '~/api/configuration'
 import type { ConfigurationStatus } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
 import type { Checklist } from '~/api/checklists'
+import { Splitter, useResizableWidth } from './ResizableSplitter'
 
 function Section({
   title,
@@ -165,39 +166,43 @@ function ChecklistsSection({ checklists }: { checklists: Checklist[] }) {
   const visible = checklists.filter((c) => c.name !== 'Custom')
   const [activeIndex, setActiveIndex] = useState(0)
   const active = visible[activeIndex]
+  const { width: listWidth, onMouseDown: onSplitterDown, dragging } = useResizableWidth(140)
 
   if (visible.length === 0) return <Text size="sm" c="dimmed">No checklists found</Text>
 
   return (
-    <div style={{ display: 'flex', gap: 16 }}>
+    <div style={{ display: 'flex', gap: 8 }}>
       {/* Left: list */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 140, flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: listWidth, flexShrink: 0 }}>
         {visible.map((c, i) => {
           const isActive = i === activeIndex
           return (
-            <button
-              key={c.name}
-              onClick={() => setActiveIndex(i)}
-              style={{
-                textAlign: 'left',
-                padding: '6px 10px',
-                borderRadius: 4,
-                border: `1px solid ${isActive ? '#2f9e44' : 'var(--mantine-color-gray-3)'}`,
-                background: isActive ? '#ebfbee' : 'white',
-                cursor: 'pointer',
-                fontWeight: isActive ? 600 : 400,
-                color: isActive ? '#2b8a3e' : 'inherit',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontSize: 13,
-              }}
-            >
-              {c.name}
-            </button>
+            <Tooltip key={c.name} label={c.name} openDelay={300} withArrow>
+              <button
+                onClick={() => setActiveIndex(i)}
+                style={{
+                  textAlign: 'left',
+                  padding: '6px 10px',
+                  borderRadius: 4,
+                  border: `1px solid ${isActive ? '#2f9e44' : 'var(--mantine-color-gray-3)'}`,
+                  background: isActive ? '#ebfbee' : 'white',
+                  cursor: 'pointer',
+                  fontWeight: isActive ? 600 : 400,
+                  color: isActive ? '#2b8a3e' : 'inherit',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: 13,
+                }}
+              >
+                {c.name}
+              </button>
+            </Tooltip>
           )
         })}
       </div>
+
+      <Splitter onMouseDown={onSplitterDown} dragging={dragging} />
 
       {/* Right: read-only content */}
       {active && (
