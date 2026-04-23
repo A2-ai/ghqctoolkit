@@ -63,8 +63,13 @@ export function IssueDetailModal({ status, onClose, onStatusUpdate }: Props) {
 function defaultTab(status: IssueStatusResponse): string {
   switch (status.qc_status.status) {
     case 'awaiting_review':
-    case 'approval_required':
-      return status.dirty ? 'review' : 'approve'
+    case 'approval_required': {
+      const checklist = status.checklist_summary
+      const checklistComplete = checklist.total === 0 || checklist.completed === checklist.total
+      const blocking = status.blocking_qc_status
+      const blockingComplete = !blocking || blocking.total === 0 || blocking.approved_count === blocking.total
+      return checklistComplete && blockingComplete ? 'approve' : 'review'
+    }
     case 'change_requested':
     case 'in_progress':
     case 'changes_to_comment':
