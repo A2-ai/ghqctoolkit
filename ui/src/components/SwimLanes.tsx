@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Stack, Text, Title } from '@mantine/core'
+import { Card, Stack, Text, Title, Tooltip } from '@mantine/core'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import type { IssueStatusResponse, QCStatus } from '~/api/issues'
 import { IssueCard } from './IssueCard'
@@ -75,37 +75,53 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                         {...provided.droppableProps}
                         style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}
                       >
-                        {cards.map((s, index) => (
+                        {cards.map((s, index) => {
+                          const postApprovalCommit = postApprovalFileCommit(s)
+                          const colorTooltip =
+                            s.qc_status.status === 'approval_required'
+                              ? 'Issue was closed without approval'
+                              : postApprovalCommit
+                              ? 'File has changed since approval'
+                              : null
+                          return (
                           <Draggable
                             key={s.issue.number}
                             draggableId={String(s.issue.number)}
                             index={index}
                             isDragDisabled
                           >
-                            {(p) => (
-                              <Card
-                                ref={p.innerRef}
-                                {...p.draggableProps}
-                                {...p.dragHandleProps}
-                                withBorder
-                                mb={8}
-                                p={10}
-                                onClick={() => setSelected(s)}
-                                data-testid={`issue-card-${s.issue.number}`}
-                                style={{
-                                  cursor: 'pointer',
-                                  ...(s.qc_status.status === 'approval_required'
-                                    ? { backgroundColor: '#fee2e2' }
-                                    : postApprovalFileCommit(s)
-                                    ? { backgroundColor: '#ffedd5' }
-                                    : undefined),
-                                }}
-                              >
-                                <IssueCard status={s} currentBranch={currentBranch} remoteCommit={remoteCommit} postApprovalCommit={postApprovalFileCommit(s)} />
-                              </Card>
-                            )}
+                            {(p) => {
+                              const card = (
+                                <Card
+                                  ref={p.innerRef}
+                                  {...p.draggableProps}
+                                  {...p.dragHandleProps}
+                                  withBorder
+                                  mb={8}
+                                  p={10}
+                                  onClick={() => setSelected(s)}
+                                  data-testid={`issue-card-${s.issue.number}`}
+                                  style={{
+                                    cursor: 'pointer',
+                                    ...(s.qc_status.status === 'approval_required'
+                                      ? { backgroundColor: '#fee2e2' }
+                                      : postApprovalCommit
+                                      ? { backgroundColor: '#ffedd5' }
+                                      : undefined),
+                                  }}
+                                >
+                                  <IssueCard status={s} currentBranch={currentBranch} remoteCommit={remoteCommit} postApprovalCommit={postApprovalCommit} />
+                                </Card>
+                              )
+                              return colorTooltip ? (
+                                <Tooltip label={colorTooltip} withArrow position="top" openDelay={300}>
+                                  {card}
+                                </Tooltip>
+                              ) : card
+                            }}
                           </Draggable>
-                        ))}
+                          )
+                        })}
                         {cards.length === 0 && (
                           <Text c="dimmed" size="sm" style={{ textAlign: 'center', paddingTop: 8 }}>
                             Empty

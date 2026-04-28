@@ -102,10 +102,10 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
       </Group>
 
       <Tabs.Panel value="notify" pt="md" px="md" pb="md" style={{ flex: 1, overflowY: 'auto' }}>
-        <NotifyTab status={status} onStatusUpdate={onStatusUpdate} />
+        <NotifyTab status={status} onStatusUpdate={onStatusUpdate} isApproved={isApproved} />
       </Tabs.Panel>
       <Tabs.Panel value="review" pt="md" px="md" pb="md" style={{ flex: 1, overflowY: 'auto' }}>
-        <ReviewTab status={status} onStatusUpdate={onStatusUpdate} />
+        <ReviewTab status={status} onStatusUpdate={onStatusUpdate} isApproved={isApproved} />
       </Tabs.Panel>
       <Tabs.Panel value="approve" pt="md" px="md" pb="md" style={{ flex: 1, overflowY: 'auto' }}>
         <ApproveTab status={status} onStatusUpdate={onStatusUpdate} />
@@ -117,7 +117,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
   )
 }
 
-function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
+function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
   // Build oldest-first commit list
@@ -163,6 +163,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
   const [postResultOpen, setPostResultOpen] = useState(false)
   const [postResultUrl, setPostResultUrl] = useState<string | null>(null)
   const [postError, setPostError] = useState<string | null>(null)
+  const [ackApproved, setAckApproved] = useState(false)
   const queryClient = useQueryClient()
 
   // Reset when the status prop changes (different issue opened)
@@ -176,6 +177,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     setPostResultOpen(false)
     setPostResultUrl(null)
     setPostError(null)
+    setAckApproved(false)
   }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
@@ -262,6 +264,19 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     <>
     <Stack gap="md">
       <StatusCard status={status} />
+
+      {isApproved && (
+        <Alert color="orange">
+          <Text size="sm" fw={600}>This issue is already approved</Text>
+          <Text size="xs" mt={4}>Consider unapproving first before posting a notification comment.</Text>
+          <Checkbox
+            mt="xs"
+            label="Notify anyway"
+            checked={ackApproved}
+            onChange={(e) => setAckApproved(e.currentTarget.checked)}
+          />
+        </Alert>
+      )}
 
       {/* Commit range slider */}
       {visibleCommits.length > 0 && (
@@ -377,7 +392,7 @@ function NotifyTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
             </Button>
             <Button
               loading={postLoading}
-              disabled={!toCommit}
+              disabled={!toCommit || (isApproved && !ackApproved)}
               onClick={handlePost}
             >
               Post
@@ -510,7 +525,7 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
 // ---------------------------------------------------------------------------
 // Review tab — single commit selector, diff against working directory
 // ---------------------------------------------------------------------------
-function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
+function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
   const orderedCommits = [...status.commits].reverse()
@@ -539,6 +554,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
   const [postResultUrl, setPostResultUrl] = useState<string | null>(null)
   const [postStashResult, setPostStashResult] = useState<ReviewStashResult | null>(null)
   const [postError, setPostError] = useState<string | null>(null)
+  const [ackApproved, setAckApproved] = useState(false)
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -552,6 +568,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     setPostResultUrl(null)
     setPostStashResult(null)
     setPostError(null)
+    setAckApproved(false)
   }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
@@ -628,6 +645,19 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
     <>
     <Stack gap="md">
       <StatusCard status={status} />
+
+      {isApproved && (
+        <Alert color="orange">
+          <Text size="sm" fw={600}>This issue is already approved</Text>
+          <Text size="xs" mt={4}>Consider unapproving first before posting a review comment.</Text>
+          <Checkbox
+            mt="xs"
+            label="Review anyway"
+            checked={ackApproved}
+            onChange={(e) => setAckApproved(e.currentTarget.checked)}
+          />
+        </Alert>
+      )}
 
       {visibleCommits.length > 0 && (
         <Stack gap="xs">
@@ -728,7 +758,7 @@ function ReviewTab({ status, onStatusUpdate }: { status: IssueStatusResponse; on
             </Button>
             <Button
               loading={postLoading}
-              disabled={!selectedCommit}
+              disabled={!selectedCommit || (isApproved && !ackApproved)}
               onClick={handlePost}
             >
               Post
