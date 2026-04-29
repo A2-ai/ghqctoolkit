@@ -41,7 +41,7 @@ import { RelevantFilesList } from './RelevantFilesList'
 import { extractIssueNumber } from '~/utils'
 import { ToggleField } from './ToggleField'
 import { useUiSession } from '~/state/uiSession'
-import { FileFetchError, buildFileRawUrl, fetchFileContent, probeFileContentType } from '~/api/preview'
+import { buildFileRawUrl, fetchFileContent, getFileExtensionLabel, getFilePreviewKind } from '~/api/preview'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -333,38 +333,29 @@ export function ArchiveTab() {
     setPreviewLoading(true)
     setPreviewTitle(fileName)
     try {
-      const content = await fetchFileContent({ path: fileName, commit })
-      setPreviewKind('text')
+      const kind = getFilePreviewKind(fileName)
+      setPreviewKind(kind)
+      if (kind === 'pdf') {
+        setPreviewUrl(buildFileRawUrl(fileName, commit))
+        setPreviewContent(null)
+        setPreviewOpen(true)
+        return
+      }
+      if (kind !== 'text') {
+        setPreviewUrl(null)
+        setPreviewContent(`Preview is not available for ${getFileExtensionLabel(fileName)} files at a specific commit.`)
+        setPreviewOpen(true)
+        return
+      }
       setPreviewUrl(null)
+      const content = await fetchFileContent({ path: fileName, commit })
       setPreviewContent(content)
       setPreviewOpen(true)
     } catch (err) {
-      if (err instanceof FileFetchError && err.status === 404) {
-        setPreviewKind('text')
-        setPreviewUrl(null)
-        setPreviewContent(`Error: ${err.message}`)
-        setPreviewOpen(true)
-        setPreviewLoading(false)
-        return
-      }
-      try {
-        const contentType = await probeFileContentType(fileName, commit)
-        if (contentType.startsWith('application/pdf')) {
-          setPreviewKind('pdf')
-          setPreviewUrl(buildFileRawUrl(fileName, commit))
-          setPreviewContent(null)
-        } else {
-          setPreviewKind('unsupported')
-          setPreviewUrl(null)
-          setPreviewContent('Preview is not available for this file.')
-        }
-        setPreviewOpen(true)
-      } catch (probeErr) {
-        setPreviewKind('text')
-        setPreviewUrl(null)
-        setPreviewContent(`Error: ${(probeErr as Error).message}`)
-        setPreviewOpen(true)
-      }
+      setPreviewUrl(null)
+      setPreviewKind('text')
+      setPreviewContent(`Error: ${(err as Error).message}`)
+      setPreviewOpen(true)
     } finally {
       setPreviewLoading(false)
     }

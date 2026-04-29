@@ -4,11 +4,11 @@ import { API_BASE } from '../config'
 
 export type FilePreviewKind = 'text' | 'pdf' | 'unsupported'
 
-export class FileFetchError extends Error {
-  constructor(public status: number, message: string) {
-    super(message)
-    this.name = 'FileFetchError'
-  }
+export function getFilePreviewKind(path: string): FilePreviewKind {
+  const ext = path.split('.').pop()?.toLowerCase()
+  if (ext === 'pdf') return 'pdf'
+  if (ext === 'doc' || ext === 'docx' || ext === 'xls' || ext === 'xlsx') return 'unsupported'
+  return 'text'
 }
 
 export function buildFileRawUrl(path: string, commit?: string | null): string {
@@ -17,14 +17,17 @@ export function buildFileRawUrl(path: string, commit?: string | null): string {
   return `${API_BASE}/files/raw?${params.toString()}`
 }
 
-/** Fetches the raw file URL and returns its Content-Type so the UI can decide how to render. */
-export async function probeFileContentType(path: string, commit?: string | null): Promise<string> {
+export function getFileExtensionLabel(path: string): string {
+  const ext = path.split('.').pop()?.trim().toLowerCase()
+  return ext ? `.${ext}` : 'this file type'
+}
+
+export async function ensureFileExists(path: string, commit?: string | null): Promise<void> {
   const res = await fetch(buildFileRawUrl(path, commit))
   if (!res.ok) {
     const data = await res.json().catch(() => null)
-    throw new FileFetchError(res.status, data?.error ?? `Failed to fetch file: ${res.status}`)
+    throw new Error(data?.error ?? `Failed to fetch file: ${res.status}`)
   }
-  return res.headers.get('content-type') ?? ''
 }
 
 export interface FileContentRequest {
@@ -45,7 +48,7 @@ export async function fetchFileContent({ path, commit }: FileContentRequest): Pr
   const res = await fetch(`${API_BASE}/files/content?${params.toString()}`)
   if (!res.ok) {
     const data = await res.json().catch(() => null)
-    throw new FileFetchError(res.status, data?.error ?? `Failed to fetch file: ${res.status}`)
+    throw new Error(data?.error ?? `Failed to fetch file: ${res.status}`)
   }
   return res.text()
 }
