@@ -42,6 +42,7 @@ import { extractIssueNumber } from '~/utils'
 import { ToggleField } from './ToggleField'
 import { useUiSession } from '~/state/uiSession'
 import { buildFileRawUrl, fetchFileContent, getFileExtensionLabel, getFilePreviewKind } from '~/api/preview'
+import { DocPreview } from './DocPreview'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -65,7 +66,7 @@ export function ArchiveTab() {
   const [previewTitle, setPreviewTitle] = useState<string | null>(null)
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [previewKind, setPreviewKind] = useState<'text' | 'pdf' | 'unsupported'>('text')
+  const [previewKind, setPreviewKind] = useState<'text' | 'doc' | 'unsupported'>('text')
 
   function handleEditResolve(resolution: FileResolution) {
     const { file_name } = resolution
@@ -335,7 +336,7 @@ export function ArchiveTab() {
     try {
       const kind = getFilePreviewKind(fileName)
       setPreviewKind(kind)
-      if (kind === 'pdf') {
+      if (kind === 'doc') {
         setPreviewUrl(buildFileRawUrl(fileName, commit))
         setPreviewContent(null)
         setPreviewOpen(true)
@@ -915,12 +916,8 @@ export function ArchiveTab() {
           <div style={{ minHeight: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Loader size="sm" />
           </div>
-        ) : previewKind === 'pdf' && previewUrl ? (
-          <iframe
-            src={previewUrl}
-            style={{ width: '100%', height: 500, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
-            title="Archive PDF Preview"
-          />
+        ) : previewKind === 'doc' && previewUrl && previewTitle ? (
+          <DocPreview url={previewUrl} fileName={previewTitle} />
         ) : (
           <pre style={{
             margin: 0,

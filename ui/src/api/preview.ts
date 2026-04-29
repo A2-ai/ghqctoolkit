@@ -2,12 +2,13 @@ import type { CreateIssueRequest } from './create'
 import type { ApproveRequest, CreateCommentRequest, ReviewRequest, UnapproveRequest } from './issues'
 import { API_BASE } from '../config'
 
-export type FilePreviewKind = 'text' | 'pdf' | 'unsupported'
+export type FilePreviewKind = 'text' | 'doc' | 'unsupported'
+
+const DOC_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'])
 
 export function getFilePreviewKind(path: string): FilePreviewKind {
   const ext = path.split('.').pop()?.toLowerCase()
-  if (ext === 'pdf') return 'pdf'
-  if (ext === 'doc' || ext === 'docx' || ext === 'xls' || ext === 'xlsx') return 'unsupported'
+  if (ext && DOC_EXTENSIONS.has(ext)) return 'doc'
   return 'text'
 }
 

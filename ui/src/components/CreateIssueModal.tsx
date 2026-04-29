@@ -15,6 +15,7 @@ import { capitalize } from '~/utils/displayName'
 import type { RelevantFileKind } from '~/api/issues'
 import { toCreateIssueRequest } from '~/api/create'
 import { buildFileRawUrl, ensureFileExists, fetchFileContent, fetchIssuePreview, getFileExtensionLabel, getFilePreviewKind } from '~/api/preview'
+import { DocPreview } from './DocPreview'
 import { fetchFileCollaborators } from '~/api/files'
 import { wrapInGithubStyles } from '~/utils/github'
 import { useUiSession } from '~/state/uiSession'
@@ -87,37 +88,13 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
   async function handleViewFile() {
     if (!modal.selectedFile) return
     const previewKind = getFilePreviewKind(modal.selectedFile)
-    if (previewKind === 'pdf') {
+    if (previewKind === 'doc') {
       setFilePreviewLoading(true)
       try {
         await ensureFileExists(modal.selectedFile)
         setCreate((prev) => ({
           ...prev,
-          modal: { ...prev.modal, filePreviewMode: 'pdf', filePreviewContent: null, filePreviewOpen: true },
-        }))
-      } catch (err) {
-        setCreate((prev) => ({
-          ...prev,
-          modal: { ...prev.modal, filePreviewMode: 'missing', filePreviewContent: `Error: ${(err as Error).message}`, filePreviewOpen: true },
-        }))
-      } finally {
-        setFilePreviewLoading(false)
-      }
-      return
-    }
-    if (previewKind === 'unsupported') {
-      setFilePreviewLoading(true)
-      try {
-        await ensureFileExists(modal.selectedFile)
-        const extension = getFileExtensionLabel(modal.selectedFile)
-        setCreate((prev) => ({
-          ...prev,
-          modal: {
-            ...prev.modal,
-            filePreviewMode: 'unsupported',
-            filePreviewContent: `Preview is not available for ${extension} files.`,
-            filePreviewOpen: true,
-          },
+          modal: { ...prev.modal, filePreviewMode: 'doc', filePreviewContent: null, filePreviewOpen: true },
         }))
       } catch (err) {
         setCreate((prev) => ({
@@ -465,12 +442,8 @@ export function CreateIssueModal({ opened, onClose, milestoneNumber, milestoneTi
         size={800}
         centered
       >
-        {modal.filePreviewMode === 'pdf' && modal.selectedFile ? (
-          <iframe
-            src={buildFileRawUrl(modal.selectedFile)}
-            style={{ width: '100%', height: 500, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
-            title="PDF Preview"
-          />
+        {modal.filePreviewMode === 'doc' && modal.selectedFile ? (
+          <DocPreview url={buildFileRawUrl(modal.selectedFile)} fileName={modal.selectedFile} />
         ) : modal.filePreviewMode === 'unsupported' ? (
           <div style={{
             minHeight: 180,

@@ -18,9 +18,11 @@
     "@tanstack/react-query": "^5",
     "@tanstack/react-router": "^1",
     "@tanstack/react-start": "^1",
+    "docx-preview": "^0.3.7",
     "react": "^19",
     "react-arborist": "^3.4.3",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/react": "^19",

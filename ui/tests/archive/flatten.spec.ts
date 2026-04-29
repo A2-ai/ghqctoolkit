@@ -497,7 +497,7 @@ test('archive preview button embeds pdf previews at the selected commit', async 
 
   const preview = page.getByRole('dialog', { name: 'docs/report.pdf' })
   await expect(preview).toBeVisible()
-  const iframe = preview.getByTitle('Archive PDF Preview')
+  const iframe = preview.locator('iframe[title="docs/report.pdf"]')
   await expect(iframe).toBeVisible()
   await expect(iframe).toHaveAttribute('src', /\/api\/files\/raw\?path=docs%2Freport\.pdf&commit=aaa1111/)
 })
