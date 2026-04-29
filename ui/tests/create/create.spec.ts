@@ -248,7 +248,7 @@ test('pdf files open in embedded preview during issue creation', async ({ page }
 
   const preview = page.getByRole('dialog', { name: 'report.pdf' })
   await expect(preview).toBeVisible()
-  const iframe = preview.getByTitle('PDF Preview')
+  const iframe = preview.locator('iframe[title="docs/report.pdf"]')
   await expect(iframe).toBeVisible()
   await expect(iframe).toHaveAttribute('src', /\/api\/files\/raw\?path=docs%2Freport\.pdf/)
 })
@@ -286,7 +286,7 @@ test('previous qc relevant files can preview the diff comment before adding', as
   await expect(preview.getByTitle('Previous QC Diff Preview')).toBeVisible()
 })
 
-test('unsupported files show a file-type message during issue creation', async ({ page }) => {
+test('docx files open in embedded doc preview during issue creation', async ({ page }) => {
   await setupRoutes(page, {
     issueStatuses: { results: [], errors: [] },
     fileTree: {
@@ -314,9 +314,12 @@ test('unsupported files show a file-type message during issue creation', async (
   await modal.getByRole('treeitem', { name: 'plan.docx' }).click()
   await modal.getByRole('button', { name: 'View File' }).click()
 
+  // DocPreview mounts for docx; the mock /api/files/raw returns invalid bytes,
+  // so the renderer surfaces an error instead of the legacy "preview not
+  // available" text.
   const preview = page.getByRole('dialog', { name: 'plan.docx' })
   await expect(preview).toBeVisible()
-  await expect(preview.getByText('Preview is not available for .docx files.')).toBeVisible()
+  await expect(preview.getByText(/Failed to render/)).toBeVisible()
 })
 
 test('missing files show a not found message during issue creation', async ({ page }) => {
