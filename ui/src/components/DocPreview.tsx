@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader, Tabs, Text } from '@mantine/core'
+import { ActionIcon, Group, Loader, Tabs, Text, Tooltip } from '@mantine/core'
+import { IconArrowsMaximize, IconMinus, IconPlus, IconRefresh } from '@tabler/icons-react'
 import { renderAsync } from 'docx-preview'
 import * as XLSX from 'xlsx'
 
@@ -25,20 +26,30 @@ interface XlsxSheet {
   html: string
 }
 
+const ZOOM_STEP = 0.1
+const MIN_ZOOM = 0.25
+const MAX_ZOOM = 3
+
 export function DocPreview({ url, fileName, height = 500 }: Props) {
   const format = detectFormat(fileName)
   const docxRef = useRef<HTMLDivElement | null>(null)
+  const wrapperRef = useRef<HTMLElement | null>(null)
   const [loading, setLoading] = useState(format === 'docx' || format === 'xlsx')
   const [error, setError] = useState<string | null>(null)
   const [sheets, setSheets] = useState<XlsxSheet[]>([])
   const [activeSheet, setActiveSheet] = useState<string | null>(null)
+  // null = "fit to width" (auto). number = explicit user zoom.
+  const [userZoom, setUserZoom] = useState<number | null>(null)
+  const [fitScale, setFitScale] = useState<number>(1)
 
+  // Render docx and set up a ResizeObserver that recomputes the fit-to-width scale.
   useEffect(() => {
     if (format !== 'docx') return
     let cancelled = false
     let resizeObserver: ResizeObserver | null = null
     setLoading(true)
     setError(null)
+    setUserZoom(null)
     fetch(url)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to fetch (${res.status})`)
@@ -59,26 +70,20 @@ export function DocPreview({ url, fileName, height = 500 }: Props) {
         if (cancelled || !docxRef.current) return
         const host = docxRef.current
         const wrapper = host.querySelector<HTMLElement>('.docx-wrapper')
-        if (!wrapper) return
+        const sections = Array.from(host.querySelectorAll<HTMLElement>('section.docx'))
+        if (!wrapper || sections.length === 0) return
+        wrapperRef.current = wrapper
         const observed = host.parentElement ?? host
-        // Look at any descendant that carries an explicit width (sections, article pages, etc.)
-        // and pick the widest natural width. Fall back to scrollWidth.
-        const widthCandidates = Array.from(
-          wrapper.querySelectorAll<HTMLElement>('section.docx, article, .docx-page'),
-        )
-        const widestPage = Math.max(
-          wrapper.scrollWidth,
-          ...widthCandidates.map((el) => el.offsetWidth),
-        )
-        const fit = () => {
-          ;(wrapper.style as CSSStyleDeclaration & { zoom?: string }).zoom = '1'
-          const available = observed.clientWidth - 48 // gray "desk" side padding
-          if (available <= 0 || widestPage <= 0) return
-          const scale = Math.min(1, available / widestPage)
-          ;(wrapper.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(scale)
+        const widestPage = sections.reduce((max, s) => Math.max(max, s.offsetWidth), 0)
+        const recomputeFit = () => {
+          const available = observed.clientWidth - 64
+          const next = available > 0 && widestPage > 0
+            ? Math.min(1, available / widestPage)
+            : 1
+          setFitScale((cur) => (Math.abs(cur - next) < 0.001 ? cur : next))
         }
-        fit()
-        resizeObserver = new ResizeObserver(fit)
+        recomputeFit()
+        resizeObserver = new ResizeObserver(recomputeFit)
         resizeObserver.observe(observed)
       })
       .catch((err) => {
@@ -92,6 +97,15 @@ export function DocPreview({ url, fileName, height = 500 }: Props) {
       resizeObserver?.disconnect()
     }
   }, [format, url])
+
+  // Apply zoom whenever userZoom or the fit scale changes.
+  const effectiveZoom = userZoom ?? fitScale
+  useEffect(() => {
+    if (format !== 'docx') return
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    ;(wrapper.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(effectiveZoom)
+  }, [format, effectiveZoom])
 
   useEffect(() => {
     if (format !== 'xlsx') return
@@ -233,32 +247,76 @@ export function DocPreview({ url, fileName, height = 500 }: Props) {
     )
   }
 
+  const zoomIn = () => setUserZoom((z) => clampZoom((z ?? fitScale) + ZOOM_STEP))
+  const zoomOut = () => setUserZoom((z) => clampZoom((z ?? fitScale) - ZOOM_STEP))
+  const resetZoom = () => setUserZoom(null)
+  const zoomTo100 = () => setUserZoom(1)
+
   return (
-    <div style={containerStyle}>
-      {loading && (
-        <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Loader size="sm" />
-        </div>
+    <div style={{ ...containerStyle, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {!error && !loading && (
+        <Group
+          gap={4}
+          justify="flex-end"
+          style={{
+            flexShrink: 0,
+            padding: '4px 8px',
+            background: 'var(--mantine-color-gray-1)',
+            borderBottom: '1px solid var(--mantine-color-gray-3)',
+          }}
+        >
+          <Tooltip label="Fit to width">
+            <ActionIcon variant="subtle" size="sm" onClick={resetZoom} aria-label="Fit to width">
+              <IconArrowsMaximize size={14} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Zoom out">
+            <ActionIcon variant="subtle" size="sm" onClick={zoomOut} aria-label="Zoom out">
+              <IconMinus size={14} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Reset to 100%">
+            <ActionIcon variant="subtle" size="sm" onClick={zoomTo100} aria-label="Reset to 100%">
+              <IconRefresh size={14} />
+            </ActionIcon>
+          </Tooltip>
+          <Text size="xs" style={{ width: 48, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+            {Math.round(effectiveZoom * 100)}%
+          </Text>
+          <Tooltip label="Zoom in">
+            <ActionIcon variant="subtle" size="sm" onClick={zoomIn} aria-label="Zoom in">
+              <IconPlus size={14} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       )}
-      {error && !loading && (
-        <div style={{ padding: 16 }}>
-          <Text size="sm" c="red">Failed to render: {error}</Text>
-        </div>
-      )}
-      {!error && (
-        <div
-          ref={docxRef}
-          className="docx-preview-host"
-          style={{ padding: 0, display: loading ? 'none' : 'block' }}
-        />
-      )}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+        {loading && (
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Loader size="sm" />
+          </div>
+        )}
+        {error && !loading && (
+          <div style={{ padding: 16 }}>
+            <Text size="sm" c="red">Failed to render: {error}</Text>
+          </div>
+        )}
+        {!error && (
+          <div
+            ref={docxRef}
+            className="docx-preview-host"
+            style={{ visibility: loading ? 'hidden' : 'visible' }}
+          />
+        )}
+      </div>
       <style>{`
         .docx-preview-host {
           background: var(--mantine-color-gray-2);
           min-height: 100%;
           padding: 12px 24px;
           box-sizing: border-box;
-          overflow: hidden;
+          width: max-content;
+          min-width: 100%;
         }
         .docx-preview-host .docx-wrapper {
           background: transparent;
@@ -268,12 +326,18 @@ export function DocPreview({ url, fileName, height = 500 }: Props) {
           margin: 0 auto 16px;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
           background: #fff;
+          box-sizing: border-box;
         }
         .docx-preview-host .docx-wrapper > section.docx:last-child {
           margin-bottom: 0;
         }
         .docx-preview-host img { max-width: 100%; height: auto; }
+        .docx-preview-host p { line-height: 1.15; }
       `}</style>
     </div>
   )
+}
+
+function clampZoom(z: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100))
 }
