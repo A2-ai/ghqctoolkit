@@ -55,7 +55,6 @@ tempfile = "3.0"
 uuid = { version = "1.21", features = ["v4"] }
 openssl = { version = "0.10", features = ["vendored"] }
 owo-colors = "4.3.0"
-rdocx = { version = "0.1", optional = true }
 
 [features]
 cli = [
@@ -71,7 +70,6 @@ api = [
     "dep:tower",
     "dep:tower-http",
     "dep:pulldown-cmark",
-    "dep:rdocx",
 ]
 ui = [
     "api",

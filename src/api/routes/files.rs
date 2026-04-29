@@ -11,7 +11,6 @@ use axum::{
     response::Response,
 };
 use gix::ObjectId;
-use rdocx::Document;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -55,8 +54,13 @@ fn sanitize_repo_relative_path(raw_path: &str) -> Result<String, ApiError> {
     Ok(path)
 }
 
-fn preview_content_type(ext: Option<&str>) -> &'static str {
-    match ext {
+fn preview_content_type(file_path: &Path) -> &'static str {
+    match file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("pdf") => "application/pdf",
         Some("doc") => "application/msword",
         Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -206,7 +210,7 @@ pub async fn get_file_raw<G: GitProvider + 'static>(
     let path = sanitize_repo_relative_path(&query.path)?;
     let repo_path = state.git_info().path().to_path_buf();
     let file_path = repo_path.join(&path);
-    let mut bytes = if let Some(commit) = query.commit {
+    let bytes = if let Some(commit) = query.commit {
         let commit = ObjectId::from_hex(commit.as_bytes()).map_err(|e| {
             ApiError::BadRequest(format!("Invalid commit hash '{}': {}", commit, e))
         })?;
@@ -229,34 +233,10 @@ pub async fn get_file_raw<G: GitProvider + 'static>(
             .map_err(|_| ApiError::NotFound(format!("File not found: {}", path)))?
     };
 
-    let mut ext = file_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|ext| ext.to_lowercase());
-
-    if ext
-        .as_deref()
-        .map(|e| ["doc", "docx"].contains(&e))
-        .unwrap_or_default()
-    {
-        match Document::from_bytes(&bytes).and_then(|d| d.to_pdf()) {
-            Ok(pdf) => {
-                bytes = pdf;
-                ext = Some("pdf".to_string());
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to convert {} to pdf for easier preview: {e}",
-                    file_path.display()
-                );
-            }
-        }
-    }
-
     let mut headers = HeaderMap::new();
     headers.insert(
         CONTENT_TYPE,
-        HeaderValue::from_static(preview_content_type(ext.as_deref())),
+        HeaderValue::from_static(preview_content_type(&file_path)),
     );
     headers.insert(
         CONTENT_DISPOSITION,
@@ -272,6 +252,7 @@ pub async fn get_file_raw<G: GitProvider + 'static>(
 #[cfg(test)]
 mod tests {
     use super::{inline_content_disposition, preview_content_type, sanitize_repo_relative_path};
+    use std::path::Path;
 
     #[test]
     fn sanitize_repo_relative_path_rejects_dot_segments() {
@@ -282,13 +263,16 @@ mod tests {
 
     #[test]
     fn preview_content_type_recognizes_pdf_and_word_files() {
-        assert_eq!(preview_content_type(Some("pdf")), "application/pdf");
         assert_eq!(
-            preview_content_type(Some("docx")),
+            preview_content_type(Path::new("report.pdf")),
+            "application/pdf"
+        );
+        assert_eq!(
+            preview_content_type(Path::new("report.docx")),
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         );
         assert_eq!(
-            preview_content_type(Some("bin")),
+            preview_content_type(Path::new("report.bin")),
             "application/octet-stream"
         );
     }
