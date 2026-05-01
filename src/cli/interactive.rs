@@ -64,9 +64,13 @@ impl MilestoneStatus {
 /// Modular milestone selection - allows creation of new milestones
 pub fn prompt_milestone(milestones: Vec<Milestone>) -> Result<MilestoneStatus> {
     let mut options = vec!["📝 Create new milestone".to_string()];
-    let milestone_titles: Vec<String> = milestones
+    let mut open_milestones: Vec<&Milestone> = milestones
         .iter()
         .filter(|m| m.state.as_deref() == Some("open"))
+        .collect();
+    open_milestones.sort_by(|a, b| b.number.cmp(&a.number));
+    let milestone_titles: Vec<String> = open_milestones
+        .iter()
         .map(|m| format!("🎯 {}", m.title))
         .collect();
 
@@ -131,10 +135,11 @@ pub fn prompt_milestone(milestones: Vec<Milestone>) -> Result<MilestoneStatus> {
 
 /// Modular milestone selection - only existing milestones (for comments)
 pub fn prompt_existing_milestone(milestones: &[Milestone]) -> Result<Milestone> {
-    let open_milestones: Vec<_> = milestones
+    let mut open_milestones: Vec<_> = milestones
         .iter()
         .filter(|m| m.state.as_deref() == Some("open"))
         .collect();
+    open_milestones.sort_by(|a, b| b.number.cmp(&a.number));
 
     if open_milestones.is_empty() {
         return Err(anyhow::anyhow!(
@@ -175,6 +180,7 @@ pub fn prompt_file(current_dir: &PathBuf, issues: &[Issue]) -> Result<PathBuf> {
             &mut self,
             input: &str,
         ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let input = input.trim();
             let mut suggestions = Vec::new();
 
             let (base_path, search_term) = if input.contains('/') {
@@ -329,6 +335,7 @@ pub fn prompt_assignees(repo_users: &[RepoUser]) -> Result<Vec<String>> {
             &mut self,
             input: &str,
         ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let input = input.trim();
             let mut suggestions = Vec::new();
 
             for user in &self.users {
@@ -490,6 +497,7 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
             &mut self,
             input: &str,
         ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let input = input.trim();
             let mut suggestions = Vec::new();
 
             for issue in &self.issues {
@@ -1167,6 +1175,7 @@ pub fn prompt_relevant_file_path(current_dir: &PathBuf, all_issues: &[Issue]) ->
             &mut self,
             input: &str,
         ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let input = input.trim();
             let mut suggestions = Vec::new();
 
             let (base_path, search_term) = if input.contains('/') {
