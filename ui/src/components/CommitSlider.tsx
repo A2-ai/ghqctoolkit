@@ -1,10 +1,37 @@
 import { Slider } from '@mantine/core'
 
 interface CommitSliderProps {
-  commits: Array<{ hash: string; file_changed: boolean }>
+  commits: Array<{ hash: string; file_changed: boolean; pending?: boolean }>
   value: number
   onChange: (idx: number) => void
   mb?: number
+}
+
+function commitMarkLabel(c: { hash: string; file_changed: boolean; pending?: boolean }) {
+  if (c.pending) {
+    return (
+      <span
+        style={{
+          fontFamily: 'monospace',
+          fontSize: 10,
+          color: '#b08900',
+          fontStyle: 'italic',
+          padding: '0 4px',
+          border: '1px dashed #f59f00',
+          borderRadius: 3,
+          background: '#fff8e1',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        pending
+      </span>
+    )
+  }
+  return (
+    <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
+      {c.hash.slice(0, 7)}
+    </span>
+  )
 }
 
 /**
@@ -25,14 +52,7 @@ export function CommitSlider({ commits, value, onChange, mb = 40 }: CommitSlider
         step={1}
         value={1}
         onChange={() => {}}
-        marks={[{
-          value: 1,
-          label: (
-            <span style={{ fontFamily: 'monospace', fontSize: 10, color: commits[0].file_changed ? '#111' : '#999' }}>
-              {commits[0].hash.slice(0, 7)}
-            </span>
-          ),
-        }]}
+        marks={[{ value: 1, label: commitMarkLabel(commits[0]) }]}
         label={null}
         mb={mb}
         styles={{ bar: { display: 'none' } }}
@@ -47,14 +67,7 @@ export function CommitSlider({ commits, value, onChange, mb = 40 }: CommitSlider
       step={1}
       value={value}
       onChange={onChange}
-      marks={commits.map((c, i) => ({
-        value: i,
-        label: (
-          <span style={{ fontFamily: 'monospace', fontSize: 10, color: c.file_changed ? '#111' : '#999' }}>
-            {c.hash.slice(0, 7)}
-          </span>
-        ),
-      }))}
+      marks={commits.map((c, i) => ({ value: i, label: commitMarkLabel(c) }))}
       label={null}
       mb={mb}
       styles={{ bar: { display: 'none' } }}

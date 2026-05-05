@@ -8,6 +8,7 @@ import {
   Card,
   Checkbox,
   Group,
+  Menu,
   Modal,
   ScrollArea,
   Slider,
@@ -17,7 +18,7 @@ import {
   Textarea,
   Tooltip,
 } from '@mantine/core'
-import { IconAsterisk, IconX } from '@tabler/icons-react'
+import { IconAsterisk, IconChevronDown, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest, ReviewStashResult } from '~/api/issues'
 import { fetchSingleIssueStatus, postApprove, postComment, postReview, useInvalidateBlockingDependents } from '~/api/issues'
@@ -117,11 +118,25 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
   )
 }
 
+const PENDING_COMMIT_HASH = '__pending__'
+
 function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  // Build oldest-first commit list
-  const orderedCommits = [...status.commits].reverse()
+  // Build oldest-first commit list, plus a virtual "pending" commit when the file
+  // is dirty — represents the new commit the tool would create before notifying.
+  const orderedCommits = [
+    ...[...status.commits].reverse(),
+    ...(status.dirty
+      ? [{
+          hash: PENDING_COMMIT_HASH,
+          message: 'Uncommitted local changes (will be committed)',
+          statuses: [] as ('initial' | 'notification' | 'approved' | 'reviewed')[],
+          file_changed: true,
+          pending: true,
+        }]
+      : []),
+  ]
 
   // Default FROM: last index with statuses.length > 0
   let fromDefault = 0
@@ -156,6 +171,9 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
   const [sliderBOrigIdx, setSliderBOrigIdx] = useState(toDefault)
   const [includeDiff, setIncludeDiff] = useState(true)
   const [note, setNote] = useState('')
+  const [postAction, setPostAction] = useState<PostAction>(status.dirty ? 'commit-and-notify' : 'notify')
+  const [separateCommitMessage, setSeparateCommitMessage] = useState(false)
+  const [commitMessage, setCommitMessage] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
@@ -173,6 +191,9 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setShowAll(false)
     setIncludeDiff(true)
     setNote('')
+    setPostAction(status.dirty ? 'commit-and-notify' : 'notify')
+    setSeparateCommitMessage(false)
+    setCommitMessage('')
     setPreviewOpen(false)
     setPostResultOpen(false)
     setPostResultUrl(null)
@@ -374,13 +395,36 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
           </Stack>
 
           <Textarea
-            label="Comment"
-            placeholder="Optional"
-            value={note}
-            onChange={(e) => setNote(e.currentTarget.value)}
+            label={postAction === 'commit' ? 'Commit message' : 'Comment'}
+            placeholder={postAction === 'commit' ? 'Required' : 'Optional'}
+            value={postAction === 'commit' ? commitMessage : note}
+            onChange={(e) =>
+              postAction === 'commit'
+                ? setCommitMessage(e.currentTarget.value)
+                : setNote(e.currentTarget.value)
+            }
             resize="vertical"
             minRows={3}
           />
+          {postAction === 'commit-and-notify' && (
+            <>
+              <Checkbox
+                label="Use a different message for the commit"
+                checked={separateCommitMessage}
+                onChange={(e) => setSeparateCommitMessage(e.currentTarget.checked)}
+              />
+              {separateCommitMessage && (
+                <Textarea
+                  label="Commit message"
+                  placeholder="Required"
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.currentTarget.value)}
+                  resize="vertical"
+                  minRows={2}
+                />
+              )}
+            </>
+          )}
           <Group justify="flex-end">
             <Button
               variant="default"
@@ -390,13 +434,14 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
             >
               Preview
             </Button>
-            <Button
+            <PostSplitButton
+              dirty={status.dirty}
+              action={postAction}
+              onActionChange={setPostAction}
               loading={postLoading}
               disabled={!toCommit || (isApproved && !ackApproved)}
-              onClick={handlePost}
-            >
-              Post
-            </Button>
+              onPost={handlePost}
+            />
           </Group>
         </Stack>
       )}
@@ -1097,17 +1142,93 @@ function UnapproveTab({ status, onStatusUpdate, onBlockedUnavailable }: { status
   )
 }
 
+type PostAction = 'commit-and-notify' | 'notify' | 'commit'
+
+const POST_ACTION_LABEL: Record<PostAction, string> = {
+  'commit-and-notify': 'Commit and Notify',
+  'notify': 'Notify',
+  'commit': 'Commit',
+}
+
+function PostSplitButton({
+  dirty,
+  action,
+  onActionChange,
+  loading,
+  disabled,
+  onPost,
+}: {
+  dirty: boolean
+  action: PostAction
+  onActionChange: (a: PostAction) => void
+  loading: boolean
+  disabled: boolean
+  onPost: () => void
+}) {
+  return (
+    <Group gap={0} wrap="nowrap">
+      <Button
+        loading={loading}
+        disabled={disabled}
+        onClick={onPost}
+        style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+      >
+        {POST_ACTION_LABEL[action]}
+      </Button>
+      <Menu position="bottom-end" withinPortal>
+        <Menu.Target>
+          <Button
+            disabled={disabled}
+            px={6}
+            style={{
+              borderTopLeftRadius: 0,
+              borderBottomLeftRadius: 0,
+              borderLeft: '1px solid rgba(255,255,255,0.35)',
+            }}
+            aria-label="Choose post action"
+          >
+            <IconChevronDown size={14} />
+          </Button>
+        </Menu.Target>
+        <Menu.Dropdown>
+          <Menu.Item
+            disabled={!dirty}
+            onClick={() => onActionChange('commit-and-notify')}
+          >
+            Commit and Notify
+          </Menu.Item>
+          <Menu.Item onClick={() => onActionChange('notify')}>Notify</Menu.Item>
+          <Menu.Item disabled={!dirty} onClick={() => onActionChange('commit')}>
+            Commit
+          </Menu.Item>
+        </Menu.Dropdown>
+      </Menu>
+    </Group>
+  )
+}
+
 function CommitBlock({
   label,
   commit,
 }: {
   label: string
-  commit: { hash: string; message: string; statuses: string[] }
+  commit: { hash: string; message: string; statuses: string[]; pending?: boolean }
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
       <Text size="sm" fw={700} style={{ flexShrink: 0 }}>{label}:</Text>
-      <Text size="sm" style={{ fontFamily: 'monospace', flexShrink: 0 }}>{commit.hash.slice(0, 7)}</Text>
+      {commit.pending ? (
+        <Badge
+          size="xs"
+          variant="outline"
+          color="yellow"
+          style={{ fontStyle: 'italic', flexShrink: 0 }}
+        >
+          pending
+        </Badge>
+      ) : (
+        <Text size="sm" style={{ fontFamily: 'monospace', flexShrink: 0 }}>{commit.hash.slice(0, 7)}</Text>
+      )}
       <Text size="sm" c="dimmed" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>
         — {commit.message}
       </Text>
