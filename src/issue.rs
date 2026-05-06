@@ -177,8 +177,7 @@ impl IssueThread {
             Some(branch.clone()),
             &file,
             disk_cache,
-        )
-        .map_err(IssueError::GitFileOpsError)?;
+        )?;
 
         // Also mark commits that touched any previously-known file names from ## File History.
         // This ensures commits made against the old filename are still flagged as file-changing.
