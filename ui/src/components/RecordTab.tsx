@@ -19,7 +19,6 @@ import {
   Droppable,
 } from '@hello-pangea/dnd'
 import {
-  IconAlertCircle,
   IconAlertTriangle,
   IconArrowBackUp,
   IconChevronDown,
@@ -37,6 +36,7 @@ import { type RecordRequest, generateRecord, previewRecord } from '~/api/record'
 import { useRepoInfo } from '~/api/repo'
 import { type MilestoneStatusInfo, useMilestoneIssues } from '~/api/issues'
 import { OpenPill } from './MilestoneFilter'
+import { StatusErrorDisplay } from './StatusErrorDisplay'
 import { ResizableSidebar } from './ResizableSidebar'
 import { AddContextFileModal } from './AddContextFileModal'
 import { ToggleField } from './ToggleField'
@@ -821,15 +821,6 @@ function RecordMilestoneCard({
   const bgColor = isRed ? '#ffe3e3' : isYellow ? '#fff3bf' : '#d7e7d3'
   const borderColor = isRed ? '#ff8787' : isYellow ? '#fcc419' : '#aacca6'
 
-  const errorLines =
-    statusInfo.statusErrors.length > 0 ? (
-      <div>
-        {statusInfo.statusErrors.map((e) => (
-          <div key={e.issue_number}>#{e.issue_number}: {e.error}</div>
-        ))}
-      </div>
-    ) : null
-
   return (
     <div style={{
       display: 'flex',
@@ -854,13 +845,8 @@ function RecordMilestoneCard({
               <IconExclamationMark data-testid="list-error-indicator" size={14} color="#c92a2a" style={{ flexShrink: 0 }} />
             </Tooltip>
           )}
-          {statusInfo.statusErrorCount > 0 && errorLines && (
-            <Tooltip label={errorLines} withArrow multiline>
-              <span data-testid="status-error-count" style={{ color: '#c92a2a', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-                <IconAlertCircle size={14} />
-                {statusInfo.statusErrorCount}
-              </span>
-            </Tooltip>
+          {statusInfo.statusErrorCount > 0 && (
+            <StatusErrorDisplay errors={statusInfo.statusErrors} variant="icon-red" />
           )}
           {isYellow && (
             <Tooltip

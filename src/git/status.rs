@@ -133,7 +133,10 @@ impl GitStatusOps for GitInfo {
         };
 
         // Try to find the upstream tracking branch
-        let upstream_ref_name = format!("refs/remotes/origin/{}", current_branch_name);
+        let upstream_ref_name = format!(
+            "refs/remotes/{}/{}",
+            self.remote_name, current_branch_name
+        );
         let upstream_ref = match repo.find_reference(&upstream_ref_name) {
             Ok(r) => r,
             Err(_) => {

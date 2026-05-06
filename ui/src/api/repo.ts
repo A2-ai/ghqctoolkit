@@ -8,6 +8,8 @@ export type GitStatus = 'clean' | 'ahead' | 'behind' | 'diverged'
 export interface RepoInfo {
   owner: string
   repo: string
+  /** Name of the user's default remote (typically "origin"). */
+  remote: string
   branch: string
   local_commit: string
   remote_commit: string

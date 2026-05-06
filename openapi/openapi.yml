@@ -1140,15 +1140,34 @@ components:
 
     BlockingQCError:
       type: object
+      required: [issue_number, error, kind]
       properties:
         issue_number:
           type: integer
         error:
           type: string
+        kind:
+          $ref: '#/components/schemas/IssueStatusErrorKind'
+        file_name:
+          type: string
+          description: >-
+            Title of the QC'd file. Present for processing failures (incl.
+            `branch_not_local`) since the issue was fetched; absent for
+            `fetch_failed` errors where the issue body was never retrieved.
+        branch:
+          type: string
+          description: >-
+            The branch ref the user needs to fetch / track locally. Set when
+            `kind == branch_not_local`; absent otherwise.
 
     IssueStatusErrorKind:
       type: string
-      enum: [fetch_failed, processing_failed]
+      description: >-
+        - `fetch_failed`: the issue itself could not be fetched from GitHub.
+        - `processing_failed`: the issue was fetched but its thread/cache could not be built.
+        - `branch_not_local`: the issue's branch ref isn't checked out locally; the response
+          includes a `branch` field naming it.
+      enum: [fetch_failed, processing_failed, branch_not_local]
 
     IssueStatusError:
       type: object
@@ -1160,6 +1179,11 @@ components:
           $ref: '#/components/schemas/IssueStatusErrorKind'
         error:
           type: string
+        branch:
+          type: string
+          description: >-
+            The branch ref the user needs to fetch / track locally. Set when
+            `kind == branch_not_local`; absent otherwise.
 
     BatchIssueStatusResponse:
       type: object
@@ -1443,6 +1467,7 @@ components:
       required:
         - owner
         - repo
+        - remote
         - branch
         - local_commit
         - remote_commit
@@ -1456,6 +1481,12 @@ components:
         repo:
           type: string
           description: Repository name
+        remote:
+          type: string
+          description: >-
+            Name of the user's default remote (typically "origin", but
+            configurable via `git clone --origin <name>` or rename).
+          example: origin
         branch:
           type: string
           description: Current branch name

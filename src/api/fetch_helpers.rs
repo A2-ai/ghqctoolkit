@@ -8,10 +8,10 @@ use crate::{
     get_issue_comments, parse_blocking_qcs,
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct FetchedIssues {
     pub(crate) issues: Vec<Issue>,
-    pub(crate) errors: HashMap<u64, String>,
+    pub(crate) errors: HashMap<u64, IssueError>,
 }
 
 impl FetchedIssues {
@@ -27,7 +27,9 @@ impl FetchedIssues {
             match result {
                 Ok(issue) => fetched.issues.push(issue),
                 Err(e) => {
-                    fetched.errors.insert(*issue_number, e.to_string());
+                    fetched
+                        .errors
+                        .insert(*issue_number, IssueError::GitHubApiError(e));
                 }
             }
         }

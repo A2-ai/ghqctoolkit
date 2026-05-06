@@ -60,6 +60,11 @@ pub struct GitInfo {
     pub(crate) base_url: String,
     pub(crate) repository_path: PathBuf,
     pub(crate) auth_sources: AuthSources,
+    /// Name of the default remote in the user's local repo. Almost always
+    /// `"origin"` but git supports renaming (e.g. `git clone --origin upstream`)
+    /// and forks-of-forks workflows. Captured once at GitInfo construction so
+    /// callers don't have to reach for the gix Remote each time.
+    pub(crate) remote_name: String,
 }
 
 impl GitInfo {
@@ -77,6 +82,12 @@ impl GitInfo {
             .find_default_remote(gix::remote::Direction::Fetch)
             .ok_or(GitInfoError::NoRemote)?
             .map_err(GitInfoError::RemoteNotFound)?;
+
+        let remote_name = remote
+            .name()
+            .map(|n| n.as_bstr().to_string())
+            .unwrap_or_else(|| "origin".to_string());
+        log::debug!("Default remote name: {}", remote_name);
 
         let remote_url = remote
             .url(gix::remote::Direction::Fetch)
@@ -113,7 +124,12 @@ impl GitInfo {
             base_url: remote_info.url,
             repository_path: path.to_path_buf(),
             auth_sources,
+            remote_name,
         })
+    }
+
+    pub fn remote_name(&self) -> &str {
+        &self.remote_name
     }
 
     /// Get a repository instance (recreated for thread safety)

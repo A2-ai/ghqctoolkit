@@ -181,6 +181,10 @@ mod tests {
             "repo"
         }
 
+        fn remote_name(&self) -> &str {
+            "origin"
+        }
+
         fn path(&self) -> &std::path::Path {
             std::path::Path::new(".")
         }
@@ -270,7 +274,7 @@ mod tests {
         }
 
         fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
         }
 
         fn file_touching_commits(

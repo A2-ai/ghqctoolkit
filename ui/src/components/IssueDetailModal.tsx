@@ -28,6 +28,7 @@ import { wrapInGithubStyles } from '~/utils/github'
 import { STATUS_LANE_COLOR } from '~/utils/statusColors'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
+import { StatusErrorDisplay } from './StatusErrorDisplay'
 
 // Commit status dot colors (rendered oldest→newest, lowest→highest)
 const STATUS_DOT_COLORS: Record<string, string> = {
@@ -510,11 +511,12 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
                 ✗ {item.file_name} (#{item.issue_number}) — {item.status}
               </Text>
             ))}
-            {blocking_qc_status.errors.map((item) => (
-              <Text key={item.issue_number} size="sm" c="red">
-                ! #{item.issue_number}: {item.error}
-              </Text>
-            ))}
+            {blocking_qc_status.errors.length > 0 && (
+              <StatusErrorDisplay
+                errors={blocking_qc_status.errors}
+                variant="inline-list"
+              />
+            )}
           </Stack>
         )}
       </Stack>
@@ -951,11 +953,9 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
                 {item.file_name} (#{item.issue_number}) — {item.status}
               </Text>
             ))}
-            {bqs.errors.map((item) => (
-              <Text key={item.issue_number} size="xs" c="red">
-                #{item.issue_number}: {item.error}
-              </Text>
-            ))}
+            {bqs.errors.length > 0 && (
+              <StatusErrorDisplay errors={bqs.errors} variant="inline-list" />
+            )}
           </Stack>
           <Checkbox
             mt="xs"

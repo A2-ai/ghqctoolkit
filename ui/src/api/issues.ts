@@ -75,6 +75,11 @@ export interface BlockingQCItemWithStatus {
 export interface BlockingQCError {
   issue_number: number
   error: string
+  kind: IssueStatusErrorKind
+  /** Title of the QC'd file. Present for processing failures; absent when the issue itself failed to fetch. */
+  file_name?: string
+  /** Set when `kind === 'branch_not_local'` — the branch the user needs to check out. */
+  branch?: string
 }
 
 export interface BlockingQCStatus {
@@ -158,12 +163,14 @@ export async function postComment(issueNumber: number, request: CreateCommentReq
   return res.json()
 }
 
-export type IssueStatusErrorKind = 'fetch_failed' | 'processing_failed'
+export type IssueStatusErrorKind = 'fetch_failed' | 'processing_failed' | 'branch_not_local'
 
 export interface IssueStatusError {
   issue_number: number
   kind: IssueStatusErrorKind
   error: string
+  /** Set when `kind === 'branch_not_local'`. */
+  branch?: string
 }
 
 export interface BatchIssueStatusResponse {

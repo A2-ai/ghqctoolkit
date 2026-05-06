@@ -994,6 +994,10 @@ Second Checklist:
                 &self.repo
             }
 
+            fn remote_name(&self) -> &str {
+                "origin"
+            }
+
             fn path(&self) -> &std::path::Path {
                 std::path::Path::new(".")
             }

@@ -15,6 +15,7 @@ import type { CreateIssueResponse } from '../../src/api/create'
 export const defaultRepoInfo: RepoInfo = {
   owner: 'test-owner',
   repo: 'test-repo',
+  remote: 'origin',
   branch: 'main',
   local_commit: 'abc1234',
   remote_commit: 'abc1234',

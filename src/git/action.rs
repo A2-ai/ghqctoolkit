@@ -10,9 +10,9 @@ pub trait GitCli {
 
     fn remote(&self, path: &Path) -> Result<Url, GitCliError>;
 
-    /// Fetch from origin. Returns whether any refs changed.
+    /// Fetch from the named remote. Returns whether any refs changed.
     /// Sets GIT_TERMINAL_PROMPT=0 to prevent blocking credential prompts.
-    fn fetch(&self, path: &Path) -> Result<bool, GitCliError>;
+    fn fetch(&self, path: &Path, remote_name: &str) -> Result<bool, GitCliError>;
 
     /// Stash changes for a single file path.
     fn stash_file(
@@ -65,8 +65,8 @@ impl<T: GitCli + ?Sized> GitCli for &T {
         (**self).remote(path)
     }
 
-    fn fetch(&self, path: &Path) -> Result<bool, GitCliError> {
-        (**self).fetch(path)
+    fn fetch(&self, path: &Path, remote_name: &str) -> Result<bool, GitCliError> {
+        (**self).fetch(path, remote_name)
     }
 
     fn stash_file(
@@ -154,11 +154,11 @@ impl GitCli for GitCommand {
         })
     }
 
-    fn fetch(&self, path: &Path) -> Result<bool, GitCliError> {
-        log::debug!("Fetching from origin in {}", path.display());
+    fn fetch(&self, path: &Path, remote_name: &str) -> Result<bool, GitCliError> {
+        log::debug!("Fetching from {} in {}", remote_name, path.display());
 
         let output = std::process::Command::new("git")
-            .args(["-C", &path.to_string_lossy(), "fetch", "origin"])
+            .args(["-C", &path.to_string_lossy(), "fetch", remote_name])
             .env("GIT_TERMINAL_PROMPT", "0")
             .output()?;
 
