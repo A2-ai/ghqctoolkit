@@ -460,13 +460,34 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
       style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}
     >
       <Stack gap="xs">
-        <div style={{ textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-          <Anchor href={issue.html_url} target="_blank" fw={700}>
+        <div
+          style={{
+            textAlign: 'center',
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'center',
+            gap: 4,
+            // File-path titles have no spaces; without `anywhere` they
+            // overflow the card. With it, the browser will break inside the
+            // path (e.g. on `/`) only when needed to fit the available width.
+            overflowWrap: 'anywhere',
+            minWidth: 0,
+          }}
+        >
+          <Anchor
+            href={issue.html_url}
+            target="_blank"
+            fw={700}
+            style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          >
             {issue.title}
           </Anchor>
           {status.dirty && (
             <Tooltip label="This file has uncommitted local changes" withArrow position="top">
-              <span data-testid="dirty-indicator" style={{ color: '#c92a2a', display: 'flex', lineHeight: 1 }}>
+              <span
+                data-testid="dirty-indicator"
+                style={{ color: '#c92a2a', display: 'inline-flex', lineHeight: 1, flexShrink: 0 }}
+              >
                 <IconAsterisk size={14} stroke={3} />
               </span>
             </Tooltip>
