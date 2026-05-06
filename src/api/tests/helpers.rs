@@ -230,6 +230,10 @@ impl GitRepository for MockGitInfo {
         &self.repo
     }
 
+    fn remote_name(&self) -> &str {
+        "origin"
+    }
+
     fn path(&self) -> &Path {
         Path::new(".")
     }
