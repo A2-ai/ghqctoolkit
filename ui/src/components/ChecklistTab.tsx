@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Group, Loader, Stack, Text, TextInput, Textarea, Tooltip } from '@mantine/core'
+import { Alert, Badge, Button, Group, Loader, Stack, Text, TextInput, Textarea, Tooltip } from '@mantine/core'
 import { fetchChecklists } from '~/api/checklists'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
@@ -12,9 +12,15 @@ export interface ChecklistDraft {
 
 interface TabEntry {
   key: string
+  isQueuedSnapshot?: boolean
+  // Editor-bound, modal-session-only. Mirrors keystrokes; survives tab switches.
+  draftName: string
+  draftContent: string
+  // Last persisted across modal opens (via onSaveCustom).
   savedName: string
   savedContent: string
-  originalName: string    // immutable API default — used by Reset
+  // Immutable API default; used by Reset for API-origin tabs.
+  originalName: string
   originalContent: string
 }
 
@@ -27,6 +33,8 @@ interface Props {
   /** Called when user saves a custom (non-API) tab; parent stores it across opens */
   onSaveCustom?: (tab: ChecklistDraft) => void
 }
+
+const QUEUED_SNAPSHOT_KEY = 'queued-snapshot'
 
 export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustomTabs, onSaveCustom }: Props) {
   const counter = useRef(0)
@@ -55,62 +63,64 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
 
         // Exclude "Custom" from the visible tab list — it's only used as the "+ New" seed
         const visible = data.filter((t) => t.name !== 'Custom')
-        const entries: TabEntry[] = visible.map((t, i) => ({
-          key: `api-${i}`,
-          savedName: t.name,
-          savedContent: t.content,
-          originalName: t.name,
-          originalContent: t.content,
-        }))
-
-        // Merge persisted saves into API tabs (overrides savedContent for edited API tabs),
-        // then append any persisted custom tabs whose names don't match an API tab.
         const apiNames = new Set(visible.map((t) => t.name))
         const persistedMap = new Map((persistedCustomTabs ?? []).map((t) => [t.name, t]))
-        const mergedEntries: TabEntry[] = entries.map((e) => {
-          const persisted = persistedMap.get(e.originalName)
-          return persisted ? { ...e, savedName: persisted.name, savedContent: persisted.content } : e
+
+        // API tabs, possibly with persisted-save overrides on saved fields.
+        const apiEntries: TabEntry[] = visible.map((t, i) => {
+          const persisted = persistedMap.get(t.name)
+          const savedName = persisted ? persisted.name : t.name
+          const savedContent = persisted ? persisted.content : t.content
+          return {
+            key: `api-${i}`,
+            draftName: savedName,
+            draftContent: savedContent,
+            savedName,
+            savedContent,
+            originalName: t.name,
+            originalContent: t.content,
+          }
         })
+
+        // Persisted custom (non-API) tabs.
         const extraEntries: TabEntry[] = (persistedCustomTabs ?? [])
           .filter((t) => !apiNames.has(t.name))
           .map((t, i) => ({
             key: `persisted-${i}`,
+            draftName: t.name,
+            draftContent: t.content,
             savedName: t.name,
             savedContent: t.content,
             originalName: t.name,
             originalContent: t.content,
           }))
-        const allEntries = [...mergedEntries, ...extraEntries]
 
-        setTabs(allEntries)
-        setLoading(false)
+        let allEntries: TabEntry[] = [...apiEntries, ...extraEntries]
 
-        // When editing, pre-select the matching tab (or create a custom one)
+        // Edit mode: prepend a queued-snapshot tab and activate it.
         if (initialDraft) {
-          const match = allEntries.find((e) => e.savedName === initialDraft.name)
-          if (match) {
-            setActiveKey(match.key)
-            setEditorName(match.savedName)
-            setEditorContent(match.savedContent)
-            onChange({ name: match.savedName, content: match.savedContent })
-          } else {
-            const customKey = 'edit-custom'
-            const customTab: TabEntry = {
-              key: customKey,
-              savedName: initialDraft.name,
-              savedContent: initialDraft.content,
-              originalName: initialDraft.name,
-              originalContent: initialDraft.content,
-            }
-            setTabs([...allEntries, customTab])
-            setActiveKey(customKey)
-            setEditorName(initialDraft.name)
-            setEditorContent(initialDraft.content)
-            onChange({ name: initialDraft.name, content: initialDraft.content })
+          const snapshotTab: TabEntry = {
+            key: QUEUED_SNAPSHOT_KEY,
+            isQueuedSnapshot: true,
+            draftName: initialDraft.name,
+            draftContent: initialDraft.content,
+            savedName: initialDraft.name,
+            savedContent: initialDraft.content,
+            originalName: initialDraft.name,
+            originalContent: initialDraft.content,
           }
+          allEntries = [snapshotTab, ...allEntries]
+          setTabs(allEntries)
+          setLoading(false)
+          setActiveKey(QUEUED_SNAPSHOT_KEY)
+          setEditorName(initialDraft.name)
+          setEditorContent(initialDraft.content)
+          onChange({ name: initialDraft.name, content: initialDraft.content })
           return
         }
 
+        setTabs(allEntries)
+        setLoading(false)
         // Fresh create: no tab selected, no editor rendered
         setActiveKey(null)
       })
@@ -124,18 +134,27 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
     const tab = entries.find((t) => t.key === key)
     if (!tab) return
     setActiveKey(key)
-    setEditorName(tab.savedName)
-    setEditorContent(tab.savedContent)
-    onChange({ name: tab.savedName, content: tab.savedContent })
+    setEditorName(tab.draftName)
+    setEditorContent(tab.draftContent)
+    onChange({ name: tab.draftName, content: tab.draftContent })
+  }
+
+  function updateActiveDraft(name: string, content: string) {
+    if (!activeKey) return
+    setTabs((prev) =>
+      prev.map((t) => (t.key === activeKey ? { ...t, draftName: name, draftContent: content } : t)),
+    )
   }
 
   function handleNameChange(val: string) {
     setEditorName(val)
+    updateActiveDraft(val, editorContent)
     onChange({ name: val, content: editorContent })
   }
 
   function handleContentChange(val: string) {
     setEditorContent(val)
+    updateActiveDraft(editorName, val)
     onChange({ name: editorName, content: val })
   }
 
@@ -143,7 +162,9 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
     if (!activeKey) return
     setTabs((prev) =>
       prev.map((t) =>
-        t.key === activeKey ? { ...t, savedName: editorName, savedContent: editorContent } : t,
+        t.key === activeKey
+          ? { ...t, draftName: editorName, draftContent: editorContent, savedName: editorName, savedContent: editorContent }
+          : t,
       ),
     )
     onSaveCustom?.({ name: editorName, content: editorContent })
@@ -154,6 +175,7 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
     if (!tab) return
     setEditorName(tab.savedName)
     setEditorContent(tab.savedContent)
+    updateActiveDraft(tab.savedName, tab.savedContent)
     onChange({ name: tab.savedName, content: tab.savedContent })
   }
 
@@ -162,6 +184,8 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
     const src = customRef.current ?? { name: 'Custom', content: '' }
     const newTab: TabEntry = {
       key,
+      draftName: src.name,
+      draftContent: src.content,
       savedName: src.name,
       savedContent: src.content,
       originalName: src.name,
@@ -185,7 +209,12 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
         {tabs.map((tab) => {
           const active = tab.key === activeKey
           return (
-            <Tooltip key={tab.key} label={tab.savedName} openDelay={300} withArrow>
+            <Tooltip
+              key={tab.key}
+              label={tab.isQueuedSnapshot ? `${tab.draftName} (queued snapshot)` : tab.draftName}
+              openDelay={300}
+              withArrow
+            >
               <button
                 onClick={() => { loadTab(tab.key); onSelect?.() }}
                 style={{
@@ -201,9 +230,19 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                   fontSize: 13,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
                 }}
               >
-                {tab.savedName}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  {tab.draftName}
+                </span>
+                {tab.isQueuedSnapshot && (
+                  <Badge size="xs" variant="light" color="blue" style={{ flexShrink: 0 }}>
+                    queued
+                  </Badge>
+                )}
               </button>
             </Tooltip>
           )
