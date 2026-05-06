@@ -209,9 +209,7 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
 
     // Only create threads for successfully fetched issues.
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, &state).await;
-    fetched_issues
-        .errors
-        .extend(created_threads.thread_errors);
+    fetched_issues.errors.extend(created_threads.thread_errors);
 
     let mut errors: Vec<IssueStatusError> = Vec::new();
     let mut responses: Vec<IssueStatusResponse> = Vec::new();

@@ -201,9 +201,7 @@ pub(crate) async fn get_blocking_qc_status<G: GitProvider>(
     let mut fetched_issues = FetchedIssues::fetch_issues(blocking_qcs, git_info).await;
 
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, state).await;
-    fetched_issues
-        .errors
-        .extend(created_threads.thread_errors);
+    fetched_issues.errors.extend(created_threads.thread_errors);
 
     let titles: std::collections::HashMap<u64, String> = fetched_issues
         .issues

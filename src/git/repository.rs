@@ -89,8 +89,8 @@ impl GitRepository for GitInfo {
             // Extract the branch name from refs/heads/<branch>
             if let Some(stripped) = name_str.strip_prefix("refs/heads/") {
                 return Ok(stripped.to_string());
-            } else if let Some(stripped) = name_str
-                .strip_prefix(&format!("refs/remotes/{}/", self.remote_name))
+            } else if let Some(stripped) =
+                name_str.strip_prefix(&format!("refs/remotes/{}/", self.remote_name))
             {
                 return Ok(stripped.to_string());
             } else {

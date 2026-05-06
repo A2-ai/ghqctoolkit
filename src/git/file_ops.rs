@@ -852,10 +852,9 @@ mod tests {
         fn branch_tip(&self, branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
             // Return the first commit of this branch as its tip
             match self.file_commits_responses.get(branch) {
-                Some(Ok(commits)) => commits
-                    .first()
-                    .map(|(id, _)| *id)
-                    .ok_or_else(|| GitFileOpsError::LocalBranchNotFound("empty branch".to_string())),
+                Some(Ok(commits)) => commits.first().map(|(id, _)| *id).ok_or_else(|| {
+                    GitFileOpsError::LocalBranchNotFound("empty branch".to_string())
+                }),
                 _ => Err(GitFileOpsError::LocalBranchNotFound(
                     branch.clone().unwrap_or_default(),
                 )),
@@ -1053,7 +1052,10 @@ mod tests {
         );
 
         // Should fail when no branch can be found
-        assert!(matches!(result, Err(GitFileOpsError::LocalBranchNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(GitFileOpsError::LocalBranchNotFound(_))
+        ));
     }
 
     #[tokio::test]
@@ -1076,7 +1078,10 @@ mod tests {
         );
 
         // Should fail since no branches can be found and all fallbacks fail
-        assert!(matches!(result, Err(GitFileOpsError::LocalBranchNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(GitFileOpsError::LocalBranchNotFound(_))
+        ));
     }
 
     #[tokio::test]
