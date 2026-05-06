@@ -177,8 +177,7 @@ impl IssueThread {
             Some(branch.clone()),
             &file,
             disk_cache,
-        )
-        .map_err(IssueError::GitFileOpsError)?;
+        )?;
 
         // Also mark commits that touched any previously-known file names from ## File History.
         // This ensures commits made against the old filename are still flagged as file-changing.
@@ -665,8 +664,10 @@ pub fn file_history_section(events: &[FileRenameEvent]) -> String {
 pub enum IssueError {
     #[error(transparent)]
     GitHubApiError(#[from] GitHubApiError),
+    #[error("Branch '{0}' is not checked out locally")]
+    LocalBranchNotFound(String),
     #[error(transparent)]
-    GitFileOpsError(#[from] GitFileOpsError),
+    GitFileOpsError(GitFileOpsError),
     #[error("Initial commit not found in issue body")]
     InitialCommitNotFound,
     #[error("Branch not found in issue body")]
@@ -677,6 +678,15 @@ pub enum IssueError {
     CommitNotParseable(String),
     #[error("No commits found for file: {0}")]
     CommitNotFound(PathBuf),
+}
+
+impl From<GitFileOpsError> for IssueError {
+    fn from(e: GitFileOpsError) -> Self {
+        match e {
+            GitFileOpsError::LocalBranchNotFound(name) => IssueError::LocalBranchNotFound(name),
+            other => IssueError::GitFileOpsError(other),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -811,7 +821,7 @@ mod tests {
         }
 
         fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
         }
 
         fn file_touching_commits(

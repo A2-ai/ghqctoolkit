@@ -300,7 +300,7 @@ mod tests {
                 .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
         }
         fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
         }
 
         fn file_touching_commits(

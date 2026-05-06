@@ -9,15 +9,11 @@ import {
   Tooltip,
   useCombobox,
 } from '@mantine/core'
-import {
-  IconAlertCircle,
-  IconAlertTriangle,
-  IconExclamationMark,
-  IconX,
-} from '@tabler/icons-react'
+import { IconExclamationMark, IconX } from '@tabler/icons-react'
 import { useState } from 'react'
 import { useMilestones, type Milestone } from '~/api/milestones'
 import { type MilestoneStatusInfo } from '~/api/issues'
+import { StatusErrorDisplay } from './StatusErrorDisplay'
 
 interface Props {
   selected: number[]
@@ -202,14 +198,6 @@ function SelectedMilestoneCard({
   const bgColor = isRed ? '#ffe3e3' : isYellow ? '#fff3bf' : '#d7e7d3'
   const borderColor = isRed ? '#ff8787' : isYellow ? '#fcc419' : '#aacca6'
 
-  const errorLines = statusInfo.statusErrors.length > 0 ? (
-    <div>
-      {statusInfo.statusErrors.map((e) => (
-        <div key={e.issue_number}>#{e.issue_number}: {e.error}</div>
-      ))}
-    </div>
-  ) : null
-
   return (
     <div style={{
       display: 'flex',
@@ -230,21 +218,11 @@ function SelectedMilestoneCard({
               <IconExclamationMark size={14} color="#c92a2a" style={{ flexShrink: 0 }} />
             </Tooltip>
           )}
-          {isAllFailed && errorLines && (
-            <Tooltip label={errorLines} withArrow multiline>
-              <span style={{ color: '#c92a2a', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-                <IconAlertCircle size={14} />
-                {statusInfo.statusErrorCount}
-              </span>
-            </Tooltip>
+          {isAllFailed && (
+            <StatusErrorDisplay errors={statusInfo.statusErrors} variant="icon-red" />
           )}
-          {isPartial && errorLines && (
-            <Tooltip label={errorLines} withArrow multiline>
-              <span data-testid="partial-warning" style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-                <IconAlertTriangle size={14} />
-                {statusInfo.statusErrorCount}
-              </span>
-            </Tooltip>
+          {isPartial && (
+            <StatusErrorDisplay errors={statusInfo.statusErrors} variant="icon-yellow" />
           )}
         </div>
         <Text size="xs" c="dimmed">

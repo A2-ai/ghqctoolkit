@@ -201,28 +201,20 @@ pub(crate) async fn get_blocking_qc_status<G: GitProvider>(
     let mut fetched_issues = FetchedIssues::fetch_issues(blocking_qcs, git_info).await;
 
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, state).await;
-    fetched_issues.errors.extend(
-        created_threads
-            .thread_errors
-            .into_iter()
-            .map(|(n, e)| (n, e.to_string())),
-    );
+    fetched_issues.errors.extend(created_threads.thread_errors);
 
-    status.errors.extend(
-        fetched_issues
-            .errors
-            .iter()
-            .map(|(num, err)| BlockingQCError {
-                issue_number: *num,
-                error: err.clone(),
-            }),
-    );
+    let titles: std::collections::HashMap<u64, String> = fetched_issues
+        .issues
+        .iter()
+        .map(|i| (i.number, i.title.clone()))
+        .collect();
 
     determine_blocking_qc_status(
         &mut status,
         blocking_qcs,
         &created_threads.responses,
         &fetched_issues.errors,
+        &titles,
     );
 
     status

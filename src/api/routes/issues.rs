@@ -209,15 +209,19 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
 
     // Only create threads for successfully fetched issues.
     let created_threads = CreatedThreads::create_threads(&fetched_issues.issues, &state).await;
-    fetched_issues.errors.extend(
-        created_threads
-            .thread_errors
-            .into_iter()
-            .map(|(n, e)| (n, e.to_string())),
-    );
+    fetched_issues.errors.extend(created_threads.thread_errors);
 
     let mut errors: Vec<IssueStatusError> = Vec::new();
     let mut responses: Vec<IssueStatusResponse> = Vec::new();
+
+    // Lookup of issue number → file title for fetched-but-failed issues, so
+    // BlockingQCError entries can name the file even when the thread couldn't
+    // be built.
+    let titles: std::collections::HashMap<u64, String> = fetched_issues
+        .issues
+        .iter()
+        .map(|i| (i.number, i.title.clone()))
+        .collect();
 
     // Preserve request ordering.
     for issue_number in &issue_numbers {
@@ -232,35 +236,33 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
                     .unwrap_or(&[]),
                 &created_threads.responses,
                 &fetched_issues.errors,
+                &titles,
             );
             responses.push(response);
         } else {
-            // Distinguish between fetch failures and processing failures.
-            let (kind, error) = if fetched_issues
+            let was_fetched = fetched_issues
                 .issues
                 .iter()
-                .any(|i| i.number == *issue_number)
-            {
-                // Issue was fetched but thread/cache creation failed → processing error.
-                let msg = fetched_issues
-                    .errors
-                    .get(issue_number)
-                    .cloned()
-                    .unwrap_or_else(|| "Failed to determine issue status".to_string());
-                (IssueStatusErrorKind::ProcessingFailed, msg)
+                .any(|i| i.number == *issue_number);
+            let default_kind = if was_fetched {
+                IssueStatusErrorKind::ProcessingFailed
             } else {
-                // Issue was never fetched successfully → fetch error.
-                let msg = fetched_issues
-                    .errors
-                    .get(issue_number)
-                    .cloned()
-                    .unwrap_or_else(|| "Failed to fetch issue".to_string());
-                (IssueStatusErrorKind::FetchFailed, msg)
+                IssueStatusErrorKind::FetchFailed
+            };
+            let default_msg = if was_fetched {
+                "Failed to determine issue status"
+            } else {
+                "Failed to fetch issue"
+            };
+            let (kind, error, branch) = match fetched_issues.errors.get(issue_number) {
+                Some(e) => classify_issue_error(e, default_kind),
+                None => (default_kind, default_msg.to_string(), None),
             };
             errors.push(IssueStatusError {
                 issue_number: *issue_number,
                 kind,
                 error,
+                branch,
             });
         }
     }
@@ -280,11 +282,28 @@ pub async fn batch_get_issue_status<G: GitProvider + 'static>(
     ))
 }
 
+/// Classify an `IssueError` into the API-facing `(kind, message, branch)` tuple.
+/// `default_kind` is used when the error doesn't match a more specific case.
+pub(crate) fn classify_issue_error(
+    e: &crate::IssueError,
+    default_kind: IssueStatusErrorKind,
+) -> (IssueStatusErrorKind, String, Option<String>) {
+    match e {
+        crate::IssueError::LocalBranchNotFound(name) => (
+            IssueStatusErrorKind::BranchNotLocal,
+            e.to_string(),
+            Some(name.clone()),
+        ),
+        _ => (default_kind, e.to_string(), None),
+    }
+}
+
 pub(crate) fn determine_blocking_qc_status(
     blocking_status: &mut BlockingQCStatus,
     blocking_numbers: &[u64],
     responses: &std::collections::HashMap<u64, IssueStatusResponse>,
-    errors: &std::collections::HashMap<u64, String>,
+    errors: &std::collections::HashMap<u64, crate::IssueError>,
+    titles: &std::collections::HashMap<u64, String>,
 ) {
     blocking_status.total = blocking_numbers.len() as u32;
     for number in blocking_numbers {
@@ -306,14 +325,22 @@ pub(crate) fn determine_blocking_qc_status(
                 }
             }
         } else if let Some(error) = errors.get(number) {
+            let (kind, msg, branch) =
+                classify_issue_error(error, IssueStatusErrorKind::FetchFailed);
             blocking_status.errors.push(BlockingQCError {
                 issue_number: *number,
-                error: error.to_string(),
+                error: msg,
+                kind,
+                file_name: titles.get(number).cloned(),
+                branch,
             });
         } else {
             blocking_status.errors.push(BlockingQCError {
                 issue_number: *number,
                 error: "Failed to determine status".to_string(),
+                kind: IssueStatusErrorKind::FetchFailed,
+                file_name: titles.get(number).cloned(),
+                branch: None,
             });
         }
     }

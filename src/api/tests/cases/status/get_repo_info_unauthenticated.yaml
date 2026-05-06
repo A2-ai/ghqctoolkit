@@ -20,6 +20,7 @@ response:
     value:
       owner: "test-owner"
       repo: "test-repo"
+      remote: "origin"
       branch: "main"
       local_commit: "abc1234567890abcdef1234567890abcdef12340"
       remote_commit: "abc1234567890abcdef1234567890abcdef12340"

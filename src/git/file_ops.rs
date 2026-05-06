@@ -56,8 +56,15 @@ pub enum GitFileOpsError {
     BlobError(gix::object::try_into::Error),
     #[error("Failed to decode file content: {0:?}")]
     EncodingError(PathBuf),
-    #[error("Branch not found: {0}")]
-    BranchNotFound(String),
+    /// The named branch ref isn't reachable locally — the user likely needs
+    /// to fetch / track it before this tool can read its history.
+    #[error("Branch '{0}' is not checked out locally")]
+    LocalBranchNotFound(String),
+    /// A git operation related to branch lookup failed for a reason other than
+    /// a missing local ref (merge analysis, ancestry walk, etc.). The string
+    /// is a diagnostic message, not a branch name.
+    #[error("Branch lookup failed: {0}")]
+    BranchLookupFailed(String),
     #[error("Failed to get HEAD ID: {0}")]
     HeadIdError(gix::reference::head_id::Error),
     #[error("Failed to access repository: {0}")]
@@ -122,7 +129,7 @@ impl GitFileOps for GitInfo {
             let branch_ref_name = format!("refs/heads/{}", branch_name);
             let branch_ref = repo
                 .find_reference(&branch_ref_name)
-                .map_err(|_| GitFileOpsError::BranchNotFound(branch_name.clone()))?;
+                .map_err(|_| GitFileOpsError::LocalBranchNotFound(branch_name.clone()))?;
             branch_ref.id()
         } else {
             // Use HEAD as default
@@ -192,7 +199,7 @@ impl GitFileOps for GitInfo {
             let branch_ref_name = format!("refs/heads/{}", branch_name);
             let branch_ref = repo
                 .find_reference(&branch_ref_name)
-                .map_err(|_| GitFileOpsError::BranchNotFound(branch_name.clone()))?;
+                .map_err(|_| GitFileOpsError::LocalBranchNotFound(branch_name.clone()))?;
             Ok(branch_ref.id().detach())
         } else {
             repo.head_id()
@@ -207,9 +214,23 @@ impl GitFileOps for GitInfo {
         file: &Path,
     ) -> Result<HashSet<String>, GitFileOpsError> {
         use crate::git::action::{GitCli as _, GitCommand};
+        let branch_name = branch.clone();
         GitCommand
             .file_touching_commits(&self.repository_path, branch, file)
-            .map_err(|e| GitFileOpsError::BranchNotFound(e.to_string()))
+            .map_err(|e| {
+                let msg = e.to_string();
+                // git emits `fatal: bad revision '<ref>'` when asked about a
+                // ref that doesn't exist locally. In that case we know which
+                // branch was missing — surface it as the structured variant
+                // so the UI can offer the copy-pasteable fix instead of a
+                // raw "lookup failed" message with no suggestion.
+                if let Some(name) = branch_name {
+                    if msg.contains("bad revision") {
+                        return GitFileOpsError::LocalBranchNotFound(name);
+                    }
+                }
+                GitFileOpsError::BranchLookupFailed(msg)
+            })
     }
 
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
@@ -489,12 +510,12 @@ fn find_merged_into_branch(
     target_commit: &gix::ObjectId,
 ) -> Result<Option<String>, GitFileOpsError> {
     let merge_commits = git_info.get_all_merge_commits().map_err(|e| {
-        GitFileOpsError::BranchNotFound(format!("Failed to get merge commits: {}", e))
+        GitFileOpsError::BranchLookupFailed(format!("Failed to get merge commits: {}", e))
     })?;
 
     for merge_commit in merge_commits {
         let parents = git_info.get_commit_parents(&merge_commit).map_err(|e| {
-            GitFileOpsError::BranchNotFound(format!("Failed to get commit parents: {}", e))
+            GitFileOpsError::BranchLookupFailed(format!("Failed to get commit parents: {}", e))
         })?;
 
         if parents.len() >= 2 {
@@ -503,13 +524,13 @@ fn find_merged_into_branch(
 
             // Check if target_commit is ancestor of parent2 (the merged-in branch)
             if git_info.is_ancestor(target_commit, &parent2).map_err(|e| {
-                GitFileOpsError::BranchNotFound(format!("Failed to check ancestry: {}", e))
+                GitFileOpsError::BranchLookupFailed(format!("Failed to check ancestry: {}", e))
             })? {
                 // Find branches that contain the merge commit
                 let candidate_branches = git_info
                     .get_branches_containing_commit(&merge_commit)
                     .map_err(|e| {
-                        GitFileOpsError::BranchNotFound(format!(
+                        GitFileOpsError::BranchLookupFailed(format!(
                             "Failed to get branches containing commit: {}",
                             e
                         ))
@@ -550,7 +571,7 @@ pub fn get_commits_robust(
             log::debug!("Found {} commits for branch {:?}", commits.len(), branch);
             return Ok(commits);
         }
-        Err(GitFileOpsError::BranchNotFound(_)) if branch.is_some() => {
+        Err(GitFileOpsError::LocalBranchNotFound(_)) if branch.is_some() => {
             log::debug!(
                 "Branch {:?} not found locally, searching for merged commits",
                 branch
@@ -598,7 +619,7 @@ pub fn get_commits_robust(
             git_info
                 .get_branches_containing_commit(commit)
                 .map_err(|e| {
-                    GitFileOpsError::BranchNotFound(format!(
+                    GitFileOpsError::BranchLookupFailed(format!(
                         "Failed to get branches containing commit: {}",
                         e
                     ))
@@ -636,12 +657,11 @@ pub fn get_commits_robust(
 
     // Final fallback: return error that branch couldn't be found
     if let Some(branch_name) = branch {
-        Err(GitFileOpsError::BranchNotFound(format!(
-            "Could not find branch '{}' or determine alternative branch from commit",
-            branch_name
-        )))
+        // We know the branch name — surface it as a structured "not checked
+        // out locally" so the UI can offer a copy-pasteable fix.
+        Err(GitFileOpsError::LocalBranchNotFound(branch_name.clone()))
     } else {
-        Err(GitFileOpsError::BranchNotFound(
+        Err(GitFileOpsError::BranchLookupFailed(
             "Could not determine branch from commit".to_string(),
         ))
     }
@@ -821,8 +841,8 @@ mod tests {
                         message: message.clone(),
                     })
                     .collect()),
-                Some(Err(GitFileOpsError::BranchNotFound(branch_name))) => {
-                    Err(GitFileOpsError::BranchNotFound(branch_name.clone()))
+                Some(Err(GitFileOpsError::LocalBranchNotFound(branch_name))) => {
+                    Err(GitFileOpsError::LocalBranchNotFound(branch_name.clone()))
                 }
                 Some(Err(_e)) => Err(GitFileOpsError::AuthorNotFound(PathBuf::from("test"))), // Fallback error for testing
                 None => Ok(Vec::new()),
@@ -832,11 +852,10 @@ mod tests {
         fn branch_tip(&self, branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
             // Return the first commit of this branch as its tip
             match self.file_commits_responses.get(branch) {
-                Some(Ok(commits)) => commits
-                    .first()
-                    .map(|(id, _)| *id)
-                    .ok_or_else(|| GitFileOpsError::BranchNotFound("empty branch".to_string())),
-                _ => Err(GitFileOpsError::BranchNotFound(
+                Some(Ok(commits)) => commits.first().map(|(id, _)| *id).ok_or_else(|| {
+                    GitFileOpsError::LocalBranchNotFound("empty branch".to_string())
+                }),
+                _ => Err(GitFileOpsError::LocalBranchNotFound(
                     branch.clone().unwrap_or_default(),
                 )),
             }
@@ -939,7 +958,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::LocalBranchNotFound(branch.to_string())),
             )
             // Merge detection finds the target branch
             .with_merge_commits(vec![merge_commit])
@@ -977,7 +996,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::LocalBranchNotFound(branch.to_string())),
             )
             // No merge commits found
             .with_merge_commits(vec![])
@@ -1017,7 +1036,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::LocalBranchNotFound(branch.to_string())),
             )
             // No merge commits found
             .with_merge_commits(vec![])
@@ -1033,7 +1052,10 @@ mod tests {
         );
 
         // Should fail when no branch can be found
-        assert!(matches!(result, Err(GitFileOpsError::BranchNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(GitFileOpsError::LocalBranchNotFound(_))
+        ));
     }
 
     #[tokio::test]
@@ -1044,7 +1066,7 @@ mod tests {
 
         let git_info = RobustMockGitInfo::new().with_file_commits_result(
             Some(branch.to_string()),
-            Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+            Err(GitFileOpsError::LocalBranchNotFound(branch.to_string())),
         );
 
         let result = get_commits_robust(
@@ -1056,7 +1078,10 @@ mod tests {
         );
 
         // Should fail since no branches can be found and all fallbacks fail
-        assert!(matches!(result, Err(GitFileOpsError::BranchNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(GitFileOpsError::LocalBranchNotFound(_))
+        ));
     }
 
     #[tokio::test]
@@ -1098,7 +1123,7 @@ mod tests {
             // Original branch fails
             .with_file_commits_result(
                 Some(branch.to_string()),
-                Err(GitFileOpsError::BranchNotFound(branch.to_string())),
+                Err(GitFileOpsError::LocalBranchNotFound(branch.to_string())),
             )
             // Multiple merge commits
             .with_merge_commits(vec![merge_commit1, merge_commit2])

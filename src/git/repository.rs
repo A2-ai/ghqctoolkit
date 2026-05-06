@@ -47,6 +47,9 @@ pub trait GitRepository {
     /// Get the repository name
     fn repo(&self) -> &str;
 
+    /// Get the name of the user's default remote (typically "origin").
+    fn remote_name(&self) -> &str;
+
     /// Get the repository path on the filesystem
     fn path(&self) -> &Path;
 
@@ -86,7 +89,9 @@ impl GitRepository for GitInfo {
             // Extract the branch name from refs/heads/<branch>
             if let Some(stripped) = name_str.strip_prefix("refs/heads/") {
                 return Ok(stripped.to_string());
-            } else if let Some(stripped) = name_str.strip_prefix("refs/remotes/origin/") {
+            } else if let Some(stripped) =
+                name_str.strip_prefix(&format!("refs/remotes/{}/", self.remote_name))
+            {
                 return Ok(stripped.to_string());
             } else {
                 return Ok(name_str);
@@ -134,13 +139,17 @@ impl GitRepository for GitInfo {
         &self.repo
     }
 
+    fn remote_name(&self) -> &str {
+        &self.remote_name
+    }
+
     fn path(&self) -> &Path {
         &self.repository_path
     }
 
     fn fetch(&self) -> Result<bool, GitRepositoryError> {
         GitCommand
-            .fetch(&self.repository_path)
+            .fetch(&self.repository_path, &self.remote_name)
             .map_err(|e| GitRepositoryError::FetchError(e.to_string()))
     }
 

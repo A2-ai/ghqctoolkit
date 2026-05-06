@@ -319,6 +319,16 @@ pub struct BlockingQCItemWithStatus {
 pub struct BlockingQCError {
     pub issue_number: u64,
     pub error: String,
+    pub kind: IssueStatusErrorKind,
+    /// Title of the QC'd file, when known. Absent for fetch-failed errors
+    /// since we never retrieved the issue body. Present for processing
+    /// failures (incl. `BranchNotLocal`) since the issue itself was fetched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    /// Set when `kind == BranchNotLocal` — the branch ref that needs to be
+    /// fetched / checked out locally so the UI can offer a copy-pasteable fix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 impl From<(u64, GitHubApiError)> for BlockingQCError {
@@ -326,6 +336,9 @@ impl From<(u64, GitHubApiError)> for BlockingQCError {
         Self {
             issue_number: value.0,
             error: value.1.to_string(),
+            kind: IssueStatusErrorKind::FetchFailed,
+            file_name: None,
+            branch: None,
         }
     }
 }
@@ -418,11 +431,14 @@ impl From<CreateResult> for CreateIssueResponse {
 }
 
 /// Error kind for batch issue status.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueStatusErrorKind {
     FetchFailed,
     ProcessingFailed,
+    /// The issue's branch ref isn't reachable locally — the user likely needs
+    /// to `git checkout` it once to populate the local ref.
+    BranchNotLocal,
 }
 
 /// Error entry for batch issue status.
@@ -431,6 +447,9 @@ pub struct IssueStatusError {
     pub issue_number: u64,
     pub kind: IssueStatusErrorKind,
     pub error: String,
+    /// Set when `kind == BranchNotLocal`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// Envelope response for batch issue status.
@@ -560,6 +579,9 @@ pub struct ConfigurationStatusResponse {
 pub struct RepoInfoResponse {
     pub owner: String,
     pub repo: String,
+    /// Name of the user's default remote (almost always `"origin"`, but
+    /// configurable via `git clone --origin <name>` or rename).
+    pub remote: String,
     pub branch: String,
     pub local_commit: String,
     pub remote_commit: String,
@@ -706,6 +728,7 @@ impl RepoInfoResponse {
     ) -> Result<Self, ApiError> {
         let owner = git_info.owner().to_string();
         let repo = git_info.repo().to_string();
+        let remote = git_info.remote_name().to_string();
 
         // Async GitHub call — non-fatal, falls back to None
         let current_user = git_info.get_current_user().await.ok().flatten();
@@ -740,6 +763,7 @@ impl RepoInfoResponse {
         Ok(Self {
             owner,
             repo,
+            remote,
             branch,
             local_commit,
             remote_commit,

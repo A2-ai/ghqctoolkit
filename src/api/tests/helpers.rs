@@ -230,6 +230,10 @@ impl GitRepository for MockGitInfo {
         &self.repo
     }
 
+    fn remote_name(&self) -> &str {
+        "origin"
+    }
+
     fn path(&self) -> &Path {
         Path::new(".")
     }
@@ -337,7 +341,7 @@ impl GitFileOps for MockGitInfo {
     }
 
     fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-        Err(GitFileOpsError::BranchNotFound("mock".to_string()))
+        Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
     }
 
     fn file_touching_commits(

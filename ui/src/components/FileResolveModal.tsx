@@ -33,6 +33,7 @@ import {
   issueStatusBatcher,
   useAllMilestoneIssues,
 } from '~/api/issues'
+import { StatusErrorDisplay } from './StatusErrorDisplay'
 import { useMilestones } from '~/api/milestones'
 import { type BranchCommit, fetchBranchCommits } from '~/api/commits'
 import { CommitSlider } from './CommitSlider'
@@ -493,14 +494,18 @@ function CommitIssueStep({
                 </div>
               )
             })}
-            {statusErrors.map(err => (
-              <Alert key={err.issue_number} color="red" p="xs">
-                <Text size="xs">Issue #{err.issue_number}: {err.error}</Text>
-              </Alert>
-            ))}
+            {statusErrors.length > 0 && <FileResolveStatusErrors errors={statusErrors} />}
           </Stack>
         </Tabs.Panel>
       </Tabs>
     </Stack>
+  )
+}
+
+function FileResolveStatusErrors({ errors }: { errors: IssueStatusError[] }) {
+  return (
+    <Alert color="red" p="xs">
+      <StatusErrorDisplay errors={errors} variant="inline-list" />
+    </Alert>
   )
 }
