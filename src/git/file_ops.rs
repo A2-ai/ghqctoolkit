@@ -214,9 +214,23 @@ impl GitFileOps for GitInfo {
         file: &Path,
     ) -> Result<HashSet<String>, GitFileOpsError> {
         use crate::git::action::{GitCli as _, GitCommand};
+        let branch_name = branch.clone();
         GitCommand
             .file_touching_commits(&self.repository_path, branch, file)
-            .map_err(|e| GitFileOpsError::BranchLookupFailed(e.to_string()))
+            .map_err(|e| {
+                let msg = e.to_string();
+                // git emits `fatal: bad revision '<ref>'` when asked about a
+                // ref that doesn't exist locally. In that case we know which
+                // branch was missing — surface it as the structured variant
+                // so the UI can offer the copy-pasteable fix instead of a
+                // raw "lookup failed" message with no suggestion.
+                if let Some(name) = branch_name {
+                    if msg.contains("bad revision") {
+                        return GitFileOpsError::LocalBranchNotFound(name);
+                    }
+                }
+                GitFileOpsError::BranchLookupFailed(msg)
+            })
     }
 
     fn authors(&self, file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
