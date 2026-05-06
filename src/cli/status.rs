@@ -205,11 +205,14 @@ pub async fn interactive_milestone_status(
     .prompt()
     .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
+    let mut sorted_milestones: Vec<&Milestone> = milestones.iter().collect();
+    sorted_milestones.sort_by(|a, b| b.number.cmp(&a.number));
+
     let selected_milestones: Vec<&Milestone> = if choice == "📋 Select All Milestones" {
-        milestones.iter().collect()
+        sorted_milestones
     } else {
         // Multi-select specific milestones
-        let milestone_options: Vec<String> = milestones
+        let milestone_options: Vec<String> = sorted_milestones
             .iter()
             .map(|m| format!("{} ({})", m.title, m.number))
             .collect();
@@ -229,8 +232,8 @@ pub async fn interactive_milestone_status(
                 .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
         // Filter milestones based on selected strings
-        milestones
-            .iter()
+        sorted_milestones
+            .into_iter()
             .filter(|m| {
                 let milestone_display = format!("{} ({})", m.title, m.number);
                 selected_strings.contains(&milestone_display)

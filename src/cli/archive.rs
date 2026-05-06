@@ -39,7 +39,8 @@ pub async fn prompt_archive(
 
     let milestones = match milestone_selection_method {
         "📋 Select All Milestones" => {
-            let filtered_milestones = prompt_open_milestones()?.filter_milestones(milestones);
+            let mut filtered_milestones = prompt_open_milestones()?.filter_milestones(milestones);
+            filtered_milestones.sort_by(|a, b| b.number.cmp(&a.number));
             if filtered_milestones.is_empty() {
                 bail!(
                     "No milestones available with the selected filter. Try including open milestones or check if you have any milestones in your repository."
@@ -48,7 +49,8 @@ pub async fn prompt_archive(
             filtered_milestones
         }
         "🎯 Choose Specific Milestones" => {
-            let filtered_milestones = prompt_open_milestones()?.filter_milestones(milestones);
+            let mut filtered_milestones = prompt_open_milestones()?.filter_milestones(milestones);
+            filtered_milestones.sort_by(|a, b| b.number.cmp(&a.number));
 
             if filtered_milestones.is_empty() {
                 bail!(
@@ -277,6 +279,7 @@ fn prompt_archive_files(
             &mut self,
             input: &str,
         ) -> std::result::Result<Vec<String>, CustomUserError> {
+            let input = input.trim();
             let mut suggestions = Vec::new();
 
             let (base_path, search_term) = if input.contains('/') {
