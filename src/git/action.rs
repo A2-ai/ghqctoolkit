@@ -191,12 +191,7 @@ impl GitCli for GitCommand {
         // TREESAME with one parent for this path is dropped, which avoids
         // listing merge commits whose resolution matched a parent verbatim
         // (i.e. no net content change for the file).
-        cmd.args([
-            "-C",
-            &repo_path.to_string_lossy(),
-            "log",
-            "--format=%H",
-        ]);
+        cmd.args(["-C", &repo_path.to_string_lossy(), "log", "--format=%H"]);
         if let Some(b) = branch {
             cmd.arg(b);
         }
