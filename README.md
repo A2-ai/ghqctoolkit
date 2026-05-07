@@ -73,6 +73,16 @@ Issues are grouped into Milestones for organizational purposes.
 | [`ghqc auth status`](docs/auth.md) | Display stored tokens and auth source resolution for the selected host |
 | [`ghqc auth token`](docs/auth.md) | Print the resolved token for the selected host |
 
+### Cache
+
+`ghqc` keeps a small on-disk cache (per-commit file changes, issue comments/events, repo users and labels) under `~/.cache/ghqc/<owner>/<repo>/`.
+
+| Command | Description |
+|---|---|
+| [`ghqc cache status`](docs/cache.md) | Show cache root, total size, TTL, and per-element sizes for the current repo |
+| [`ghqc cache dir`](docs/cache.md) | Print the cache directory for the current repo (or `--global` for the root) |
+| [`ghqc cache remove`](docs/cache.md) | Remove cached data for the current repo, a single element, or globally |
+
 ### Diagnostics
 
 | Command | Description |

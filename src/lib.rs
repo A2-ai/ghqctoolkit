@@ -40,8 +40,8 @@ pub use auth::{
 };
 pub use cache::DiskCache;
 pub use cache::{
-    CachedCommit, CachedEvents, FileChangeRecord, create_labels_if_needed, get_issue_comments,
-    get_issue_events, get_repo_users,
+    CachedCommit, CachedEvents, FileChangeRecord, cache_root, create_labels_if_needed,
+    get_issue_comments, get_issue_events, get_repo_users,
 };
 pub use comment::QCComment;
 pub use comment_system::CommentBody;
