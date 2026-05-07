@@ -290,6 +290,7 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
                 onChange={handleContentChange}
                 monospace
                 minHeight={200}
+                showPreviewTabs
                 onKeyDown={(e) => {
                   if (e.key === 'Tab') {
                     e.preventDefault()

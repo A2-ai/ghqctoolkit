@@ -1,5 +1,5 @@
-import type { KeyboardEvent, TextareaHTMLAttributes } from 'react'
-import { Input, useMantineColorScheme } from '@mantine/core'
+import { useState, type KeyboardEvent, type TextareaHTMLAttributes } from 'react'
+import { Input, Tabs, useMantineColorScheme } from '@mantine/core'
 import {
   IconBold,
   IconItalic,
@@ -29,6 +29,7 @@ type Props = {
   monospace?: boolean
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void
   textareaProps?: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value'>
+  showPreviewTabs?: boolean
 }
 
 const tablerIcon = (Icon: typeof IconBold) => (
@@ -61,17 +62,35 @@ export function CommentEditor({
   monospace,
   onKeyDown,
   textareaProps,
+  showPreviewTabs,
 }: Props) {
   const { colorScheme } = useMantineColorScheme()
   const dataColorMode = colorScheme === 'dark' ? 'dark' : 'light'
+  const [mode, setMode] = useState<'edit' | 'preview'>('edit')
 
   return (
     <Input.Wrapper label={label} required={required} error={error || undefined}>
       <div data-color-mode={dataColorMode} style={{ marginTop: label ? 4 : 0 }}>
+        {showPreviewTabs && (
+          <Tabs
+            value={mode}
+            onChange={(v) => setMode((v as 'edit' | 'preview') ?? 'edit')}
+            variant="outline"
+            styles={{
+              list: { borderBottom: 'none' },
+              tab: { padding: '4px 10px', fontSize: 12, height: 26 },
+            }}
+          >
+            <Tabs.List>
+              <Tabs.Tab value="edit">Write</Tabs.Tab>
+              <Tabs.Tab value="preview">Preview</Tabs.Tab>
+            </Tabs.List>
+          </Tabs>
+        )}
         <MDEditor
           value={value}
           onChange={(v) => onChange(v ?? '')}
-          preview="edit"
+          preview={showPreviewTabs ? mode : 'edit'}
           hideToolbar={false}
           visibleDragbar={true}
           commands={toolbarCommands}
