@@ -379,6 +379,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
             placeholder="Optional"
             value={note}
             onChange={setNote}
+            showPreviewTabs
           />
           <Group justify="flex-end">
             <Button
@@ -765,6 +766,7 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
             placeholder="Optional"
             value={note}
             onChange={setNote}
+            showPreviewTabs
           />
           <Group justify="flex-end">
             <Button
@@ -1040,6 +1042,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
             error={overrideBlocking && note.trim() === '' ? 'A note is required when overriding blocking QCs' : undefined}
             value={note}
             onChange={setNote}
+            showPreviewTabs
           />
           <Group justify="flex-end">
             <Button
