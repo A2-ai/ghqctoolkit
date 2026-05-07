@@ -14,9 +14,9 @@ import {
   Stack,
   Tabs,
   Text,
-  Textarea,
   Tooltip,
 } from '@mantine/core'
+import { CommentEditor } from './CommentEditor'
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest, ReviewStashResult } from '~/api/issues'
@@ -374,13 +374,11 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
             </Tooltip>
           </Stack>
 
-          <Textarea
+          <CommentEditor
             label="Comment"
             placeholder="Optional"
             value={note}
-            onChange={(e) => setNote(e.currentTarget.value)}
-            resize="vertical"
-            minRows={3}
+            onChange={setNote}
           />
           <Group justify="flex-end">
             <Button
@@ -762,13 +760,11 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
             </Tooltip>
           </Stack>
 
-          <Textarea
+          <CommentEditor
             label="Comment"
             placeholder="Optional"
             value={note}
-            onChange={(e) => setNote(e.currentTarget.value)}
-            resize="vertical"
-            minRows={3}
+            onChange={setNote}
           />
           <Group justify="flex-end">
             <Button
@@ -1037,15 +1033,13 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
             {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
           </Stack>
 
-          <Textarea
+          <CommentEditor
             label={overrideBlocking ? 'Note (required)' : 'Comment'}
             placeholder={overrideBlocking ? 'Required' : 'Optional'}
             required={overrideBlocking}
             error={overrideBlocking && note.trim() === '' ? 'A note is required when overriding blocking QCs' : undefined}
             value={note}
-            onChange={(e) => setNote(e.currentTarget.value)}
-            resize="vertical"
-            minRows={3}
+            onChange={setNote}
           />
           <Group justify="flex-end">
             <Button

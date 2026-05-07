@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Badge, Button, Group, Loader, Stack, Text, TextInput, Textarea, Tooltip } from '@mantine/core'
+import { Alert, Badge, Button, Group, Loader, Stack, Text, TextInput, Tooltip } from '@mantine/core'
+import { CommentEditor } from './CommentEditor'
 import { fetchChecklists } from '~/api/checklists'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
@@ -284,9 +285,11 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
               <Text size="sm" fw={500} mb={4}>
                 {singularCap}
               </Text>
-              <Textarea
+              <CommentEditor
                 value={editorContent}
-                onChange={(e) => handleContentChange(e.currentTarget.value)}
+                onChange={handleContentChange}
+                monospace
+                minHeight={200}
                 onKeyDown={(e) => {
                   if (e.key === 'Tab') {
                     e.preventDefault()
@@ -300,10 +303,6 @@ export function ChecklistTab({ onChange, onSelect, initialDraft, persistedCustom
                     })
                   }
                 }}
-                autosize
-                minRows={8}
-                maxRows={14}
-                styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
               />
             </div>
             <Group justify="flex-end" gap="xs">
