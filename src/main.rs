@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
-    FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter,
-    RelevantFileArg, RelevantFileArgParser, confirm_rename_noninteractive, find_issue,
-    generate_archive_name, get_milestone_issue_threads, gh_auth_login, gh_auth_logout,
-    gh_auth_status, gh_auth_token, interactive_milestone_status, interactive_rename,
-    interactive_status, milestone_status, prompt_archive, prompt_context_files,
-    prompt_milestone_record, single_issue_status,
+    CacheCommands, FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser,
+    MilestoneSelectionFilter, RelevantFileArg, RelevantFileArgParser,
+    confirm_rename_noninteractive, find_issue, generate_archive_name,
+    get_milestone_issue_threads, gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token,
+    handle_cache, interactive_milestone_status, interactive_rename, interactive_status,
+    milestone_status, prompt_archive, prompt_context_files, prompt_milestone_record,
+    single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -59,6 +60,11 @@ enum Commands {
     Configuration {
         #[command(subcommand)]
         configuration_command: ConfigurationCommands,
+    },
+    /// Cache management commands
+    Cache {
+        #[command(subcommand)]
+        cache_command: CacheCommands,
     },
     /// Authentication management commands
     Auth {
@@ -1136,6 +1142,9 @@ async fn main() -> Result<()> {
                 println!("{}", configuration_status(&configuration, &git_info))
             }
         },
+        Commands::Cache { cache_command } => {
+            handle_cache(cache_command, &cli.directory)?;
+        }
         Commands::Auth { host, auth_command } => {
             let store = auth_store
                 .as_ref()

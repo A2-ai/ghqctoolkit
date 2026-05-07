@@ -93,8 +93,7 @@ impl DiskCache {
 
     /// Create a new DiskCache instance using the system cache directory
     pub fn new(owner: String, repo: String) -> Result<Self, Box<dyn std::error::Error>> {
-        let strategy = etcetera::choose_base_strategy()?;
-        let root = strategy.cache_dir().join("ghqc");
+        let root = cache_root()?;
         let ttl = default_ttl();
 
         Ok(Self {
@@ -189,6 +188,12 @@ impl DiskCache {
         }
         Ok(())
     }
+}
+
+/// Path of the on-disk cache root (`<system-cache-dir>/ghqc`).
+pub fn cache_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let strategy = etcetera::choose_base_strategy()?;
+    Ok(strategy.cache_dir().join("ghqc"))
 }
 
 /// Get the default cache TTL from environment or use 1 hour default
