@@ -1,3 +1,26 @@
+# v0.7.0 - May 8, 2026
+## Action Required
+**After installing this release, clear the commit cache with `ghqc cache remove commits --global`** (see the new `ghqc cache` command below).
+
+Previous releases used `git log --full-history` to determine file-changing commits, which incorrectly flagged merge commits that touched the file on another branch without changing it on the QC branch. That's fixed in 0.7.0, but cached results from prior versions will still reflect the old behavior until cleared.
+
+## New Features
+* Markdown editor for review comments, checklist editing, and issue detail previews
+* Word (.docx) and Excel (.xlsx) file previews in the Create and Archive tabs, rendered via in-browser viewers
+* `ghqc cache` command to provide insight and remove entries
+
+## Improvements
+* Checklist state now persists across tab switches and reloads
+* Status tab tooltips clarify status colors and the approve-comment lock state
+* Better error messaging and suggestions for non-local branches, with improved branch error handling
+* "Ready for Review" issues now default to the Review tab unless checklist and relevant files are incomplete
+* Checklist column is expandable and shows a tooltip with the full checklist name
+* Milestone ordering reverted to prior behavior; tab completion improved; input is trimmed of extra whitespace
+* git log walks no longer use `--full-history`, improving performance on file-changing commits
+* `octocrab` updated to support the "Closed as Duplicate" issue status
+* Config directory resolution strips a trailing `.git` from the repo name
+* Auth store not-found log downgraded from warning to debug to reduce user confusion
+
 # v0.6.0 - April 9, 2026
 ## New Features
 * File rename tracking: after issue creation, the UI detects when the associated file has been renamed and prompts to update the issue link; a `ghqc rename` CLI command is also available
