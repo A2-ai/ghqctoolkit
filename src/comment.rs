@@ -99,7 +99,7 @@ impl QCComment {
 #[cfg(test)]
 mod tests {
     use crate::GitFileOpsError;
-    use crate::{GitAuthor, GitCommitOps, git::GitCommit};
+    use crate::GitAuthor;
 
     use super::*;
     use crate::comment_system::CommentBody;
@@ -160,42 +160,6 @@ mod tests {
         }
         fn issue_url(&self, issue_number: u64) -> String {
             format!("https://github.com/owner/repo/issues/{issue_number}")
-        }
-    }
-
-    impl GitCommitOps for MockGitInfo {
-        fn commits(
-            &self,
-            _branch: &Option<String>,
-            _stop_at: Option<ObjectId>,
-        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
-        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
-        }
-
-        fn file_touching_commits(
-            &self,
-            _branch: Option<String>,
-            _file: &std::path::Path,
-        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
-            Ok(std::collections::HashSet::new())
-        }
-
-        fn get_branches_containing_commit(
-            &self,
-            _commit: &gix::ObjectId,
-        ) -> Result<Vec<String>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
-        fn find_merged_into_branch(
-            &self,
-            _target_commit: &gix::ObjectId,
-        ) -> Result<Option<String>, GitFileOpsError> {
-            Ok(None)
         }
     }
 

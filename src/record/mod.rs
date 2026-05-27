@@ -12,7 +12,7 @@ use tera::{Context, Tera};
 use crate::{
     ChecklistSummary, Configuration, DiskCache, GitCommitOps, GitHubReader, GitRepository,
     GitStatusOps, RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
-    git::{GitComment, GitFileOps, GitState},
+    git::{GitComment, GitState},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
     utils::EnvProvider,
@@ -198,7 +198,7 @@ pub async fn fetch_milestone_issues(
 pub async fn get_milestone_issue_information(
     milestone_issues: &HashMap<String, Vec<Issue>>,
     cache: Option<&DiskCache>,
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitOps + GitStatusOps + GitRepository),
+    git_info: &(impl GitHubReader + GitCommitOps + GitStatusOps + GitRepository),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
@@ -264,7 +264,7 @@ pub async fn create_issue_information(
     git_status: &GitState,
     dirty_files: &[PathBuf],
     cache: Option<&DiskCache>,
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitOps + GitRepository),
+    git_info: &(impl GitHubReader + GitCommitOps),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: &Path,
 ) -> Result<IssueInformation, RecordError> {
@@ -731,8 +731,8 @@ pub enum RecordError {
 mod tests {
     use super::*;
     use crate::{
-        GitAuthor, GitCommitOps,
-        git::{GitComment, GitCommit, GitFileOps, GitFileOpsError, GitHubApiError},
+        GitCommitOps,
+        git::{GitComment, GitCommit, GitFileOpsError, GitHubApiError},
         record::images::DownloadError,
         test_utils::create_test_issue,
     };
@@ -779,58 +779,6 @@ mod tests {
             _target_commit: &ObjectId,
         ) -> Result<Option<String>, GitFileOpsError> {
             Ok(None)
-        }
-    }
-
-    impl GitFileOps for TestGitInfo {
-        fn authors(&self, _file: &Path) -> Result<Vec<crate::git::GitAuthor>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
-        fn file_bytes_at_commit(
-            &self,
-            _file: &Path,
-            _commit: &ObjectId,
-        ) -> Result<Vec<u8>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
-        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-    }
-
-    impl GitRepository for TestGitInfo {
-        fn path(&self) -> &Path {
-            Path::new(".")
-        }
-        fn branch(&self) -> Result<String, crate::GitRepositoryError> {
-            Ok(String::new())
-        }
-        fn commit(&self) -> Result<String, crate::GitRepositoryError> {
-            Ok(String::new())
-        }
-        fn configured_author(&self) -> Option<GitAuthor> {
-            None
-        }
-        fn fetch(&self) -> Result<bool, crate::GitRepositoryError> {
-            Ok(false)
-        }
-        fn owner(&self) -> &str {
-            ""
-        }
-        fn remote_name(&self) -> &str {
-            ""
-        }
-        fn repo(&self) -> &str {
-            ""
-        }
-        fn stash_file(
-            &self,
-            _file: &Path,
-            _message: &str,
-        ) -> Result<crate::FileStashOutcome, crate::GitRepositoryError> {
-            Ok(crate::FileStashOutcome::NoChanges)
         }
     }
 

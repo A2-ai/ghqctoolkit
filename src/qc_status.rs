@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use crate::cache::DiskCache;
 use crate::git::{GitHubApiError, GitHubReader};
 use crate::issue::{BlockingQC, IssueError, IssueThread};
-use crate::{GitCommitOps, GitFileOps, GitRepository};
+use crate::GitCommitOps;
 
 static CHECKLIST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^\s*-\s*\[([xX\s])\]").expect("Failed to compile checklist regex")
@@ -135,7 +135,7 @@ impl QCStatus {
     pub async fn from_blocking_qc(
         blocking_qc: &BlockingQC,
         cache: Option<&DiskCache>,
-        git_info: &(impl GitHubReader + GitFileOps + GitCommitOps + GitRepository),
+        git_info: &(impl GitHubReader + GitCommitOps),
     ) -> Result<Self, QCStatusError> {
         let issue = git_info.get_issue(blocking_qc.issue_number).await?;
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
@@ -433,7 +433,7 @@ impl fmt::Display for BlockingQCStatus {
 /// which allows it to be used when IssueThread construction might fail (e.g., missing metadata).
 pub async fn get_blocking_qc_status(
     blocking_qcs: &[BlockingQC],
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitOps + GitRepository),
+    git_info: &(impl GitHubReader + GitCommitOps),
     cache: Option<&DiskCache>,
 ) -> BlockingQCStatus {
     let mut status = BlockingQCStatus::default();

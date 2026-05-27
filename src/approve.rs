@@ -6,7 +6,7 @@ use gix::ObjectId;
 use octocrab::models::issues::Issue;
 use serde::{Deserialize, Serialize};
 
-use crate::{GitCommitOps, GitRepository};
+use crate::GitCommitOps;
 use crate::cache::DiskCache;
 use crate::comment_system::CommentBody;
 use crate::git::{GitFileOps, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter};
@@ -190,7 +190,7 @@ impl fmt::Display for ApprovalResult {
 /// which allows approval to proceed even when IssueThread construction might fail.
 pub async fn get_unapproved_blocking_qcs(
     blocking_qcs: &[BlockingQC],
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitOps + GitRepository),
+    git_info: &(impl GitHubReader + GitCommitOps),
     cache: Option<&DiskCache>,
 ) -> BlockingQCCheckResult {
     let status = get_blocking_qc_status(blocking_qcs, git_info, cache).await;
@@ -212,7 +212,7 @@ pub async fn get_unapproved_blocking_qcs(
 /// If `force` is true, proceeds with approval and records skipped issues in the result.
 pub async fn approve_with_validation(
     approval: &QCApprove,
-    git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitOps + GitRepository),
+    git_info: &(impl GitHubWriter + GitHubReader + GitCommitOps),
     cache: Option<&DiskCache>,
     force: bool,
 ) -> Result<ApprovalResult, ApprovalError> {
@@ -497,7 +497,7 @@ where
 
 /// Unapprove an issue and show impact tree
 pub async fn unapprove_with_impact<
-    T: GitHubWriter + GitHubReader + GitHelpers + GitFileOps + Sync,
+    T: GitHubWriter + GitHubReader + Sync,
 >(
     unapproval: &QCUnapprove,
     git_info: &T,
@@ -541,7 +541,7 @@ pub async fn unapprove_with_impact<
 mod tests {
     use super::*;
     use crate::comment_system::CommentBody;
-    use crate::git::{GitAuthor, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, GitHelpers};
+    use crate::git::{GitAuthor, GitFileOps, GitFileOpsError, GitHelpers};
     use std::path::Path;
 
     // Mock implementation for testing
@@ -566,42 +566,6 @@ mod tests {
 
         fn issue_url(&self, issue_number: u64) -> String {
             format!("https://github.com/owner/repo/issues/{issue_number}")
-        }
-    }
-
-    impl GitCommitOps for MockGitHelpers {
-        fn commits(
-            &self,
-            _branch: &Option<String>,
-            _stop_at: Option<ObjectId>,
-        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
-        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
-        }
-
-        fn file_touching_commits(
-            &self,
-            _branch: Option<String>,
-            _file: &Path,
-        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
-            Ok(std::collections::HashSet::new())
-        }
-
-        fn get_branches_containing_commit(
-            &self,
-            _commit: &gix::ObjectId,
-        ) -> Result<Vec<String>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
-        fn find_merged_into_branch(
-            &self,
-            _target_commit: &gix::ObjectId,
-        ) -> Result<Option<String>, GitFileOpsError> {
-            Ok(None)
         }
     }
 
