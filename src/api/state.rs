@@ -1,6 +1,6 @@
 //! Application state for the API server.
 
-use crate::{Configuration, DiskCache, GitCli, GitCommand, GitProvider};
+use crate::{Configuration, DiskCache, GitProvider};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +23,7 @@ pub struct AppState<G: GitProvider> {
     /// Configuration git_info update
     pub config_git_info_creator: Arc<dyn Fn(&Path) -> Option<G> + Send + Sync + 'static>,
     /// Git Cli trait
-    git_cli: Arc<dyn GitCli + Send + Sync>,
+    // git_cli: Arc<RwLock<Option<C>>>,
     /// Preview PDF store: UUID key → temp file path
     preview_store: Arc<Mutex<HashMap<String, PathBuf>>>,
 }
@@ -42,14 +42,8 @@ impl<G: GitProvider> AppState<G> {
             configuration_git_info: Arc::new(RwLock::new(configuration_git_info)),
             disk_cache: disk_cache.map(Arc::new),
             config_git_info_creator: Arc::new(|_| None),
-            git_cli: Arc::new(GitCommand),
             preview_store: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    pub fn with_git_cli(mut self, cli: impl GitCli + Send + Sync + 'static) -> Self {
-        self.git_cli = Arc::new(cli);
-        self
     }
 
     pub fn with_creator(
@@ -76,10 +70,6 @@ impl<G: GitProvider> AppState<G> {
         let git_info = (self.config_git_info_creator)(path);
         let mut config_git_info = self.configuration_git_info.write().await;
         *config_git_info = git_info.clone();
-    }
-
-    pub fn git_cli(&self) -> &(dyn GitCli + Send + Sync) {
-        self.git_cli.as_ref()
     }
 
     pub async fn preview_store(&self) -> tokio::sync::MutexGuard<'_, HashMap<String, PathBuf>> {

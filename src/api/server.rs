@@ -1,11 +1,11 @@
 //! Axum server setup and router assembly.
 
-use crate::GitProvider;
 use crate::api::routes::{
     archive, comments, commits, configuration, files, health, issues, milestones, preview, record,
     status,
 };
 use crate::api::state::AppState;
+use crate::{GitCli, GitProvider};
 use axum::{
     Router,
     extract::{DefaultBodyLimit, Request},
@@ -29,7 +29,9 @@ async fn log_request(req: Request, next: Next) -> Response {
 }
 
 /// Create the API router with all routes.
-pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
+pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static>(
+    state: AppState<G>,
+) -> Router {
     // NOTE: Wildcard CORS is intentional for local development serving a GUI.
     // This should NOT be used in production or networked deployments.
     // For production, restrict origins to specific domains.
@@ -121,7 +123,8 @@ pub fn create_router<G: GitProvider + 'static>(state: AppState<G>) -> Router {
         // Configuration
         .route(
             "/api/configuration",
-            get(configuration::get_configuration).post(configuration::setup_configuration_repo),
+            get(configuration::get_configuration)
+                .post(configuration::setup_configuration_repo::<G, C>),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http())

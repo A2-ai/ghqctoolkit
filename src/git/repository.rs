@@ -1,4 +1,4 @@
-use crate::git::action::{GitCli, GitCommand, StashFileOutcome};
+use crate::git::action::{GitCli, StashFileOutcome};
 use crate::{GitAuthor, GitInfo};
 #[cfg(test)]
 use mockall::automock;
@@ -148,8 +148,8 @@ impl GitRepository for GitInfo {
     }
 
     fn fetch(&self) -> Result<bool, GitRepositoryError> {
-        GitCommand
-            .fetch(&self.repository_path, &self.remote_name)
+        self.command
+            .fetch(&self.remote_name)
             .map_err(|e| GitRepositoryError::FetchError(e.to_string()))
     }
 
@@ -158,8 +158,9 @@ impl GitRepository for GitInfo {
         file: &Path,
         message: &str,
     ) -> Result<FileStashOutcome, GitRepositoryError> {
-        match GitCommand
-            .stash_file(&self.repository_path, file, message)
+        match self
+            .command
+            .stash_file(file, message)
             .map_err(|e| GitRepositoryError::StashError(e.to_string()))?
         {
             StashFileOutcome::Stashed => Ok(FileStashOutcome::Stashed),

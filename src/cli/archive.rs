@@ -14,14 +14,14 @@ use inquire::{
 use octocrab::models::Milestone;
 
 use crate::{
-    DiskCache, GitCommitAnalysis, GitFileOps, GitHubReader, GitRepository, IssueThread,
+    DiskCache, GitCommitOps, GitFileOps, GitHubReader, GitRepository, IssueThread,
     archive::ArchiveFile, get_issue_comments, git::GitCommit,
 };
 
 pub async fn prompt_archive(
     milestones: &[Milestone],
     current_dir: &PathBuf,
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitRepository),
+    git_info: &(impl GitHubReader + GitCommitOps + GitRepository),
     cache: Option<&DiskCache>,
 ) -> Result<(Vec<ArchiveFile>, PathBuf)> {
     println!("📦 Welcome to GHQC Milestone Archive Mode!");
@@ -207,7 +207,7 @@ impl MilestoneSelectionFilter {
 
 pub async fn get_milestone_issue_threads(
     milestones: &[&Milestone],
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
+    git_info: &(impl GitHubReader + GitCommitOps + GitRepository),
     cache: Option<&DiskCache>,
 ) -> Result<Vec<IssueThread>> {
     let futures = milestones
@@ -266,7 +266,7 @@ fn prompt_archive_files(
     current_dir: &PathBuf,
     selected_files: &[&Path],
     commits: &[GitCommit],
-    git_info: &impl GitFileOps,
+    git_info: &impl GitCommitOps,
 ) -> Result<Vec<(PathBuf, ObjectId)>> {
     #[derive(Clone)]
     struct ArchiveFileCompleter {

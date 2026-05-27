@@ -232,7 +232,7 @@ impl PreviousQCDiffComment {
 mod tests {
     use super::*;
     use crate::{
-        GitAuthor,
+        GitAuthor, GitCommitOps,
         comment_system::CommentBody,
         git::{GitCommit, GitFileOpsError},
     };
@@ -278,7 +278,7 @@ mod tests {
         }
     }
 
-    impl GitFileOps for MockGitInfo {
+    impl GitCommitOps for MockGitInfo {
         fn commits(
             &self,
             _branch: &Option<String>,
@@ -286,19 +286,7 @@ mod tests {
         ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(Vec::new())
         }
-        fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-        fn file_bytes_at_commit(
-            &self,
-            file: &Path,
-            commit: &ObjectId,
-        ) -> Result<Vec<u8>, GitFileOpsError> {
-            self.file_contents
-                .get(&(file.to_path_buf(), commit.to_string()))
-                .cloned()
-                .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
-        }
+
         fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
             Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
         }
@@ -309,6 +297,37 @@ mod tests {
             _file: &Path,
         ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
             Ok(std::collections::HashSet::new())
+        }
+
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &ObjectId,
+        ) -> Result<Vec<String>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn find_merged_into_branch(
+            &self,
+            _target_commit: &ObjectId,
+        ) -> Result<Option<String>, GitFileOpsError> {
+            Ok(None)
+        }
+    }
+
+    impl GitFileOps for MockGitInfo {
+        fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn file_bytes_at_commit(
+            &self,
+            file: &Path,
+            commit: &ObjectId,
+        ) -> Result<Vec<u8>, GitFileOpsError> {
+            self.file_contents
+                .get(&(file.to_path_buf(), commit.to_string()))
+                .cloned()
+                .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
         }
 
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {

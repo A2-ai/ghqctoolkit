@@ -2,8 +2,8 @@
 
 use crate::CommentBody;
 use crate::git::{
-    FileStashOutcome, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps, GitFileOpsError,
-    GitHelpers, GitRepository, GitRepositoryError, GitState, GitStatusError, GitStatusOps,
+    FileStashOutcome, GitCommitOps, GitFileOps, GitFileOpsError, GitHelpers, GitRepository,
+    GitRepositoryError, GitState, GitStatusError, GitStatusOps,
 };
 use crate::{GitAuthor, GitCommit, GitHubApiError, GitHubReader, GitHubWriter};
 use gix::ObjectId;
@@ -307,7 +307,7 @@ impl GitStatusOps for MockGitInfo {
     }
 }
 
-impl GitFileOps for MockGitInfo {
+impl GitCommitOps for MockGitInfo {
     fn commits(
         &self,
         _branch: &Option<String>,
@@ -322,22 +322,6 @@ impl GitFileOps for MockGitInfo {
             commit: commit_hash,
             message: "Initial commit".to_string(),
         }])
-    }
-
-    fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
-        // Return dummy authors for any file
-        Ok(vec![GitAuthor {
-            name: "Test Author".to_string(),
-            email: "test@example.com".to_string(),
-        }])
-    }
-
-    fn file_bytes_at_commit(
-        &self,
-        _file: &Path,
-        _commit: &ObjectId,
-    ) -> Result<Vec<u8>, GitFileOpsError> {
-        Ok(vec![])
     }
 
     fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
@@ -355,6 +339,38 @@ impl GitFileOps for MockGitInfo {
         Ok(std::iter::once(commit_hash.to_string()).collect())
     }
 
+    fn get_branches_containing_commit(
+        &self,
+        _commit: &ObjectId,
+    ) -> Result<Vec<String>, GitFileOpsError> {
+        Ok(Vec::new())
+    }
+
+    fn find_merged_into_branch(
+        &self,
+        _target_commit: &ObjectId,
+    ) -> Result<Option<String>, GitFileOpsError> {
+        Ok(None)
+    }
+}
+
+impl GitFileOps for MockGitInfo {
+    fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
+        // Return dummy authors for any file
+        Ok(vec![GitAuthor {
+            name: "Test Author".to_string(),
+            email: "test@example.com".to_string(),
+        }])
+    }
+
+    fn file_bytes_at_commit(
+        &self,
+        _file: &Path,
+        _commit: &ObjectId,
+    ) -> Result<Vec<u8>, GitFileOpsError> {
+        Ok(vec![])
+    }
+
     fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
         match path {
             "" => Ok(vec![
@@ -367,34 +383,6 @@ impl GitFileOps for MockGitInfo {
             ]),
             _ => Err(GitFileOpsError::DirectoryNotFound(path.to_string())),
         }
-    }
-}
-
-impl GitCommitAnalysis for MockGitInfo {
-    fn get_all_merge_commits(&self) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
-        Ok(vec![])
-    }
-
-    fn get_commit_parents(
-        &self,
-        _commit: &ObjectId,
-    ) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
-        Ok(vec![])
-    }
-
-    fn is_ancestor(
-        &self,
-        _ancestor: &ObjectId,
-        _descendant: &ObjectId,
-    ) -> Result<bool, GitCommitAnalysisError> {
-        Ok(false)
-    }
-
-    fn get_branches_containing_commit(
-        &self,
-        _commit: &ObjectId,
-    ) -> Result<Vec<String>, GitCommitAnalysisError> {
-        Ok(vec![])
     }
 }
 

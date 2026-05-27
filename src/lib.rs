@@ -52,11 +52,10 @@ pub use configuration::{
 pub use create::{QCEntry, QCIssue, QCRelationship, RelevantFileEntry, batch_post_qc_entries};
 pub use git::{
     AuthError, AuthSourceKind, AuthSources, FileStashOutcome, GitAuthor, GitCli, GitCliError,
-    GitCommand, GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
-    GitFileOpsError, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError,
-    GitProvider, GitRepository, GitRepositoryError, GitState, GitStatus, GitStatusError,
-    GitStatusOps, RepoUser, detect_renames, find_commits, find_or_cache_file_changes,
-    get_git_status, head_commit_hash,
+    GitCommand, GitComment, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, GitHelpers,
+    GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError, GitProvider, GitRepository,
+    GitRepositoryError, GitState, GitStatus, GitStatusError, GitStatusOps, RepoUser, detect_renames,
+    find_commits, find_or_cache_file_changes, get_commits_robust, get_git_status, head_commit_hash,
 };
 pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, FileRenameEvent, IssueCommit, IssueError,

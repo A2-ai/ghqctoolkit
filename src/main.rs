@@ -1120,9 +1120,11 @@ async fn main() -> Result<()> {
 
                 let config_dir = determine_config_dir(cli.config_dir, &StdEnvProvider::default())?;
 
-                let git_action = GitCommand;
+                let git_action = GitCommand {
+                    path: config_dir.clone(),
+                };
 
-                setup_configuration(&config_dir, url, &git_action)
+                setup_configuration(url, &git_action)
                     .await
                     .map_err(|e| anyhow!("{e}"))?;
 
@@ -1255,7 +1257,7 @@ async fn main() -> Result<()> {
                 .with_creator(move |path| {
                     GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
                 });
-            ghqctoolkit::ui::run(port, state, no_open, ipv4_only).await?;
+            ghqctoolkit::ui::run::<GitInfo, GitCommand>(port, state, no_open, ipv4_only).await?;
         }
     }
 

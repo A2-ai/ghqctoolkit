@@ -6,11 +6,10 @@ use gix::ObjectId;
 use octocrab::models::issues::Issue;
 use serde::{Deserialize, Serialize};
 
+use crate::{GitCommitOps, GitRepository};
 use crate::cache::DiskCache;
 use crate::comment_system::CommentBody;
-use crate::git::{
-    GitCommitAnalysis, GitFileOps, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter,
-};
+use crate::git::{GitFileOps, GitHelpers, GitHubApiError, GitHubReader, GitHubWriter};
 use crate::issue::{BlockingQC, parse_blocking_qcs};
 use crate::qc_status::get_blocking_qc_status;
 
@@ -191,7 +190,7 @@ impl fmt::Display for ApprovalResult {
 /// which allows approval to proceed even when IssueThread construction might fail.
 pub async fn get_unapproved_blocking_qcs(
     blocking_qcs: &[BlockingQC],
-    git_info: &(impl GitHubReader + GitCommitAnalysis + GitFileOps),
+    git_info: &(impl GitHubReader + GitFileOps + GitCommitOps + GitRepository),
     cache: Option<&DiskCache>,
 ) -> BlockingQCCheckResult {
     let status = get_blocking_qc_status(blocking_qcs, git_info, cache).await;
@@ -213,7 +212,7 @@ pub async fn get_unapproved_blocking_qcs(
 /// If `force` is true, proceeds with approval and records skipped issues in the result.
 pub async fn approve_with_validation(
     approval: &QCApprove,
-    git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitAnalysis),
+    git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitOps + GitRepository),
     cache: Option<&DiskCache>,
     force: bool,
 ) -> Result<ApprovalResult, ApprovalError> {
@@ -542,7 +541,7 @@ pub async fn unapprove_with_impact<
 mod tests {
     use super::*;
     use crate::comment_system::CommentBody;
-    use crate::git::{GitAuthor, GitCommit, GitFileOps, GitFileOpsError, GitHelpers};
+    use crate::git::{GitAuthor, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, GitHelpers};
     use std::path::Path;
 
     // Mock implementation for testing
@@ -570,7 +569,7 @@ mod tests {
         }
     }
 
-    impl GitFileOps for MockGitHelpers {
+    impl GitCommitOps for MockGitHelpers {
         fn commits(
             &self,
             _branch: &Option<String>,
@@ -591,6 +590,22 @@ mod tests {
             Ok(std::collections::HashSet::new())
         }
 
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<String>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn find_merged_into_branch(
+            &self,
+            _target_commit: &gix::ObjectId,
+        ) -> Result<Option<String>, GitFileOpsError> {
+            Ok(None)
+        }
+    }
+
+    impl GitFileOps for MockGitHelpers {
         fn authors(&self, _file: &Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
             Ok(Vec::new())
         }

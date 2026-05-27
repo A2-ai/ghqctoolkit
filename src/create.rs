@@ -10,7 +10,7 @@ use gix::ObjectId;
 use crate::{
     configuration::Checklist,
     git::{
-        GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError,
+        GitAuthor, GitCommitOps, GitFileOps, GitFileOpsError, GitHelpers, GitHubApiError,
         GitHubReader, GitHubWriter, GitRepository, GitRepositoryError,
     },
     issue::IssueThread,
@@ -153,7 +153,7 @@ impl QCIssue {
     ///
     /// Returns the URL of the created issue.
     pub async fn post_with_blocking<
-        T: GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitAnalysis,
+        T: GitHubWriter + GitHubReader + GitHelpers + GitFileOps + GitCommitOps + GitRepository,
     >(
         &self,
         git_info: &T,
@@ -672,9 +672,7 @@ fn resolve_creation_order(entries: &[QCEntry]) -> ResolutionResult {
 /// Create multiple QC issues in resolved dependency order
 pub async fn batch_post_qc_entries(
     entries: &[QCEntry],
-    git_info: &(
-         impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps + GitCommitAnalysis
-     ),
+    git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps + GitCommitOps),
     milestone_id: u64,
     current_user: Option<&str>,
 ) -> Result<Vec<CreateResult>, QCIssueError> {
@@ -843,10 +841,8 @@ pub enum QCIssueError {
 mod tests {
     use super::*;
     use crate::{
-        git::{
-            GitAuthor, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHelpers, GitHubReader,
-            GitHubWriter,
-        },
+        GitCommitOps,
+        git::{GitAuthor, GitFileOps, GitFileOpsError, GitHelpers, GitHubReader, GitHubWriter},
         relevant_files::RelevantFileClass,
     };
     use std::collections::{HashMap, HashSet};
@@ -1399,24 +1395,12 @@ mod tests {
         }
     }
 
-    impl GitFileOps for MockGitInfo {
+    impl GitCommitOps for MockGitInfo {
         fn commits(
             &self,
             _branch: &Option<String>,
             _stop_at: Option<ObjectId>,
         ) -> Result<Vec<crate::git::GitCommit>, GitFileOpsError> {
-            Ok(vec![])
-        }
-
-        fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
-            Ok(vec![])
-        }
-
-        fn file_bytes_at_commit(
-            &self,
-            _file: &std::path::Path,
-            _commit: &gix::ObjectId,
-        ) -> Result<Vec<u8>, GitFileOpsError> {
             Ok(vec![])
         }
 
@@ -1432,38 +1416,70 @@ mod tests {
             Ok(std::collections::HashSet::new())
         }
 
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<String>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn find_merged_into_branch(
+            &self,
+            _target_commit: &gix::ObjectId,
+        ) -> Result<Option<String>, GitFileOpsError> {
+            Ok(None)
+        }
+    }
+
+    impl GitFileOps for MockGitInfo {
+        fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
+            Ok(vec![])
+        }
+
+        fn file_bytes_at_commit(
+            &self,
+            _file: &std::path::Path,
+            _commit: &gix::ObjectId,
+        ) -> Result<Vec<u8>, GitFileOpsError> {
+            Ok(vec![])
+        }
+
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
             Ok(vec![])
         }
     }
 
-    impl GitCommitAnalysis for MockGitInfo {
-        fn get_all_merge_commits(
-            &self,
-        ) -> Result<Vec<gix::ObjectId>, crate::git::GitCommitAnalysisError> {
-            Ok(vec![])
+    impl GitRepository for MockGitInfo {
+        fn path(&self) -> &Path {
+            Path::new(".")
         }
-
-        fn get_commit_parents(
-            &self,
-            _commit: &gix::ObjectId,
-        ) -> Result<Vec<gix::ObjectId>, crate::git::GitCommitAnalysisError> {
-            Ok(vec![])
+        fn branch(&self) -> Result<String, crate::GitRepositoryError> {
+            Ok(String::new())
         }
-
-        fn is_ancestor(
-            &self,
-            _ancestor: &gix::ObjectId,
-            _descendant: &gix::ObjectId,
-        ) -> Result<bool, crate::git::GitCommitAnalysisError> {
+        fn commit(&self) -> Result<String, crate::GitRepositoryError> {
+            Ok(String::new())
+        }
+        fn configured_author(&self) -> Option<GitAuthor> {
+            None
+        }
+        fn fetch(&self) -> Result<bool, crate::GitRepositoryError> {
             Ok(false)
         }
-
-        fn get_branches_containing_commit(
+        fn owner(&self) -> &str {
+            ""
+        }
+        fn remote_name(&self) -> &str {
+            ""
+        }
+        fn repo(&self) -> &str {
+            ""
+        }
+        fn stash_file(
             &self,
-            _commit: &gix::ObjectId,
-        ) -> Result<Vec<String>, crate::git::GitCommitAnalysisError> {
-            Ok(vec![])
+            _file: &Path,
+            _message: &str,
+        ) -> Result<crate::FileStashOutcome, crate::GitRepositoryError> {
+            Ok(crate::FileStashOutcome::NoChanges)
         }
     }
 

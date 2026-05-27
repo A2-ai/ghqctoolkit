@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::GitProvider;
+use crate::{GitCommitOps, GitProvider};
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::{find_commits, find_or_cache_file_changes};
@@ -48,7 +48,7 @@ pub struct PagedCommitsResponse {
 /// Returns a page of commits on the current branch (HEAD), newest first.
 /// If `file` is provided, `file_changed` is set for commits that touched it.
 /// If `locate` is provided, returns the page containing that commit hash.
-pub async fn get_commits<G: GitProvider + 'static>(
+pub async fn get_commits<G: GitProvider + GitCommitOps + 'static>(
     State(state): State<AppState<G>>,
     Query(params): Query<CommitsQuery>,
 ) -> Result<Json<PagedCommitsResponse>, ApiError> {

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use tower::ServiceExt;
 
 use crate::Configuration;
+use crate::GitCommand;
 use crate::api::tests::helpers::{MockGitInfo, WriteCall};
 use crate::api::{server::create_router, state::AppState};
 
@@ -52,7 +53,7 @@ impl TestRunner {
         // Create AppState and router (clone mock to keep a reference for assertions)
         let config = Configuration::default();
         let state = AppState::new(mock.clone(), config, Some(mock.clone()), None);
-        let app = create_router(state);
+        let app = create_router::<_, GitCommand>(state);
 
         // Build HTTP request
         let request = self

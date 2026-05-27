@@ -16,6 +16,7 @@ mod test_runner {
     use tower::ServiceExt;
 
     use crate::Configuration;
+    use crate::GitCommand;
     use crate::api::tests::harness::runner::TestRunner;
     use crate::api::tests::harness::types::TestCase;
     use crate::api::tests::helpers::{MockGitInfo, load_test_issue, load_test_milestone};
@@ -138,7 +139,7 @@ mod test_runner {
 
         let config = Configuration::default();
         let state = AppState::new(mock, config, None, None);
-        let app = create_router(state.clone());
+        let app = create_router::<_, GitCommand>(state.clone());
 
         let response1 = app
             .clone()

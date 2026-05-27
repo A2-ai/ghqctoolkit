@@ -8,7 +8,7 @@ use crate::api::types::{
 };
 use crate::configuration::ConfigurationError;
 use crate::utils::StdEnvProvider;
-use crate::{Configuration, GitProvider, setup_configuration};
+use crate::{Configuration, GitCli, GitProvider, setup_configuration};
 use axum::{Json, extract::State};
 
 /// GET /api/configuration
@@ -54,7 +54,7 @@ pub async fn get_configuration<G: GitProvider + 'static>(
 }
 
 /// POST /api/configuration
-pub async fn setup_configuration_repo<G: GitProvider + 'static>(
+pub async fn setup_configuration_repo<G: GitProvider + 'static, C: GitCli + Send + Sync>(
     State(state): State<AppState<G>>,
     Json(body): Json<SetupConfigurationRequest>,
 ) -> Result<Json<ConfigurationStatusResponse>, ApiError> {
@@ -74,8 +74,9 @@ pub async fn setup_configuration_repo<G: GitProvider + 'static>(
         .map_err(|e| ApiError::BadRequest(format!("Invalid git URL: {e}")))?;
 
     let config_dir = state.configuration.read().await.path.clone();
+    let git_cli = C::new(&config_dir);
 
-    setup_configuration(&config_dir, url, state.git_cli())
+    setup_configuration(url, &git_cli)
         .await
         .map_err(|e| match e {
             ConfigurationError::Io(ref io_err)
@@ -111,6 +112,12 @@ mod tests {
     use serde_json::json;
     use std::sync::{Mutex, OnceLock};
     use tower::ServiceExt;
+
+    // Serialize tests that use MockGitCli::new_context (static mock state is global).
+    fn cli_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -173,7 +180,8 @@ mod tests {
         let mock = MockGitInfo::builder().build();
         let config = Configuration::default();
         let state = AppState::new(mock.clone(), config, Some(mock), None);
-        let app = create_router(state);
+        // C::new is never reached (early conflict return), any GitCli type works.
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
 
         let response = post_setup(app, "https://github.com/owner/config-repo").await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
@@ -183,15 +191,24 @@ mod tests {
     #[tokio::test]
     async fn setup_success_returns_200_with_status() {
         let _lock = env_lock().lock().unwrap();
+        let _cli_lock = cli_lock().lock().unwrap();
         let _env_guard = EnvGuard::remove("GHQC_UI_REFRESH_RATE");
 
-        let mut mock_cli = MockGitCli::new();
-        mock_cli.expect_clone().returning(|_, _| Ok(()));
+        // MockGitCli::new_context lets us configure the instance that C::new produces
+        // inside the handler, including its clone expectation.
+        let ctx = MockGitCli::new_context();
+        ctx.expect().returning(|_path| {
+            let mut mock = MockGitCli::default();
+            mock.expect_path()
+                .return_const(std::path::PathBuf::from("/tmp/ghqc_test_nonexistent_xyz"));
+            mock.expect_clone().returning(|_| Ok(()));
+            mock
+        });
 
         let mock = MockGitInfo::builder().build();
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None, None).with_git_cli(mock_cli);
-        let app = create_router(state);
+        let state = AppState::new(mock, config, None, None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
 
         let response = post_setup(app, "https://github.com/owner/config-repo").await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -217,7 +234,8 @@ mod tests {
         let mock = MockGitInfo::builder().build();
         let config = Configuration::default();
         let state = AppState::new(mock, config, None, None);
-        let app = create_router(state);
+        // GET /api/configuration never calls C::new; type param is required by the router.
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
 
         let response = app
             .oneshot(
@@ -242,15 +260,22 @@ mod tests {
     /// A failed clone (e.g. auth error) maps to 500.
     #[tokio::test]
     async fn setup_clone_failure_returns_500() {
-        let mut mock_cli = MockGitCli::new();
-        mock_cli
-            .expect_clone()
-            .returning(|_, _| Err(GitCliError::GitCommandFailed("auth failed".to_string())));
+        let _cli_lock = cli_lock().lock().unwrap();
+
+        let ctx = MockGitCli::new_context();
+        ctx.expect().returning(|_path| {
+            let mut mock = MockGitCli::default();
+            mock.expect_path()
+                .return_const(std::path::PathBuf::from("/tmp/ghqc_test_nonexistent_xyz"));
+            mock.expect_clone()
+                .returning(|_| Err(GitCliError::GitCommandFailed("auth failed".to_string())));
+            mock
+        });
 
         let mock = MockGitInfo::builder().build();
         let config = Configuration::default();
-        let state = AppState::new(mock, config, None, None).with_git_cli(mock_cli);
-        let app = create_router(state);
+        let state = AppState::new(mock, config, None, None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
 
         let response = post_setup(app, "https://github.com/owner/config-repo").await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);

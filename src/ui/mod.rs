@@ -1,5 +1,5 @@
-use crate::GitProvider;
 use crate::api::AppState;
+use crate::{GitCli, GitProvider};
 use axum::{
     body::Body,
     extract::Request,
@@ -51,13 +51,13 @@ fn serve_index() -> Response {
 }
 
 /// Start the embedded server (API + SPA) and open the browser.
-pub async fn run<G: GitProvider + 'static>(
+pub async fn run<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static>(
     port: u16,
     state: AppState<G>,
     no_open: bool,
     ipv4_only: bool,
 ) -> anyhow::Result<()> {
-    let app = crate::api::create_router(state).fallback(static_handler);
+    let app = crate::api::create_router::<G, C>(state).fallback(static_handler);
 
     let (listener, url) = crate::api::bind_local_server_with_url(port, ipv4_only).await?;
     log::info!("ghqc UI running at {url}");

@@ -394,21 +394,18 @@ fn format_header(name: &str, level: usize) -> String {
 }
 
 pub async fn setup_configuration(
-    config_dir: impl AsRef<Path>,
     git: Url,
     git_action: &(impl GitCli + ?Sized),
 ) -> Result<(), ConfigurationError> {
-    let config_dir = config_dir.as_ref();
-
     // Check if config directory already exists
-    if config_dir.exists() {
+    if git_action.path().exists() {
         log::debug!(
             "Config directory already exists at {}",
-            config_dir.display()
+            git_action.path().display()
         );
 
         // Check if it's already a git repository with the same remote
-        match git_action.remote(config_dir) {
+        match git_action.remote() {
             Ok(existing_url) => {
                 if existing_url == git {
                     log::debug!("Config directory already has correct remote URL");
@@ -438,18 +435,18 @@ pub async fn setup_configuration(
         }
     }
 
-    if let Some(parent) = config_dir.parent() {
+    if let Some(parent) = git_action.path().parent() {
         if !parent.is_dir() {
             fs::create_dir_all(parent)?;
         }
     }
 
     // Clone the repository
-    git_action.clone(git, config_dir)?;
+    git_action.clone(git)?;
 
     log::debug!(
         "Successfully set up configuration at {}",
-        config_dir.display()
+        git_action.path().display()
     );
     Ok(())
 }

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 mod action;
 mod api;
 mod auth;
-mod commit_analysis;
 mod file_ops;
 mod helpers;
 mod provider;
@@ -14,10 +13,9 @@ mod status;
 pub use action::{GitCli, GitCliError, GitCommand};
 pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
 pub use auth::{AuthError, AuthSourceKind, AuthSources};
-pub use commit_analysis::{GitCommitAnalysis, GitCommitAnalysisError};
 pub use file_ops::{
-    GitAuthor, GitCommit, GitFileOps, GitFileOpsError, find_commits, find_or_cache_file_changes,
-    get_commits_robust,
+    GitAuthor, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, find_commits,
+    find_or_cache_file_changes, get_commits_robust,
 };
 
 #[cfg(test)]
@@ -65,6 +63,7 @@ pub struct GitInfo {
     /// and forks-of-forks workflows. Captured once at GitInfo construction so
     /// callers don't have to reach for the gix Remote each time.
     pub(crate) remote_name: String,
+    command: GitCommand,
 }
 
 impl GitInfo {
@@ -125,6 +124,9 @@ impl GitInfo {
             repository_path: path.to_path_buf(),
             auth_sources,
             remote_name,
+            command: GitCommand {
+                path: path.to_path_buf(),
+            },
         })
     }
 
