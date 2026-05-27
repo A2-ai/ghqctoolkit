@@ -672,7 +672,9 @@ fn resolve_creation_order(entries: &[QCEntry]) -> ResolutionResult {
 /// Create multiple QC issues in resolved dependency order
 pub async fn batch_post_qc_entries(
     entries: &[QCEntry],
-    git_info: &(impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps + GitCommitOps),
+    git_info: &(
+         impl GitHubWriter + GitHubReader + GitHelpers + GitRepository + GitFileOps + GitCommitOps
+     ),
     milestone_id: u64,
     current_user: Option<&str>,
 ) -> Result<Vec<CreateResult>, QCIssueError> {

@@ -692,7 +692,9 @@ impl From<GitFileOpsError> for IssueError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{GitComment, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, GitHubReader};
+    use crate::git::{
+        GitComment, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, GitHubReader,
+    };
     use octocrab::models::issues::Issue;
     use std::path::PathBuf;
     use std::str::FromStr;

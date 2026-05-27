@@ -6,10 +6,10 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use crate::GitCommitOps;
 use crate::cache::DiskCache;
 use crate::git::{GitHubApiError, GitHubReader};
 use crate::issue::{BlockingQC, IssueError, IssueThread};
-use crate::GitCommitOps;
 
 static CHECKLIST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^\s*-\s*\[([xX\s])\]").expect("Failed to compile checklist regex")

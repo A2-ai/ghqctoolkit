@@ -14,8 +14,8 @@ use inquire::{
 use octocrab::models::Milestone;
 
 use crate::{
-    DiskCache, GitCommitOps, GitFileOps, GitHubReader, GitRepository, IssueThread,
-    archive::ArchiveFile, get_issue_comments, git::GitCommit,
+    DiskCache, GitCommitOps, GitHubReader, GitRepository, IssueThread, archive::ArchiveFile,
+    get_issue_comments, git::GitCommit,
 };
 
 pub async fn prompt_archive(

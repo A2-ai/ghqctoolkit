@@ -98,8 +98,8 @@ impl QCComment {
 
 #[cfg(test)]
 mod tests {
-    use crate::GitFileOpsError;
     use crate::GitAuthor;
+    use crate::GitFileOpsError;
 
     use super::*;
     use crate::comment_system::CommentBody;

@@ -231,11 +231,7 @@ impl PreviousQCDiffComment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        GitAuthor,
-        comment_system::CommentBody,
-        git::GitFileOpsError,
-    };
+    use crate::{GitAuthor, comment_system::CommentBody, git::GitFileOpsError};
     use gix::ObjectId;
     use std::{collections::HashMap, str::FromStr};
 

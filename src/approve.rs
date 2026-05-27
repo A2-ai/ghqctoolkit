@@ -496,9 +496,7 @@ where
 }
 
 /// Unapprove an issue and show impact tree
-pub async fn unapprove_with_impact<
-    T: GitHubWriter + GitHubReader + Sync,
->(
+pub async fn unapprove_with_impact<T: GitHubWriter + GitHubReader + Sync>(
     unapproval: &QCUnapprove,
     git_info: &T,
 ) -> Result<UnapprovalResult, GitHubApiError> {
