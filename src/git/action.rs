@@ -1,36 +1,42 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use gix::Url;
 
 #[cfg_attr(test, mockall::automock)]
 pub trait GitCli {
     /// Clone a repository from a URL to a local path
-    fn clone(&self, url: Url, path: &Path) -> Result<(), GitCliError>;
+    fn clone(&self, url: Url) -> Result<(), GitCliError>;
 
-    fn remote(&self, path: &Path) -> Result<Url, GitCliError>;
+    fn remote(&self) -> Result<Url, GitCliError>;
 
     /// Fetch from the named remote. Returns whether any refs changed.
     /// Sets GIT_TERMINAL_PROMPT=0 to prevent blocking credential prompts.
-    fn fetch(&self, path: &Path, remote_name: &str) -> Result<bool, GitCliError>;
+    fn fetch(&self, remote_name: &str) -> Result<bool, GitCliError>;
 
     /// Stash changes for a single file path.
-    fn stash_file(
-        &self,
-        path: &Path,
-        file: &Path,
-        message: &str,
-    ) -> Result<StashFileOutcome, GitCliError>;
+    fn stash_file(&self, file: &Path, message: &str) -> Result<StashFileOutcome, GitCliError>;
 
     /// Return the set of full commit SHAs (40-char hex) that touch `file` on `branch`.
     /// If `branch` is None, searches from HEAD.
     /// Uses `git log --format=%H [branch] -- <file>`.
     fn file_touching_commits(
         &self,
-        repo_path: &Path,
         branch: Option<String>,
         file: &Path,
     ) -> Result<HashSet<String>, GitCliError>;
+
+    fn branch_commits<'a>(
+        &self,
+        branch: Option<&'a str>,
+        stop_at: Option<&'a str>,
+    ) -> Result<Vec<(String, String)>, GitCliError>;
+
+    fn path(&self) -> &Path;
+
+    /// Construct an instance rooted at `path`.
+    fn new(path: &Path) -> Self;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,58 +63,69 @@ pub enum GitCliError {
 }
 
 impl<T: GitCli + ?Sized> GitCli for &T {
-    fn clone(&self, url: Url, path: &Path) -> Result<(), GitCliError> {
-        (**self).clone(url, path)
+    fn clone(&self, url: Url) -> Result<(), GitCliError> {
+        (**self).clone(url)
     }
 
-    fn remote(&self, path: &Path) -> Result<Url, GitCliError> {
-        (**self).remote(path)
+    fn remote(&self) -> Result<Url, GitCliError> {
+        (**self).remote()
     }
 
-    fn fetch(&self, path: &Path, remote_name: &str) -> Result<bool, GitCliError> {
-        (**self).fetch(path, remote_name)
+    fn fetch(&self, remote_name: &str) -> Result<bool, GitCliError> {
+        (**self).fetch(remote_name)
     }
 
-    fn stash_file(
-        &self,
-        path: &Path,
-        file: &Path,
-        message: &str,
-    ) -> Result<StashFileOutcome, GitCliError> {
-        (**self).stash_file(path, file, message)
+    fn stash_file(&self, file: &Path, message: &str) -> Result<StashFileOutcome, GitCliError> {
+        (**self).stash_file(file, message)
     }
 
     fn file_touching_commits(
         &self,
-        repo_path: &Path,
         branch: Option<String>,
         file: &Path,
     ) -> Result<HashSet<String>, GitCliError> {
-        (**self).file_touching_commits(repo_path, branch, file)
+        (**self).file_touching_commits(branch, file)
+    }
+    fn branch_commits(
+        &self,
+        branch: Option<&str>,
+        stop_at: Option<&str>,
+    ) -> Result<Vec<(String, String)>, GitCliError> {
+        (**self).branch_commits(branch, stop_at)
+    }
+    fn path(&self) -> &Path {
+        (**self).path()
+    }
+
+    fn new(_path: &Path) -> Self {
+        // Constructing a reference via the blanket impl is never needed;
+        // this exists only to satisfy the trait bound.
+        panic!("GitCli::new is not supported on references")
     }
 }
 
 /// Default implementation of GitCli using the git command line
 #[derive(Debug, Clone, Default)]
-pub struct GitCommand;
-
+pub struct GitCommand {
+    pub path: PathBuf,
+}
 impl GitCli for GitCommand {
-    fn clone(&self, url: Url, path: &Path) -> Result<(), GitCliError> {
-        log::debug!("Cloning repository from {} to {}", url, path.display());
+    fn clone(&self, url: Url) -> Result<(), GitCliError> {
+        log::debug!("Cloning repository from {} to {}", url, self.path.display());
 
-        if path.exists() {
-            log::debug!("Path ({}) already exists", path.display());
-            return Err(GitCliError::DirectoryExists(path.to_path_buf()));
+        if self.path.exists() {
+            log::debug!("Path ({}) already exists", self.path.display());
+            return Err(GitCliError::DirectoryExists(self.path.to_path_buf()));
         }
 
         // Use the system git command for cloning - it handles authentication better
         let mut cmd = std::process::Command::new("git");
-        cmd.args(&["clone", &url.to_string(), &path.to_string_lossy()]);
+        cmd.args(&["clone", &url.to_string(), &self.path.to_string_lossy()]);
 
         log::debug!(
             "Running git clone command: git clone {} {}",
             url,
-            path.display()
+            self.path.display()
         );
 
         let output = cmd.output().map_err(|e| GitCliError::GitCommandError(e))?;
@@ -123,27 +140,14 @@ impl GitCli for GitCommand {
         Ok(())
     }
 
-    fn remote(&self, path: &Path) -> Result<Url, GitCliError> {
-        if !path.exists() {
-            return Err(GitCliError::NoDirectoryExists(path.to_path_buf()));
+    fn remote(&self) -> Result<Url, GitCliError> {
+        if !self.path.exists() {
+            return Err(GitCliError::NoDirectoryExists(self.path.to_path_buf()));
         }
 
         // Use git command to get remote URL
-        let mut cmd = std::process::Command::new("git");
-        cmd.args(&["-C", &path.to_string_lossy(), "remote", "get-url", "origin"]);
-
-        log::debug!(
-            "Running git remote command: git -C {} remote get-url origin",
-            path.display()
-        );
-
-        let output = cmd.output().map_err(|e| GitCliError::GitCommandError(e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::debug!("Git remote failed: {}", stderr);
-            return Err(GitCliError::NoRemote(stderr.to_string()));
-        }
+        let args = vec!["remote", "get-url", "origin"];
+        let output = self.run_git(&args)?;
 
         let url_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
         log::debug!("Found remote URL: {}", url_str);
@@ -154,11 +158,11 @@ impl GitCli for GitCommand {
         })
     }
 
-    fn fetch(&self, path: &Path, remote_name: &str) -> Result<bool, GitCliError> {
-        log::debug!("Fetching from {} in {}", remote_name, path.display());
+    fn fetch(&self, remote_name: &str) -> Result<bool, GitCliError> {
+        log::debug!("Fetching from {} in {}", remote_name, self.path.display());
 
         let output = std::process::Command::new("git")
-            .args(["-C", &path.to_string_lossy(), "fetch", remote_name])
+            .args(["-C", &self.path.to_string_lossy(), "fetch", remote_name])
             .env("GIT_TERMINAL_PROMPT", "0")
             .output()?;
 
@@ -175,7 +179,6 @@ impl GitCli for GitCommand {
 
     fn file_touching_commits(
         &self,
-        repo_path: &Path,
         branch: Option<String>,
         file: &Path,
     ) -> Result<HashSet<String>, GitCliError> {
@@ -183,22 +186,22 @@ impl GitCli for GitCommand {
             "Finding commits touching {:?} on {:?} in {}",
             file,
             branch,
-            repo_path.display()
+            self.path.display()
         );
 
-        let mut cmd = std::process::Command::new("git");
         // Rely on git's default history simplification: a merge that is
         // TREESAME with one parent for this path is dropped, which avoids
         // listing merge commits whose resolution matched a parent verbatim
         // (i.e. no net content change for the file).
-        cmd.args(["-C", &repo_path.to_string_lossy(), "log", "--format=%H"]);
-        if let Some(b) = branch {
-            cmd.arg(b);
+        let mut args = vec!["log", "--format=%H"];
+        if let Some(b) = &branch {
+            args.push(b.as_str());
         }
-        cmd.args(["--", &file.to_string_lossy()]);
+        args.push("--");
+        let file_binding = file.to_string_lossy();
+        args.push(file_binding.as_ref());
 
-        let output = cmd.output()?;
-
+        let output = self.run_git(&args)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(GitCliError::GitCommandFailed(stderr.trim().to_string()));
@@ -214,31 +217,21 @@ impl GitCli for GitCommand {
         Ok(hashes)
     }
 
-    fn stash_file(
-        &self,
-        path: &Path,
-        file: &Path,
-        message: &str,
-    ) -> Result<StashFileOutcome, GitCliError> {
-        log::debug!("Stashing file {} in {}", file.display(), path.display());
-
-        let output = std::process::Command::new("git")
-            .args([
-                "-C",
-                &path.to_string_lossy(),
-                "stash",
-                "push",
-                "-m",
-                message,
-                "--",
-                &file.to_string_lossy(),
-            ])
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(GitCliError::GitCommandFailed(stderr.trim().to_string()));
-        }
+    fn stash_file(&self, file: &Path, message: &str) -> Result<StashFileOutcome, GitCliError> {
+        log::debug!(
+            "Stashing file {} in {}",
+            file.display(),
+            self.path.display()
+        );
+        let args = [
+            "stash",
+            "push",
+            "-m",
+            message,
+            "--",
+            &file.to_string_lossy(),
+        ];
+        let output = self.run_git(&args)?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         if stdout.contains("No local changes to save") {
@@ -246,5 +239,71 @@ impl GitCli for GitCommand {
         } else {
             Ok(StashFileOutcome::Stashed)
         }
+    }
+
+    /// Return commits reachable from `branch` (or HEAD if None) back to and
+    /// including `stop_at` (if given), across all parent chains.
+    ///
+    /// Uses `git log --format="%H%x1f%s" <branch> ^<stop_at>^@` so that the
+    /// range is computed correctly even when `stop_at` is a merge commit —
+    /// `^<sha>^@` excludes everything reachable from *any* parent of stop_at,
+    /// meaning stop_at itself is included and nothing older is.
+    fn branch_commits(
+        &self,
+        branch: Option<&str>,
+        stop_at: Option<&str>,
+    ) -> Result<Vec<(String, String)>, GitCliError> {
+        let mut args = vec!["log", "--format=%H%x1f%s", branch.unwrap_or("HEAD")];
+        let stop = stop_at.map(|s| format!("^{}^@", s)).unwrap_or_default();
+        if !stop.is_empty() {
+            args.push(stop.as_str());
+        }
+        let output = self.run_git(&args)?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let commits = stdout
+            .lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| {
+                let mut parts = l.splitn(2, '\x1f');
+                let hash = parts.next()?.trim().to_string();
+                let subject = parts.next().unwrap_or("").trim().to_string();
+                if hash.is_empty() {
+                    None
+                } else {
+                    Some((hash, subject))
+                }
+            })
+            .collect();
+        Ok(commits)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+        }
+    }
+}
+
+impl GitCommand {
+    fn run_git(&self, args: &[&str]) -> Result<Output, GitCliError> {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.path)
+            .args(args)
+            .output()
+            .map_err(GitCliError::GitCommandError)?;
+
+        if !output.status.success() {
+            return Err(GitCliError::GitCommandFailed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+
+        Ok(output)
     }
 }

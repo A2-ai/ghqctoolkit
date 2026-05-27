@@ -98,8 +98,8 @@ impl QCComment {
 
 #[cfg(test)]
 mod tests {
+    use crate::GitAuthor;
     use crate::GitFileOpsError;
-    use crate::{GitAuthor, git::GitCommit};
 
     use super::*;
     use crate::comment_system::CommentBody;
@@ -164,14 +164,6 @@ mod tests {
     }
 
     impl GitFileOps for MockGitInfo {
-        fn commits(
-            &self,
-            _branch: &Option<String>,
-            _stop_at: Option<ObjectId>,
-        ) -> Result<Vec<GitCommit>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
         fn authors(&self, _file: &std::path::Path) -> Result<Vec<GitAuthor>, GitFileOpsError> {
             Ok(Vec::new())
         }
@@ -188,18 +180,6 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))?
                 .into_bytes())
-        }
-
-        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
-        }
-
-        fn file_touching_commits(
-            &self,
-            _branch: Option<String>,
-            _file: &std::path::Path,
-        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
-            Ok(std::collections::HashSet::new())
         }
 
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {

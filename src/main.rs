@@ -16,7 +16,7 @@ use ghqctoolkit::cli::{
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
     ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
-    GitFileOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread, QCContext,
+    GitCommitOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread, QCContext,
     QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation, archive,
     configuration_status, create_labels_if_needed, create_staging_dir, determine_config_dir,
     fetch_milestone_issues, get_blocking_qc_status, get_git_status,
@@ -1120,9 +1120,11 @@ async fn main() -> Result<()> {
 
                 let config_dir = determine_config_dir(cli.config_dir, &StdEnvProvider::default())?;
 
-                let git_action = GitCommand;
+                let git_action = GitCommand {
+                    path: config_dir.clone(),
+                };
 
-                setup_configuration(&config_dir, url, &git_action)
+                setup_configuration(url, &git_action)
                     .await
                     .map_err(|e| anyhow!("{e}"))?;
 
@@ -1213,7 +1215,7 @@ async fn main() -> Result<()> {
                 .with_creator(move |path| {
                     GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
                 });
-            let app = create_router(state);
+            let app = create_router::<GitInfo, GitCommand>(state);
 
             let listener = bind_local_server(port, ipv4_only).await?;
             println!("Starting API server on {}", local_server_url(&listener));
@@ -1255,7 +1257,7 @@ async fn main() -> Result<()> {
                 .with_creator(move |path| {
                     GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
                 });
-            ghqctoolkit::ui::run(port, state, no_open, ipv4_only).await?;
+            ghqctoolkit::ui::run::<GitInfo, GitCommand>(port, state, no_open, ipv4_only).await?;
         }
     }
 

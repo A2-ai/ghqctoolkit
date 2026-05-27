@@ -1,7 +1,7 @@
 //! Git provider trait combining all git operations.
 
 use super::api::{GitHubReader, GitHubWriter};
-use super::{GitCommitAnalysis, GitFileOps, GitHelpers, GitRepository, GitStatusOps};
+use super::{GitCommitOps, GitFileOps, GitHelpers, GitRepository, GitStatusOps};
 
 /// Super-trait combining all git/GitHub operations.
 ///
@@ -13,8 +13,8 @@ pub trait GitProvider:
     + GitHelpers
     + GitRepository
     + GitFileOps
+    + GitCommitOps
     + GitStatusOps
-    + GitCommitAnalysis
     + Clone
     + Send
     + Sync
@@ -28,8 +28,8 @@ impl<T> GitProvider for T where
         + GitHelpers
         + GitRepository
         + GitFileOps
+        + GitCommitOps
         + GitStatusOps
-        + GitCommitAnalysis
         + Clone
         + Send
         + Sync

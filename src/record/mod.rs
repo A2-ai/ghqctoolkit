@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use tera::{Context, Tera};
 
 use crate::{
-    ChecklistSummary, Configuration, DiskCache, GitHubReader, GitRepository, GitStatusOps,
-    RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
-    git::{GitComment, GitCommitAnalysis, GitFileOps, GitState},
+    ChecklistSummary, Configuration, DiskCache, GitCommitOps, GitHubReader, GitRepository,
+    GitStatusOps, RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
+    git::{GitComment, GitState},
     issue::IssueThread,
     qc_status::{QCStatus, analyze_issue_checklists},
     utils::EnvProvider,
@@ -198,7 +198,7 @@ pub async fn fetch_milestone_issues(
 pub async fn get_milestone_issue_information(
     milestone_issues: &HashMap<String, Vec<Issue>>,
     cache: Option<&DiskCache>,
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis + GitStatusOps + GitRepository),
+    git_info: &(impl GitHubReader + GitCommitOps + GitStatusOps + GitRepository),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<IssueInformation>>, RecordError> {
@@ -264,7 +264,7 @@ pub async fn create_issue_information(
     git_status: &GitState,
     dirty_files: &[PathBuf],
     cache: Option<&DiskCache>,
-    git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
+    git_info: &(impl GitHubReader + GitCommitOps),
     http_downloader: &impl images::HttpDownloader,
     staging_dir: &Path,
 ) -> Result<IssueInformation, RecordError> {
@@ -731,10 +731,8 @@ pub enum RecordError {
 mod tests {
     use super::*;
     use crate::{
-        git::{
-            GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
-            GitFileOpsError, GitHubApiError,
-        },
+        GitCommitOps,
+        git::{GitComment, GitCommit, GitFileOpsError, GitHubApiError},
         record::images::DownloadError,
         test_utils::create_test_issue,
     };
@@ -747,25 +745,13 @@ mod tests {
         commits: Vec<GitCommit>,
     }
 
-    impl GitFileOps for TestGitInfo {
+    impl GitCommitOps for TestGitInfo {
         fn commits(
             &self,
             _branch: &Option<String>,
             _stop_at: Option<ObjectId>,
         ) -> Result<Vec<GitCommit>, GitFileOpsError> {
             Ok(self.commits.clone())
-        }
-
-        fn authors(&self, _file: &Path) -> Result<Vec<crate::git::GitAuthor>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-
-        fn file_bytes_at_commit(
-            &self,
-            _file: &Path,
-            _commit: &ObjectId,
-        ) -> Result<Vec<u8>, GitFileOpsError> {
-            Ok(Vec::new())
         }
 
         fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
@@ -781,36 +767,18 @@ mod tests {
             Ok(self.commits.iter().map(|c| c.commit.to_string()).collect())
         }
 
-        fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-    }
-
-    impl GitCommitAnalysis for TestGitInfo {
-        fn get_all_merge_commits(&self) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
-            Ok(Vec::new())
-        }
-
-        fn get_commit_parents(
-            &self,
-            _commit: &ObjectId,
-        ) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
-            Ok(Vec::new())
-        }
-
-        fn is_ancestor(
-            &self,
-            _ancestor: &ObjectId,
-            _descendant: &ObjectId,
-        ) -> Result<bool, GitCommitAnalysisError> {
-            Ok(false)
-        }
-
         fn get_branches_containing_commit(
             &self,
             _commit: &ObjectId,
-        ) -> Result<Vec<String>, GitCommitAnalysisError> {
+        ) -> Result<Vec<String>, GitFileOpsError> {
             Ok(Vec::new())
+        }
+
+        fn find_merged_into_branch(
+            &self,
+            _target_commit: &ObjectId,
+        ) -> Result<Option<String>, GitFileOpsError> {
+            Ok(None)
         }
     }
 

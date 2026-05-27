@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     cache::{DiskCache, get_issue_comments},
     git::{
-        GitComment, GitCommitAnalysis, GitFileOps, GitFileOpsError, GitHubApiError, GitHubReader,
+        GitComment, GitCommitOps, GitFileOpsError, GitHubApiError, GitHubReader,
         find_or_cache_file_changes, get_commits_robust,
     },
 };
@@ -104,7 +104,7 @@ impl IssueThread {
     pub fn from_issue_comments(
         issue: &Issue,
         comments: &[GitComment],
-        git_info: &(impl GitFileOps + GitCommitAnalysis),
+        git_info: &impl GitCommitOps,
         disk_cache: Option<&DiskCache>,
     ) -> Result<Self, IssueError> {
         let file = PathBuf::from(&issue.title);
@@ -267,7 +267,7 @@ impl IssueThread {
     pub async fn from_issue(
         issue: &Issue,
         disk_cache: Option<&DiskCache>,
-        git_info: &(impl GitHubReader + GitFileOps + GitCommitAnalysis),
+        git_info: &(impl GitHubReader + GitCommitOps),
     ) -> Result<Self, IssueError> {
         let comments = get_issue_comments(issue, disk_cache, git_info).await?;
         Self::from_issue_comments(issue, &comments, git_info, disk_cache)
@@ -693,8 +693,7 @@ impl From<GitFileOpsError> for IssueError {
 mod tests {
     use super::*;
     use crate::git::{
-        GitComment, GitCommit, GitCommitAnalysis, GitCommitAnalysisError, GitFileOps,
-        GitFileOpsError, GitHubReader,
+        GitComment, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, GitHubReader,
     };
     use octocrab::models::issues::Issue;
     use std::path::PathBuf;
@@ -789,7 +788,7 @@ mod tests {
         }
     }
 
-    impl GitFileOps for SimpleMockGitInfo {
+    impl GitCommitOps for SimpleMockGitInfo {
         fn commits(
             &self,
             _branch: &Option<String>,
@@ -805,6 +804,35 @@ mod tests {
                 .collect())
         }
 
+        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
+            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
+        }
+
+        fn file_touching_commits(
+            &self,
+            _branch: Option<String>,
+            _file: &std::path::Path,
+        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
+            // Return all commit hashes as "touching" since tests use a single file
+            Ok(self.commits.iter().map(|(id, _)| id.to_string()).collect())
+        }
+
+        fn get_branches_containing_commit(
+            &self,
+            _commit: &ObjectId,
+        ) -> Result<Vec<String>, GitFileOpsError> {
+            Ok(Vec::new())
+        }
+
+        fn find_merged_into_branch(
+            &self,
+            _target_commit: &ObjectId,
+        ) -> Result<Option<String>, GitFileOpsError> {
+            Ok(None)
+        }
+    }
+
+    impl GitFileOps for SimpleMockGitInfo {
         fn authors(
             &self,
             _file: &std::path::Path,
@@ -820,48 +848,7 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
-        }
-
-        fn file_touching_commits(
-            &self,
-            _branch: Option<String>,
-            _file: &std::path::Path,
-        ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
-            // Return all commit hashes as "touching" since tests use a single file
-            Ok(self.commits.iter().map(|(id, _)| id.to_string()).collect())
-        }
-
         fn list_tree_entries(&self, _path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
-            Ok(Vec::new())
-        }
-    }
-
-    impl GitCommitAnalysis for SimpleMockGitInfo {
-        fn get_all_merge_commits(&self) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
-            Ok(Vec::new())
-        }
-
-        fn get_commit_parents(
-            &self,
-            _commit: &ObjectId,
-        ) -> Result<Vec<ObjectId>, GitCommitAnalysisError> {
-            Ok(Vec::new())
-        }
-
-        fn is_ancestor(
-            &self,
-            _ancestor: &ObjectId,
-            _descendant: &ObjectId,
-        ) -> Result<bool, GitCommitAnalysisError> {
-            Ok(false)
-        }
-
-        fn get_branches_containing_commit(
-            &self,
-            _commit: &ObjectId,
-        ) -> Result<Vec<String>, GitCommitAnalysisError> {
             Ok(Vec::new())
         }
     }
