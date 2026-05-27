@@ -1215,7 +1215,7 @@ async fn main() -> Result<()> {
                 .with_creator(move |path| {
                     GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
                 });
-            let app = create_router(state);
+            let app = create_router::<GitInfo, GitCommand>(state);
 
             let listener = bind_local_server(port, ipv4_only).await?;
             println!("Starting API server on {}", local_server_url(&listener));
