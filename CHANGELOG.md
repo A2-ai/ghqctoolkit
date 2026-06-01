@@ -1,3 +1,7 @@
+# v0.7.1 - May 27, 2026
+## Improvements
+* Git operations now shell out to the system `git` CLI consistently, replacing the previous hybrid approach that mixed the `gix` Rust library with shell-out calls; reduces internal complexity and eliminates `gix` revision-walk usage for commit history
+
 # v0.7.0 - May 8, 2026
 ## Action Required
 **After installing this release, clear the commit cache with `ghqc cache remove commits --global`** (see the new `ghqc cache` command below).
