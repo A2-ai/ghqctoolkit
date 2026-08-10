@@ -126,6 +126,10 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
             get(configuration::get_configuration)
                 .post(configuration::setup_configuration_repo::<G, C>),
         )
+        .route(
+            "/api/configuration/update",
+            post(configuration::update_configuration_repo::<G, C>),
+        )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(log_request))

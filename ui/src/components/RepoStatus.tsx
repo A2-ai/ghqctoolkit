@@ -1,7 +1,7 @@
 import { Box, Text, Tooltip } from '@mantine/core'
 import type { GitStatus, RepoInfo } from '~/api/repo'
 
-const STATUS_COLOR: Record<GitStatus, string> = {
+export const STATUS_COLOR: Record<GitStatus, string> = {
   clean:    '#2f9e44',
   ahead:    '#e67700',
   behind:   '#e67700',

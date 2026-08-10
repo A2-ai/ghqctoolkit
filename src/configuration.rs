@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git::{GitCli, GitRepository, GitStatusOps, get_git_status};
+use crate::git::{GitCli, GitRepository, GitState, GitStatusOps, PullOutcome, get_git_status};
 use crate::utils::EnvProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,6 +451,136 @@ pub async fn setup_configuration(
     Ok(())
 }
 
+/// Reason an update of the configuration repository was refused.
+///
+/// Every refusal is decided *before* the repository is touched, so a refused
+/// update never leaves the configuration repository in a modified state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigUpdateRefusal {
+    /// The repository has uncommitted (staged or unstaged) changes.
+    Dirty(Vec<PathBuf>),
+    /// The repository has local commits that are not on the remote.
+    Ahead(usize),
+    /// The repository has both local-only and remote-only commits.
+    Diverged { ahead: usize, behind: usize },
+}
+
+impl ConfigUpdateRefusal {
+    /// Human readable, actionable explanation naming the repository `path`.
+    ///
+    /// Shared by the CLI and the API so both report the same wording.
+    pub fn message(&self, path: &Path) -> String {
+        match self {
+            Self::Dirty(files) => format!(
+                "Cannot update: {} uncommitted change(s) in {}:\n  - {}\nCommit or stash them, then retry.",
+                files.len(),
+                path.display(),
+                files
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n  - ")
+            ),
+            Self::Ahead(commits) => format!(
+                "Cannot update: {} local commit(s) not on the remote in {}. Push or reset them, then retry.",
+                commits,
+                path.display()
+            ),
+            Self::Diverged { ahead, behind } => format!(
+                "Cannot update: {} has diverged from its remote ({} ahead, {} behind). Resolve manually.",
+                path.display(),
+                ahead,
+                behind
+            ),
+        }
+    }
+}
+
+/// Result of attempting to update the configuration repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigUpdateResult {
+    /// The pull ran successfully (possibly a no-op, see [`PullOutcome::UpToDate`]).
+    Updated(PullOutcome),
+    /// The update was refused; the repository was not modified.
+    Refused(ConfigUpdateRefusal),
+}
+
+/// Fast-forward the configuration repository onto its remote.
+///
+/// Shared by `ghqc configuration update` and `POST /api/configuration/update`
+/// so the two can never drift apart.
+///
+/// Safety: all refusal conditions are checked *before* any mutation, and the
+/// pull itself is `--ff-only`, so this never rewrites or discards local work.
+///
+/// Returns the (re-loaded) [`Configuration`] alongside the result so callers
+/// always see fresh checklists. In the refusal case nothing changed on disk, so
+/// the reloaded configuration is simply equivalent to the previous one.
+pub fn update_configuration(
+    git_action: &(impl GitCli + ?Sized),
+    git_info: &(impl GitRepository + GitStatusOps),
+) -> Result<(ConfigUpdateResult, Configuration), ConfigurationError> {
+    let path = git_info.path().to_path_buf();
+
+    let reload = |path: &Path| {
+        let mut configuration = Configuration::from_path(path);
+        configuration.load_checklists();
+        configuration
+    };
+
+    // 1. Refuse if there is any uncommitted work to lose.
+    let dirty = git_info.dirty()?;
+    if !dirty.is_empty() {
+        log::debug!(
+            "Refusing configuration update: {} dirty files in {}",
+            dirty.len(),
+            path.display()
+        );
+        return Ok((
+            ConfigUpdateResult::Refused(ConfigUpdateRefusal::Dirty(dirty)),
+            reload(&path),
+        ));
+    }
+
+    // 2. Fetch + compute a fresh state, and refuse anything that is not a
+    //    pure fast-forward.
+    let status = get_git_status(git_info)?;
+    match status.state {
+        GitState::Ahead(commits) => {
+            log::debug!(
+                "Refusing configuration update: {} local commits in {}",
+                commits.len(),
+                path.display()
+            );
+            return Ok((
+                ConfigUpdateResult::Refused(ConfigUpdateRefusal::Ahead(commits.len())),
+                reload(&path),
+            ));
+        }
+        GitState::Diverged { ahead, behind } => {
+            log::debug!(
+                "Refusing configuration update: {} diverged from its remote",
+                path.display()
+            );
+            return Ok((
+                ConfigUpdateResult::Refused(ConfigUpdateRefusal::Diverged {
+                    ahead: ahead.len(),
+                    behind: behind.len(),
+                }),
+                reload(&path),
+            ));
+        }
+        // Clean still pulls: it reports UpToDate and keeps a single code path.
+        GitState::Clean | GitState::Behind(_) => {}
+    }
+
+    // 3. Pull, then reload so callers get refreshed checklists.
+    let outcome = git_action.pull_ff_only(git_info.remote_name())?;
+    log::debug!("Configuration update outcome: {:?}", outcome);
+
+    Ok((ConfigUpdateResult::Updated(outcome), reload(&path)))
+}
+
 /// Determine directory for config:
 ///     1. Use provided config_dir
 ///     2. If `GHQC_CONFIG_REPO` set, use $XDG_DATA_HOME/ghqc/{repo_name}
@@ -638,6 +768,8 @@ pub enum ConfigurationError {
     },
     #[error("Git action failed: {0}")]
     GitAction(#[from] crate::git::GitCliError),
+    #[error("Failed to determine git status: {0}")]
+    GitStatus(#[from] crate::git::GitStatusError),
 }
 
 #[cfg(test)]
@@ -1061,5 +1193,218 @@ Second Checklist:
 
         let result_dirty = configuration_status(&configuration, &Some(git_info_dirty));
         insta::assert_snapshot!("configuration_status_dirty", result_dirty);
+    }
+
+    // ---- update_configuration ----------------------------------------------
+
+    /// Minimal git info stub implementing the two traits `update_configuration`
+    /// requires.
+    struct StubGitInfo {
+        path: PathBuf,
+        state: crate::git::GitState,
+        dirty_files: Vec<PathBuf>,
+    }
+
+    impl StubGitInfo {
+        fn new(path: impl Into<PathBuf>, state: crate::git::GitState) -> Self {
+            Self {
+                path: path.into(),
+                state,
+                dirty_files: Vec::new(),
+            }
+        }
+
+        fn with_dirty(mut self, files: Vec<PathBuf>) -> Self {
+            self.dirty_files = files;
+            self
+        }
+    }
+
+    impl crate::git::GitRepository for StubGitInfo {
+        fn commit(&self) -> Result<String, crate::git::GitRepositoryError> {
+            Ok("abc123".to_string())
+        }
+        fn branch(&self) -> Result<String, crate::git::GitRepositoryError> {
+            Ok("main".to_string())
+        }
+        fn owner(&self) -> &str {
+            "test-owner"
+        }
+        fn repo(&self) -> &str {
+            "test-repo"
+        }
+        fn remote_name(&self) -> &str {
+            "origin"
+        }
+        fn path(&self) -> &Path {
+            &self.path
+        }
+        fn fetch(&self) -> Result<bool, crate::git::GitRepositoryError> {
+            Ok(false)
+        }
+        fn stash_file(
+            &self,
+            _file: &Path,
+            _message: &str,
+        ) -> Result<crate::git::FileStashOutcome, crate::git::GitRepositoryError> {
+            Ok(crate::git::FileStashOutcome::NoChanges)
+        }
+        fn configured_author(&self) -> Option<crate::GitAuthor> {
+            None
+        }
+    }
+
+    impl crate::git::GitStatusOps for StubGitInfo {
+        fn state(
+            &self,
+        ) -> Result<(gix::ObjectId, crate::git::GitState), crate::git::GitStatusError> {
+            Ok((
+                gix::ObjectId::empty_tree(gix::hash::Kind::Sha1),
+                self.state.clone(),
+            ))
+        }
+        fn dirty(&self) -> Result<Vec<PathBuf>, crate::git::GitStatusError> {
+            Ok(self.dirty_files.clone())
+        }
+    }
+
+    fn object_ids(n: usize) -> Vec<gix::ObjectId> {
+        (0..n)
+            .map(|_| gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
+            .collect()
+    }
+
+    #[test]
+    fn test_update_configuration_refuses_when_dirty() {
+        let temp = TempDir::new().unwrap();
+        let mut cli = crate::git::MockGitCli::default();
+        // Refusal must happen before any repository mutation.
+        cli.expect_pull_ff_only().never();
+
+        let git_info = StubGitInfo::new(temp.path(), crate::git::GitState::Behind(object_ids(2)))
+            .with_dirty(vec![PathBuf::from("checklists/a.yaml")]);
+
+        let (result, _config) = update_configuration(&cli, &git_info).unwrap();
+        match result {
+            ConfigUpdateResult::Refused(ConfigUpdateRefusal::Dirty(files)) => {
+                assert_eq!(files, vec![PathBuf::from("checklists/a.yaml")]);
+            }
+            other => panic!("expected dirty refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_update_configuration_refuses_when_ahead() {
+        let temp = TempDir::new().unwrap();
+        let mut cli = crate::git::MockGitCli::default();
+        cli.expect_pull_ff_only().never();
+
+        let git_info = StubGitInfo::new(temp.path(), crate::git::GitState::Ahead(object_ids(3)));
+
+        let (result, _config) = update_configuration(&cli, &git_info).unwrap();
+        assert_eq!(
+            result,
+            ConfigUpdateResult::Refused(ConfigUpdateRefusal::Ahead(3))
+        );
+    }
+
+    #[test]
+    fn test_update_configuration_refuses_when_diverged() {
+        let temp = TempDir::new().unwrap();
+        let mut cli = crate::git::MockGitCli::default();
+        cli.expect_pull_ff_only().never();
+
+        let git_info = StubGitInfo::new(
+            temp.path(),
+            crate::git::GitState::Diverged {
+                ahead: object_ids(1),
+                behind: object_ids(2),
+            },
+        );
+
+        let (result, _config) = update_configuration(&cli, &git_info).unwrap();
+        assert_eq!(
+            result,
+            ConfigUpdateResult::Refused(ConfigUpdateRefusal::Diverged {
+                ahead: 1,
+                behind: 2
+            })
+        );
+    }
+
+    #[test]
+    fn test_update_configuration_clean_reports_up_to_date() {
+        let temp = TempDir::new().unwrap();
+        let mut cli = crate::git::MockGitCli::default();
+        cli.expect_pull_ff_only()
+            .times(1)
+            .withf(|remote| remote == "origin")
+            .returning(|_| Ok(PullOutcome::UpToDate));
+
+        let git_info = StubGitInfo::new(temp.path(), crate::git::GitState::Clean);
+
+        let (result, config) = update_configuration(&cli, &git_info).unwrap();
+        assert_eq!(result, ConfigUpdateResult::Updated(PullOutcome::UpToDate));
+        assert_eq!(config.path, temp.path());
+    }
+
+    #[test]
+    fn test_update_configuration_behind_fast_forwards_and_reloads() {
+        let temp = TempDir::new().unwrap();
+        let checklist_dir = temp.path().join("checklists");
+        fs::create_dir_all(&checklist_dir).unwrap();
+        fs::write(
+            checklist_dir.join("simple.yaml"),
+            "Simple Checklist:\n  - first item\n  - second item\n",
+        )
+        .unwrap();
+
+        let mut cli = crate::git::MockGitCli::default();
+        cli.expect_pull_ff_only().times(1).returning(|_| {
+            Ok(PullOutcome::FastForwarded {
+                from: "aaaaaaa".to_string(),
+                to: "bbbbbbb".to_string(),
+                commits: 3,
+            })
+        });
+
+        let git_info = StubGitInfo::new(temp.path(), crate::git::GitState::Behind(object_ids(3)));
+
+        let (result, config) = update_configuration(&cli, &git_info).unwrap();
+        assert_eq!(
+            result,
+            ConfigUpdateResult::Updated(PullOutcome::FastForwarded {
+                from: "aaaaaaa".to_string(),
+                to: "bbbbbbb".to_string(),
+                commits: 3,
+            })
+        );
+        // Checklists are reloaded from disk so callers see fresh content.
+        assert!(config.checklists.contains_key("Simple Checklist"));
+    }
+
+    #[test]
+    fn test_config_update_refusal_messages_name_the_path() {
+        let path = Path::new("/tmp/ghqc-config");
+
+        let dirty = ConfigUpdateRefusal::Dirty(vec![PathBuf::from("checklists/a.yaml")]);
+        assert_eq!(
+            dirty.message(path),
+            "Cannot update: 1 uncommitted change(s) in /tmp/ghqc-config:\n  - checklists/a.yaml\nCommit or stash them, then retry."
+        );
+
+        assert_eq!(
+            ConfigUpdateRefusal::Ahead(2).message(path),
+            "Cannot update: 2 local commit(s) not on the remote in /tmp/ghqc-config. Push or reset them, then retry."
+        );
+
+        assert_eq!(
+            ConfigUpdateRefusal::Diverged {
+                ahead: 1,
+                behind: 4
+            }
+            .message(path),
+            "Cannot update: /tmp/ghqc-config has diverged from its remote (1 ahead, 4 behind). Resolve manually."
+        );
     }
 }

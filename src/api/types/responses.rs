@@ -516,6 +516,12 @@ pub struct ConfigGitRepository {
     pub owner: String,
     pub repo: String,
     pub status: GitStatusEnum,
+    /// Human readable summary of `status`, e.g. "Repository is behind by 3 commits".
+    pub status_detail: String,
+    /// Full shas of local-only commits (empty unless ahead/diverged).
+    pub ahead_commits: Vec<String>,
+    /// Full shas of remote-only commits (empty unless behind/diverged).
+    pub behind_commits: Vec<String>,
     pub dirty_files: Vec<String>,
 }
 
@@ -546,6 +552,9 @@ impl ConfigGitRepository {
             owner,
             repo,
             status: status.status,
+            status_detail: status.detail,
+            ahead_commits: status.ahead_commits,
+            behind_commits: status.behind_commits,
             dirty_files,
         })
     }

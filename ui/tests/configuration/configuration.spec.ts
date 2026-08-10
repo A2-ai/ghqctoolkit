@@ -1,6 +1,13 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
 import type { Checklist } from '../../src/api/checklists'
+import {
+  makeConfigGitRepo,
+  configRepoClean,
+  configRepoBehind,
+  configRepoAhead,
+  configRepoDiverged,
+} from '../fixtures/index'
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -34,7 +41,7 @@ const notConfigured = {
 const configured = {
   directory: '/mock/config',
   exists: true,
-  git_repository: { owner: 'myorg', repo: 'config-repo', status: 'clean', dirty_files: [] },
+  git_repository: configRepoClean,
   options: defaultOptions,
   checklists: twoChecklists,
   config_repo_env: null,
@@ -259,12 +266,12 @@ test('already configured renders repo info and status badge', async ({ page }) =
 test('dirty files shown when config repo has uncommitted changes', async ({ page }) => {
   const dirty = {
     ...configured,
-    git_repository: {
-      owner: 'myorg',
-      repo: 'config-repo',
+    git_repository: makeConfigGitRepo({
       status: 'ahead',
+      status_detail: 'Repository is ahead by 1 commit',
+      ahead_commits: ['ddd4444'],
       dirty_files: ['checklists/review.yaml'],
-    },
+    }),
   }
 
   await setupRoutes(page)
@@ -272,7 +279,7 @@ test('dirty files shown when config repo has uncommitted changes', async ({ page
 
   await goToConfiguration(page)
 
-  await expect(page.getByText('ahead')).toBeVisible()
+  await expect(page.getByText('ahead', { exact: true })).toBeVisible()
   await expect(page.getByText(/Dirty:.*checklists\/review\.yaml/)).toBeVisible()
 })
 
@@ -314,4 +321,163 @@ test('options section renders display name, collaborator setting, paths, refresh
   await expect(page.getByText('15s')).toBeVisible()
   // logo_found=false → ✗
   await expect(page.getByText('✗')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 13. Tab warning when the configuration repository is behind its remote
+// ---------------------------------------------------------------------------
+test('configuration tab warns when the config repo is behind its remote', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoBehind })
+
+  await page.goto('/')
+
+  const configTab = page.getByRole('button', { name: 'Configuration' })
+  await configTab.hover()
+  await expect(
+    page.getByText('Configuration repository is 3 commits behind myorg/config-repo'),
+  ).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 14. Tab warning when the configuration repository has diverged
+// ---------------------------------------------------------------------------
+test('configuration tab warns when the config repo has diverged', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoDiverged })
+
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Configuration' }).hover()
+  await expect(
+    page.getByText('Configuration repository has diverged from its remote (2 ahead, 3 behind)'),
+  ).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 15. No tab warning for clean or ahead — intentional local work is not nagged
+// ---------------------------------------------------------------------------
+for (const [label, gitRepo] of [
+  ['clean', configRepoClean],
+  ['ahead', configRepoAhead],
+] as const) {
+  test(`configuration tab has no warning when the config repo is ${label}`, async ({ page }) => {
+    await setupRoutes(page, { configGitRepository: gitRepo })
+
+    await page.goto('/')
+
+    const configTab = page.getByRole('button', { name: 'Configuration' })
+    await expect(configTab).toBeVisible()
+    await configTab.hover()
+    await expect(page.getByText(/Configuration repository (is \d+ commit|has diverged)/)).not.toBeVisible()
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 16. Always-visible strip shows status without expanding any section
+// ---------------------------------------------------------------------------
+test('git status strip is visible without expanding a section', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoBehind })
+
+  await goToConfiguration(page)
+
+  await expect(page.getByText('myorg / config-repo')).toBeVisible()
+  await expect(page.getByText('behind', { exact: true })).toBeVisible()
+  await expect(page.getByText('Repository is behind by 3 commits')).toBeVisible()
+  await expect(page.getByText('/mock/config')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 17. Update button is enabled only when the repo is behind
+// ---------------------------------------------------------------------------
+test('Update button is enabled only when the config repo is behind', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoBehind })
+  await goToConfiguration(page)
+  await expect(page.getByRole('button', { name: 'Update' })).toBeEnabled()
+})
+
+for (const [label, gitRepo] of [
+  ['clean', configRepoClean],
+  ['ahead', configRepoAhead],
+  ['diverged', configRepoDiverged],
+  ['dirty', makeConfigGitRepo({ status: 'behind', behind_commits: ['aaa1111'], dirty_files: ['checklists/review.yaml'] })],
+] as const) {
+  test(`Update button is disabled when the config repo is ${label}`, async ({ page }) => {
+    await setupRoutes(page, { configGitRepository: gitRepo })
+    await goToConfiguration(page)
+    await expect(page.getByRole('button', { name: 'Update' })).toBeDisabled()
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 18. Disabled Update button explains itself via a tooltip on its wrapper
+// ---------------------------------------------------------------------------
+test('disabled Update button explains why it cannot run', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoDiverged })
+
+  await goToConfiguration(page)
+
+  await page.getByRole('button', { name: 'Update' }).hover()
+  await expect(
+    page.getByText('The configuration repository has diverged from its remote. Resolve it manually with git.'),
+  ).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 19. A successful update refreshes the displayed status
+// ---------------------------------------------------------------------------
+test('successful update refreshes the displayed status', async ({ page }) => {
+  await setupRoutes(page, {
+    configGitRepository: configRepoBehind,
+    configUpdateResult: configRepoClean,
+  })
+
+  await goToConfiguration(page)
+
+  await expect(page.getByText('Repository is behind by 3 commits')).toBeVisible()
+  await page.getByRole('button', { name: 'Update' }).click()
+
+  await expect(page.getByText('Configuration repository updated')).toBeVisible()
+  await expect(page.getByText('clean', { exact: true })).toBeVisible()
+  await expect(page.getByText('Repository is behind by 3 commits')).not.toBeVisible()
+  await expect(page.getByRole('button', { name: 'Update' })).toBeDisabled()
+
+  // The tab warning clears once the repo is up to date
+  await page.getByRole('button', { name: 'Configuration' }).hover()
+  await expect(page.getByText(/Configuration repository is \d+ commit/)).not.toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 20. A 409 refusal renders the backend's message verbatim
+// ---------------------------------------------------------------------------
+test('update refusal renders the 409 error message verbatim', async ({ page }) => {
+  const reason = 'Cannot update: the configuration repository has uncommitted changes in checklists/review.yaml'
+
+  await setupRoutes(page, {
+    configGitRepository: configRepoBehind,
+    configUpdateResult: reason,
+  })
+
+  await goToConfiguration(page)
+
+  await page.getByRole('button', { name: 'Update' }).click()
+
+  await expect(page.getByText(reason)).toBeVisible()
+  // Status is unchanged after a refusal
+  await expect(page.getByText('Repository is behind by 3 commits')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 21. Refresh control re-reads the configuration status
+// ---------------------------------------------------------------------------
+test('refresh control re-fetches the configuration status', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoBehind })
+
+  await goToConfiguration(page)
+
+  let refetched = false
+  page.on('request', (req) => {
+    if (req.url().includes('/api/configuration') && req.method() === 'GET') refetched = true
+  })
+
+  await page.getByLabel('Re-check repository status').click()
+  await expect.poll(() => refetched).toBe(true)
 })

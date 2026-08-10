@@ -8,7 +8,10 @@ use crate::api::types::{
 };
 use crate::configuration::ConfigurationError;
 use crate::utils::StdEnvProvider;
-use crate::{Configuration, GitCli, GitProvider, setup_configuration};
+use crate::{
+    ConfigUpdateResult, Configuration, GitCli, GitProvider, setup_configuration,
+    update_configuration,
+};
 use axum::{Json, extract::State};
 
 /// GET /api/configuration
@@ -89,6 +92,51 @@ pub async fn setup_configuration_repo<G: GitProvider + 'static, C: GitCli + Send
 
     let mut new_configuration = Configuration::from_path(&config_dir);
     new_configuration.load_checklists();
+
+    {
+        let mut config_lock = state.configuration.write().await;
+        *config_lock = new_configuration;
+    }
+
+    state.update_config_git_info(&config_dir).await;
+
+    get_configuration(State(state)).await
+}
+
+/// POST /api/configuration/update
+///
+/// Fast-forwards the configuration repository onto its remote. Refuses (409)
+/// when the repository is dirty, ahead, or diverged — the same rules and
+/// wording as `ghqc configuration update`.
+pub async fn update_configuration_repo<
+    G: GitProvider + 'static,
+    C: GitCli + Send + Sync + 'static,
+>(
+    State(state): State<AppState<G>>,
+) -> Result<Json<ConfigurationStatusResponse>, ApiError> {
+    let git_info = state
+        .configuration_git_info()
+        .await
+        .ok_or_else(|| ApiError::NotFound("Configuration repository is not set up".to_string()))?;
+
+    let config_dir = git_info.path().to_path_buf();
+    let git_cli = C::new(&config_dir);
+
+    // Git work is blocking (shells out and fetches), so keep it off the runtime.
+    let (result, new_configuration) =
+        tokio::task::spawn_blocking(move || update_configuration(&git_cli, &git_info))
+            .await
+            .map_err(|e| ApiError::Internal(format!("Blocking task failed: {e}")))?
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    match result {
+        ConfigUpdateResult::Refused(refusal) => {
+            return Err(ApiError::Conflict(refusal.message(&config_dir)));
+        }
+        ConfigUpdateResult::Updated(outcome) => {
+            log::debug!("Configuration repository update outcome: {outcome:?}");
+        }
+    }
 
     {
         let mut config_lock = state.configuration.write().await;
@@ -255,6 +303,102 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body["options"]["include_collaborators"], true);
         assert_eq!(body["options"]["ui_repo_refresh_rate_seconds"], 27);
+    }
+
+    async fn post_update(app: axum::Router) -> axum::http::Response<Body> {
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/configuration/update")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// No configuration git info → nothing to update.
+    #[tokio::test]
+    async fn update_not_set_up_returns_404() {
+        let mock = MockGitInfo::builder().build();
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None, None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
+
+        let response = post_update(app).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Uncommitted changes in the config repo are refused with 409 and the
+    /// CLI's wording.
+    #[tokio::test]
+    async fn update_dirty_repo_returns_409() {
+        let _cli_lock = cli_lock().lock().unwrap();
+
+        let ctx = MockGitCli::new_context();
+        ctx.expect().returning(|_path| {
+            let mut mock = MockGitCli::default();
+            // A refusal must never reach the pull.
+            mock.expect_pull_ff_only().never();
+            mock
+        });
+
+        let mock = MockGitInfo::builder()
+            .with_dirty_file("checklists/a.yaml")
+            .build();
+        let config = Configuration::default();
+        let state = AppState::new(mock.clone(), config, Some(mock), None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
+
+        let response = post_update(app).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let message = body.to_string();
+        assert!(
+            message.contains("1 uncommitted change(s)"),
+            "unexpected body: {message}"
+        );
+        assert!(
+            message.contains("checklists/a.yaml"),
+            "unexpected body: {message}"
+        );
+    }
+
+    /// A clean repository pulls (a no-op) and returns the configuration status.
+    #[tokio::test]
+    async fn update_success_returns_200_with_status() {
+        let _lock = env_lock().lock().unwrap();
+        let _cli_lock = cli_lock().lock().unwrap();
+        let _env_guard = EnvGuard::remove("GHQC_UI_REFRESH_RATE");
+
+        let ctx = MockGitCli::new_context();
+        ctx.expect().returning(|_path| {
+            let mut mock = MockGitCli::default();
+            mock.expect_pull_ff_only()
+                .times(1)
+                .returning(|_| Ok(crate::git::PullOutcome::UpToDate));
+            mock
+        });
+
+        let mock = MockGitInfo::builder().build();
+        let config = Configuration::default();
+        let state = AppState::new(mock.clone(), config, Some(mock), None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
+
+        let response = post_update(app).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(body.get("directory").is_some());
+        assert!(body.get("checklists").is_some());
+        assert_eq!(body["options"]["ui_repo_refresh_rate_seconds"], 15);
     }
 
     /// A failed clone (e.g. auth error) maps to 500.

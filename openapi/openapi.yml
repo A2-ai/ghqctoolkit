@@ -889,6 +889,50 @@ paths:
         '500':
           description: Clone or configuration load failed
 
+  /configuration/update:
+    post:
+      summary: Fast-forward the configuration repository to match its remote
+      description: >
+        Fetches the configuration repository's remote and fast-forwards the local
+        clone (`git pull --ff-only`). The update is refused, and the repository
+        left untouched, when it has uncommitted changes, local commits not on the
+        remote, or has diverged. On success the checklists are reloaded and the
+        full configuration status is returned.
+      operationId: updateConfiguration
+      tags: [configuration]
+      responses:
+        '200':
+          description: Configuration repository fast-forwarded (or already up to date) and reloaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationStatusResponse'
+        '404':
+          description: Configuration repository is not set up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Configuration repository is not set up"
+        '409':
+          description: >
+            Update refused because the repository is dirty, ahead of, or diverged
+            from its remote. The `error` string is human-readable and actionable
+            and may be displayed verbatim.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Cannot update: 2 local commit(s) not on the remote in /home/user/.local/share/ghqc/config. Push or reset them, then retry."
+        '500':
+          description: Fetch, pull, or configuration reload failed
+
 components:
   schemas:
     HealthResponse:
@@ -1546,15 +1590,39 @@ components:
       properties:
         owner:
           type: string
+          example: a2-ai
         repo:
           type: string
+          example: ghqc.example_config_repo
         status:
           type: string
           enum: [clean, ahead, behind, diverged]
-        dirty_files:
+          example: behind
+        status_detail:
+          type: string
+          description: Human-readable summary of `status`
+          example: Repository is behind by 3 commits
+        ahead_commits:
           type: array
+          description: Full shas of local commits not present on the remote. Empty unless status is ahead or diverged.
           items:
             type: string
+          example: []
+        behind_commits:
+          type: array
+          description: Full shas of remote commits not present locally. Empty unless status is behind or diverged.
+          items:
+            type: string
+          example:
+            - 8f2a1c9d4b6e0f3a7c5d2b8e1a4f6c9d0b3e5a72
+            - 1b4e7a0c3f6d9b2e5a8c1f4d7b0e3a6c9d2f5b81
+            - 5d8b1e4a7c0f3d6b9e2a5c8f1b4d7a0e3c6f9b24
+        dirty_files:
+          type: array
+          description: Repo-relative paths with uncommitted (staged or unstaged) changes
+          items:
+            type: string
+          example: []
 
     SetupConfigurationRequest:
       type: object

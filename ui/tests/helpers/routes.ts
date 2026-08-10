@@ -11,7 +11,9 @@ import {
   srcFileTree,
   createdMilestone,
   createIssueResponses,
+  configRepoClean,
 } from '../fixtures/index'
+import type { ConfigGitRepository } from '../../src/api/configuration'
 import type { BatchIssueStatusResponse } from '../../src/api/issues'
 import type { Milestone } from '../../src/api/milestones'
 import type { Issue } from '../../src/api/issues'
@@ -41,6 +43,14 @@ export interface RouteOverrides {
   uiRepoRefreshRateSeconds: number
   /** Checklists returned by GET /api/configuration */
   checklists: Checklist[]
+  /** git_repository returned by GET /api/configuration (default: null → local directory only) */
+  configGitRepository: ConfigGitRepository | null
+  /**
+   * Result of POST /api/configuration/update. A ConfigGitRepository is returned
+   * as the new git_repository with status 200; a string is returned as a 409
+   * `{ error }` body.
+   */
+  configUpdateResult: ConfigGitRepository | string
   /** Assignees returned by /api/assignees */
   assignees: Assignee[]
   /** File tree responses keyed by path ('' for root, 'src' for src/, etc.) */
@@ -95,6 +105,8 @@ const defaultOverrides: RouteOverrides = {
   includeCollaborators: true,
   uiRepoRefreshRateSeconds: 15,
   checklists: defaultChecklists,
+  configGitRepository: null,
+  configUpdateResult: configRepoClean,
   assignees: defaultAssignees,
   fileTree: { '': rootFileTree, src: srcFileTree },
   fileCollaborators: {
@@ -185,11 +197,14 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
-  await page.route('/api/configuration', (route, request) => {
-    const configStatus = {
+  // Mutated by a successful POST /api/configuration/update so that the
+  // subsequent GET reflects the updated repository.
+  let currentConfigGitRepository = cfg.configGitRepository
+
+  const configStatusBody = () => ({
       directory: '/mock/config',
       exists: true,
-      git_repository: null,
+      git_repository: currentConfigGitRepository,
       options: {
         prepended_checklist_note: null,
         checklist_display_name: cfg.checklistDisplayName,
@@ -202,11 +217,31 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       },
       checklists: cfg.checklists,
       config_repo_env: null,
-    }
+  })
+
+  await page.route('/api/configuration', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(configStatus),
+      body: JSON.stringify(configStatusBody()),
+    })
+  })
+
+  await page.route('/api/configuration/update', (route, request) => {
+    if (request.method() !== 'POST') { void route.continue(); return }
+    if (typeof cfg.configUpdateResult === 'string') {
+      route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: cfg.configUpdateResult }),
+      })
+      return
+    }
+    currentConfigGitRepository = cfg.configUpdateResult
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(configStatusBody()),
     })
   })
 

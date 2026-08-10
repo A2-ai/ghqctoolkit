@@ -1,3 +1,14 @@
+# v0.8.0 - Unreleased
+## New Features
+* `ghqc configuration update` command to fast-forward the local configuration repository to its remote; refuses and leaves the repository untouched when there are uncommitted changes, local commits not on the remote, or diverged history
+* `ghqc configuration path` command to print just the configuration repository directory, for use in shells (`cd $(ghqc configuration path)`)
+* POST /api/configuration/update endpoint backing the Web UI's configuration update button
+
+## Improvements
+* Configuration repository status in the API response now includes `status_detail`, `ahead_commits`, and `behind_commits` on `ConfigGitRepository`
+* Configuration tab shows the configuration repository's git status in an always-visible strip with an Update button, enabled when the repository is behind its remote
+* Configuration tab is marked with a warning badge and explanatory tooltip when the configuration repository is behind or has diverged, so stale configuration is easier to notice
+
 # v0.7.1 - May 27, 2026
 ## Improvements
 * Git operations now shell out to the system `git` CLI consistently, replacing the previous hybrid approach that mixed the `gix` Rust library with shell-out calls; reduces internal complexity and eliminates `gix` revision-walk usage for commit history
