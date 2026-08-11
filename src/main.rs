@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
-    CacheCommands, FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser,
-    MilestoneSelectionFilter, RelevantFileArg, RelevantFileArgParser,
-    confirm_rename_noninteractive, find_issue, generate_archive_name, get_milestone_issue_threads,
-    gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token, handle_cache,
-    interactive_milestone_status, interactive_rename, interactive_status, milestone_status,
-    prompt_archive, prompt_context_files, prompt_milestone_record, single_issue_status,
+    CacheCommands, ConfigurationEditCommands, FileCommitPair, FileCommitPairParser, IssueUrlArg,
+    IssueUrlArgParser, MilestoneSelectionFilter, RelevantFileArg, RelevantFileArgParser,
+    configuration_edit, configuration_init, confirm_rename_noninteractive, find_issue,
+    generate_archive_name, get_milestone_issue_threads, gh_auth_login, gh_auth_logout,
+    gh_auth_status, gh_auth_token, handle_cache, interactive_milestone_status, interactive_rename,
+    interactive_status, milestone_status, prompt_archive, prompt_context_files,
+    prompt_milestone_record, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -357,6 +358,16 @@ enum MilestoneCommands {
 
 #[derive(Subcommand)]
 enum ConfigurationCommands {
+    /// Interactively create a configuration repository, or edit an existing one
+    Init {
+        /// Directory to create the configuration repository in. Prompted for when omitted
+        path: Option<PathBuf>,
+    },
+    /// Edit part of an existing configuration repository. Omit the component to choose interactively
+    Edit {
+        #[command(subcommand)]
+        edit_command: Option<ConfigurationEditCommands>,
+    },
     /// Set-up the custom configuration to be used by the tool
     Setup {
         /// git repository url to be cloned
@@ -1106,6 +1117,13 @@ async fn main() -> Result<()> {
         Commands::Configuration {
             configuration_command,
         } => match configuration_command {
+            ConfigurationCommands::Init { path } => {
+                configuration_init(path, &cli.directory)?;
+            }
+            ConfigurationCommands::Edit { edit_command } => {
+                let configured = determine_config_dir(cli.config_dir.clone(), &StdEnvProvider)?;
+                configuration_edit(edit_command, cli.config_dir, &cli.directory, &configured)?;
+            }
             ConfigurationCommands::Setup { git } => {
                 let url = if let Some(git) = git {
                     gix::url::parse(git.as_str().into())

@@ -2,6 +2,59 @@
 
 `ghqc` reads checklists, a logo, and options from a separate **configuration repository**. The configuration repository must be cloned locally before running other commands.
 
+## Init
+
+```shell
+ghqc configuration init [PATH]
+```
+
+Interactively creates a configuration repository, or edits an existing one. `PATH` is resolved relative to the current directory and prompted for when omitted; if it does not exist, the command warns and asks before creating it.
+
+The wizard writes files only — it never runs `git`. Committing, pushing, and pointing `GHQC_CONFIG_REPO` at the resulting remote are left to the user, and the command prints those next steps when it finishes.
+
+It walks through, in order:
+
+1. **Options** — every `options.yaml` setting, with the current (or default) value pre-filled. Options left unset are written as comments, so they keep falling back to the environment variable and built-in default.
+2. **Logo** — a path to an image, copied into the repository at `logo_path`. Optional: pressing Enter skips it, or keeps the existing logo.
+3. **Record template** — write the built-in template, copy an existing `.typ` file, or skip it. When skipped, the built-in template is used at runtime.
+4. **Checklists** — add or edit checklists until you choose **Done**.
+
+The logo and template prompts browse the filesystem: **Tab** completes to the unique match or the longest shared prefix, directories are listed with a trailing `/`, and `../` is always offered so the tree can be walked in both directions.
+
+New checklists are written as markdown. They can be authored three ways: in your editor starting from a small skeleton, item by item through prompts (optionally grouped into `###` sections), or from a bundled starter checklist (General Script, Code Review, Report) which is then opened in the editor. A checklist with no `- [ ]` items re-opens the editor rather than being saved silently.
+
+The editor is `$VISUAL`, then `$EDITOR`, falling back to `vim` (then `vi`, then `nano`) — set either variable to use something else.
+
+Selecting an existing checklist offers editing its contents, renaming it, or deleting it. Editing opens the **raw file** as it exists on disk, so round-tripping never duplicates `prepended_checklist_note` or flattens YAML sections. Renaming updates the file stem (or the YAML root key, for the older YAML format) as well as the filename.
+
+### Editing an existing configuration repository
+
+When `options.yaml` already exists, the command reports the existing configuration and asks for confirmation before proceeding. Every prompt is then seeded with the current value, so pressing Enter through the wizard leaves the configuration unchanged. Existing files are never overwritten without an explicit confirmation.
+
+To change one thing without walking the whole wizard, use `ghqc configuration edit` below.
+
+## Edit
+
+```shell
+ghqc configuration edit              # choose a component interactively
+ghqc configuration edit checklists
+ghqc configuration edit options
+ghqc configuration edit logo
+ghqc configuration edit record
+```
+
+Runs a single step of the wizard against an existing configuration repository. `edit checklists` goes straight to the checklist menu; `edit options` walks the `options.yaml` settings and rewrites the file; `edit logo` and `edit record` replace those files. Each step behaves exactly as it does inside `ghqc configuration init`, and untouched components are left alone.
+
+With no component named, the components are offered as a menu that returns after each one, so several can be edited in a single session. `options.yaml` is re-read before each step, so a checklist directory changed under **Options** takes effect immediately.
+
+The repository is located, in order:
+
+1. `--config-dir`, when given
+2. the current directory, when it contains an `options.yaml`
+3. the configured configuration directory (see [Directory Resolution](#directory-resolution))
+
+Unlike `init`, `edit` never creates a repository — if none is found, it says so and points at `ghqc configuration init`.
+
 ## Setup
 
 ```shell
@@ -141,7 +194,9 @@ The configuration repository must follow this structure:
 
 ### Checklist Format
 
-Checklists can be defined as YAML files or GitHub-flavored Markdown files placed in the `checklists/` directory (or the directory specified by `checklist_directory`).
+Checklists are placed in the `checklists/` directory (or the directory specified by `checklist_directory`). Files ending in `.md`, `.markdown`, and `.txt` are used as the checklist body verbatim, and their title comes from the filename — wrap the name in backticks (`` `Code Review`.md ``) for titles containing spaces. Files ending in `.yaml` and `.yml` are parsed as a single-key mapping whose root key is the title.
+
+Markdown is the recommended format and the one `ghqc configuration init` writes: the file is passed through untouched, so any GitHub-flavored markdown is available. Checklist items are lines beginning with `- [ ]`; `###` headers group them into sections.
 
 ### options.yaml
 

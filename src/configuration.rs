@@ -189,7 +189,9 @@ impl Configuration {
             };
 
             match extension.to_lowercase().as_str() {
-                "txt" => {
+                // Markdown and plain text are both used verbatim as the
+                // checklist body; only the title comes from the filename.
+                "txt" | "md" | "markdown" => {
                     match extract_title_from_filename(&path) {
                         Ok(key) => {
                             let checklist = Checklist::new(
@@ -319,7 +321,7 @@ fn extract_title_from_filename(path: &Path) -> Result<String, ConfigurationError
     }
 }
 
-fn parse_yaml_checklist(content: &str) -> Result<(String, String), ConfigurationError> {
+pub(crate) fn parse_yaml_checklist(content: &str) -> Result<(String, String), ConfigurationError> {
     use serde_yaml::Value;
 
     let yaml: Value = serde_yaml::from_str(content)?;
@@ -942,11 +944,13 @@ mod tests {
         let mut config = Configuration::from_path(&test_config_path);
         config.load_checklists();
 
-        // Should have loaded 5 checklists and 1 default custom (ignoring .md file)
-        assert_eq!(config.checklists.len(), 6);
+        // Should have loaded 6 checklists and 1 default custom (ignoring the
+        // .rst file, whose extension the loader does not read)
+        assert_eq!(config.checklists.len(), 7);
 
         // Verify all expected keys are present
         assert!(config.checklists.contains_key("Custom"));
+        assert!(config.checklists.contains_key("markdown_checklist"));
         assert!(config.checklists.contains_key("simple_checklist"));
         assert!(config.checklists.contains_key("Complex Checklist Name"));
         assert!(config.checklists.contains_key("Simple Tasks"));

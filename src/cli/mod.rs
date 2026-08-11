@@ -1,6 +1,7 @@
 mod archive;
 mod auth;
 pub mod cache;
+mod config_init;
 mod context;
 mod file_parser;
 mod interactive;
@@ -29,6 +30,7 @@ pub use archive::{
 };
 pub use auth::{gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token};
 pub use cache::{CacheCommands, handle_cache};
+pub use config_init::{ConfigurationEditCommands, configuration_edit, configuration_init};
 pub use context::find_issue;
 pub use file_parser::{
     FileCommitPair, FileCommitPairParser, IssueUrlArg, IssueUrlArgParser, RelevantFileArg,

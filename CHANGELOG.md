@@ -1,5 +1,8 @@
 # v0.8.0 - Unreleased
 ## New Features
+* `ghqc configuration edit [checklists|options|logo|record]` command to run a single step of the wizard against an existing configuration repository, located from `--config-dir`, the current directory, or the configured configuration directory; with no component named, they are offered as a menu
+* `ghqc configuration init` command to interactively create a configuration repository — every `options.yaml` option, copying in a logo, the record template, and authoring markdown checklists in an editor, item by item, or from a bundled starter. Logo and template paths are picked with Tab-completing filesystem browsing. Re-running against an existing configuration repository turns it into an editor: current values become the prompt defaults, and existing checklists can be edited, renamed, or deleted. Files only; committing and pushing is left to the user
+* Markdown checklists (`.md`, `.markdown`) are now loaded from the configuration repository, alongside the existing `.txt` and `.yaml`/`.yml` formats; the title comes from the filename and the file content is used as the checklist body verbatim
 * `ghqc configuration update` command to fast-forward the local configuration repository to its remote; refuses and leaves the repository untouched when there are uncommitted changes, local commits not on the remote, or diverged history
 * `ghqc configuration path` command to print just the configuration repository directory, for use in shells (`cd $(ghqc configuration path)`)
 * POST /api/configuration/update endpoint backing the Web UI's configuration update button
