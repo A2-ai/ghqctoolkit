@@ -22,6 +22,7 @@ const defaultOptions = {
   checklist_directory: 'checklists/',
   record_path: 'records/',
   ui_repo_refresh_rate_seconds: 15,
+  allow_config_update: true,
 }
 
 const twoChecklists: Checklist[] = [
@@ -87,6 +88,29 @@ async function goToConfiguration(page: import('playwright/test').Page) {
   await page.goto('/')
   await page.getByRole('button', { name: 'Configuration' }).click()
 }
+
+/**
+ * The nav warning pill has no accessible name of its own (adding one would
+ * collide with the `name: 'Configuration'` tab locator), so it is matched by the
+ * inline yellow background React renders on the wrapping span.
+ */
+function warningPill(page: import('playwright/test').Page) {
+  return page
+    .getByRole('button', { name: 'Configuration' })
+    .locator('span[style*="rgb(255, 243, 191)"]')
+}
+
+/**
+ * The value rendered next to an Options-section row label. Rows are a dimmed
+ * label followed by its value element as the immediate next sibling.
+ */
+function optionValue(page: import('playwright/test').Page, label: string) {
+  return page.getByText(label, { exact: true }).locator('xpath=following-sibling::*[1]')
+}
+
+const CENTRALLY_MANAGED_NOTE = 'Updates are managed centrally for this deployment.'
+const ADMIN_REMEDY =
+  /Your checklists may be out of date\. This deployment's configuration is managed centrally — contact your administrator\./
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -314,13 +338,66 @@ test('options section renders display name, collaborator setting, paths, refresh
   // Value from options.checklist_display_name
   await expect(page.getByText('Code Review').first()).toBeVisible()
   await expect(page.getByText('Include collaborators')).toBeVisible()
-  await expect(page.getByText('Yes')).toBeVisible()
+  await expect(optionValue(page, 'Include collaborators')).toHaveText('Yes')
   await expect(page.getByText('checklists/')).toBeVisible()
   await expect(page.getByText('records/')).toBeVisible()
   await expect(page.getByText('UI repo refresh rate')).toBeVisible()
   await expect(page.getByText('15s')).toBeVisible()
   // logo_found=false → ✗
   await expect(page.getByText('✗')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 12b. Every option is shown, including the update toggle and an unset note
+// ---------------------------------------------------------------------------
+test('options section shows the update toggle as Yes and a placeholder for an unset note', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await mockConfiguration(page, configured)
+
+  await goToConfiguration(page)
+
+  await expect(page.getByText('Allow updates from UI')).toBeVisible()
+  await expect(optionValue(page, 'Allow updates from UI')).toHaveText('Yes')
+  // prepended_checklist_note is null → the row is still rendered, with a placeholder
+  await expect(page.getByText('Code Review note')).toBeVisible()
+  await expect(optionValue(page, 'Code Review note')).toHaveText('Not set')
+})
+
+test('options section shows the update toggle as No when updates are disabled', async ({ page }) => {
+  await setupRoutes(page)
+  await mockConfiguration(page, {
+    ...configured,
+    options: { ...defaultOptions, allow_config_update: false },
+  })
+
+  await goToConfiguration(page)
+
+  await expect(optionValue(page, 'Allow updates from UI')).toHaveText('No')
+})
+
+test('options section treats a missing allow_config_update as Yes', async ({ page }) => {
+  const { allow_config_update: _omitted, ...legacyOptions } = defaultOptions
+
+  await setupRoutes(page)
+  await mockConfiguration(page, { ...configured, options: legacyOptions })
+
+  await goToConfiguration(page)
+
+  await expect(optionValue(page, 'Allow updates from UI')).toHaveText('Yes')
+})
+
+test('options section renders a set note instead of the placeholder', async ({ page }) => {
+  await setupRoutes(page)
+  await mockConfiguration(page, {
+    ...configured,
+    options: { ...defaultOptions, prepended_checklist_note: 'Review carefully' },
+  })
+
+  await goToConfiguration(page)
+
+  await expect(optionValue(page, 'Code Review note')).toHaveText('Review carefully')
 })
 
 // ---------------------------------------------------------------------------
@@ -480,4 +557,127 @@ test('refresh control re-fetches the configuration status', async ({ page }) => 
 
   await page.getByLabel('Re-check repository status').click()
   await expect.poll(() => refetched).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// 22. allow_config_update=false — no Update button anywhere, replaced by a
+//     muted explanation
+// ---------------------------------------------------------------------------
+for (const [label, gitRepo] of [
+  ['behind', configRepoBehind],
+  ['clean', configRepoClean],
+  ['ahead', configRepoAhead],
+  ['diverged', configRepoDiverged],
+] as const) {
+  test(`no Update button when updates are disabled (${label})`, async ({ page }) => {
+    await setupRoutes(page, { configGitRepository: gitRepo, allowConfigUpdate: false })
+
+    await goToConfiguration(page)
+
+    await expect(page.getByText('myorg / config-repo')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Update' })).toHaveCount(0)
+    await expect(page.getByText(CENTRALLY_MANAGED_NOTE)).toBeVisible()
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 23. Updates disabled + behind — no nav warning pill, but the strip still
+//     reports the stale state and names the administrator as the remedy
+// ---------------------------------------------------------------------------
+for (const [label, gitRepo, detail] of [
+  ['behind', configRepoBehind, 'Repository is behind by 3 commits'],
+  ['diverged', configRepoDiverged, 'Repository has diverged'],
+] as const) {
+  test(`updates disabled: ${label} repo warns in the tab but not in the nav`, async ({ page }) => {
+    await setupRoutes(page, { configGitRepository: gitRepo, allowConfigUpdate: false })
+
+    await page.goto('/')
+
+    // No yellow pill and no staleness tooltip on the nav tab
+    await expect(warningPill(page)).toHaveCount(0)
+    const configTab = page.getByRole('button', { name: 'Configuration' })
+    await configTab.hover()
+    await expect(
+      page.getByText(/Configuration repository (is \d+ commit|has diverged)/),
+    ).not.toBeVisible()
+
+    // …but the Configuration tab itself still shows the stale state
+    await configTab.click()
+    await expect(page.getByText(label, { exact: true })).toBeVisible()
+    await expect(page.getByText(detail, { exact: false })).toBeVisible()
+    await expect(page.getByText(ADMIN_REMEDY)).toBeVisible()
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 24. Updates disabled — the nav warning pill still appears for behind when
+//     updates are allowed (guards against over-suppression)
+// ---------------------------------------------------------------------------
+test('nav warning pill still shows for a behind repo when updates are allowed', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoBehind, allowConfigUpdate: true })
+
+  await page.goto('/')
+
+  await expect(warningPill(page)).toBeVisible()
+  await page.getByRole('button', { name: 'Configuration' }).click()
+  await expect(page.getByRole('button', { name: 'Update' })).toBeEnabled()
+  await expect(page.getByText(CENTRALLY_MANAGED_NOTE)).not.toBeVisible()
+  await expect(page.getByText(ADMIN_REMEDY)).not.toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 25. Updates disabled — refresh control is still present and still re-reads
+// ---------------------------------------------------------------------------
+test('refresh control still works when updates are disabled', async ({ page }) => {
+  await setupRoutes(page, { configGitRepository: configRepoBehind, allowConfigUpdate: false })
+
+  await goToConfiguration(page)
+
+  const refresh = page.getByLabel('Re-check repository status')
+  await expect(refresh).toBeVisible()
+
+  let refetched = false
+  page.on('request', (req) => {
+    if (req.url().includes('/api/configuration') && req.method() === 'GET') refetched = true
+  })
+
+  await refresh.click()
+  await expect.poll(() => refetched).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// 26. Updates disabled — the "not set up" warning is unaffected
+// ---------------------------------------------------------------------------
+test('not-set-up warning still fires when updates are disabled', async ({ page }) => {
+  await setupRoutes(page)
+  await mockConfiguration(page, {
+    ...notConfigured,
+    options: { ...defaultOptions, allow_config_update: false },
+  })
+
+  await page.goto('/')
+
+  await expect(warningPill(page)).toBeVisible()
+  await page.getByRole('button', { name: 'Configuration' }).hover()
+  await expect(page.getByText('Configuration repository is not set up')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// 27. Defensive: an older backend that omits allow_config_update keeps the
+//     Update button
+// ---------------------------------------------------------------------------
+test('missing allow_config_update is treated as allowed', async ({ page }) => {
+  const { allow_config_update: _omitted, ...legacyOptions } = defaultOptions
+
+  await setupRoutes(page)
+  await mockConfiguration(page, {
+    ...configured,
+    git_repository: configRepoBehind,
+    options: legacyOptions,
+  })
+
+  await goToConfiguration(page)
+
+  await expect(page.getByRole('button', { name: 'Update' })).toBeEnabled()
+  await expect(page.getByText(CENTRALLY_MANAGED_NOTE)).not.toBeVisible()
 })

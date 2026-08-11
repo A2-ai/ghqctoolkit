@@ -16,6 +16,9 @@ pub enum ApiError {
     /// Validation error (400)
     #[error("Validation Error: {0}")]
     BadRequest(String),
+    /// Operation not permitted by deployment policy (403)
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
     /// Conflict error, e.g., blocking QCs not approved (409)
     #[error("Request caused conflict: {0}")]
     Conflict(String),
@@ -48,6 +51,7 @@ impl IntoResponse for ApiError {
                 let (status, message) = match self {
                     ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
                     ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+                    ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
                     ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
                     ApiError::GitHubApi(msg) => (StatusCode::BAD_GATEWAY, msg),
                     ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),

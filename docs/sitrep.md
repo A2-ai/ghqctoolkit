@@ -14,7 +14,7 @@ The report is divided into four sections:
 ### Binary
 
 ```
-=== Binary =========================
+── Binary ────────────────────────────────────
 Version: 0.2.0
 Path: /usr/local/bin/ghqc
 ```
@@ -27,7 +27,7 @@ Path: /usr/local/bin/ghqc
 ### Repository
 
 ```
-=== Repository =====================
+── Repository ────────────────────────────────
 Directory: /projects/myrepo
 Repository: owner/repo (https://github.com/owner/repo)
 Branch: main
@@ -48,7 +48,7 @@ If the directory is not a git repository, or the GitHub API cannot be reached, a
 ### Auth
 
 ```
-=== Auth ===========================
+── Auth ──────────────────────────────────────
 store directory: /home/user/.local/share/ghqc/auth
 stored tokens:
   ▶ github.com (ghp_abcd...wxyz)
@@ -73,7 +73,7 @@ available auth sources
 ### Configuration
 
 ```
-=== Configuration ==================
+── Configuration ─────────────────────────────
 Directory: /home/user/.local/share/ghqc-config
 Repository: owner/ghqc-config (https://github.com/owner/ghqc-config)
 Checklists: 3
@@ -83,18 +83,28 @@ Checklists: 3
 Options:
   - Prepended Checklist Note:
      │ All items must be reviewed before approval.
-  - Checklist Display Name:  checklists
+  - Checklist Display Name: checklists
+  - Include Collaborators: no
   - Logo Path: logo.png
   - Checklist Directory: checklists
   - Record Template Path: record.typ
+  - UI Repo Refresh Rate: 15s
+  - Allow Config Update From UI: yes
 ```
+
+Every configuration option is listed. `Prepended Checklist Note` shows `(none)`
+when it is unset. `UI Repo Refresh Rate` and `Allow Config Update From UI` show
+the *effective* value after resolution: the value in `options.yaml` if set,
+otherwise `GHQC_UI_REFRESH_RATE` / `GHQC_ALLOW_CONFIG_UPDATE`, otherwise the
+default (`15` seconds and `yes`). `Allow Config Update From UI: no` explains why
+the web UI shows no Update button.
 
 | Field | Description |
 |---|---|
 | Directory | Path to the configuration directory (marked ❌ if not found) |
 | Repository | GitHub owner/repo of the configuration repo, if it is a git repository |
 | Checklists | Number of checklists found, with item counts for each |
-| Options | Active values from the configuration (prepended note, display name, logo, checklist directory, record template) |
+| Options | All configuration options: prepended note, checklist display name, include collaborators, logo path, checklist directory, record template path, and the resolved UI repo refresh rate and UI config-update toggle |
 
 ## Flags
 

@@ -571,6 +571,9 @@ pub struct ConfigurationOptions {
     pub checklist_directory: String,
     pub record_path: String,
     pub ui_repo_refresh_rate_seconds: u64,
+    /// Resolved (config, env, default) flag for whether the UI may fast-forward the
+    /// configuration repository.
+    pub allow_config_update: bool,
 }
 
 /// Configuration status response.

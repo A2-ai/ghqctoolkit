@@ -27,7 +27,11 @@ expression: make_sitrep(Ok(repo)).to_string()
 [1mChecklists:[0m 1
   - Custom: 1 items
 [1mOptions:[0m
-  - Checklist Display Name:  checklists
+  - Prepended Checklist Note: (none)
+  - Checklist Display Name: checklists
+  - Include Collaborators: yes
   - Logo Path: logo.png
   - Checklist Directory: checklists
   - Record Template Path: record.typ
+  - UI Repo Refresh Rate: 15s
+  - Allow Config Update From UI: yes

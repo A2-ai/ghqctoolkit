@@ -48,7 +48,7 @@ Repository is up to date!
 - Report: 7 checklist items
 ```
 
-In the Web UI, the Configuration tab shows the same sync status in an always-visible strip at the top of the tab. When the configuration repository is behind or has diverged from its remote, the Configuration tab is marked with a warning badge, and hovering the badge explains why.
+In the Web UI, the Configuration tab shows the same sync status in an always-visible strip at the top of the tab. When the configuration repository is behind or has diverged from its remote, the Configuration tab is marked with a warning badge, and hovering the badge explains why. Deployments that [disable updates from the Web UI](#disabling-updates-from-the-web-ui) show the sync status only within the Configuration tab, without the warning badge.
 
 ## Update
 
@@ -67,6 +67,12 @@ The update is deliberately conservative: it never creates a merge commit, stashe
 If the repository is already current, the command says so and does nothing.
 
 The Web UI offers the same operation through the **Update** button in the Configuration tab, which is enabled when the configuration repository is behind its remote.
+
+### Disabling updates from the Web UI
+
+Deployments where the configuration repository is managed centrally — and individual users have no write access to it — can hide the **Update** button entirely by setting `allow_ui_config_update: false` in `options.yaml`, or `GHQC_ALLOW_CONFIG_UPDATE=false` in the server's environment. With updates disabled, `POST /api/configuration/update` also returns `403` with `Configuration updates are disabled for this deployment`, so the restriction holds even without the button.
+
+The `ghqc configuration update` command is deliberately unaffected: an administrator maintaining the shared repository uses the CLI, and ordinary git and filesystem permissions already determine who can actually update it.
 
 ### Example output
 
@@ -146,6 +152,7 @@ Checklists can be defined as YAML files or GitHub-flavored Markdown files placed
 | `logo_path` | Override the default logo path (`logo.png`) |
 | `checklist_directory` | Override the default checklist directory (`checklists`) |
 | `ui_repo_refresh_rate_seconds` | Override the UI repository refresh interval in seconds |
+| `allow_ui_config_update` | Whether the Web UI may update the configuration repository (default `true`) |
 
 `ui_repo_refresh_rate_seconds` resolves in this order:
 
@@ -154,6 +161,14 @@ Checklists can be defined as YAML files or GitHub-flavored Markdown files placed
 3. default `15`
 
 Missing, non-numeric, zero, and negative values fall back to the next source, ending at `15`.
+
+`allow_ui_config_update` resolves in this order:
+
+1. `options.yaml` `allow_ui_config_update`
+2. `GHQC_ALLOW_CONFIG_UPDATE`
+3. default `true`
+
+The environment variable accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`, case-insensitively. Missing and unrecognized values fall back to the next source, ending at `true`, so a typo never silently disables updates.
 
 The **Custom** checklist is always available as a built-in fallback, regardless of the configuration repository contents.
 

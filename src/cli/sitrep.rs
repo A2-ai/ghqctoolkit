@@ -144,10 +144,14 @@ struct ConfigSitRep {
     remote_url: Option<String>,
     path_exists: bool,
     configuration: Configuration,
+    // Effective values for options that fall back to env vars/defaults when unset in
+    // options.yaml. Resolved at construction time because Display has no EnvProvider.
+    resolved_ui_repo_refresh_rate_seconds: u64,
+    resolved_allow_ui_config_update: bool,
 }
 
 impl ConfigSitRep {
-    fn new(path: impl AsRef<Path>, git_info: Option<&GitInfo>) -> Self {
+    fn new(path: impl AsRef<Path>, git_info: Option<&GitInfo>, env: &impl EnvProvider) -> Self {
         let (remote_url, owner, repo) = match git_info {
             Some(g) => (
                 Some(format!("{}/{}/{}", g.base_url, g.owner, g.repo)),
@@ -160,14 +164,26 @@ impl ConfigSitRep {
         let mut configuration = Configuration::from_path(path.as_ref());
         configuration.load_checklists();
 
+        let resolved_ui_repo_refresh_rate_seconds = configuration
+            .options
+            .resolved_ui_repo_refresh_rate_seconds(env);
+        let resolved_allow_ui_config_update =
+            configuration.options.resolved_allow_ui_config_update(env);
+
         Self {
             owner,
             repo,
             remote_url,
             path_exists: path.as_ref().exists(),
             configuration,
+            resolved_ui_repo_refresh_rate_seconds,
+            resolved_allow_ui_config_update,
         }
     }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 impl fmt::Display for ConfigSitRep {
@@ -220,17 +236,23 @@ impl fmt::Display for ConfigSitRep {
 
         writeln!(f, "{}", "Options:".bold())?;
         let options = &self.configuration.options;
-        if let Some(note) = &options.prepended_checklist_note {
-            writeln!(
+        match &options.prepended_checklist_note {
+            Some(note) => writeln!(
                 f,
                 "  - Prepended Checklist Note:\n     │ {}",
                 note.replace("\n", "\n     │ ")
-            )?;
+            )?,
+            None => writeln!(f, "  - Prepended Checklist Note: (none)")?,
         }
         writeln!(
             f,
-            "  - Checklist Display Name:  {}",
+            "  - Checklist Display Name: {}",
             options.checklist_display_name
+        )?;
+        writeln!(
+            f,
+            "  - Include Collaborators: {}",
+            yes_no(options.include_collaborators)
         )?;
         writeln!(f, "  - Logo Path: {}", options.logo_path.display())?;
         writeln!(
@@ -242,6 +264,16 @@ impl fmt::Display for ConfigSitRep {
             f,
             "  - Record Template Path: {}",
             options.record_path.display()
+        )?;
+        writeln!(
+            f,
+            "  - UI Repo Refresh Rate: {}s",
+            self.resolved_ui_repo_refresh_rate_seconds
+        )?;
+        writeln!(
+            f,
+            "  - Allow Config Update From UI: {}",
+            yes_no(self.resolved_allow_ui_config_update)
         )
     }
 }
@@ -420,7 +452,7 @@ impl SitRep {
                     .join("share"),
             );
         let config_git_info = GitInfo::from_path(&config_dir, &env, None).ok();
-        let configuration = ConfigSitRep::new(&config_dir, config_git_info.as_ref());
+        let configuration = ConfigSitRep::new(&config_dir, config_git_info.as_ref(), &env);
 
         Self {
             binary: BinarySitRep::new(),
@@ -460,8 +492,30 @@ impl fmt::Display for SitRep {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::MockEnvProvider;
     use serde_json::Value;
     use std::path::PathBuf;
+
+    // An environment with no ghqc variables set, so resolved options fall back to defaults.
+    fn empty_env() -> MockEnvProvider {
+        let mut env = MockEnvProvider::new();
+        env.expect_var()
+            .returning(|_| Err(std::env::VarError::NotPresent));
+        env
+    }
+
+    // An environment with a single variable set to `value`.
+    fn env_with(key: &'static str, value: &'static str) -> MockEnvProvider {
+        let mut env = MockEnvProvider::new();
+        env.expect_var().returning(move |requested| {
+            if requested == key {
+                Ok(value.to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        });
+        env
+    }
 
     fn load_milestone_json(name: &str) -> Value {
         let text =
@@ -569,6 +623,8 @@ mod tests {
                 remote_url: Some("https://github.com/owner/repo".to_string()),
                 path_exists: false,
                 configuration: Configuration::from_path(PathBuf::from("/config/path")),
+                resolved_ui_repo_refresh_rate_seconds: 15,
+                resolved_allow_ui_config_update: true,
             },
             auth: AuthSitRep {
                 store_dir: Some(PathBuf::from("/home/user/.local/share/ghqc/auth")),
@@ -615,7 +671,7 @@ mod tests {
             binary: fixed_binary(),
             directory: PathBuf::from("/projects/myrepo"),
             repository: Ok(repo),
-            configuration: ConfigSitRep::new("src/tests/custom_configuration", None),
+            configuration: ConfigSitRep::new("src/tests/custom_configuration", None, &empty_env()),
             auth: AuthSitRep {
                 store_dir: Some(PathBuf::from("/home/user/.local/share/ghqc/auth")),
                 stored_tokens: "none".to_string(),
@@ -624,5 +680,90 @@ mod tests {
             },
         };
         insta::assert_snapshot!(sitrep.to_string());
+    }
+
+    #[test]
+    fn test_config_sitrep_display_shows_all_options() {
+        let rep = ConfigSitRep::new("src/tests/custom_configuration", None, &empty_env());
+        let rendered = rep.to_string();
+        for expected in [
+            "Prepended Checklist Note:",
+            "Checklist Display Name: Custom Quality Check",
+            "Include Collaborators: no",
+            "Logo Path: assets/custom_logo.svg",
+            "Checklist Directory: my_custom_checklists",
+            "Record Template Path: record.typ",
+            "UI Repo Refresh Rate: 22s",
+            "Allow Config Update From UI: yes",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "expected options output to contain {expected:?}, got:\n{rendered}"
+            );
+        }
+        // note set in options.yaml keeps the indented continuation rendering
+        assert!(rendered.contains("     │ Please review carefully"));
+    }
+
+    #[test]
+    fn test_config_sitrep_display_unset_note_placeholder() {
+        // no options.yaml at this path, so all options fall back to defaults
+        let rep = ConfigSitRep::new("src/tests/does_not_exist", None, &empty_env());
+        let rendered = rep.to_string();
+        assert!(rendered.contains("  - Prepended Checklist Note: (none)"));
+        assert!(rendered.contains("  - Include Collaborators: yes"));
+        assert!(rendered.contains("  - UI Repo Refresh Rate: 15s"));
+        assert!(rendered.contains("  - Allow Config Update From UI: yes"));
+    }
+
+    #[test]
+    fn test_config_sitrep_resolves_options_from_env() {
+        let rep = ConfigSitRep::new(
+            "src/tests/does_not_exist",
+            None,
+            &env_with("GHQC_UI_REFRESH_RATE", "45"),
+        );
+        assert_eq!(rep.resolved_ui_repo_refresh_rate_seconds, 45);
+        assert!(rep.to_string().contains("  - UI Repo Refresh Rate: 45s"));
+
+        let rep = ConfigSitRep::new(
+            "src/tests/does_not_exist",
+            None,
+            &env_with("GHQC_ALLOW_CONFIG_UPDATE", "false"),
+        );
+        assert!(!rep.resolved_allow_ui_config_update);
+        assert!(
+            rep.to_string()
+                .contains("  - Allow Config Update From UI: no")
+        );
+    }
+
+    #[test]
+    fn test_config_sitrep_options_yaml_wins_over_env() {
+        // options.yaml sets ui_repo_refresh_rate_seconds: 22, which takes precedence
+        let rep = ConfigSitRep::new(
+            "src/tests/custom_configuration",
+            None,
+            &env_with("GHQC_UI_REFRESH_RATE", "45"),
+        );
+        assert_eq!(rep.resolved_ui_repo_refresh_rate_seconds, 22);
+    }
+
+    #[test]
+    fn test_config_sitrep_json_includes_resolved_options() {
+        let rep = ConfigSitRep::new(
+            "src/tests/custom_configuration",
+            None,
+            &env_with("GHQC_ALLOW_CONFIG_UPDATE", "false"),
+        );
+        let json = serde_json::to_value(&rep).expect("serialize");
+        assert_eq!(json["resolved_ui_repo_refresh_rate_seconds"], 22);
+        assert_eq!(json["resolved_allow_ui_config_update"], false);
+        // raw options remain available alongside the resolved values
+        assert_eq!(
+            json["configuration"]["options"]["include_collaborators"],
+            false
+        );
+        assert!(json["configuration"]["options"]["allow_ui_config_update"].is_null());
     }
 }

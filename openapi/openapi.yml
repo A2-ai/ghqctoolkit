@@ -907,6 +907,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigurationStatusResponse'
+        '403':
+          description: >
+            Configuration updates are disabled for this deployment
+            (`options.yaml` `allow_ui_config_update: false` or
+            `GHQC_ALLOW_CONFIG_UPDATE=false`). No git work is attempted. The CLI
+            `ghqc configuration update` is deliberately unaffected.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Configuration updates are disabled for this deployment"
         '404':
           description: Configuration repository is not set up
           content:
@@ -1659,6 +1673,14 @@ components:
           minimum: 1
           description: Effective UI repository refresh interval in seconds after config, env, and default fallback
           example: 15
+        allow_config_update:
+          type: boolean
+          description: >
+            Whether the Web UI may fast-forward the configuration repository, resolved from
+            `options.yaml` `allow_ui_config_update`, then `GHQC_ALLOW_CONFIG_UPDATE`, then the
+            default `true`. When false the Update button is not offered and
+            POST /configuration/update returns 403.
+          example: true
 
     RecordContextFileRequest:
       type: object

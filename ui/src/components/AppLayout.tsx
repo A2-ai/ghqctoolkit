@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { useRepoInfo } from '~/api/repo'
-import { useConfigurationStatus } from '~/api/configuration'
+import { useConfigurationStatus, configUpdateAllowed } from '~/api/configuration'
 import { RepoStatus } from './RepoStatus'
 import { MilestoneFilter } from './MilestoneFilter'
 import { useMilestoneIssues } from '~/api/issues'
@@ -256,7 +256,11 @@ export function AppLayout() {
   const tabWarnings: Partial<Record<Tab, string>> = {}
   if (configStatus && !configStatus.exists && configStatus.git_repository === null) {
     tabWarnings.configuration = 'Configuration repository is not set up'
-  } else if (configStatus?.git_repository) {
+  } else if (configStatus?.git_repository && configUpdateAllowed(configStatus)) {
+    // Staleness warnings are suppressed in the nav when updates are managed
+    // centrally: the user cannot act on them from here. The Configuration tab's
+    // status strip still reports the stale state and points at the
+    // administrator. The "not set up" warning above is unaffected.
     const git = configStatus.git_repository
     const fullName = `${git.owner}/${git.repo}`
     const behind = git.behind_commits?.length ?? 0

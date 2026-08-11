@@ -51,6 +51,8 @@ export interface RouteOverrides {
    * `{ error }` body.
    */
   configUpdateResult: ConfigGitRepository | string
+  /** options.allow_config_update returned by GET /api/configuration (default: true) */
+  allowConfigUpdate: boolean
   /** Assignees returned by /api/assignees */
   assignees: Assignee[]
   /** File tree responses keyed by path ('' for root, 'src' for src/, etc.) */
@@ -107,6 +109,7 @@ const defaultOverrides: RouteOverrides = {
   checklists: defaultChecklists,
   configGitRepository: null,
   configUpdateResult: configRepoClean,
+  allowConfigUpdate: true,
   assignees: defaultAssignees,
   fileTree: { '': rootFileTree, src: srcFileTree },
   fileCollaborators: {
@@ -214,6 +217,7 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
         checklist_directory: 'checklists/',
         record_path: 'records/',
         ui_repo_refresh_rate_seconds: cfg.uiRepoRefreshRateSeconds,
+        allow_config_update: cfg.allowConfigUpdate,
       },
       checklists: cfg.checklists,
       config_repo_env: null,

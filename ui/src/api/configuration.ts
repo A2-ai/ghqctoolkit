@@ -24,6 +24,15 @@ export interface ConfigurationOptions {
   checklist_directory: string
   record_path: string
   ui_repo_refresh_rate_seconds: number
+  /**
+   * Whether this deployment permits UI-initiated updates of the configuration
+   * repository. Deployments that provision the configuration repository
+   * centrally set this to false; users there have no write access, so the UI
+   * must not offer an update it cannot perform. Resolved server-side; a
+   * missing value (older backend) is treated as true — see
+   * {@link configUpdateAllowed}.
+   */
+  allow_config_update: boolean
 }
 
 export interface ConfigurationStatus {
@@ -33,6 +42,15 @@ export interface ConfigurationStatus {
   options: ConfigurationOptions
   checklists: Checklist[]
   config_repo_env: string | null
+}
+
+/**
+ * Whether the UI may offer to update the configuration repository.
+ * Defaults to true when the backend omits the flag so that an older backend
+ * does not silently hide the Update button.
+ */
+export function configUpdateAllowed(status: ConfigurationStatus | undefined): boolean {
+  return status?.options.allow_config_update !== false
 }
 
 async function fetchConfigurationStatus(): Promise<ConfigurationStatus> {

@@ -29,6 +29,9 @@ pub struct ConfigurationOptions {
     // UI repo refresh rate in seconds. Falls back to env var/default if not set or invalid
     #[serde(default, deserialize_with = "deserialize_optional_positive_seconds")]
     pub ui_repo_refresh_rate_seconds: Option<u64>,
+    // Whether the web UI may fast-forward the configuration repository. Falls back to
+    // env var/default if not set. Default: true
+    pub allow_ui_config_update: Option<bool>,
 }
 
 impl Default for ConfigurationOptions {
@@ -41,6 +44,7 @@ impl Default for ConfigurationOptions {
             checklist_directory: PathBuf::from("checklists"),
             record_path: PathBuf::from("record.typ"),
             ui_repo_refresh_rate_seconds: None,
+            allow_ui_config_update: None,
         }
     }
 }
@@ -61,6 +65,16 @@ impl ConfigurationOptions {
                     .and_then(|value| parse_positive_seconds(&value))
             })
             .unwrap_or(15)
+    }
+
+    pub fn resolved_allow_ui_config_update(&self, env: &impl EnvProvider) -> bool {
+        self.allow_ui_config_update
+            .or_else(|| {
+                env.var("GHQC_ALLOW_CONFIG_UPDATE")
+                    .ok()
+                    .and_then(|value| parse_bool(&value))
+            })
+            .unwrap_or(true)
     }
 }
 
@@ -275,6 +289,20 @@ fn parse_positive_seconds(value: &str) -> Option<u64> {
         .ok()
         .filter(|seconds| *seconds > 0)
         .map(|seconds| seconds as u64)
+}
+
+/// Tolerantly parses a boolean, accepting the spellings commonly used in shell
+/// environments. Unrecognized values yield `None` so the caller falls back to
+/// the next source rather than silently choosing a value.
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        other => {
+            log::warn!("Ignoring unrecognized boolean value: {other:?}");
+            None
+        }
+    }
 }
 
 fn extract_title_from_filename(path: &Path) -> Result<String, ConfigurationError> {
@@ -1049,6 +1077,127 @@ mod tests {
 
         assert_eq!(options.ui_repo_refresh_rate_seconds, None);
         assert_eq!(options.resolved_ui_repo_refresh_rate_seconds(&mock_env), 15);
+    }
+
+    #[test]
+    fn test_allow_ui_config_update_prefers_configuration_option() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.expect_var().times(0);
+
+        let options = ConfigurationOptions {
+            allow_ui_config_update: Some(false),
+            ..ConfigurationOptions::default()
+        };
+
+        assert!(!options.resolved_allow_ui_config_update(&mock_env));
+    }
+
+    #[test]
+    fn test_allow_ui_config_update_uses_env_var_when_option_missing() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_ALLOW_CONFIG_UPDATE"))
+            .times(1)
+            .returning(|_| Ok("false".to_string()));
+
+        let options = ConfigurationOptions::default();
+        assert!(!options.resolved_allow_ui_config_update(&mock_env));
+    }
+
+    #[test]
+    fn test_allow_ui_config_update_defaults_to_true_when_missing() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_ALLOW_CONFIG_UPDATE"))
+            .times(1)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
+        let options = ConfigurationOptions::default();
+        assert!(options.resolved_allow_ui_config_update(&mock_env));
+    }
+
+    #[test]
+    fn test_allow_ui_config_update_accepted_env_spellings() {
+        let truthy = ["true", "TRUE", " True ", "1", "yes", "YES", "on", "On"];
+        let falsy = ["false", "FALSE", " False ", "0", "no", "NO", "off", "Off"];
+
+        for value in truthy {
+            let mut mock_env = MockEnvProvider::new();
+            let owned = value.to_string();
+            mock_env
+                .expect_var()
+                .with(mockall::predicate::eq("GHQC_ALLOW_CONFIG_UPDATE"))
+                .times(1)
+                .returning(move |_| Ok(owned.clone()));
+
+            let options = ConfigurationOptions::default();
+            assert!(
+                options.resolved_allow_ui_config_update(&mock_env),
+                "expected {value:?} to parse as true"
+            );
+        }
+
+        for value in falsy {
+            let mut mock_env = MockEnvProvider::new();
+            let owned = value.to_string();
+            mock_env
+                .expect_var()
+                .with(mockall::predicate::eq("GHQC_ALLOW_CONFIG_UPDATE"))
+                .times(1)
+                .returning(move |_| Ok(owned.clone()));
+
+            let options = ConfigurationOptions::default();
+            assert!(
+                !options.resolved_allow_ui_config_update(&mock_env),
+                "expected {value:?} to parse as false"
+            );
+        }
+    }
+
+    /// An unparseable env value must never be read as `false` — a typo should not
+    /// silently disable configuration updates.
+    #[test]
+    fn test_allow_ui_config_update_invalid_env_value_defaults_to_true() {
+        for value in ["nope", "", "2", "disabled"] {
+            let mut mock_env = MockEnvProvider::new();
+            let owned = value.to_string();
+            mock_env
+                .expect_var()
+                .with(mockall::predicate::eq("GHQC_ALLOW_CONFIG_UPDATE"))
+                .times(1)
+                .returning(move |_| Ok(owned.clone()));
+
+            let options = ConfigurationOptions::default();
+            assert!(
+                options.resolved_allow_ui_config_update(&mock_env),
+                "expected invalid value {value:?} to fall back to true"
+            );
+        }
+    }
+
+    /// Existing options.yaml files predate the key, so they must still allow updates.
+    #[test]
+    fn test_allow_ui_config_update_missing_from_options_yaml() {
+        let config = Configuration::from_path(PathBuf::from("src/tests/custom_configuration"));
+        assert_eq!(config.options.allow_ui_config_update, None);
+
+        let mut mock_env = MockEnvProvider::new();
+        mock_env
+            .expect_var()
+            .with(mockall::predicate::eq("GHQC_ALLOW_CONFIG_UPDATE"))
+            .times(1)
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
+        assert!(config.options.resolved_allow_ui_config_update(&mock_env));
+    }
+
+    #[test]
+    fn test_allow_ui_config_update_parsed_from_options_yaml() {
+        let options: ConfigurationOptions =
+            serde_yaml::from_str("allow_ui_config_update: false").unwrap();
+        assert_eq!(options.allow_ui_config_update, Some(false));
     }
 
     #[test]

@@ -29,7 +29,10 @@ expression: sitrep.to_string()
 [1mOptions:[0m
   - Prepended Checklist Note:
      │ Please review carefully
-  - Checklist Display Name:  Custom Quality Check
+  - Checklist Display Name: Custom Quality Check
+  - Include Collaborators: no
   - Logo Path: assets/custom_logo.svg
   - Checklist Directory: my_custom_checklists
   - Record Template Path: record.typ
+  - UI Repo Refresh Rate: 22s
+  - Allow Config Update From UI: yes

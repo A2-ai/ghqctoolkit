@@ -48,6 +48,7 @@ pub async fn get_configuration<G: GitProvider + 'static>(
             checklist_directory: options.checklist_directory.to_string_lossy().to_string(),
             record_path: options.record_path.to_string_lossy().to_string(),
             ui_repo_refresh_rate_seconds: config.ui_repo_refresh_rate_seconds(&StdEnvProvider),
+            allow_config_update: options.resolved_allow_ui_config_update(&StdEnvProvider),
         },
         checklists,
         config_repo_env,
@@ -107,13 +108,28 @@ pub async fn setup_configuration_repo<G: GitProvider + 'static, C: GitCli + Send
 ///
 /// Fast-forwards the configuration repository onto its remote. Refuses (409)
 /// when the repository is dirty, ahead, or diverged — the same rules and
-/// wording as `ghqc configuration update`.
+/// wording as `ghqc configuration update`. Refuses (403) when updates are
+/// disabled for the deployment (`allow_ui_config_update` /
+/// `GHQC_ALLOW_CONFIG_UPDATE`).
 pub async fn update_configuration_repo<
     G: GitProvider + 'static,
     C: GitCli + Send + Sync + 'static,
 >(
     State(state): State<AppState<G>>,
 ) -> Result<Json<ConfigurationStatusResponse>, ApiError> {
+    // Centrally-managed deployments can opt out entirely; refuse before any git work.
+    {
+        let config = state.configuration.read().await;
+        if !config
+            .options
+            .resolved_allow_ui_config_update(&StdEnvProvider)
+        {
+            return Err(ApiError::Forbidden(
+                "Configuration updates are disabled for this deployment".to_string(),
+            ));
+        }
+    }
+
     let git_info = state
         .configuration_git_info()
         .await
@@ -320,6 +336,9 @@ mod tests {
     /// No configuration git info → nothing to update.
     #[tokio::test]
     async fn update_not_set_up_returns_404() {
+        let _lock = env_lock().lock().unwrap();
+        let _env_guard = EnvGuard::remove("GHQC_ALLOW_CONFIG_UPDATE");
+
         let mock = MockGitInfo::builder().build();
         let config = Configuration::default();
         let state = AppState::new(mock, config, None, None);
@@ -333,7 +352,9 @@ mod tests {
     /// CLI's wording.
     #[tokio::test]
     async fn update_dirty_repo_returns_409() {
+        let _lock = env_lock().lock().unwrap();
         let _cli_lock = cli_lock().lock().unwrap();
+        let _env_guard = EnvGuard::remove("GHQC_ALLOW_CONFIG_UPDATE");
 
         let ctx = MockGitCli::new_context();
         ctx.expect().returning(|_path| {
@@ -374,6 +395,7 @@ mod tests {
         let _lock = env_lock().lock().unwrap();
         let _cli_lock = cli_lock().lock().unwrap();
         let _env_guard = EnvGuard::remove("GHQC_UI_REFRESH_RATE");
+        let _allow_guard = EnvGuard::remove("GHQC_ALLOW_CONFIG_UPDATE");
 
         let ctx = MockGitCli::new_context();
         ctx.expect().returning(|_path| {
@@ -399,6 +421,96 @@ mod tests {
         assert!(body.get("directory").is_some());
         assert!(body.get("checklists").is_some());
         assert_eq!(body["options"]["ui_repo_refresh_rate_seconds"], 15);
+        assert_eq!(body["options"]["allow_config_update"], true);
+    }
+
+    /// The `allow_ui_config_update` option disables the endpoint outright, before
+    /// any git work is attempted.
+    #[tokio::test]
+    async fn update_disabled_by_option_returns_403() {
+        let _lock = env_lock().lock().unwrap();
+        let _cli_lock = cli_lock().lock().unwrap();
+        let _env_guard = EnvGuard::remove("GHQC_ALLOW_CONFIG_UPDATE");
+
+        let ctx = MockGitCli::new_context();
+        // The gate must fire before C::new is ever reached.
+        ctx.expect().never();
+
+        let mock = MockGitInfo::builder().build();
+        let mut config = Configuration::default();
+        config.options.allow_ui_config_update = Some(false);
+        let state = AppState::new(mock.clone(), config, Some(mock), None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
+
+        let response = post_update(app).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(
+            body["error"],
+            "Configuration updates are disabled for this deployment"
+        );
+    }
+
+    /// The env var disables the endpoint when the option is unset.
+    #[tokio::test]
+    async fn update_disabled_by_env_returns_403() {
+        let _lock = env_lock().lock().unwrap();
+        let _cli_lock = cli_lock().lock().unwrap();
+        let _env_guard = EnvGuard::set("GHQC_ALLOW_CONFIG_UPDATE", "false");
+
+        let ctx = MockGitCli::new_context();
+        ctx.expect().never();
+
+        let mock = MockGitInfo::builder().build();
+        let config = Configuration::default();
+        let state = AppState::new(mock.clone(), config, Some(mock), None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
+
+        let response = post_update(app).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(
+            body["error"],
+            "Configuration updates are disabled for this deployment"
+        );
+    }
+
+    /// GET /api/configuration surfaces the resolved flag so the UI can hide the button.
+    #[tokio::test]
+    async fn get_configuration_reports_disabled_config_update() {
+        let _lock = env_lock().lock().unwrap();
+        let _env_guard = EnvGuard::set("GHQC_ALLOW_CONFIG_UPDATE", "off");
+
+        let mock = MockGitInfo::builder().build();
+        let config = Configuration::default();
+        let state = AppState::new(mock, config, None, None);
+        let app = create_router::<MockGitInfo, MockGitCli>(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/configuration")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["options"]["allow_config_update"], false);
     }
 
     /// A failed clone (e.g. auth error) maps to 500.

@@ -7,6 +7,7 @@ import {
   useChecklistDisplayName,
   setupConfiguration,
   updateConfiguration,
+  configUpdateAllowed,
 } from '~/api/configuration'
 import type { ConfigGitRepository, ConfigurationStatus } from '~/api/configuration'
 import { STATUS_COLOR } from './RepoStatus'
@@ -195,6 +196,10 @@ function ConfigRepoStrip({
 
   const color = STATUS_COLOR[git.status]
   const blockedReason = updateBlockedReason(git)
+  const updatesAllowed = configUpdateAllowed(configStatus)
+  // The staleness is still worth surfacing here even when the user cannot act
+  // on it: it explains why their checklists differ from a colleague's.
+  const centrallyManagedStale = !updatesAllowed && (git.status === 'behind' || git.status === 'diverged')
 
   const updateButton = (
     <Button
@@ -238,7 +243,16 @@ function ConfigRepoStrip({
           </ActionIcon>
         </Tooltip>
         <div style={{ flex: 1 }} />
-        {blockedReason ? (
+        {/*
+          When the deployment manages the configuration repository centrally the
+          user has no write access, so no Update button is rendered at all — a
+          disabled button would only invite a hunt for how to enable it.
+        */}
+        {!updatesAllowed ? (
+          <Text size="xs" c="dimmed">
+            Updates are managed centrally for this deployment.
+          </Text>
+        ) : blockedReason ? (
           // A disabled Mantine Button swallows pointer events, so the tooltip
           // needs a wrapper element to attach to.
           <Tooltip label={blockedReason} multiline w={280} withArrow>
@@ -248,6 +262,13 @@ function ConfigRepoStrip({
           updateButton
         )}
       </div>
+
+      {centrallyManagedStale && (
+        <Text size="xs" c="yellow.7">
+          Your checklists may be out of date. This deployment&apos;s configuration is managed centrally — contact your
+          administrator.
+        </Text>
+      )}
 
       {git.status_detail && (
         <Text size="xs" c="dimmed">
@@ -382,9 +403,20 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
       label: 'UI repo refresh rate',
       value: <Text size="sm">{opts.ui_repo_refresh_rate_seconds}s</Text>,
     },
-    ...(opts.prepended_checklist_note !== null
-      ? [{ label: `${singularCap} note`, value: <Text size="sm">{opts.prepended_checklist_note}</Text> }]
-      : []),
+    {
+      label: 'Allow updates from UI',
+      value: <Text size="sm">{configUpdateAllowed(configStatus) ? 'Yes' : 'No'}</Text>,
+    },
+    {
+      label: `${singularCap} note`,
+      value: opts.prepended_checklist_note ? (
+        <Text size="sm">{opts.prepended_checklist_note}</Text>
+      ) : (
+        <Text size="sm" c="dimmed">
+          Not set
+        </Text>
+      ),
+    },
   ]
 
   return (
