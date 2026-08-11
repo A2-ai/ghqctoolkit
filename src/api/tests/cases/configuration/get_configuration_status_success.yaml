@@ -45,3 +45,4 @@ response:
             - checklist_directory
             - record_path
             - ui_repo_refresh_rate_seconds
+            - allow_config_update

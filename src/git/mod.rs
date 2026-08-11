@@ -10,7 +10,7 @@ mod provider;
 mod repository;
 mod status;
 
-pub use action::{GitCli, GitCliError, GitCommand};
+pub use action::{GitCli, GitCliError, GitCommand, PullOutcome};
 pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
 pub use auth::{AuthError, AuthSourceKind, AuthSources};
 pub use file_ops::{

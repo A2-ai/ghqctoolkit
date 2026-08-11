@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { useRepoInfo } from '~/api/repo'
-import { useConfigurationStatus } from '~/api/configuration'
+import { useConfigurationStatus, configUpdateAllowed } from '~/api/configuration'
 import { RepoStatus } from './RepoStatus'
 import { MilestoneFilter } from './MilestoneFilter'
 import { useMilestoneIssues } from '~/api/issues'
@@ -38,6 +38,11 @@ const TABS: { id: Tab; label: string; icon: ReactNode; to: string }[] = [
 const PRIMARY_TABS = TABS.slice(0, 2)
 const MORE_TABS = TABS.slice(2)
 
+/** "1 commit" / "3 commits" */
+function commits(n: number): string {
+  return `${n} ${n === 1 ? 'commit' : 'commits'}`
+}
+
 function TabButton({
   tab,
   active,
@@ -53,7 +58,7 @@ function TabButton({
 }) {
   const color = active ? '#2f7a3b' : '#333'
   return (
-    <Tooltip label={warning ?? ''} disabled={!warning}>
+    <Tooltip label={warning ?? ''} disabled={!warning} multiline w={320} withArrow>
       <button
         onClick={onClick}
         style={{
@@ -138,7 +143,7 @@ function MoreMenu({
         {tabs.map((tab) => {
           const warn = warnings[tab.id]
           return (
-            <Tooltip key={tab.id} label={warn ?? ''} disabled={!warn} position="right">
+            <Tooltip key={tab.id} label={warn ?? ''} disabled={!warn} position="right" multiline w={320} withArrow>
               <Menu.Item leftSection={tab.icon} onClick={() => setActiveTab(tab.id)}>
                 {warn ? (
                   <span style={{
@@ -251,6 +256,24 @@ export function AppLayout() {
   const tabWarnings: Partial<Record<Tab, string>> = {}
   if (configStatus && !configStatus.exists && configStatus.git_repository === null) {
     tabWarnings.configuration = 'Configuration repository is not set up'
+  } else if (configStatus?.git_repository && configUpdateAllowed(configStatus)) {
+    // Staleness warnings are suppressed in the nav when updates are managed
+    // centrally: the user cannot act on them from here. The Configuration tab's
+    // status strip still reports the stale state and points at the
+    // administrator. The "not set up" warning above is unaffected.
+    const git = configStatus.git_repository
+    const fullName = `${git.owner}/${git.repo}`
+    const behind = git.behind_commits?.length ?? 0
+    const ahead = git.ahead_commits?.length ?? 0
+    if (git.status === 'behind') {
+      tabWarnings.configuration =
+        `Configuration repository is ${commits(behind)} behind ${fullName}. ` +
+        'Your checklists may be out of date — update it on the Configuration tab.'
+    } else if (git.status === 'diverged') {
+      tabWarnings.configuration =
+        `Configuration repository has diverged from its remote (${ahead} ahead, ${behind} behind). ` +
+        'Resolve it manually — see the Configuration tab.'
+    }
   }
 
   const { milestoneStatusByMilestone } = useMilestoneIssues(

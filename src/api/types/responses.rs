@@ -516,6 +516,12 @@ pub struct ConfigGitRepository {
     pub owner: String,
     pub repo: String,
     pub status: GitStatusEnum,
+    /// Human readable summary of `status`, e.g. "Repository is behind by 3 commits".
+    pub status_detail: String,
+    /// Full shas of local-only commits (empty unless ahead/diverged).
+    pub ahead_commits: Vec<String>,
+    /// Full shas of remote-only commits (empty unless behind/diverged).
+    pub behind_commits: Vec<String>,
     pub dirty_files: Vec<String>,
 }
 
@@ -546,6 +552,9 @@ impl ConfigGitRepository {
             owner,
             repo,
             status: status.status,
+            status_detail: status.detail,
+            ahead_commits: status.ahead_commits,
+            behind_commits: status.behind_commits,
             dirty_files,
         })
     }
@@ -562,6 +571,9 @@ pub struct ConfigurationOptions {
     pub checklist_directory: String,
     pub record_path: String,
     pub ui_repo_refresh_rate_seconds: u64,
+    /// Resolved (config, env, default) flag for whether the UI may fast-forward the
+    /// configuration repository.
+    pub allow_config_update: bool,
 }
 
 /// Configuration status response.

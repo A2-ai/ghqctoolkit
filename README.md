@@ -61,6 +61,8 @@ Issues are grouped into Milestones for organizational purposes.
 |---|---|
 | [`ghqc configuration setup`](docs/configuration.md) | Clone the configuration repository |
 | [`ghqc configuration status`](docs/configuration.md) | Display configuration directory and available checklists |
+| [`ghqc configuration update`](docs/configuration.md) | Fast-forward the configuration repository to match its remote |
+| [`ghqc configuration path`](docs/configuration.md) | Print the configuration repository directory |
 
 ### Authentication
 

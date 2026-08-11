@@ -15,13 +15,13 @@ use ghqctoolkit::cli::{
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, Configuration, ContextPosition, DiskCache, GitCommand,
-    GitCommitOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread, QCContext,
-    QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation, archive,
-    configuration_status, create_labels_if_needed, create_staging_dir, determine_config_dir,
-    fetch_milestone_issues, get_blocking_qc_status, get_git_status,
-    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
-    stash_review_file, unapprove_with_impact,
+    ArchiveFile, ArchiveMetadata, ConfigUpdateResult, Configuration, ContextPosition, DiskCache,
+    GitCommand, GitCommitOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread,
+    PullOutcome, QCContext, QCStatus, UreqDownloader, analyze_issue_checklists,
+    approve_with_validation, archive, configuration_status, create_labels_if_needed,
+    create_staging_dir, determine_config_dir, fetch_milestone_issues, get_blocking_qc_status,
+    get_git_status, get_milestone_issue_information, get_repo_users, record, render,
+    setup_configuration, stash_review_file, unapprove_with_impact, update_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -364,6 +364,10 @@ enum ConfigurationCommands {
     },
     /// Status of the configuration repository
     Status,
+    /// Fast-forward the configuration repository to match its remote
+    Update,
+    /// Print the configuration repository directory
+    Path,
 }
 
 #[derive(Subcommand)]
@@ -1141,6 +1145,53 @@ async fn main() -> Result<()> {
                 let git_info = GitInfo::from_path(&config_dir, &env, None).ok();
 
                 println!("{}", configuration_status(&configuration, &git_info))
+            }
+            ConfigurationCommands::Update => {
+                let env = StdEnvProvider;
+                // Always operate on the configuration repository, regardless of
+                // the current working directory.
+                let config_dir = determine_config_dir(cli.config_dir, &env)?;
+                let git_action = GitCommand {
+                    path: config_dir.clone(),
+                };
+                let git_info = GitInfo::from_path(&config_dir, &env, None).map_err(|e| {
+                    anyhow!(
+                        "Cannot update: could not read git information for the configuration repository at {}: {e}",
+                        config_dir.display()
+                    )
+                })?;
+
+                let (result, configuration) = update_configuration(&git_action, &git_info)
+                    .map_err(|e| anyhow!("Failed to update configuration repository: {e}"))?;
+
+                match result {
+                    ConfigUpdateResult::Updated(PullOutcome::UpToDate) => {
+                        println!("✅ Configuration repository is already up to date");
+                    }
+                    ConfigUpdateResult::Updated(PullOutcome::FastForwarded {
+                        from,
+                        to,
+                        commits,
+                    }) => {
+                        println!(
+                            "✅ Updated configuration repository: {commits} commits ({from} -> {to})"
+                        );
+                        println!(
+                            "📋 {} available in '{}': {}",
+                            configuration.options.checklist_display_name,
+                            configuration.options.checklist_directory.display(),
+                            configuration.checklists.len()
+                        );
+                    }
+                    ConfigUpdateResult::Refused(refusal) => {
+                        bail!("{}", refusal.message(&config_dir));
+                    }
+                }
+            }
+            ConfigurationCommands::Path => {
+                let config_dir = determine_config_dir(cli.config_dir, &StdEnvProvider)?;
+                // Bare path only, so `cd $(ghqc configuration path)` works.
+                println!("{}", config_dir.display());
             }
         },
         Commands::Cache { cache_command } => {

@@ -15,6 +15,13 @@ pub trait GitCli {
     /// Sets GIT_TERMINAL_PROMPT=0 to prevent blocking credential prompts.
     fn fetch(&self, remote_name: &str) -> Result<bool, GitCliError>;
 
+    /// Fast-forward the current branch to the named remote's tracking branch.
+    ///
+    /// Runs `git pull --ff-only <remote>`, which refuses (and changes nothing)
+    /// whenever the merge would not be a fast-forward. Sets
+    /// `GIT_TERMINAL_PROMPT=0` to prevent blocking credential prompts.
+    fn pull_ff_only(&self, remote_name: &str) -> Result<PullOutcome, GitCliError>;
+
     /// Stash changes for a single file path.
     fn stash_file(&self, file: &Path, message: &str) -> Result<StashFileOutcome, GitCliError>;
 
@@ -45,6 +52,22 @@ pub enum StashFileOutcome {
     NoChanges,
 }
 
+/// Outcome of a fast-forward-only pull.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullOutcome {
+    /// The local branch already matched the remote; nothing changed.
+    UpToDate,
+    /// The local branch was fast-forwarded onto the remote.
+    FastForwarded {
+        /// Short sha of HEAD before the pull.
+        from: String,
+        /// Short sha of HEAD after the pull.
+        to: String,
+        /// Number of commits applied by the fast-forward.
+        commits: usize,
+    },
+}
+
 /// Error types for git CLI operations
 #[derive(thiserror::Error, Debug)]
 pub enum GitCliError {
@@ -73,6 +96,10 @@ impl<T: GitCli + ?Sized> GitCli for &T {
 
     fn fetch(&self, remote_name: &str) -> Result<bool, GitCliError> {
         (**self).fetch(remote_name)
+    }
+
+    fn pull_ff_only(&self, remote_name: &str) -> Result<PullOutcome, GitCliError> {
+        (**self).pull_ff_only(remote_name)
     }
 
     fn stash_file(&self, file: &Path, message: &str) -> Result<StashFileOutcome, GitCliError> {
@@ -175,6 +202,65 @@ impl GitCli for GitCommand {
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(GitCliError::GitCommandFailed(stderr.trim().to_string()))
         }
+    }
+
+    fn pull_ff_only(&self, remote_name: &str) -> Result<PullOutcome, GitCliError> {
+        log::debug!(
+            "Fast-forwarding from {} in {}",
+            remote_name,
+            self.path.display()
+        );
+
+        if !self.path.exists() {
+            return Err(GitCliError::NoDirectoryExists(self.path.to_path_buf()));
+        }
+
+        let before = self.short_head()?;
+
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                &self.path.to_string_lossy(),
+                "pull",
+                "--ff-only",
+                remote_name,
+            ])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()?;
+
+        if !output.status.success() {
+            // `--ff-only` leaves the repository untouched when it refuses, so
+            // there is nothing to restore here.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::debug!("git pull --ff-only failed: {}", stderr.trim());
+            return Err(GitCliError::GitCommandFailed(stderr.trim().to_string()));
+        }
+
+        let after = self.short_head()?;
+
+        if before == after {
+            log::debug!("Already up to date at {}", after);
+            return Ok(PullOutcome::UpToDate);
+        }
+
+        let range = format!("{}..{}", before, after);
+        let count_output = self.run_git(&["rev-list", "--count", &range])?;
+        let commits = String::from_utf8_lossy(&count_output.stdout)
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0);
+
+        log::debug!(
+            "Fast-forwarded {} commits ({} -> {})",
+            commits,
+            before,
+            after
+        );
+        Ok(PullOutcome::FastForwarded {
+            from: before,
+            to: after,
+            commits,
+        })
     }
 
     fn file_touching_commits(
@@ -290,6 +376,12 @@ impl GitCli for GitCommand {
 }
 
 impl GitCommand {
+    /// Short sha of the current HEAD.
+    fn short_head(&self) -> Result<String, GitCliError> {
+        let output = self.run_git(&["rev-parse", "--short", "HEAD"])?;
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
     fn run_git(&self, args: &[&str]) -> Result<Output, GitCliError> {
         let output = std::process::Command::new("git")
             .arg("-C")
@@ -305,5 +397,127 @@ impl GitCommand {
         }
 
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(dir: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git spawn");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Build an origin plus two clones: `seed` (pushes commits) and `local`
+    /// (the repo under test).
+    fn fixture(temp: &Path) -> (PathBuf, PathBuf) {
+        let origin = temp.join("origin.git");
+        std::fs::create_dir_all(&origin).unwrap();
+        run(&origin, &["init", "-q", "--bare", "--initial-branch=main"]);
+
+        let seed = temp.join("seed");
+        run(temp, &["clone", "-q", &origin.to_string_lossy(), "seed"]);
+        std::fs::write(seed.join("a.txt"), "one\n").unwrap();
+        run(&seed, &["add", "-A"]);
+        run(&seed, &["commit", "-qm", "first"]);
+        run(&seed, &["push", "-q", "origin", "main"]);
+
+        let local = temp.join("local");
+        run(temp, &["clone", "-q", &origin.to_string_lossy(), "local"]);
+
+        (seed, local)
+    }
+
+    #[test]
+    fn pull_ff_only_reports_up_to_date_when_unchanged() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (_seed, local) = fixture(temp.path());
+
+        let git = GitCommand { path: local };
+        assert_eq!(git.pull_ff_only("origin").unwrap(), PullOutcome::UpToDate);
+    }
+
+    #[test]
+    fn pull_ff_only_fast_forwards_and_counts_commits() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (seed, local) = fixture(temp.path());
+
+        for n in ["two", "three"] {
+            std::fs::write(seed.join(format!("{n}.txt")), n).unwrap();
+            run(&seed, &["add", "-A"]);
+            run(&seed, &["commit", "-qm", n]);
+        }
+        run(&seed, &["push", "-q", "origin", "main"]);
+
+        let git = GitCommand {
+            path: local.clone(),
+        };
+        match git.pull_ff_only("origin").unwrap() {
+            PullOutcome::FastForwarded { from, to, commits } => {
+                assert_eq!(commits, 2);
+                assert_ne!(from, to);
+            }
+            other => panic!("expected fast-forward, got {other:?}"),
+        }
+        assert!(local.join("three.txt").exists());
+    }
+
+    #[test]
+    fn pull_ff_only_errors_when_not_a_fast_forward() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (seed, local) = fixture(temp.path());
+
+        // Remote moves on...
+        std::fs::write(seed.join("remote.txt"), "remote").unwrap();
+        run(&seed, &["add", "-A"]);
+        run(&seed, &["commit", "-qm", "remote change"]);
+        run(&seed, &["push", "-q", "origin", "main"]);
+
+        // ...and so does local, so a fast-forward is impossible.
+        std::fs::write(local.join("local.txt"), "local").unwrap();
+        run(&local, &["add", "-A"]);
+        run(&local, &["commit", "-qm", "local change"]);
+        let before = GitCommand {
+            path: local.clone(),
+        }
+        .short_head()
+        .unwrap();
+
+        let git = GitCommand {
+            path: local.clone(),
+        };
+        assert!(matches!(
+            git.pull_ff_only("origin"),
+            Err(GitCliError::GitCommandFailed(_))
+        ));
+        // A refused --ff-only leaves the repository untouched.
+        assert_eq!(git.short_head().unwrap(), before);
+        assert!(!local.join("remote.txt").exists());
+    }
+
+    #[test]
+    fn pull_ff_only_errors_when_directory_missing() {
+        let git = GitCommand {
+            path: PathBuf::from("/tmp/ghqc-does-not-exist-xyz"),
+        };
+        assert!(matches!(
+            git.pull_ff_only("origin"),
+            Err(GitCliError::NoDirectoryExists(_))
+        ));
     }
 }

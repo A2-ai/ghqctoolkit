@@ -11,6 +11,7 @@ import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
+import type { ConfigGitRepository } from '../../src/api/configuration'
 
 export const defaultRepoInfo: RepoInfo = {
   owner: 'test-owner',
@@ -425,3 +426,43 @@ export const createIssueResponses: CreateIssueResponse[] = [
     blocking_errors: [],
   },
 ]
+
+// ---------------------------------------------------------------------------
+// Configuration repository git state
+// ---------------------------------------------------------------------------
+
+export function makeConfigGitRepo(
+  overrides: Partial<ConfigGitRepository> = {},
+): ConfigGitRepository {
+  return {
+    owner: 'myorg',
+    repo: 'config-repo',
+    status: 'clean',
+    status_detail: 'Configuration repository is up to date',
+    ahead_commits: [],
+    behind_commits: [],
+    dirty_files: [],
+    ...overrides,
+  }
+}
+
+export const configRepoClean = makeConfigGitRepo()
+
+export const configRepoBehind = makeConfigGitRepo({
+  status: 'behind',
+  status_detail: 'Repository is behind by 3 commits',
+  behind_commits: ['aaa1111', 'bbb2222', 'ccc3333'],
+})
+
+export const configRepoAhead = makeConfigGitRepo({
+  status: 'ahead',
+  status_detail: 'Repository is ahead by 1 commit',
+  ahead_commits: ['ddd4444'],
+})
+
+export const configRepoDiverged = makeConfigGitRepo({
+  status: 'diverged',
+  status_detail: 'Repository has diverged from its remote',
+  ahead_commits: ['eee5555', 'fff6666'],
+  behind_commits: ['aaa1111', 'bbb2222', 'ccc3333'],
+})

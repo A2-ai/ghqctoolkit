@@ -46,15 +46,15 @@ pub use cache::{
 pub use comment::QCComment;
 pub use comment_system::CommentBody;
 pub use configuration::{
-    Checklist, Configuration, ConfigurationOptions, configuration_status, determine_config_dir,
-    setup_configuration,
+    Checklist, ConfigUpdateRefusal, ConfigUpdateResult, Configuration, ConfigurationOptions,
+    configuration_status, determine_config_dir, setup_configuration, update_configuration,
 };
 pub use create::{QCEntry, QCIssue, QCRelationship, RelevantFileEntry, batch_post_qc_entries};
 pub use git::{
     AuthError, AuthSourceKind, AuthSources, FileStashOutcome, GitAuthor, GitCli, GitCliError,
     GitCommand, GitComment, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, GitHelpers,
     GitHubApiError, GitHubReader, GitHubWriter, GitInfo, GitInfoError, GitProvider, GitRepository,
-    GitRepositoryError, GitState, GitStatus, GitStatusError, GitStatusOps, RepoUser,
+    GitRepositoryError, GitState, GitStatus, GitStatusError, GitStatusOps, PullOutcome, RepoUser,
     detect_renames, find_commits, find_or_cache_file_changes, get_commits_robust, get_git_status,
     head_commit_hash,
 };

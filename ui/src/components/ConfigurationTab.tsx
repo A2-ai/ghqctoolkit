@@ -1,9 +1,16 @@
 import { useState } from 'react'
-import { Collapse, Divider, Text, TextInput, Button, Textarea, Tooltip } from '@mantine/core'
-import { IconChevronRight } from '@tabler/icons-react'
+import { ActionIcon, Collapse, Divider, Text, TextInput, Button, Textarea, Tooltip } from '@mantine/core'
+import { IconChevronRight, IconRefresh } from '@tabler/icons-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useConfigurationStatus, useChecklistDisplayName, setupConfiguration } from '~/api/configuration'
-import type { ConfigurationStatus } from '~/api/configuration'
+import {
+  useConfigurationStatus,
+  useChecklistDisplayName,
+  setupConfiguration,
+  updateConfiguration,
+  configUpdateAllowed,
+} from '~/api/configuration'
+import type { ConfigGitRepository, ConfigurationStatus } from '~/api/configuration'
+import { STATUS_COLOR } from './RepoStatus'
 import { capitalize } from '~/utils/displayName'
 import type { Checklist } from '~/api/checklists'
 import { Splitter, useResizableWidth } from './ResizableSplitter'
@@ -111,51 +118,182 @@ function GitRepoSection({ configStatus }: { configStatus: ConfigurationStatus })
     )
   }
 
-  const statusColor =
-    git.status === 'clean'
-      ? '#2f9e44'
-      : git.status === 'diverged'
-        ? '#c92a2a'
-        : '#e67700'
+  // A configured git repository is rendered by ConfigRepoStrip, which lives
+  // outside the collapsible section so that it is always visible.
+  return null
+}
+
+function StatusPill({ git }: { git: ConfigGitRepository }) {
+  const color = STATUS_COLOR[git.status]
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: color + '22',
+        border: `1px solid ${color}`,
+        borderRadius: 10,
+        padding: '1px 8px',
+        fontSize: 12,
+        color,
+        fontWeight: 600,
+      }}
+    >
+      <span
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: '50%',
+          backgroundColor: color,
+          display: 'inline-block',
+        }}
+      />
+      {git.status}
+    </span>
+  )
+}
+
+/** Reason the Update button is unavailable, or null when an update can be run. */
+function updateBlockedReason(git: ConfigGitRepository): string | null {
+  if (git.dirty_files.length > 0) {
+    return 'The configuration repository has uncommitted changes. Commit or discard them before updating.'
+  }
+  switch (git.status) {
+    case 'clean':
+      return 'The configuration repository is already up to date.'
+    case 'ahead':
+      return 'The configuration repository has local commits that are not on the remote. Push them before updating.'
+    case 'diverged':
+      return 'The configuration repository has diverged from its remote. Resolve it manually with git.'
+    case 'behind':
+      return null
+  }
+}
+
+/**
+ * Always-visible summary of the configuration repository's git state, with a
+ * one-click update. Sits above the collapsible sections so a stale
+ * configuration repository cannot be missed.
+ */
+function ConfigRepoStrip({
+  configStatus,
+  git,
+}: {
+  configStatus: ConfigurationStatus
+  git: ConfigGitRepository
+}) {
+  const queryClient = useQueryClient()
+  const { isFetching } = useConfigurationStatus()
+  const mutation = useMutation({
+    mutationFn: updateConfiguration,
+    onSuccess: (data) => {
+      queryClient.setQueryData(['configuration', 'status'], data)
+      // Re-read everything derived from the configuration repository.
+      void queryClient.invalidateQueries({ queryKey: ['configuration'] })
+    },
+  })
+
+  const color = STATUS_COLOR[git.status]
+  const blockedReason = updateBlockedReason(git)
+  const updatesAllowed = configUpdateAllowed(configStatus)
+  // The staleness is still worth surfacing here even when the user cannot act
+  // on it: it explains why their checklists differ from a colleague's.
+  const centrallyManagedStale = !updatesAllowed && (git.status === 'behind' || git.status === 'diverged')
+
+  const updateButton = (
+    <Button
+      size="xs"
+      onClick={() => mutation.mutate()}
+      loading={mutation.isPending}
+      disabled={blockedReason !== null}
+    >
+      Update
+    </Button>
+  )
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        marginBottom: 16,
+        padding: '10px 14px',
+        borderRadius: 6,
+        border: '1px solid var(--mantine-color-gray-3)',
+        borderLeft: `3px solid ${color}`,
+        backgroundColor: color + '0f',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <Text fw={700} size="sm">
           {git.owner} / {git.repo}
         </Text>
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            backgroundColor: statusColor + '22',
-            border: `1px solid ${statusColor}`,
-            borderRadius: 10,
-            padding: '1px 8px',
-            fontSize: 12,
-            color: statusColor,
-            fontWeight: 600,
-          }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              backgroundColor: statusColor,
-              display: 'inline-block',
-            }}
-          />
-          {git.status}
-        </span>
+        <StatusPill git={git} />
+        <Tooltip label="Re-check the configuration repository">
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            aria-label="Re-check repository status"
+            loading={isFetching}
+            onClick={() => void queryClient.invalidateQueries({ queryKey: ['configuration'] })}
+          >
+            <IconRefresh size={14} />
+          </ActionIcon>
+        </Tooltip>
+        <div style={{ flex: 1 }} />
+        {/*
+          When the deployment manages the configuration repository centrally the
+          user has no write access, so no Update button is rendered at all — a
+          disabled button would only invite a hunt for how to enable it.
+        */}
+        {!updatesAllowed ? (
+          <Text size="xs" c="dimmed">
+            Updates are managed centrally for this deployment.
+          </Text>
+        ) : blockedReason ? (
+          // A disabled Mantine Button swallows pointer events, so the tooltip
+          // needs a wrapper element to attach to.
+          <Tooltip label={blockedReason} multiline w={280} withArrow>
+            <span style={{ display: 'inline-flex' }}>{updateButton}</span>
+          </Tooltip>
+        ) : (
+          updateButton
+        )}
       </div>
+
+      {centrallyManagedStale && (
+        <Text size="xs" c="yellow.7">
+          Your checklists may be out of date. This deployment&apos;s configuration is managed centrally — contact your
+          administrator.
+        </Text>
+      )}
+
+      {git.status_detail && (
+        <Text size="xs" c="dimmed">
+          {git.status_detail}
+        </Text>
+      )}
+
       <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace' }}>
         {configStatus.directory}
       </Text>
+
       {git.dirty_files.length > 0 && (
         <Text size="xs" c="yellow.7">
           Dirty: {git.dirty_files.join(', ')}
+        </Text>
+      )}
+
+      {mutation.isSuccess && (
+        <Text size="xs" c="green.7">
+          Configuration repository updated
+        </Text>
+      )}
+      {mutation.isError && (
+        <Text size="xs" c="red">
+          {(mutation.error as Error).message}
         </Text>
       )}
     </div>
@@ -265,9 +403,20 @@ function OptionsSection({ configStatus }: { configStatus: ConfigurationStatus })
       label: 'UI repo refresh rate',
       value: <Text size="sm">{opts.ui_repo_refresh_rate_seconds}s</Text>,
     },
-    ...(opts.prepended_checklist_note !== null
-      ? [{ label: `${singularCap} note`, value: <Text size="sm">{opts.prepended_checklist_note}</Text> }]
-      : []),
+    {
+      label: 'Allow updates from UI',
+      value: <Text size="sm">{configUpdateAllowed(configStatus) ? 'Yes' : 'No'}</Text>,
+    },
+    {
+      label: `${singularCap} note`,
+      value: opts.prepended_checklist_note ? (
+        <Text size="sm">{opts.prepended_checklist_note}</Text>
+      ) : (
+        <Text size="sm" c="dimmed">
+          Not set
+        </Text>
+      ),
+    },
   ]
 
   return (
@@ -297,11 +446,17 @@ export function ConfigurationTab() {
     )
   }
 
+  const git = configStatus.git_repository
+
   return (
     <div style={{ maxWidth: 720, margin: 'auto', padding: 24 }}>
-      <Section title="Git Repository">
-        <GitRepoSection configStatus={configStatus} />
-      </Section>
+      {git ? (
+        <ConfigRepoStrip configStatus={configStatus} git={git} />
+      ) : (
+        <Section title="Git Repository">
+          <GitRepoSection configStatus={configStatus} />
+        </Section>
+      )}
 
       <Section title={pluralCap}>
         <ChecklistsSection checklists={configStatus.checklists} />
