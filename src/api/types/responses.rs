@@ -299,6 +299,116 @@ impl From<Vec<(String, crate::ChecklistSummary)>> for ChecklistSummary {
     }
 }
 
+/// Whether a QC round is still being reviewed, or was closed by an approval.
+///
+/// Mirrors [`crate::RoundState`]'s discriminant; the closing details live in
+/// [`RoundInfo`]'s flat `closing_*` fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundStateEnum {
+    Open,
+    Closed,
+}
+
+/// Where a round's checklist lives. Mirrors [`crate::ChecklistSource`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChecklistSourceKind {
+    /// Initial QC: the checklist is in the issue body.
+    IssueBody,
+    /// Round N > 1: the checklist is in the `# QC New Round` comment.
+    Comment,
+}
+
+/// The checklist source of a round, with the comment it lives in when known.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundChecklistSource {
+    pub kind: ChecklistSourceKind,
+    /// GitHub's comment id; `None` for `issue_body` and for cache-loaded comments.
+    pub comment_id: Option<u64>,
+    /// Permalink to the comment; `None` for the same reasons as `comment_id`.
+    pub comment_url: Option<String>,
+}
+
+impl From<&crate::ChecklistSource> for RoundChecklistSource {
+    fn from(source: &crate::ChecklistSource) -> Self {
+        match source {
+            crate::ChecklistSource::IssueBody => Self {
+                kind: ChecklistSourceKind::IssueBody,
+                comment_id: None,
+                comment_url: None,
+            },
+            crate::ChecklistSource::Comment {
+                comment_id,
+                comment_url,
+                ..
+            } => Self {
+                kind: ChecklistSourceKind::Comment,
+                comment_id: *comment_id,
+                comment_url: comment_url.clone(),
+            },
+        }
+    }
+}
+
+/// A single derived QC round. Mirrors [`crate::Round`]; counts replace the
+/// event/retraction/extension lists, which the UI does not render individually.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundInfo {
+    /// 1-based, derived round number. `1` is Initial QC.
+    pub index: u32,
+    /// Human-readable name: `"Initial QC"` or `"Round N"`.
+    pub name: String,
+    /// The commit the round opened at (its anchor).
+    pub opened_at: String,
+    /// The approval this round builds on; `None` for Initial QC.
+    pub previous_approval: Option<String>,
+    pub checklist_name: Option<String>,
+    pub checklist_source: RoundChecklistSource,
+    pub state: RoundStateEnum,
+    /// Set only when `state == closed`: the approved commit.
+    pub closing_commit: Option<String>,
+    /// Set only when `state == closed`: who approved.
+    pub closed_by: Option<String>,
+    /// Set only when `state == closed`: when the approval landed.
+    pub closed_at: Option<DateTime<Utc>>,
+    /// Notifications and reviews inside this round.
+    pub event_count: u32,
+    /// `# QC Un-Approval` comments that took back this round's approval.
+    pub retraction_count: u32,
+    /// `# QC New Round` comments that extended this round instead of opening one.
+    pub extension_count: u32,
+}
+
+impl From<&crate::Round> for RoundInfo {
+    fn from(round: &crate::Round) -> Self {
+        let (state, closing_commit, closed_by, closed_at) = match &round.state {
+            crate::RoundState::Open => (RoundStateEnum::Open, None, None, None),
+            crate::RoundState::Closed { commit, by, at, .. } => (
+                RoundStateEnum::Closed,
+                Some(commit.to_string()),
+                Some(by.clone()),
+                Some(*at),
+            ),
+        };
+        Self {
+            index: round.index,
+            name: round.name(),
+            opened_at: round.opened_at.to_string(),
+            previous_approval: round.previous_approval.map(|c| c.to_string()),
+            checklist_name: round.checklist_name.clone(),
+            checklist_source: (&round.checklist).into(),
+            state,
+            closing_commit,
+            closed_by,
+            closed_at,
+            event_count: round.events.len() as u32,
+            retraction_count: round.retractions.len() as u32,
+            extension_count: round.extensions.len() as u32,
+        }
+    }
+}
+
 /// Blocking QC item (approved).
 #[derive(Debug, Clone, Serialize)]
 pub struct BlockingQCItem {
@@ -364,6 +474,24 @@ pub struct IssueStatusResponse {
     pub commits: Vec<IssueCommit>,
     pub checklist_summary: ChecklistSummary,
     pub blocking_qc_status: BlockingQCStatus,
+    /// Derived QC rounds, oldest first. A legacy single-round issue yields exactly
+    /// one entry named `Initial QC`.
+    pub rounds: Vec<RoundInfo>,
+    /// [`RoundInfo::index`] of the currently open round, or `None` when the last
+    /// round is closed (i.e. a new round may be started).
+    pub open_round_index: Option<u32>,
+    /// The commit a new notification would diff against — the UI's default
+    /// comparison base for its commit picker.
+    pub next_notification_from: String,
+    /// Which of the open round's follow-up steps are incomplete, so a client can
+    /// offer a repair without asking. `null` when no round is open, or when the
+    /// open round is Initial QC (which no start-round action opened).
+    ///
+    /// This lives here rather than on the round seed because the status surface
+    /// renders many issues at once and must decide per card without a second
+    /// request, and because it is a pure function of the rounds already folded for
+    /// this response: no extra API call, no writes.
+    pub round_repair: Option<RoundRepairStatus>,
 }
 
 impl IssueStatusResponse {
@@ -384,6 +512,12 @@ impl IssueStatusResponse {
             commits: issue_thread.commits.iter().map(IssueCommit::from).collect(),
             checklist_summary: analyze_issue_checklists(issue.body.as_deref()).into(),
             blocking_qc_status: BlockingQCStatus::default(),
+            rounds: issue_thread.rounds.iter().map(RoundInfo::from).collect(),
+            open_round_index: issue_thread.open_round().map(|round| round.index),
+            next_notification_from: issue_thread.next_notification_from().to_string(),
+            round_repair: issue_thread
+                .open_round()
+                .and_then(|round| RoundRepairStatus::derive(issue, round)),
         }
     }
 
@@ -485,6 +619,244 @@ pub struct ApprovalResponse {
 pub struct UnapprovalResponse {
     pub unapproval_url: String,
     pub opened: bool,
+}
+
+/// How one of a round start's recoverable steps turned out. Mirrors
+/// [`crate::StepOutcome`], whose failure message becomes `error`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepStatusEnum {
+    Done,
+    /// Not attempted because it was not requested.
+    Skipped,
+    Failed,
+}
+
+/// Outcome of one recoverable step of a round start.
+#[derive(Debug, Clone, Serialize)]
+pub struct StepOutcomeResponse {
+    pub status: StepStatusEnum,
+    /// Present only when `status == failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl From<&crate::StepOutcome> for StepOutcomeResponse {
+    fn from(outcome: &crate::StepOutcome) -> Self {
+        match outcome {
+            crate::StepOutcome::Done => Self {
+                status: StepStatusEnum::Done,
+                error: None,
+            },
+            crate::StepOutcome::Skipped => Self {
+                status: StepStatusEnum::Skipped,
+                error: None,
+            },
+            crate::StepOutcome::Failed(error) => Self {
+                status: StepStatusEnum::Failed,
+                error: Some(error.clone()),
+            },
+        }
+    }
+}
+
+/// A downstream issue a new round may have invalidated. Display only — the round
+/// action never writes to a downstream issue.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactedIssueItem {
+    pub issue_number: u64,
+    pub file_name: String,
+    pub milestone: String,
+    /// Human-readable relationship, e.g. `"previous QC"`.
+    pub relationship: String,
+}
+
+/// Direct downstream issues, one layer deep. Mirrors [`crate::ImpactedIssues`].
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactedIssuesResponse {
+    /// `false` when the dependency API is unavailable on this GitHub instance, in
+    /// which case `issues` is empty because nothing could be checked.
+    pub api_available: bool,
+    pub issues: Vec<ImpactedIssueItem>,
+}
+
+impl From<&crate::ImpactedIssues> for ImpactedIssuesResponse {
+    fn from(impacted: &crate::ImpactedIssues) -> Self {
+        match impacted {
+            crate::ImpactedIssues::None => Self {
+                api_available: true,
+                issues: Vec::new(),
+            },
+            crate::ImpactedIssues::ApiUnavailable => Self {
+                api_available: false,
+                issues: Vec::new(),
+            },
+            crate::ImpactedIssues::Some(nodes) => Self {
+                api_available: true,
+                issues: nodes
+                    .iter()
+                    .map(|node| ImpactedIssueItem {
+                        issue_number: node.issue_number,
+                        file_name: node.file_name.display().to_string(),
+                        milestone: node.milestone.clone(),
+                        relationship: node.relationship.to_string(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
+/// Response for starting a new QC round.
+///
+/// The round exists as soon as `round_comment_url` is set; the three step fields
+/// report what else landed. A `failed` step is **not** an error response: each
+/// step is idempotent and independently retryable, which is what `needs_repair`
+/// flags.
+#[derive(Debug, Clone, Serialize)]
+pub struct StartRoundResponse {
+    /// Derived index of the round that was opened (always >= 2).
+    pub round: u32,
+    /// Human-readable name of the new round, e.g. `"Round 2"`.
+    pub round_name: String,
+    /// URL of the `# QC New Round` comment: the round's identity.
+    pub round_comment_url: String,
+    /// The commit the round opened at (HEAD at open time).
+    pub anchor: String,
+    /// Step 2: reopening the issue.
+    pub reopened: StepOutcomeResponse,
+    /// Step 3: refreshing the `## QC Round` block in the issue body.
+    pub body_marker: StepOutcomeResponse,
+    /// Step 4: the `# QC Notification` comment.
+    pub notification: StepOutcomeResponse,
+    /// Whether any of the steps above failed and wants a retry.
+    pub needs_repair: bool,
+    pub impacted_issues: ImpactedIssuesResponse,
+}
+
+impl From<&crate::StartRoundResult> for StartRoundResponse {
+    fn from(result: &crate::StartRoundResult) -> Self {
+        Self {
+            round: result.round,
+            round_name: format!("Round {}", result.round),
+            round_comment_url: result.round_comment_url.clone(),
+            anchor: result.anchor.to_string(),
+            reopened: (&result.reopened).into(),
+            body_marker: (&result.body_marker).into(),
+            notification: (&result.notification).into(),
+            needs_repair: result.needs_repair(),
+            impacted_issues: (&result.impacted_issues).into(),
+        }
+    }
+}
+
+/// Which of the open round's follow-up steps are incomplete. Mirrors
+/// [`crate::RepairPlan`], and is what `POST /api/issues/{n}/rounds/repair` would
+/// act on.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundRepairStatus {
+    /// Index of the open round these flags describe.
+    pub round: u32,
+    /// Name of that round, e.g. `"Round 2"`.
+    pub round_name: String,
+    /// The issue is closed while this round is open.
+    pub reopen: bool,
+    /// The `## QC Round` body marker is missing or disagrees with this round.
+    pub body_marker: bool,
+    /// This round carries no `# QC Notification`. Informational: **not** a defect,
+    /// and therefore excluded from `needs_repair` — opening a round without
+    /// notifying is a legitimate choice, and a repair only posts one on request.
+    pub notification_missing: bool,
+    /// Whether something is actually wrong, i.e. `reopen || body_marker`. The only
+    /// field a client should use to decide whether to offer a repair.
+    pub needs_repair: bool,
+}
+
+impl RoundRepairStatus {
+    /// `None` unless `round` is open **and** was opened by a `# QC New Round`
+    /// comment: Initial QC is opened by creating the issue, so it has no follow-up
+    /// steps of a start-round action to complete.
+    pub fn derive(issue: &octocrab::models::issues::Issue, round: &crate::Round) -> Option<Self> {
+        if !round.is_open() || !matches!(round.opened, crate::RoundOpen::NewRound { .. }) {
+            return None;
+        }
+        let plan = crate::plan_repair(issue, round);
+        Some(Self {
+            round: round.index,
+            round_name: round.name(),
+            reopen: plan.reopen,
+            body_marker: plan.body_marker,
+            notification_missing: plan.notification_missing,
+            needs_repair: plan.needs_repair(),
+        })
+    }
+}
+
+/// Response for repairing an issue's open round.
+///
+/// Mirrors [`StartRoundResponse`]'s per-step shape. A `failed` step is **not** an
+/// error response: the repair is a best-effort completion of steps that are each
+/// idempotent, so `needs_repair` simply says one still wants another attempt.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepairRoundResponse {
+    /// Index of the open round that was repaired.
+    pub round: u32,
+    /// Name of that round, e.g. `"Round 2"`.
+    pub round_name: String,
+    /// URL of the round's `# QC New Round` comment. `null` when the comment came
+    /// from the disk cache and so carries no identity — in which case the body
+    /// marker is deliberately left alone rather than rewritten with a wrong URL.
+    pub round_comment_url: Option<String>,
+    /// Reopening the issue.
+    pub reopened: StepOutcomeResponse,
+    /// Refreshing the `## QC Round` block in the issue body.
+    pub body_marker: StepOutcomeResponse,
+    /// The `# QC Notification` comment. `skipped` unless the request asked for one
+    /// *and* the round had none.
+    pub notification: StepOutcomeResponse,
+    /// Whether anything was actually written.
+    pub repaired: bool,
+    /// Whether a step that was attempted failed and still wants a retry.
+    pub needs_repair: bool,
+}
+
+impl From<&crate::RepairRoundResult> for RepairRoundResponse {
+    fn from(result: &crate::RepairRoundResult) -> Self {
+        Self {
+            round: result.round,
+            round_name: result.round_name.clone(),
+            round_comment_url: result.round_comment_url.clone(),
+            reopened: (&result.reopened).into(),
+            body_marker: (&result.body_marker).into(),
+            notification: (&result.notification).into(),
+            repaired: result.repaired(),
+            needs_repair: result.needs_repair(),
+        }
+    }
+}
+
+/// Everything a "start new round" form needs, with no side effects.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundSeedResponse {
+    /// Index the next round would get.
+    pub next_round: u32,
+    /// Name the next round would get, e.g. `"Round 2"`.
+    pub next_round_name: String,
+    /// Seeded checklist markdown, boxes reset. `None` when neither the most recent
+    /// round comment nor the issue body carries a checklist.
+    pub checklist_content: Option<String>,
+    /// Name of the template the seed came from, when recorded.
+    pub checklist_name: Option<String>,
+    /// The anchor the round would open at (HEAD of the issue's branch). `None`
+    /// when HEAD could not be resolved.
+    pub anchor: Option<String>,
+    /// The approval the new round would build on: the last round's closing commit.
+    /// `None` when the last round is still open.
+    pub previous_approval: Option<String>,
+    /// Whether starting a round is currently legal.
+    pub can_start: bool,
+    /// Why not, when `can_start` is false.
+    pub blocked_reason: Option<String>,
 }
 
 /// Repository assignee.

@@ -23,6 +23,8 @@ tags:
     description: Issue management
   - name: comments
     description: Comments, approvals, and reviews
+  - name: rounds
+    description: QC rounds
   - name: status
     description: Supporting data queries
   - name: configuration
@@ -229,6 +231,125 @@ paths:
                 $ref: '#/components/schemas/Issue'
         '404':
           description: Issue not found
+
+  /issues/{number}/rounds:
+    post:
+      summary: Start a new QC round
+      description: |
+        Posts a `# QC New Round` comment (which is what creates the round), then
+        reopens the issue, refreshes the `## QC Round` body marker and optionally
+        posts a `# QC Notification`.
+
+        Only the first step is a hard requirement: once the round comment lands the
+        round exists, so a later step failing is reported per step in the 201 body
+        rather than as an error. Each failed step is idempotent and independently
+        retryable; `needs_repair` flags that one wants a retry.
+
+        The anchor is always HEAD of the issue's branch at open time and is never
+        accepted from the caller.
+      operationId: startRound
+      tags: [rounds]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRoundRequest'
+      responses:
+        '201':
+          description: Round started (possibly with failed follow-up steps)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartRoundResponse'
+        '409':
+          description: The last round is still open, so no new round could be opened
+        '500':
+          description: No rounds could be derived, or HEAD could not be resolved
+        '502':
+          description: The round comment could not be posted
+
+  /issues/{number}/rounds/seed:
+    get:
+      summary: Seed a new QC round
+      description: |
+        Side-effect free. Returns the checklist a new round would start from (the
+        most recent prior round comment's checklist, falling back to the issue
+        body's, with every box reset), the anchor and previous approval it would
+        use, and whether starting a round is currently legal.
+      operationId: getRoundSeed
+      tags: [rounds]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Seed data for the next round
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoundSeedResponse'
+        '500':
+          description: No rounds could be derived for this issue
+
+  /issues/{number}/rounds/repair:
+    post:
+      summary: Repair an issue's open QC round
+      description: |
+        Completes the follow-up steps of the issue's *currently open* round: reopens
+        the issue when it is closed, and refreshes the `## QC Round` body marker when
+        it is missing or disagrees with the open round.
+
+        This is the retry the start-round action promises. Once a round is open it
+        cannot be started again — a second `# QC New Round` comment extends the round
+        rather than opening one — so this endpoint is the only way to finish a round
+        start whose later steps failed.
+
+        Which steps are incomplete is **derived** from the issue and its folded
+        rounds, never taken from the caller. The one caller decision is
+        `notification`, which defaults to `none`: a round the author opened without
+        notifying is in exactly the state they chose, so a reviewer is pinged only on
+        an explicit request, and never when the round already has a notification.
+
+        Every step is idempotent, so a repair can be run repeatedly. A step that
+        failed is reported per step in the 200 body rather than as an error response;
+        `needs_repair` flags that one still wants another attempt. Use
+        `IssueStatusResponse.round_repair` to detect that a repair is worth offering
+        without attempting one.
+      operationId: repairRound
+      tags: [rounds]
+      parameters:
+        - name: number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepairRoundRequest'
+      responses:
+        '200':
+          description: Repair attempted (possibly with failed steps, possibly with nothing to do)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairRoundResponse'
+        '409':
+          description: Nothing to repair — no round is open, or the open round is Initial QC, which no start-round action opened
+        '500':
+          description: No rounds could be derived for this issue
 
   /issues/{number}/comment:
     post:
@@ -1073,6 +1194,88 @@ components:
           $ref: '#/components/schemas/ChecklistSummary'
         blocking_qc_status:
           $ref: '#/components/schemas/BlockingQCStatus'
+        rounds:
+          type: array
+          description: Derived QC rounds, oldest first. A legacy single-round issue yields exactly one entry named "Initial QC".
+          items:
+            $ref: '#/components/schemas/RoundInfo'
+        open_round_index:
+          type: integer
+          nullable: true
+          description: Index of the currently open round, or null when the last round is closed (i.e. a new round may be started)
+        next_notification_from:
+          type: string
+          description: The commit a new notification would diff against — the default comparison base
+        round_repair:
+          allOf:
+            - $ref: '#/components/schemas/RoundRepairStatus'
+          nullable: true
+          description: |
+            Which of the open round's follow-up steps are incomplete, so a client can
+            offer a repair without asking. Null when no round is open, or when the open
+            round is Initial QC (which no start-round action opened).
+
+    RoundInfo:
+      type: object
+      required: [index, name, opened_at, checklist_source, state, event_count, retraction_count, extension_count]
+      properties:
+        index:
+          type: integer
+          description: 1-based derived round number; 1 is Initial QC
+        name:
+          type: string
+          description: '"Initial QC" or "Round N"'
+        opened_at:
+          type: string
+          description: The commit the round opened at (its anchor)
+        previous_approval:
+          type: string
+          nullable: true
+          description: The approval this round builds on; null for Initial QC
+        checklist_name:
+          type: string
+          nullable: true
+        checklist_source:
+          $ref: '#/components/schemas/RoundChecklistSource'
+        state:
+          type: string
+          enum: [open, closed]
+        closing_commit:
+          type: string
+          nullable: true
+          description: Set only when state is closed
+        closed_by:
+          type: string
+          nullable: true
+          description: Set only when state is closed
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set only when state is closed
+        event_count:
+          type: integer
+          description: Notifications and reviews inside this round
+        retraction_count:
+          type: integer
+          description: Un-approvals that took back this round's approval
+        extension_count:
+          type: integer
+          description: QC New Round comments that extended this round instead of opening one
+
+    RoundChecklistSource:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [issue_body, comment]
+        comment_id:
+          type: integer
+          nullable: true
+        comment_url:
+          type: string
+          nullable: true
 
     QCStatus:
       type: object
@@ -1459,6 +1662,194 @@ components:
         opened:
           type: boolean
           description: "Whether the issue was successfully re-opened"
+
+    StartRoundRequest:
+      type: object
+      required: [checklist_content]
+      properties:
+        checklist_content:
+          type: string
+          description: Author-edited checklist markdown for the new round
+        checklist_name:
+          type: string
+          nullable: true
+          description: Name of the checklist template the content came from
+        note:
+          type: string
+          nullable: true
+        notification:
+          type: string
+          enum: [full, metadata_only, none]
+          default: full
+          description: |
+            - full: QC Notification with the inline file diff
+            - metadata_only: QC Notification without the diff
+            - none: no notification comment
+
+    StepOutcome:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [done, skipped, failed]
+        error:
+          type: string
+          description: Present only when status is failed
+
+    ImpactedIssueItem:
+      type: object
+      required: [issue_number, file_name, milestone, relationship]
+      properties:
+        issue_number:
+          type: integer
+        file_name:
+          type: string
+        milestone:
+          type: string
+        relationship:
+          type: string
+          description: Human-readable relationship, e.g. "previous QC"
+
+    ImpactedIssues:
+      type: object
+      required: [api_available, issues]
+      properties:
+        api_available:
+          type: boolean
+          description: False when the dependency API is unavailable, in which case nothing could be checked
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImpactedIssueItem'
+
+    StartRoundResponse:
+      type: object
+      required: [round, round_name, round_comment_url, anchor, reopened, body_marker, notification, needs_repair, impacted_issues]
+      properties:
+        round:
+          type: integer
+          description: Derived index of the round that was opened (always >= 2)
+        round_name:
+          type: string
+        round_comment_url:
+          type: string
+          description: URL of the QC New Round comment — the round's identity
+        anchor:
+          type: string
+          description: The commit the round opened at (HEAD at open time)
+        reopened:
+          $ref: '#/components/schemas/StepOutcome'
+        body_marker:
+          $ref: '#/components/schemas/StepOutcome'
+        notification:
+          $ref: '#/components/schemas/StepOutcome'
+        needs_repair:
+          type: boolean
+          description: Whether any step above failed and wants a retry
+        impacted_issues:
+          $ref: '#/components/schemas/ImpactedIssues'
+
+    RoundSeedResponse:
+      type: object
+      required: [next_round, next_round_name, can_start]
+      properties:
+        next_round:
+          type: integer
+        next_round_name:
+          type: string
+        checklist_content:
+          type: string
+          nullable: true
+          description: Seeded checklist markdown, boxes reset
+        checklist_name:
+          type: string
+          nullable: true
+        anchor:
+          type: string
+          nullable: true
+          description: HEAD of the issue's branch; null when it could not be resolved
+        previous_approval:
+          type: string
+          nullable: true
+          description: The approval the new round would build on; null when the last round is still open
+        can_start:
+          type: boolean
+        blocked_reason:
+          type: string
+          nullable: true
+          description: Why a round cannot be started, when can_start is false
+
+    RoundRepairStatus:
+      type: object
+      required: [round, round_name, reopen, body_marker, notification_missing, needs_repair]
+      properties:
+        round:
+          type: integer
+          description: Index of the open round these flags describe
+        round_name:
+          type: string
+        reopen:
+          type: boolean
+          description: The issue is closed while this round is open
+        body_marker:
+          type: boolean
+          description: The `## QC Round` body marker is missing or disagrees with this round
+        notification_missing:
+          type: boolean
+          description: |
+            This round carries no QC Notification. Informational, not a defect —
+            opening a round without notifying is a legitimate choice — and therefore
+            excluded from needs_repair.
+        needs_repair:
+          type: boolean
+          description: |
+            Whether something is actually wrong (reopen || body_marker). The only field
+            a client should use to decide whether to offer a repair.
+
+    RepairRoundRequest:
+      type: object
+      properties:
+        notification:
+          type: string
+          enum: [full, metadata_only, none]
+          default: none
+          description: |
+            Post a QC Notification when the open round has none. Defaults to `none`:
+            a repair never notifies unless asked.
+            - full: QC Notification with the inline file diff
+            - metadata_only: QC Notification without the diff
+            - none: post nothing
+
+    RepairRoundResponse:
+      type: object
+      required: [round, round_name, round_comment_url, reopened, body_marker, notification, repaired, needs_repair]
+      properties:
+        round:
+          type: integer
+          description: Index of the open round that was repaired
+        round_name:
+          type: string
+        round_comment_url:
+          type: string
+          nullable: true
+          description: |
+            URL of the round's QC New Round comment. Null when the comment came from
+            the disk cache and so carries no identity — in which case the body marker
+            is deliberately left alone rather than rewritten with a wrong URL.
+        reopened:
+          $ref: '#/components/schemas/StepOutcome'
+        body_marker:
+          $ref: '#/components/schemas/StepOutcome'
+        notification:
+          $ref: '#/components/schemas/StepOutcome'
+        repaired:
+          type: boolean
+          description: Whether anything was actually written
+        needs_repair:
+          type: boolean
+          description: Whether a step that was attempted failed and still wants a retry
+
     BlockedIssueStatus:
       type: object
       required: [issue, qc_status]

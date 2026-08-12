@@ -100,6 +100,35 @@ impl From<crate::ApprovalError> for ApiError {
     }
 }
 
+impl From<crate::StartRoundError> for ApiError {
+    fn from(err: crate::StartRoundError) -> Self {
+        match &err {
+            // A still-open round is a precondition violation, not a bad request.
+            crate::StartRoundError::RoundStillOpen { .. } => ApiError::Conflict(err.to_string()),
+            crate::StartRoundError::GitHubApiError(_) => ApiError::GitHubApi(err.to_string()),
+            // Unprocessable domain state. This crate has no 422 variant: every
+            // other domain error (IssueError, QCStatusError, ...) maps to
+            // Internal, so these follow that convention rather than adding one.
+            crate::StartRoundError::NoRounds | crate::StartRoundError::AnchorUnresolved { .. } => {
+                ApiError::Internal(err.to_string())
+            }
+        }
+    }
+}
+
+impl From<crate::RepairRoundError> for ApiError {
+    fn from(err: crate::RepairRoundError) -> Self {
+        match &err {
+            // Nothing to repair is a precondition violation, exactly as a still-open
+            // round is for starting one.
+            crate::RepairRoundError::NoOpenRound { .. }
+            | crate::RepairRoundError::InitialRound { .. } => ApiError::Conflict(err.to_string()),
+            // Underivable domain state, following `StartRoundError::NoRounds`.
+            crate::RepairRoundError::NoRounds => ApiError::Internal(err.to_string()),
+        }
+    }
+}
+
 impl From<crate::GitRepositoryError> for ApiError {
     fn from(err: crate::GitRepositoryError) -> Self {
         ApiError::Internal(err.to_string())

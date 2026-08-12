@@ -7,12 +7,13 @@ use std::path::PathBuf;
 use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
     CacheCommands, ConfigurationEditCommands, FileCommitPair, FileCommitPairParser, IssueUrlArg,
-    IssueUrlArgParser, MilestoneSelectionFilter, RelevantFileArg, RelevantFileArgParser,
-    configuration_edit, configuration_init, confirm_rename_noninteractive, find_issue,
-    generate_archive_name, get_milestone_issue_threads, gh_auth_login, gh_auth_logout,
-    gh_auth_status, gh_auth_token, handle_cache, interactive_milestone_status, interactive_rename,
-    interactive_status, milestone_status, prompt_archive, prompt_context_files,
-    prompt_milestone_record, single_issue_status,
+    IssueUrlArgParser, MilestoneSelectionFilter, NewRoundArgs, NotificationArg, RelevantFileArg,
+    RelevantFileArgParser, RepairRoundArgs, configuration_edit, configuration_init,
+    confirm_rename_noninteractive, find_issue, generate_archive_name, get_milestone_issue_threads,
+    gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token, handle_cache,
+    interactive_milestone_status, interactive_rename, interactive_status, milestone_status,
+    new_round, prompt_archive, prompt_context_files, prompt_milestone_record, repair_open_round,
+    single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
@@ -237,6 +238,50 @@ enum IssueCommands {
         /// Reason to re-open issue (will prompt if not provided)
         #[arg(short, long)]
         reason: Option<String>,
+    },
+    /// Start a new QC round on an issue whose previous round is approved
+    NewRound {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path of the issue to start a new round on (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Start from this configuration checklist instead of the previous round's
+        #[arg(short, long)]
+        checklist_name: Option<String>,
+
+        /// Optional note explaining why the round was opened
+        #[arg(short, long)]
+        note: Option<String>,
+
+        /// How loudly to notify reviewers about the new round
+        #[arg(long, value_enum, default_value_t = NotificationArg::Full)]
+        notification: NotificationArg,
+
+        /// Open the checklist in $EDITOR before posting (always on in interactive mode)
+        #[arg(long)]
+        edit: bool,
+    },
+    /// Complete the follow-up steps of an issue's open QC round
+    ///
+    /// Reopens the issue and refreshes its `## QC Round` body marker when those are
+    /// out of step with the open round. Use this after `new-round` reported a failed
+    /// follow-up step: re-running `new-round` would extend the round instead.
+    RepairRound {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path of the issue whose open round should be repaired (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Post a QC Notification if the open round has none (default: post nothing)
+        #[arg(long, value_enum, default_value_t = NotificationArg::None)]
+        notification: NotificationArg,
     },
     /// Review current working directory changes against a commit
     Review {
@@ -615,6 +660,57 @@ async fn main() -> Result<()> {
                     let result = unapprove_with_impact(&unapproval, &git_info).await?;
 
                     println!("{}", result);
+                }
+                IssueCommands::NewRound {
+                    milestone,
+                    file,
+                    checklist_name,
+                    note,
+                    notification,
+                    edit,
+                } => {
+                    let config_dir = determine_config_dir(cli.config_dir, &env)?;
+                    let mut configuration = Configuration::from_path(&config_dir);
+                    configuration.load_checklists();
+
+                    let milestones = git_info.get_milestones().await?;
+                    let cache = DiskCache::from_git_info(&git_info).ok();
+
+                    new_round(
+                        NewRoundArgs {
+                            milestone,
+                            file,
+                            checklist_name,
+                            note,
+                            notification: notification.into(),
+                            edit,
+                        },
+                        &configuration,
+                        &milestones,
+                        cache.as_ref(),
+                        &git_info,
+                    )
+                    .await?;
+                }
+                IssueCommands::RepairRound {
+                    milestone,
+                    file,
+                    notification,
+                } => {
+                    let milestones = git_info.get_milestones().await?;
+                    let cache = DiskCache::from_git_info(&git_info).ok();
+
+                    repair_open_round(
+                        RepairRoundArgs {
+                            milestone,
+                            file,
+                            notification: notification.into(),
+                        },
+                        &milestones,
+                        cache.as_ref(),
+                        &git_info,
+                    )
+                    .await?;
                 }
                 IssueCommands::Review {
                     milestone,

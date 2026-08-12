@@ -12,6 +12,11 @@ import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
 import type { ConfigGitRepository } from '../../src/api/configuration'
+import { approvedRoundFields, legacyRoundFields } from './rounds'
+
+// Round fixtures live in ./rounds and are re-exported so tests can keep
+// importing everything from '../fixtures/index'.
+export * from './rounds'
 
 export const defaultRepoInfo: RepoInfo = {
   owner: 'test-owner',
@@ -58,6 +63,7 @@ function makeIssue(overrides: Partial<Issue> & Pick<Issue, 'number' | 'title'>):
     branch: 'main',
     checklist_name: 'Code Review',
     relevant_files: [],
+    file_history: [],
     ...overrides,
   }
 }
@@ -87,6 +93,9 @@ function makeStatusResponse(
       },
     ],
     checklist_summary: { completed: 0, total: 0, percentage: 0 },
+    ...(status === 'approved'
+      ? approvedRoundFields('bbb2222', 'aaa1111')
+      : legacyRoundFields('bbb2222', 'ccc3333')),
     ...overrides,
   }
 }
@@ -149,6 +158,7 @@ export const singleCommitStatus: IssueStatusResponse = {
   ],
   checklist_summary: { completed: 2, total: 7, percentage: 28.6 },
   blocking_qc_status: emptyBlockingQCStatus,
+  ...legacyRoundFields('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
 }
 
 // Multi-commit: 4 commits, one hidden by default (ccccccc: no file change, no statuses).
@@ -171,6 +181,10 @@ export const multiCommitStatus: IssueStatusResponse = {
   ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: emptyBlockingQCStatus,
+  ...legacyRoundFields(
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1',
+  ),
 }
 
 // Notification landed on a non-file-changing commit after the last file change.
@@ -189,6 +203,10 @@ export const notifOnNonFileStatus: IssueStatusResponse = {
   ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: emptyBlockingQCStatus,
+  ...legacyRoundFields(
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1',
+  ),
 }
 
 // Approved modal issue — used to test the unapprove tab (defaults to 'unapprove' tab)
@@ -203,6 +221,10 @@ export const approvedModalStatus: IssueStatusResponse = {
   ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+  ...approvedRoundFields(
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  ),
 }
 
 // Dirty modal issue — used to test the asterisk in the modal status card
@@ -276,6 +298,10 @@ export const approvedChildStatus: IssueStatusResponse = {
   ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+  ...approvedRoundFields(
+    'cccccccccccccccccccccccccccccccccccccccc',
+    'cccccccccccccccccccccccccccccccccccccccc',
+  ),
 }
 
 // Non-approved issue for tab-disabled tests (defaults to Notify tab)
@@ -296,6 +322,7 @@ export const inProgressModalStatus: IssueStatusResponse = {
   ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+  ...legacyRoundFields('ffffffffffffffffffffffffffffffffffffffff'),
 }
 
 // ── Blocking QC inverse-map / cache-invalidation fixtures ────────────────────
@@ -322,10 +349,15 @@ export const helperStatusInitial: IssueStatusResponse = {
   ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: emptyBlockingQCStatus,
+  ...legacyRoundFields('aaa0000000000000000000000000000000000000'),
 }
 
 export const helperStatusApproved: IssueStatusResponse = {
   ...helperStatusInitial,
+  ...approvedRoundFields(
+    'aaa0000000000000000000000000000000000000',
+    'aaa0000000000000000000000000000000000000',
+  ),
   qc_status: {
     status: 'approved',
     status_detail: 'Approved',
@@ -350,6 +382,7 @@ export const fileAStatusBlocked: IssueStatusResponse = {
     { hash: 'bbb0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
   ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  ...legacyRoundFields('bbb0000000000000000000000000000000000000'),
   blocking_qc_status: {
     total: 1,
     approved_count: 0,

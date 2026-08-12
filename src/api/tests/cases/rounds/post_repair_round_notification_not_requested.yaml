@@ -1,0 +1,72 @@
+name: "POST /api/issues/{number}/rounds/repair - a missing notification is never implicit"
+description: "The same round with no QC Notification, repaired with the default request: nothing is written and nobody is pinged"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      state: "open"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        ## QC Round
+        * current round: 2
+        * round comment: https://github.com/test-owner/test-repo/issues/1#issuecomment-456
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+      milestone: 1
+  comments:
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+    - issue: 1
+      author: author
+      id: 456
+      html_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
+      body: |
+        # QC New Round
+
+        ## Metadata
+        * round: 2
+        * round commit: abc1234567890abcdef1234567890abcdef12340
+        * previous approved commit: 456def789abc012345678901234567890123cdef
+        * checklist: Code Review Checklist
+
+        ## Checklist
+        - [ ] Reviewed the logic
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds/repair"
+  body: {}
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      reopened:
+        status: "skipped"
+      body_marker:
+        status: "skipped"
+      notification:
+        status: "skipped"
+      repaired: false
+      needs_repair: false
+
+# Nothing at all was written: `notification: none` is a decision, not a defect.
+assert_write_calls: []

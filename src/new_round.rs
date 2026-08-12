@@ -28,7 +28,8 @@ use std::sync::LazyLock;
 use crate::comment_system::CommentBody;
 use crate::git::{GitFileOps, GitHelpers};
 use crate::round::{
-    NEW_ROUND_MARKER, NOTE_KEY, PREVIOUS_APPROVED_COMMIT_KEY, ROUND_COMMIT_KEY, ROUND_KEY,
+    CHECKLIST_NAME_KEY, ChecklistSource, NEW_ROUND_MARKER, NOTE_KEY, PREVIOUS_APPROVED_COMMIT_KEY,
+    ROUND_COMMIT_KEY, ROUND_KEY, metadata_value,
 };
 
 /// Heading of the checklist section of a `# QC New Round` comment.
@@ -58,6 +59,10 @@ pub struct QCNewRound {
     pub round_commit: ObjectId,
     /// The approval the new round builds on (the prior round's closing commit).
     pub previous_approved_commit: ObjectId,
+    /// Name of the checklist template this round is QC'd against. Recorded because
+    /// the round comment is the audit record of what the round was checked against,
+    /// and the name cannot be derived from the checklist content.
+    pub checklist_name: Option<String>,
     pub note: Option<String>,
     /// Checklist markdown, already seeded and reset (see [`seed_checklist`]).
     pub checklist_content: String,
@@ -82,6 +87,14 @@ impl CommentBody for QCNewRound {
                 self.previous_approved_commit
             ),
         ];
+        if let Some(name) = &self.checklist_name {
+            // One metadata line, like the note: the fold reads the remainder of the
+            // line as the value.
+            let name = flatten_to_one_line(name);
+            if !name.is_empty() {
+                metadata.push(format!("{CHECKLIST_NAME_KEY}{name}"));
+            }
+        }
         if let Some(note) = &self.note {
             // The fold reads a note as the remainder of a single metadata line,
             // so a multi-line note is flattened rather than silently truncated.
@@ -167,9 +180,31 @@ fn section_body(body: &str, section_heading: &str) -> Option<String> {
     }
 }
 
+/// A checklist recovered from an issue body or a round comment, together with the
+/// name of the template it came from.
+///
+/// The name is carried alongside the content — rather than left inside it as a
+/// heading — because [`QCNewRound`] records it as metadata, where the fold can
+/// read it back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeededChecklist {
+    /// Checklist markdown, with no `# <name>` heading line.
+    pub content: String,
+    /// The template name, when the source recorded one.
+    pub name: Option<String>,
+}
+
 /// Extract the `## Checklist` section of a `# QC New Round` comment.
 pub fn checklist_from_round_comment(body: &str) -> Option<String> {
     section_body(body, CHECKLIST_HEADING)
+}
+
+/// The checklist template name a `# QC New Round` comment recorded, if any.
+///
+/// Read with [`crate::round`]'s own metadata parser, so writer and reader cannot
+/// drift apart.
+pub fn checklist_name_from_round_comment(body: &str) -> Option<String> {
+    metadata_value(body, CHECKLIST_NAME_KEY).map(|name| name.to_string())
 }
 
 /// Extract the checklist from an issue body, for seeding round 2 from Initial QC.
@@ -183,39 +218,45 @@ pub fn checklist_from_round_comment(body: &str) -> Option<String> {
 /// A body may hold more than one such section (see
 /// [`crate::analyze_issue_checklists`], which iterates sections); all of them are
 /// returned, concatenated in document order. The `# <name>` heading lines
-/// themselves are dropped: the round comment supplies its own
+/// themselves are dropped from the content: the round comment supplies its own
 /// `## Checklist` heading, and a level-1 heading nested under it would misnest
-/// the comment's own `# QC New Round` heading.
-pub fn checklist_from_issue_body(body: &str) -> Option<String> {
-    let mut sections: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
+/// the comment's own `# QC New Round` heading. The *first* such heading's text is
+/// returned as [`SeededChecklist::name`] instead, so the template a round was
+/// QC'd against survives into the round comment's metadata.
+pub fn checklist_from_issue_body(body: &str) -> Option<SeededChecklist> {
+    // (heading text, section content), in document order.
+    let mut sections: Vec<(Option<String>, String)> = Vec::new();
     for line in body.lines() {
-        let is_level1 = line.starts_with("# ");
-        if is_level1 {
-            if let Some(buffer) = current.take() {
-                sections.push(buffer);
-            }
-            current = Some(String::new());
-        } else if let Some(buffer) = &mut current {
+        if let Some(heading) = line.strip_prefix("# ") {
+            let heading = heading.trim();
+            sections.push((
+                (!heading.is_empty()).then(|| heading.to_string()),
+                String::new(),
+            ));
+        } else if let Some((_, buffer)) = sections.last_mut() {
             buffer.push_str(line);
             buffer.push('\n');
         }
     }
-    if let Some(buffer) = current.take() {
-        sections.push(buffer);
-    }
 
-    let joined = sections
+    // Empty sections carry neither content nor a usable name.
+    let sections: Vec<(Option<String>, &str)> = sections
         .iter()
-        .map(|section| section.trim())
-        .filter(|section| !section.is_empty())
+        .map(|(heading, content)| (heading.clone(), content.trim()))
+        .filter(|(_, content)| !content.is_empty())
+        .collect();
+
+    let name = sections.first().and_then(|(heading, _)| heading.clone());
+    let content = sections
+        .iter()
+        .map(|(_, content)| *content)
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    if joined.is_empty() {
+    if content.is_empty() {
         None
     } else {
-        Some(joined)
+        Some(SeededChecklist { content, name })
     }
 }
 
@@ -223,14 +264,44 @@ pub fn checklist_from_issue_body(body: &str) -> Option<String> {
 ///
 /// The most recent prior round comment's checklist wins; the issue body's
 /// (Initial QC's) checklist is the fallback. `None` when neither carries one.
+///
+/// The name travels with the content it describes: a checklist seeded from a prior
+/// round comment takes that comment's `checklist:` metadata, while one seeded from
+/// the issue body takes its `# <name>` heading.
 pub fn seed_checklist(
     prior_round_comment_body: Option<&str>,
     issue_body: Option<&str>,
-) -> Option<String> {
-    let extracted = prior_round_comment_body
-        .and_then(checklist_from_round_comment)
-        .or_else(|| issue_body.and_then(checklist_from_issue_body))?;
-    Some(reset_checklist(&extracted))
+) -> Option<SeededChecklist> {
+    if let Some(prior) = prior_round_comment_body
+        && let Some(content) = checklist_from_round_comment(prior)
+    {
+        return Some(SeededChecklist {
+            content: reset_checklist(&content),
+            name: checklist_name_from_round_comment(prior),
+        });
+    }
+    let seeded = issue_body.and_then(checklist_from_issue_body)?;
+    Some(SeededChecklist {
+        content: reset_checklist(&seeded.content),
+        name: seeded.name,
+    })
+}
+
+/// The body of the comment that opened `thread`'s most recent round, which is
+/// what [`seed_checklist`] wants as its first argument.
+///
+/// `None` when that round is Initial QC (whose checklist lives in the issue body)
+/// or when the comment is no longer present in `comments`.
+pub fn prior_round_comment_body<'a>(
+    thread: &crate::IssueThread,
+    comments: &'a [crate::GitComment],
+) -> Option<&'a str> {
+    match &thread.rounds.last()?.checklist {
+        ChecklistSource::IssueBody => None,
+        ChecklistSource::Comment { comment_index, .. } => comments
+            .get(*comment_index)
+            .map(|comment| comment.body.as_str()),
+    }
 }
 
 // ── Issue-body round marker ─────────────────────────────────────────────────
@@ -403,6 +474,7 @@ mod tests {
             round: 2,
             round_commit: ObjectId::from_str(C).unwrap(),
             previous_approved_commit: ObjectId::from_str(B).unwrap(),
+            checklist_name: Some("Code Review Checklist".to_string()),
             note: note.map(String::from),
             checklist_content: "- [ ] item one\n- [ ] item two".to_string(),
         }
@@ -472,7 +544,7 @@ mod tests {
             comment(&body),
         ];
 
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
         assert!(anomalies.is_empty(), "unexpected anomalies: {anomalies:?}");
         assert_eq!(rounds.len(), 2);
 
@@ -481,6 +553,7 @@ mod tests {
         assert_eq!(second.opened_at, C);
         assert_eq!(second.previous_approval, Some(B));
         assert_eq!(second.state, RawRoundState::Open);
+        assert_eq!(second.checklist_name, Some("Code Review Checklist"));
         assert!(
             matches!(
                 second.checklist,
@@ -506,6 +579,55 @@ mod tests {
             checklist_from_round_comment(&body).as_deref(),
             Some("- [ ] item one\n- [ ] item two")
         );
+    }
+
+    /// The checklist template name is written as metadata and read back by the fold.
+    #[test]
+    fn checklist_name_round_trips_writer_to_fold_and_is_none_when_absent() {
+        let comment = |body: &str| GitComment {
+            body: body.to_string(),
+            author_login: "tester".to_string(),
+            created_at: chrono::Utc::now(),
+            id: None,
+            html_url: None,
+            html: None,
+        };
+        let approval = format!("# QC Approval\n\n## Metadata\napproved qc commit: {B}\n");
+
+        let mut round = new_round(None);
+        round.checklist_name = Some("Stats Review Checklist".to_string());
+        let body = round.generate_body(&MockGitHelpers);
+        assert!(body.contains("* checklist: Stats Review Checklist\n"));
+        // The written value is recoverable both by the fold and by the reader used
+        // when seeding the next round.
+        assert_eq!(
+            checklist_name_from_round_comment(&body).as_deref(),
+            Some("Stats Review Checklist")
+        );
+        let comments = vec![comment(&approval), comment(&body)];
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
+        assert_eq!(rounds[1].checklist_name, Some("Stats Review Checklist"));
+
+        // No name written ⇒ no metadata line, and the round folds with `None`.
+        round.checklist_name = None;
+        let body = round.generate_body(&MockGitHelpers);
+        assert!(!body.contains("checklist: "));
+        assert_eq!(checklist_name_from_round_comment(&body), None);
+        let comments = vec![comment(&approval), comment(&body)];
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
+        assert_eq!(rounds[1].checklist_name, None);
+
+        // Initial QC's name comes from the issue body instead.
+        let (rounds, _) = fold_rounds_from_comments(A, Some("Code Review Checklist"), &[]);
+        assert_eq!(rounds[0].checklist_name, Some("Code Review Checklist"));
+    }
+
+    #[test]
+    fn multi_line_checklist_name_is_flattened_onto_one_metadata_line() {
+        let mut round = new_round(None);
+        round.checklist_name = Some("first line\nsecond line".to_string());
+        let body = round.generate_body(&MockGitHelpers);
+        assert!(body.contains("* checklist: first line second line\n"));
     }
 
     // ── reset_checklist ──────────────────────────────────────────────────────
@@ -574,17 +696,24 @@ mod tests {
     fn checklist_from_issue_body_reads_from_the_first_level_one_heading() {
         let body = "## Metadata\n* initial qc commit: abc1234\n\n## Relevant Files\n\n### Previous QC\n- [file](url)\n\n# Code Review Checklist\n\nNOTE\n\n- [ ] compiles\n- [x] tests pass\n";
         assert_eq!(
-            checklist_from_issue_body(body).as_deref(),
-            Some("NOTE\n\n- [ ] compiles\n- [x] tests pass")
+            checklist_from_issue_body(body),
+            Some(SeededChecklist {
+                content: "NOTE\n\n- [ ] compiles\n- [x] tests pass".to_string(),
+                name: Some("Code Review Checklist".to_string()),
+            })
         );
     }
 
     #[test]
     fn checklist_from_issue_body_concatenates_multiple_sections_in_order() {
         let body = "## Metadata\n* a: 1\n\n# First\n- [ ] one\n\n# Second\n- [x] two\n";
+        // The first section's heading names the seeded checklist.
         assert_eq!(
-            checklist_from_issue_body(body).as_deref(),
-            Some("- [ ] one\n\n- [x] two")
+            checklist_from_issue_body(body),
+            Some(SeededChecklist {
+                content: "- [ ] one\n\n- [x] two".to_string(),
+                name: Some("First".to_string()),
+            })
         );
     }
 
@@ -605,8 +734,23 @@ mod tests {
         let prior = "# QC New Round\n\n## Metadata\n* round: 2\n\n## Checklist\n- [x] one\n  - [X] nested\n";
         let issue = "## Metadata\n* a: 1\n\n# Checklist\n- [x] from the issue body\n";
         assert_eq!(
-            seed_checklist(Some(prior), Some(issue)).as_deref(),
-            Some("- [ ] one\n  - [ ] nested")
+            seed_checklist(Some(prior), Some(issue)),
+            Some(SeededChecklist {
+                content: "- [ ] one\n  - [ ] nested".to_string(),
+                // The prior comment recorded no `checklist:` metadata.
+                name: None,
+            })
+        );
+
+        // ...and when it does record one, that name is carried over.
+        let named = format!("{prior}\n");
+        let named = named.replace("* round: 2", "* round: 2\n* checklist: Stats Review");
+        assert_eq!(
+            seed_checklist(Some(&named), Some(issue)),
+            Some(SeededChecklist {
+                content: "- [ ] one\n  - [ ] nested".to_string(),
+                name: Some("Stats Review".to_string()),
+            })
         );
     }
 
@@ -614,8 +758,11 @@ mod tests {
     fn seed_checklist_falls_back_to_the_issue_body() {
         let issue = "## Metadata\n* a: 1\n\n# Checklist\n- [x] from the issue body\n";
         assert_eq!(
-            seed_checklist(None, Some(issue)).as_deref(),
-            Some("- [ ] from the issue body")
+            seed_checklist(None, Some(issue)),
+            Some(SeededChecklist {
+                content: "- [ ] from the issue body".to_string(),
+                name: Some("Checklist".to_string()),
+            })
         );
         // A prior comment without a checklist section falls back too.
         assert_eq!(
@@ -623,8 +770,8 @@ mod tests {
                 Some("# QC New Round\n\n## Metadata\n* round: 2\n"),
                 Some(issue)
             )
-            .as_deref(),
-            Some("- [ ] from the issue body")
+            .map(|seeded| seeded.content),
+            Some("- [ ] from the issue body".to_string())
         );
         assert_eq!(seed_checklist(None, None), None);
     }

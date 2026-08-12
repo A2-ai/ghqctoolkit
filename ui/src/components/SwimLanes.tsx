@@ -4,6 +4,7 @@ import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea
 import type { IssueStatusResponse, QCStatus } from '~/api/issues'
 import { IssueCard } from './IssueCard'
 import { IssueDetailModal } from './IssueDetailModal'
+import { StartRoundModal } from './StartRoundModal'
 
 const LANES: { id: string; title: string; headerColor: string }[] = [
   { id: 'ready-for-review',    title: 'Ready for Review',    headerColor: '#dbeafe' },
@@ -47,6 +48,8 @@ function postApprovalFileCommit(s: IssueStatusResponse): string | undefined {
 
 export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
   const [selected, setSelected] = useState<IssueStatusResponse | null>(null)
+  // Issue the start-new-round modal is open for (S6 entry point).
+  const [startRoundFor, setStartRoundFor] = useState<IssueStatusResponse | null>(null)
 
   const byLane: Record<string, IssueStatusResponse[]> = Object.fromEntries(
     LANES.map((l) => [l.id, []])
@@ -110,7 +113,14 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                                       : undefined),
                                   }}
                                 >
-                                  <IssueCard status={s} currentBranch={currentBranch} remoteCommit={remoteCommit} postApprovalCommit={postApprovalCommit} />
+                                  <IssueCard
+                                    status={s}
+                                    currentBranch={currentBranch}
+                                    remoteCommit={remoteCommit}
+                                    postApprovalCommit={postApprovalCommit}
+                                    onStartRound={() => setStartRoundFor(s)}
+                                    onRepairRound={() => setStartRoundFor(s)}
+                                  />
                                 </Card>
                               )
                               return colorTooltip ? (
@@ -138,7 +148,26 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
         })}
       </div>
     </DragDropContext>
-    <IssueDetailModal status={selected} onClose={() => setSelected(null)} onStatusUpdate={setSelected} />
+    <IssueDetailModal
+      status={selected}
+      onClose={() => setSelected(null)}
+      onStatusUpdate={setSelected}
+      // The rail's action: open the round modal for the issue whose detail is
+      // showing, and close the detail modal so only one dialog is up.
+      onStartRound={() => {
+        if (!selected) return
+        setStartRoundFor(selected)
+        setSelected(null)
+      }}
+    />
+    {/* One owner of the modal's state: the card, the rail and the repair affordance
+        all open this instance rather than each keeping their own. */}
+    <StartRoundModal
+      issueNumber={startRoundFor?.issue.number ?? null}
+      issueTitle={startRoundFor?.issue.title}
+      repair={startRoundFor?.round_repair ?? null}
+      onClose={() => setStartRoundFor(null)}
+    />
     </>
   )
 }

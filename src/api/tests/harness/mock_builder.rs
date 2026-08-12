@@ -19,11 +19,17 @@ impl MockBuilder {
             .with_commit(&git_state.commit)
             .with_branch(&git_state.branch)
             .with_remote_commit(&git_state.remote_commit)
-            .with_current_user(git_state.current_user.clone());
+            .with_current_user(git_state.current_user.clone())
+            .with_branch_tip(git_state.branch_tip.clone());
 
         // Add all issues
         for (number, issue) in &fixtures.issues {
             builder = builder.with_issue(*number, issue.clone());
+        }
+
+        // Add issue comments (the QC round fold reads these)
+        for (number, comments) in &fixtures.comments {
+            builder = builder.with_comments(*number, comments.clone());
         }
 
         // Add all milestones

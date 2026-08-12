@@ -8,6 +8,7 @@ expression: body
 * round: 2
 * round commit: ccccccc000000000000000000000000000000003
 * previous approved commit: bbbbbbb000000000000000000000000000000002
+* checklist: Code Review Checklist
 
 ## Checklist
 - [ ] item one

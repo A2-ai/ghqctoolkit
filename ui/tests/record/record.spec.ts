@@ -1,6 +1,6 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
-import { closedMilestone, openMilestone, defaultRepoInfo, rootFileTree, srcFileTree } from '../fixtures/index'
+import { approvedRoundFields, closedMilestone, legacyRoundFields, openMilestone, defaultRepoInfo, rootFileTree, srcFileTree } from '../fixtures/index'
 import type { Issue, IssueStatusResponse, BatchIssueStatusResponse, QCStatus } from '../../src/api/issues'
 
 // ── Test-local fixtures ───────────────────────────────────────────────────────
@@ -44,6 +44,9 @@ function makeStatus(issue: Issue, status: QCStatus['status']): IssueStatusRespon
     commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
     checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
     blocking_qc_status: { total: 0, approved_count: 0, summary: '0/0', approved: [], not_approved: [], errors: [] },
+    ...(status === 'approved'
+      ? approvedRoundFields('bbb2222', 'aaa1111')
+      : legacyRoundFields('bbb2222', 'ccc3333')),
   }
 }
 

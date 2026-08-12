@@ -59,6 +59,9 @@ pub(crate) const ROUND_COMMIT_KEY: &str = "round commit: ";
 pub(crate) const PREVIOUS_APPROVED_COMMIT_KEY: &str = "previous approved commit: ";
 /// Metadata key holding a free-text note on a `# QC New Round` comment.
 pub(crate) const NOTE_KEY: &str = "note: ";
+/// Metadata key holding the name of the checklist template a round was QC'd
+/// against. Not derivable from anywhere else, so it is trusted as written.
+pub(crate) const CHECKLIST_NAME_KEY: &str = "checklist: ";
 
 /// How a round came into being.
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +208,10 @@ pub struct Round {
     pub previous_approval: Option<ObjectId>,
     pub opened: RoundOpen,
     pub checklist: ChecklistSource,
+    /// Name of the checklist template this round was QC'd against. Read from the
+    /// opening comment's `checklist:` metadata (or, for Initial QC, from the
+    /// issue body's checklist heading). `None` when nothing recorded it.
+    pub checklist_name: Option<String>,
     pub state: RoundState,
     pub events: Vec<RoundEvent>,
     pub retractions: Vec<Retraction>,
@@ -356,6 +363,7 @@ pub(crate) struct RawRound<'a> {
     pub previous_approval: Option<&'a str>,
     pub opened: RawRoundOpen<'a>,
     pub checklist: ChecklistSource,
+    pub checklist_name: Option<&'a str>,
     pub state: RawRoundState<'a>,
     pub events: Vec<RawRoundEvent<'a>>,
     pub retractions: Vec<RawRetraction<'a>>,
@@ -419,6 +427,15 @@ fn metadata_line<'a>(section: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+/// The value of `key` in `body`'s `## Metadata` section, using exactly the same
+/// scoping and bullet rules the fold uses.
+///
+/// Exposed so writers (see [`crate::new_round`]) can read back a metadata value
+/// they wrote without reimplementing — and thereby diverging from — the parser.
+pub(crate) fn metadata_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
+    metadata_line(metadata_section(body), key)
+}
+
 /// The first whitespace-delimited token after `key` in the metadata section, which
 /// is how every commit-valued key is read.
 fn metadata_commit<'a>(section: &'a str, key: &str) -> Option<&'a str> {
@@ -451,8 +468,14 @@ fn sha_equivalent(a: &str, b: &str) -> bool {
 /// A thread with no `# QC New Round` markers always folds to exactly one round.
 /// There is deliberately no legacy reinterpretation: un-approvals in such a thread
 /// are plain retractions on round 1.
+///
+/// `initial_checklist_name` is the checklist template name Initial QC used, which
+/// lives in the issue body rather than in any comment (see
+/// [`crate::new_round::checklist_from_issue_body`]); later rounds carry their own
+/// name in the opening comment's `checklist:` metadata.
 pub(crate) fn fold_rounds_from_comments<'a>(
     initial_commit_sha: &'a str,
+    initial_checklist_name: Option<&'a str>,
     comments: &'a [GitComment],
 ) -> (Vec<RawRound<'a>>, Vec<RawAnomaly>) {
     let mut anomalies: Vec<RawAnomaly> = Vec::new();
@@ -462,6 +485,7 @@ pub(crate) fn fold_rounds_from_comments<'a>(
         previous_approval: None,
         opened: RawRoundOpen::IssueCreated,
         checklist: ChecklistSource::IssueBody,
+        checklist_name: initial_checklist_name,
         state: RawRoundState::Open,
         events: Vec::new(),
         retractions: Vec::new(),
@@ -513,6 +537,10 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                         comment_id,
                         comment_url: comment_url.map(|url| url.to_string()),
                     };
+                    // The checklist name travels with the checklist it names: the
+                    // round is now QC'd against this comment's checklist, so an
+                    // unnamed one legitimately leaves the round unnamed.
+                    cur.checklist_name = metadata_line(metadata, CHECKLIST_NAME_KEY);
                     cur.extensions.push(RawExtension {
                         comment_index,
                         comment_id,
@@ -569,6 +597,7 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                             comment_id,
                             comment_url: comment_url.map(|url| url.to_string()),
                         },
+                        checklist_name: metadata_line(metadata, CHECKLIST_NAME_KEY),
                         state: RawRoundState::Open,
                         events: Vec::new(),
                         retractions: Vec::new(),
@@ -910,6 +939,7 @@ pub(crate) fn resolve_rounds(
             previous_approval,
             opened,
             checklist: raw.checklist,
+            checklist_name: raw.checklist_name.map(|name| name.to_string()),
             state,
             events,
             retractions,
@@ -1005,7 +1035,7 @@ mod tests {
                 file_changed: true,
             })
             .collect();
-        let (raw, raw_anomalies) = fold_rounds_from_comments(initial, comments);
+        let (raw, raw_anomalies) = fold_rounds_from_comments(initial, None, comments);
         let (rounds, round_anomalies) = resolve_rounds(raw, raw_anomalies, &commits);
         IssueThread {
             file: PathBuf::from("src/main.rs"),
@@ -1024,7 +1054,7 @@ mod tests {
     #[test]
     fn legacy_notifications_only_folds_to_one_open_round() {
         let comments = vec![notification(B), notification(C)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert!(anomalies.is_empty());
@@ -1050,7 +1080,7 @@ mod tests {
     #[test]
     fn legacy_approval_closes_the_single_round() {
         let comments = vec![notification(B), approval(B)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert!(anomalies.is_empty());
@@ -1063,7 +1093,7 @@ mod tests {
     #[test]
     fn unapproval_reopens_round_and_records_retraction() {
         let comments = vec![notification(B), approval(B), unapproval()];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert!(anomalies.is_empty());
@@ -1081,7 +1111,7 @@ mod tests {
     #[test]
     fn second_unapproval_is_idempotent_and_flagged() {
         let comments = vec![approval(B), unapproval(), unapproval()];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert_eq!(rounds[0].retractions.len(), 1);
@@ -1094,7 +1124,7 @@ mod tests {
     #[test]
     fn second_approval_overwrites_closing_commit_without_new_round() {
         let comments = vec![approval(B), approval(C)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert!(anomalies.is_empty());
@@ -1107,7 +1137,7 @@ mod tests {
     #[test]
     fn new_round_after_close_opens_round_two() {
         let comments = vec![notification(B), approval(B), new_round(2, C, B)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert!(anomalies.is_empty());
         assert_eq!(rounds.len(), 2);
@@ -1138,7 +1168,7 @@ mod tests {
     #[test]
     fn new_round_while_open_extends_the_current_round() {
         let comments = vec![notification(B), new_round(2, C, B)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert_eq!(
@@ -1170,7 +1200,7 @@ mod tests {
     #[test]
     fn new_round_with_mismatched_written_index_extends_instead_of_opening() {
         let comments = vec![approval(B), new_round(7, D, C)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1, "a mismatched index must not open a round");
         assert_eq!(
@@ -1209,7 +1239,7 @@ mod tests {
     fn new_round_base_is_derived_and_written_mismatch_is_warn_only() {
         // Matching `round:`, but the comment wrote the wrong previous approval.
         let comments = vec![approval(B), new_round(2, D, C)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 2);
         assert_eq!(rounds[1].index, 2);
@@ -1230,7 +1260,7 @@ mod tests {
     fn new_round_without_written_index_opens_the_derived_round() {
         let body = format!("# QC New Round\n\n## Metadata\nround commit: {D}\n");
         let comments = vec![approval(B), comment(&body)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert!(anomalies.is_empty(), "unexpected anomalies: {anomalies:?}");
         assert_eq!(rounds.len(), 2);
@@ -1242,7 +1272,7 @@ mod tests {
     #[test]
     fn event_after_close_is_recorded_and_flagged() {
         let comments = vec![approval(B), notification(C)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert_eq!(rounds[0].events.len(), 1);
@@ -1255,7 +1285,7 @@ mod tests {
     #[test]
     fn review_events_are_folded_onto_the_current_round() {
         let comments = vec![notification(B), review(B)];
-        let (rounds, _) = fold_rounds_from_comments(A, &comments);
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
         assert_eq!(rounds[0].events.len(), 2);
         assert!(matches!(
             rounds[0].events[1],
@@ -1411,7 +1441,7 @@ mod tests {
             // Agrees with the derived index — opens round 3.
             new_round(3, E, D),
         ];
-        let (rounds, _) = fold_rounds_from_comments(A, &comments);
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
 
         let indices: Vec<u32> = rounds.iter().map(|r| r.index).collect();
         assert_eq!(indices, vec![1, 2, 3]);
@@ -1422,7 +1452,7 @@ mod tests {
     #[test]
     fn extending_a_closed_round_does_not_record_a_retraction() {
         let comments = vec![approval(B), new_round(9, D, B)];
-        let (rounds, _) = fold_rounds_from_comments(A, &comments);
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 1);
         assert!(rounds[0].retractions.is_empty());
@@ -1438,7 +1468,7 @@ mod tests {
             "# QC Notification\n\n## Metadata\ncurrent commit: {B}\n\n## File Difference\n```diff\n+ message <- \"current commit: {C}\"\n```\n"
         );
         let comments = vec![comment(&body)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert!(anomalies.is_empty());
         assert_eq!(rounds[0].events.len(), 1);
@@ -1458,7 +1488,7 @@ mod tests {
         );
 
         let comments = vec![comment(&body)];
-        let (rounds, _) = fold_rounds_from_comments(A, &comments);
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
         assert!(rounds[0].events.is_empty());
     }
 
@@ -1491,14 +1521,14 @@ mod tests {
             format!("Replying:\n\n> # QC New Round\n\n## Metadata\nround: 2\nround commit: {C}\n");
         assert!(!has_marker(&quoted, NEW_ROUND_MARKER));
         let comments = vec![approval(B), comment(&quoted)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
         assert_eq!(rounds.len(), 1, "a quoted marker must not open a round");
         assert!(anomalies.is_empty());
 
         let split = format!("# QC Notification (2/3)\n\n## Metadata\ncurrent commit: {B}\n");
         assert!(has_marker(&split, NOTIFICATION_MARKER));
         let split_comments = vec![comment(&split)];
-        let (rounds, _) = fold_rounds_from_comments(A, &split_comments);
+        let (rounds, _) = fold_rounds_from_comments(A, None, &split_comments);
         assert_eq!(rounds[0].events.len(), 1);
     }
 
@@ -1548,7 +1578,7 @@ mod tests {
             &B[..7]
         );
         let comments = vec![approval(B), comment(&body)];
-        let (rounds, anomalies) = fold_rounds_from_comments(A, &comments);
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
         assert_eq!(rounds.len(), 2);
         assert!(anomalies.is_empty(), "unexpected anomalies: {anomalies:?}");
@@ -1722,7 +1752,7 @@ mod tests {
             approval(D),
             unapproval(),
         ];
-        let (raw, raw_anomalies) = fold_rounds_from_comments(A, &comments);
+        let (raw, raw_anomalies) = fold_rounds_from_comments(A, None, &comments);
         assert!(
             raw_anomalies.is_empty(),
             "unexpected anomalies: {raw_anomalies:?}"
@@ -1776,7 +1806,7 @@ mod tests {
 
     #[test]
     fn no_commits_yields_no_rounds_and_no_panics() {
-        let (raw, raw_anomalies) = fold_rounds_from_comments(A, &[]);
+        let (raw, raw_anomalies) = fold_rounds_from_comments(A, None, &[]);
         let (rounds, anomalies) = resolve_rounds(raw, raw_anomalies, &[]);
         assert!(rounds.is_empty());
         assert!(anomalies.is_empty());

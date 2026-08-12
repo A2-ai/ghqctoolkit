@@ -39,6 +39,28 @@ pub struct Fixtures {
     /// Blocking relationships between issues
     #[serde(default)]
     pub blocking: Vec<BlockingRelationship>,
+    /// Issue timeline comments, in thread order. Needed by anything that reads the
+    /// derived QC rounds, which are a fold over this thread.
+    #[serde(default)]
+    pub comments: Vec<CommentSource>,
+}
+
+/// A single issue comment, created programmatically.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CommentSource {
+    /// Issue this comment belongs to.
+    pub issue: u64,
+    pub body: String,
+    #[serde(default = "default_comment_author")]
+    pub author: String,
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub html_url: Option<String>,
+}
+
+fn default_comment_author() -> String {
+    "test-user".to_string()
 }
 
 /// Source for loading or creating an Issue
@@ -130,6 +152,10 @@ pub struct GitState {
     /// Current authenticated user (defaults to "test-user", set to null to simulate unauthenticated)
     #[serde(default = "default_current_user")]
     pub current_user: Option<String>,
+    /// HEAD of the issue's branch, as `branch_tip` would report it. Left unset the
+    /// mock keeps its default of "branch not available locally".
+    #[serde(default)]
+    pub branch_tip: Option<String>,
 }
 
 /// Git status specification for tests
@@ -160,6 +186,7 @@ impl Default for GitState {
             status: None,
             remote_commit: default_remote_commit(),
             current_user: default_current_user(),
+            branch_tip: None,
         }
     }
 }

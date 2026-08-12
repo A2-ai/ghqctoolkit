@@ -53,14 +53,19 @@ pub struct MockGitInfo {
 
     // Mock data storage
     issues: Arc<Mutex<HashMap<u64, Issue>>>,
+    comments: Arc<Mutex<HashMap<u64, Vec<crate::GitComment>>>>,
     blocked_issues: Arc<Mutex<HashMap<u64, Vec<Issue>>>>,
     milestones: Arc<Mutex<Vec<octocrab::models::Milestone>>>,
     users: Arc<Mutex<Vec<crate::RepoUser>>>,
+
+    // Repository
+    branch_tip: Option<String>,
 
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
     git_state: GitState,
     stash_error: Option<String>,
+    open_issue_fails: bool,
 
     // Authentication
     current_user: Option<String>,
@@ -90,6 +95,7 @@ pub struct MockGitInfoBuilder {
     branch: String,
     remote_commit: String,
     issues: HashMap<u64, Issue>,
+    comments: HashMap<u64, Vec<crate::GitComment>>,
     blocked_issues: HashMap<u64, Vec<Issue>>,
     milestones: Vec<octocrab::models::Milestone>,
     users: Vec<crate::RepoUser>,
@@ -97,6 +103,8 @@ pub struct MockGitInfoBuilder {
     git_state: GitState,
     current_user: Option<String>,
     stash_error: Option<String>,
+    open_issue_fails: bool,
+    branch_tip: Option<String>,
 }
 
 impl MockGitInfoBuilder {
@@ -108,6 +116,7 @@ impl MockGitInfoBuilder {
             branch: "main".to_string(),
             remote_commit: "def4567890abcdef4567890abcdef4567890abc0".to_string(),
             issues: HashMap::new(),
+            comments: HashMap::new(),
             blocked_issues: HashMap::new(),
             milestones: Vec::new(),
             users: Vec::new(),
@@ -115,6 +124,8 @@ impl MockGitInfoBuilder {
             git_state: GitState::Clean,
             current_user: Some("test-user".to_string()),
             stash_error: None,
+            open_issue_fails: false,
+            branch_tip: None,
         }
     }
 
@@ -145,6 +156,19 @@ impl MockGitInfoBuilder {
 
     pub fn with_issue(mut self, number: u64, issue: Issue) -> Self {
         self.issues.insert(number, issue);
+        self
+    }
+
+    /// Timeline comments for an issue, in thread order.
+    pub fn with_comments(mut self, number: u64, comments: Vec<crate::GitComment>) -> Self {
+        self.comments.insert(number, comments);
+        self
+    }
+
+    /// HEAD of the (single) branch this mock knows about. `None` keeps the default
+    /// of reporting the branch as not available locally.
+    pub fn with_branch_tip(mut self, tip: Option<String>) -> Self {
+        self.branch_tip = tip;
         self
     }
 
@@ -183,6 +207,12 @@ impl MockGitInfoBuilder {
         self
     }
 
+    /// Make `open_issue` fail, for exercising partially-failed multi-step actions.
+    pub fn with_open_issue_failure(mut self) -> Self {
+        self.open_issue_fails = true;
+        self
+    }
+
     pub fn build(self) -> MockGitInfo {
         MockGitInfo {
             owner: self.owner,
@@ -191,6 +221,7 @@ impl MockGitInfoBuilder {
             current_branch: self.branch,
             remote_commit: self.remote_commit,
             issues: Arc::new(Mutex::new(self.issues)),
+            comments: Arc::new(Mutex::new(self.comments)),
             blocked_issues: Arc::new(Mutex::new(self.blocked_issues)),
             milestones: Arc::new(Mutex::new(self.milestones)),
             users: Arc::new(Mutex::new(self.users)),
@@ -198,6 +229,8 @@ impl MockGitInfoBuilder {
             git_state: self.git_state,
             current_user: self.current_user,
             stash_error: self.stash_error,
+            open_issue_fails: self.open_issue_fails,
+            branch_tip: self.branch_tip,
             calls: Arc::new(Mutex::new(Vec::new())),
             write_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -325,7 +358,12 @@ impl GitCommitOps for MockGitInfo {
     }
 
     fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-        Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
+        match &self.branch_tip {
+            Some(tip) => {
+                ObjectId::from_str(tip).map_err(|e| GitFileOpsError::ParseError(e.to_string()))
+            }
+            None => Err(GitFileOpsError::LocalBranchNotFound("mock".to_string())),
+        }
     }
 
     fn file_touching_commits(
@@ -467,9 +505,15 @@ impl GitHubReader for MockGitInfo {
 
     async fn get_issue_comments(
         &self,
-        _issue: &Issue,
+        issue: &Issue,
     ) -> Result<Vec<crate::GitComment>, GitHubApiError> {
-        Ok(vec![])
+        Ok(self
+            .comments
+            .lock()
+            .unwrap()
+            .get(&issue.number)
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn get_issue_events(
@@ -618,6 +662,9 @@ impl GitHubWriter for MockGitInfo {
             .lock()
             .unwrap()
             .push(WriteCall::OpenIssue { issue_number });
+        if self.open_issue_fails {
+            return Err(GitHubApiError::NoApi);
+        }
         Ok(())
     }
 

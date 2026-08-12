@@ -1,4 +1,4 @@
-import { Anchor, Stack, Text, Tooltip } from '@mantine/core'
+import { Anchor, Badge, Button, Stack, Text, Tooltip } from '@mantine/core'
 import { IconAsterisk } from '@tabler/icons-react'
 import type { ReactNode } from 'react'
 import type { IssueStatusResponse } from '~/api/issues'
@@ -10,13 +10,33 @@ interface Props {
   currentBranch: string
   remoteCommit: string
   postApprovalCommit?: string
+  /** Opens the start-new-round modal for this issue. Omitted → no affordance. */
+  onStartRound?: () => void
+  /**
+   * Opens the same modal to repair the issue's open round. Omitted → no affordance.
+   * Only ever offered when `status.round_repair.needs_repair` says a follow-up step
+   * of the open round is actually incomplete.
+   */
+  onRepairRound?: () => void
 }
 
-export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCommit }: Props) {
+export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCommit, onStartRound, onRepairRound }: Props) {
   const { issue, qc_status, dirty, branch, checklist_summary, blocking_qc_status } = status
   const isWrongBranch = branch !== currentBranch
   const { singular } = useChecklistDisplayName()
   const singularCap = capitalize(singular)
+
+  // Round indicator: only for multi-round issues, so the common single
+  // `Initial QC` case stays exactly as quiet as it is today.
+  const rounds = status.rounds ?? []
+  const latestRound = rounds.length > 1 ? rounds[rounds.length - 1] : null
+  // The model's cue that the file moved after approval → offer a new round.
+  const showStartRound = qc_status.status === 'changes_after_approval' && onStartRound !== undefined
+  // A round is open but one of its follow-up steps never landed. `needs_repair` is
+  // the only flag to branch on: a round with no notification is not broken, just
+  // quiet, so the common single-round case stays exactly as quiet as before.
+  const repair = status.round_repair
+  const showRepairRound = repair !== null && repair.needs_repair && onRepairRound !== undefined
 
   // Per-lane commit rows (commits array is newest-first)
   let commitRows: ReactNode = null
@@ -84,6 +104,26 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
         </Anchor>
       </div>
 
+      {/* Round indicator — multi-round issues only */}
+      {latestRound && (
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Tooltip
+            label={`${rounds.length} QC rounds; ${latestRound.name} is ${latestRound.state === 'open' ? 'open' : 'closed'}`}
+            withArrow
+            position="top"
+          >
+            <Badge
+              size="sm"
+              variant="light"
+              color={latestRound.state === 'open' ? 'blue' : 'gray'}
+              data-testid={`round-badge-${issue.number}`}
+            >
+              {latestRound.name}
+            </Badge>
+          </Tooltip>
+        </div>
+      )}
+
       {/* Milestone */}
       {issue.milestone && (
         <Text size="sm" c="black"><b>Milestone:</b> {issue.milestone}</Text>
@@ -117,6 +157,49 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
           total={blocking_qc_status.total}
           color="#3d7a57"
         />
+      )}
+
+      {/* Approved, then the file changed again — offer a new QC round */}
+      {showStartRound && (
+        <Button
+          size="xs"
+          variant="light"
+          color="orange"
+          data-testid={`start-round-action-${issue.number}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            onStartRound?.()
+          }}
+        >
+          Start new round
+        </Button>
+      )}
+
+      {/* The open round exists but is incomplete — offer to finish it */}
+      {showRepairRound && (
+        <Tooltip
+          label={`${repair.round_name} is open, but ${[
+            repair.reopen && 'the issue was left closed',
+            repair.body_marker && 'its QC Round body block is out of date',
+          ]
+            .filter(Boolean)
+            .join(' and ')}`}
+          withArrow
+          position="top"
+        >
+          <Button
+            size="xs"
+            variant="light"
+            color="yellow"
+            data-testid={`repair-round-action-${issue.number}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onRepairRound?.()
+            }}
+          >
+            Repair {repair.round_name}
+          </Button>
+        </Tooltip>
       )}
     </Stack>
   )

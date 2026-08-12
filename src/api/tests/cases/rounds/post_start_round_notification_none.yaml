@@ -1,0 +1,56 @@
+name: "POST /api/issues/{number}/rounds - notification mode none"
+description: "notification: none opens the round without posting a QC Notification"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        # Code Review Checklist
+        - [x] Reviewed the logic
+      milestone: 1
+  comments:
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds"
+  body:
+    checklist_content: "- [ ] Reviewed the logic"
+    notification: "none"
+
+response:
+  status: 201
+  body:
+    match_type: partial
+    fields:
+      round: 2
+      needs_repair: false
+      notification:
+        status: "skipped"
+
+assert_write_calls:
+  - type: PostComment
+    comment_type: "ghqctoolkit::new_round::QCNewRound"
+    position: 0
+  # The last write is the body marker: no notification comment follows it.
+  - type: UpdateIssue
+    issue_number: 1
+    position: last

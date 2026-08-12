@@ -263,7 +263,18 @@ impl IssueThread {
 
         // 8. Fold the comment thread into QC rounds (derived, additive).
         //    Stage 1 is pure over comments; stage 2 resolves SHAs against issue_commits.
-        let (raw_rounds, raw_anomalies) = fold_rounds_from_comments(initial_commit_str, comments);
+        // Initial QC's checklist template name lives in the issue body, not in any
+        // comment, so it is supplied to the (otherwise comment-only) fold here.
+        let initial_checklist_name = issue
+            .body
+            .as_deref()
+            .and_then(crate::new_round::checklist_from_issue_body)
+            .and_then(|seeded| seeded.name);
+        let (raw_rounds, raw_anomalies) = fold_rounds_from_comments(
+            initial_commit_str,
+            initial_checklist_name.as_deref(),
+            comments,
+        );
         let (rounds, round_anomalies) = resolve_rounds(raw_rounds, raw_anomalies, &issue_commits);
         log::debug!(
             "derived {} QC round(s) with {} anomal(ies) for {}",

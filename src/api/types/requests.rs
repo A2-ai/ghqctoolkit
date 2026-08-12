@@ -185,6 +185,67 @@ pub struct UnapproveRequest {
     pub reason: String,
 }
 
+/// Whether — and how loudly — reviewers are notified about a new round.
+/// Mirrors [`crate::NotificationMode`].
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationModeRequest {
+    /// Post a `# QC Notification` with the inline file diff.
+    #[default]
+    Full,
+    /// Post a `# QC Notification` with metadata only, no inline diff.
+    MetadataOnly,
+    /// Post no notification comment at all.
+    None,
+}
+
+impl From<NotificationModeRequest> for crate::NotificationMode {
+    fn from(mode: NotificationModeRequest) -> Self {
+        match mode {
+            NotificationModeRequest::Full => crate::NotificationMode::Full,
+            NotificationModeRequest::MetadataOnly => crate::NotificationMode::MetadataOnly,
+            NotificationModeRequest::None => crate::NotificationMode::None,
+        }
+    }
+}
+
+/// Request to start a new QC round on an issue.
+///
+/// The anchor is deliberately absent: it is always HEAD of the issue's branch at
+/// open time, read from the repository rather than accepted from the caller.
+#[derive(Debug, Deserialize)]
+pub struct StartRoundApiRequest {
+    /// Author-edited checklist markdown for the new round.
+    pub checklist_content: String,
+    /// Name of the checklist template the content came from, for the audit record.
+    #[serde(default)]
+    pub checklist_name: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub notification: NotificationModeRequest,
+}
+
+/// Request to repair the follow-up steps of an issue's currently open round.
+///
+/// Nothing else is accepted: which steps are incomplete is derived from the issue
+/// and its derived round, never taken from the caller. The notification is the one
+/// exception, and it defaults to *not* notifying — a round opened with
+/// `notification: none` is in exactly the state its author chose, so a reviewer is
+/// only pinged when a caller explicitly asks.
+// Deliberately no `Default`: `NotificationModeRequest`'s own default is `Full`, so
+// a derived `Default` here would silently mean "notify" — the opposite of the rule
+// above. An absent field goes through `no_notification` instead.
+#[derive(Debug, Deserialize)]
+pub struct RepairRoundApiRequest {
+    #[serde(default = "no_notification")]
+    pub notification: NotificationModeRequest,
+}
+
+fn no_notification() -> NotificationModeRequest {
+    NotificationModeRequest::None
+}
+
 /// Request to post a working directory review.
 #[derive(Debug, Deserialize)]
 pub struct ReviewRequest {

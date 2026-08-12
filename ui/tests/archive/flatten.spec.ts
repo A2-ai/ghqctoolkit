@@ -1,6 +1,6 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
-import { closedMilestone, defaultRepoInfo } from '../fixtures/index'
+import { approvedRoundFields, closedMilestone, defaultRepoInfo, legacyRoundFields } from '../fixtures/index'
 import type { Issue, IssueStatusResponse, BatchIssueStatusResponse, QCStatus } from '../../src/api/issues'
 import type { Milestone } from '../../src/api/milestones'
 import type { FileTreeResponse } from '../../src/api/files'
@@ -39,6 +39,9 @@ function makeStatus(issue: Issue, status: QCStatus['status'] = 'approved'): Issu
     branch: 'main',
     commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
     checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
+    ...(status === 'approved'
+      ? approvedRoundFields('bbb2222', 'aaa1111')
+      : legacyRoundFields('bbb2222', 'ccc3333')),
   }
 }
 

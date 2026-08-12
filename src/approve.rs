@@ -342,6 +342,11 @@ pub struct ImpactNode {
 }
 
 impl ImpactNode {
+    /// Render this node as the root of a tree.
+    pub(crate) fn fmt_tree_root(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_tree(f, "", true, true)
+    }
+
     fn fmt_tree(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -395,7 +400,7 @@ impl ImpactNode {
 
 /// Extract file path from issue title
 /// Expected format: "QC: path/to/file.ext" or similar patterns
-fn extract_file_from_title(title: &str) -> PathBuf {
+pub(crate) fn extract_file_from_title(title: &str) -> PathBuf {
     // Try pattern: "QC: path/to/file"
     if let Some(rest) = title.strip_prefix("QC: ") {
         return PathBuf::from(rest.trim());

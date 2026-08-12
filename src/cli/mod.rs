@@ -5,6 +5,7 @@ mod config_init;
 mod context;
 mod file_parser;
 mod interactive;
+mod new_round;
 pub mod rename;
 mod sitrep;
 mod status;
@@ -40,6 +41,10 @@ pub use interactive::{
     prompt_assignees, prompt_checklist, prompt_collaborators, prompt_context_files,
     prompt_existing_milestone, prompt_file, prompt_issue, prompt_milestone,
     prompt_milestone_archive, prompt_milestone_record,
+};
+pub use new_round::{
+    NewRoundArgs, NotificationArg, RepairRoundArgs, new_round, repair_open_round, report_repair,
+    report_result,
 };
 pub use rename::{confirm_rename_noninteractive, interactive_rename};
 pub use sitrep::SitRep;

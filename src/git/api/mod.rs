@@ -4,6 +4,12 @@ mod write;
 pub use read::{GitComment, GitHubReader};
 pub use write::GitHubWriter;
 
+// Mockall's generated mocks, for tests that exercise write actions without a network.
+#[cfg(test)]
+pub(crate) use read::MockGitHubReader;
+#[cfg(test)]
+pub(crate) use write::MockGitHubWriter;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RepoUser {
     pub login: String,

@@ -1,5 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { API_BASE } from '../config'
+import type { RoundInfo, RoundRepairStatus } from './rounds'
 
 export type RelevantFileKind = 'blocking_qc' | 'previous_qc' | 'relevant_qc' | 'file'
 
@@ -99,6 +100,19 @@ export interface IssueStatusResponse {
   commits: IssueCommit[]
   checklist_summary: ChecklistSummary
   blocking_qc_status?: BlockingQCStatus
+  /** Derived QC rounds, oldest first. A legacy issue yields exactly one `Initial QC`. */
+  rounds: RoundInfo[]
+  /** `index` of the currently open round; null when the last round is closed
+   *  (i.e. a new round may be started). */
+  open_round_index: number | null
+  /** The commit a new notification would diff against — the default comparison base. */
+  next_notification_from: string
+  /**
+   * Which of the open round's follow-up steps are incomplete, so a surface can
+   * offer a repair without a second request. null when no round is open, or when
+   * the open round is `Initial QC` (which no start-round action opened).
+   */
+  round_repair: RoundRepairStatus | null
 }
 
 export interface CreateCommentRequest {

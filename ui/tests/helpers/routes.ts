@@ -12,7 +12,11 @@ import {
   createdMilestone,
   createIssueResponses,
   configRepoClean,
+  roundSeedCanStart,
+  startRoundSuccess,
+  repairRoundSuccess,
 } from '../fixtures/index'
+import type { RepairRoundResponse, RoundSeedResponse, StartRoundResponse } from '../../src/api/rounds'
 import type { ConfigGitRepository } from '../../src/api/configuration'
 import type { BatchIssueStatusResponse } from '../../src/api/issues'
 import type { Milestone } from '../../src/api/milestones'
@@ -89,6 +93,24 @@ export interface RouteOverrides {
   archiveGenerateResponse: { output_path: string } | null
   /** Response for GET /api/commits */
   commitsResponse: { commits: { hash: string; message: string; file_changed: boolean }[]; total: number; page: number; page_size: number }
+  /** Default response for GET /api/issues/:n/rounds/seed; null → 500 */
+  roundSeedResponse: RoundSeedResponse | null
+  /** Per-issue overrides for GET /api/issues/:n/rounds/seed (takes precedence) */
+  roundSeedResponseByIssue: Record<number, RoundSeedResponse | null>
+  /**
+   * Response for POST /api/issues/:n/rounds. A StartRoundResponse is returned
+   * with status 201 (including when it reports failed steps — that is a success);
+   * a string is returned as a 409 `{ error }` body, i.e. a round is already open;
+   * null → 500.
+   */
+  startRoundResponse: StartRoundResponse | string | null
+  /**
+   * Response for POST /api/issues/:n/rounds/repair. A RepairRoundResponse is
+   * returned with status 200 (including when it reports a step that still failed —
+   * that is a success); a string is returned as a 409 `{ error }` body, i.e. there
+   * is nothing to repair; null → 500.
+   */
+  repairRoundResponse: RepairRoundResponse | string | null
 }
 
 const defaultOverrides: RouteOverrides = {
@@ -134,6 +156,10 @@ const defaultOverrides: RouteOverrides = {
   recordUploadResponse: { temp_path: '/tmp/ghqc-uploads/test123.pdf' },
   archiveGenerateResponse: { output_path: '/mock/repo/test-archive.tar.gz' },
   commitsResponse: { commits: [{ hash: 'abc1234567890', message: 'Initial commit', file_changed: true }], total: 1, page: 0, page_size: 10 },
+  roundSeedResponse: roundSeedCanStart,
+  roundSeedResponseByIssue: {},
+  startRoundResponse: startRoundSuccess,
+  repairRoundResponse: repairRoundSuccess,
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -482,6 +508,48 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
         contentType: 'application/json',
         body: JSON.stringify({ error: 'Archive generation failed' }),
       })
+    }
+  })
+
+  // QC rounds. Both patterns are anchored so the seed URL can never be served by
+  // the start-round handler (and vice versa) regardless of registration order.
+  await page.route(/\/api\/issues\/\d+\/rounds\/seed$/, (route, request) => {
+    if (request.method() !== 'GET') { void route.continue(); return }
+    const match = request.url().match(/\/api\/issues\/(\d+)\/rounds\/seed$/)
+    const issueNum = match ? Number(match[1]) : -1
+    const response = issueNum in cfg.roundSeedResponseByIssue
+      ? cfg.roundSeedResponseByIssue[issueNum]
+      : cfg.roundSeedResponse
+    if (response === null) {
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'No QC rounds could be derived for this issue' }) })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response) })
+    }
+  })
+
+  // Anchored like the other two, so `/rounds`, `/rounds/seed` and `/rounds/repair`
+  // can never serve one another regardless of registration order.
+  await page.route(/\/api\/issues\/\d+\/rounds\/repair$/, (route, request) => {
+    if (request.method() !== 'POST') { void route.continue(); return }
+    if (cfg.repairRoundResponse === null) {
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Internal server error' }) })
+    } else if (typeof cfg.repairRoundResponse === 'string') {
+      // 409: nothing to repair, so nothing was written.
+      route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: cfg.repairRoundResponse }) })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(cfg.repairRoundResponse) })
+    }
+  })
+
+  await page.route(/\/api\/issues\/\d+\/rounds$/, (route, request) => {
+    if (request.method() !== 'POST') { void route.continue(); return }
+    if (cfg.startRoundResponse === null) {
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Internal server error' }) })
+    } else if (typeof cfg.startRoundResponse === 'string') {
+      // 409: the last round is still open, so nothing was written.
+      route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: cfg.startRoundResponse }) })
+    } else {
+      route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(cfg.startRoundResponse) })
     }
   })
 

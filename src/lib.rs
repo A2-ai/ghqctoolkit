@@ -14,8 +14,10 @@ mod new_round;
 mod qc_status;
 mod record;
 mod relevant_files;
+mod repair_round;
 mod review;
 mod round;
+mod start_round;
 pub mod utils;
 
 #[cfg(test)]
@@ -66,8 +68,9 @@ pub use issue::{
     parse_blocking_qcs, parse_branch_from_body, parse_file_history, splice_file_history,
 };
 pub use new_round::{
-    CHECKLIST_HEADING, QCNewRound, ROUND_MARKER_HEADING, RoundMarker, checklist_from_issue_body,
-    checklist_from_round_comment, parse_round_marker, reset_checklist, seed_checklist,
+    CHECKLIST_HEADING, QCNewRound, ROUND_MARKER_HEADING, RoundMarker, SeededChecklist,
+    checklist_from_issue_body, checklist_from_round_comment, checklist_name_from_round_comment,
+    parse_round_marker, prior_round_comment_body, reset_checklist, seed_checklist,
     upsert_round_marker,
 };
 pub use qc_status::{
@@ -80,8 +83,15 @@ pub use record::{
     record, render,
 };
 pub use relevant_files::{RelevantFile, RelevantFileClass};
+pub use repair_round::{
+    RepairPlan, RepairRoundError, RepairRoundRequest, RepairRoundResult, plan_repair, repair_round,
+};
 pub use review::{QCReview, ReviewStashResult, ReviewStashStatus, stash_review_file};
 pub use round::{
     ChecklistSource, Extension, ExtensionReason, Retraction, Round, RoundAnomaly, RoundEvent,
     RoundOpen, RoundState,
+};
+pub use start_round::{
+    NotificationMode, StartRoundError, StartRoundRequest, StartRoundResult, StepOutcome,
+    start_round,
 };

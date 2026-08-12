@@ -1,0 +1,80 @@
+name: "POST /api/issues/{number}/rounds - start round 2"
+description: "Start a new round on an issue whose Initial QC is closed; all four steps run"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        # Code Review Checklist
+        - [x] Reviewed the logic
+        - [x] Checked the tests
+      milestone: 1
+  comments:
+    # Closes Initial QC, so a new round may be opened.
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+
+git_state:
+  # HEAD of the issue's branch becomes the new round's anchor.
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds"
+  body:
+    checklist_content: "- [ ] Reviewed the logic\n- [ ] Checked the tests"
+    checklist_name: "Code Review Checklist"
+    note: "Second pass after the refactor."
+    notification: "full"
+
+response:
+  status: 201
+  body:
+    match_type: exact
+    value:
+      round: 2
+      round_name: "Round 2"
+      round_comment_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"
+      anchor: "abc1234567890abcdef1234567890abcdef12340"
+      reopened:
+        status: "done"
+      body_marker:
+        status: "done"
+      notification:
+        status: "done"
+      needs_repair: false
+      impacted_issues:
+        api_available: true
+        issues: []
+
+assert_write_calls:
+  # Step 1: the round comment — the round's identity.
+  - type: PostComment
+    comment_type: "ghqctoolkit::new_round::QCNewRound"
+    position: 0
+  # Step 2: reopen.
+  - type: OpenIssue
+    issue_number: 1
+    position: 1
+  # Step 3: the `## QC Round` body marker.
+  - type: UpdateIssue
+    issue_number: 1
+    position: 2
+  # Step 4: the notification.
+  - type: PostComment
+    comment_type: "ghqctoolkit::comment::QCComment"
+    position: 3
