@@ -11,6 +11,7 @@ use crate::{
         GitComment, GitCommitOps, GitFileOpsError, GitHubApiError, GitHubReader,
         find_or_cache_file_changes, get_commits_robust,
     },
+    round::{Round, RoundAnomaly, RoundEvent, fold_rounds_from_comments, resolve_rounds},
 };
 
 static MARKDOWN_LINK_REGEX: LazyLock<Regex> =
@@ -97,6 +98,13 @@ pub struct IssueThread {
     /// Blocking QC issues parsed from issue body
     /// Includes both Gating QC and Previous QC sections
     pub blocking_qcs: Vec<BlockingQC>,
+    /// QC rounds derived from the comment thread, oldest first.
+    /// Round 1 is "Initial QC"; a thread with no `# QC New Round` markers has
+    /// exactly one round. Purely derived and additive: no existing accessor
+    /// consults this.
+    pub rounds: Vec<Round>,
+    /// Problems found while folding rounds. Folding never fails.
+    pub round_anomalies: Vec<RoundAnomaly>,
 }
 
 impl IssueThread {
@@ -253,6 +261,17 @@ impl IssueThread {
             .map(|body| parse_blocking_qcs(body))
             .unwrap_or_default();
 
+        // 8. Fold the comment thread into QC rounds (derived, additive).
+        //    Stage 1 is pure over comments; stage 2 resolves SHAs against issue_commits.
+        let (raw_rounds, raw_anomalies) = fold_rounds_from_comments(initial_commit_str, comments);
+        let (rounds, round_anomalies) = resolve_rounds(raw_rounds, raw_anomalies, &issue_commits);
+        log::debug!(
+            "derived {} QC round(s) with {} anomal(ies) for {}",
+            rounds.len(),
+            round_anomalies.len(),
+            file.display()
+        );
+
         Ok(IssueThread {
             file,
             branch,
@@ -260,6 +279,8 @@ impl IssueThread {
             commits: issue_commits,
             milestone,
             blocking_qcs,
+            rounds,
+            round_anomalies,
         })
     }
 
@@ -320,6 +341,135 @@ impl IssueThread {
             .find(|commit| commit.statuses.contains(&CommitStatus::Initial))
             .expect("IssueThread must have exactly one commit with Initial status")
             .hash
+    }
+
+    // ── Round-derived accessors (additive; nothing else calls these yet) ─────
+
+    /// Position of a commit in [`Self::commits`], which is ordered newest-first.
+    /// A smaller index means a more recent commit.
+    fn commit_recency(&self, hash: &ObjectId) -> Option<usize> {
+        self.commits.iter().position(|commit| commit.hash == *hash)
+    }
+
+    /// The round currently being reviewed: the last round, if it is `Open`.
+    pub fn open_round(&self) -> Option<&Round> {
+        self.rounds.last().filter(|round| round.is_open())
+    }
+
+    /// The closing commit of the most recent round still in `Closed` state.
+    ///
+    /// Retracted approvals do not count: a `# QC Un-Approval` reopens its round, so
+    /// that round stops contributing a standing approval.
+    pub fn latest_standing_approval(&self) -> Option<&ObjectId> {
+        self.rounds
+            .iter()
+            .rev()
+            .find_map(|round| round.closing_commit())
+    }
+
+    /// The newest commit that has been notified, across all rounds.
+    /// "Newest" is by position in [`Self::commits`] (newest-first).
+    pub fn latest_notified_commit(&self) -> Option<&ObjectId> {
+        self.newest_event_commit(|event| matches!(event, RoundEvent::Notification { .. }))
+    }
+
+    /// The newest commit that has been reviewed, across all rounds.
+    /// "Newest" is by position in [`Self::commits`] (newest-first).
+    pub fn latest_reviewed_commit(&self) -> Option<&ObjectId> {
+        self.newest_event_commit(|event| matches!(event, RoundEvent::Review { .. }))
+    }
+
+    fn newest_event_commit(&self, want: impl Fn(&RoundEvent) -> bool) -> Option<&ObjectId> {
+        self.rounds
+            .iter()
+            .flat_map(|round| round.events.iter())
+            .filter(|event| want(event))
+            .filter_map(|event| self.commit_recency(event.commit()))
+            .min()
+            .map(|index| &self.commits[index].hash)
+    }
+
+    /// The commit a new notification should diff against.
+    ///
+    /// This is a deliberately **flat maximum** by commit recency over four
+    /// candidates: [`Self::latest_standing_approval`], [`Self::latest_notified_commit`],
+    /// [`Self::latest_reviewed_commit`] and [`Self::initial_commit`]. It is *not* the
+    /// tiered priority used by [`Self::latest_commit`], which ranks Approved above
+    /// everything else; `latest_commit` is intentionally left alone in this phase.
+    ///
+    /// Note that a round's anchor (`opened_at`) is deliberately not a candidate, so
+    /// an open round N > 1 with no notification yet diffs against round N-1's
+    /// approval rather than against its own anchor.
+    pub fn next_notification_from(&self) -> ObjectId {
+        let initial = self.initial_commit();
+        [
+            self.latest_standing_approval(),
+            self.latest_notified_commit(),
+            self.latest_reviewed_commit(),
+            Some(initial),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|hash| self.commit_recency(hash).map(|index| (index, hash)))
+        .min_by_key(|(index, _)| *index)
+        .map(|(_, hash)| *hash)
+        .unwrap_or(*initial)
+    }
+
+    /// Commits belonging to the round at `position` in [`Self::rounds`], newest-first.
+    ///
+    /// `position` is a 0-based position in [`Self::rounds`] (which is oldest-first),
+    /// **not** a [`Round::index`]. Because `Round::index` is always derived it is in
+    /// practice unique and monotonic, so `index - 1` and `position` coincide; the
+    /// positional API is kept as the more robust one.
+    ///
+    /// Membership is the commits after the round's `opened_at` (exclusive) through
+    /// its closing commit if `Closed`, else through the newest known commit.
+    /// Draft-gap commits — those between one round's approval and the next round's
+    /// anchor — belong to no round and are excluded.
+    pub fn round_membership(&self, position: usize) -> Vec<&IssueCommit> {
+        let Some(round) = self.rounds.get(position) else {
+            return Vec::new();
+        };
+        let Some(anchor) = self.commit_recency(&round.opened_at) else {
+            return Vec::new();
+        };
+        let start = match round.closing_commit() {
+            Some(commit) => match self.commit_recency(commit) {
+                Some(index) => index,
+                None => return Vec::new(),
+            },
+            None => 0,
+        };
+        if start >= anchor {
+            return Vec::new();
+        }
+        self.commits[start..anchor].iter().collect()
+    }
+
+    /// Commits strictly between the previous round's closing commit and the
+    /// `opened_at` of the round at `position` in [`Self::rounds`], newest-first.
+    /// These belong to no round. Always empty for Initial QC.
+    ///
+    /// As with [`Self::round_membership`], `position` is a 0-based position in
+    /// [`Self::rounds`], not a [`Round::index`].
+    pub fn draft_gap(&self, position: usize) -> Vec<&IssueCommit> {
+        let Some(round) = self.rounds.get(position) else {
+            return Vec::new();
+        };
+        let Some(previous_approval) = &round.previous_approval else {
+            return Vec::new();
+        };
+        let (Some(anchor), Some(base)) = (
+            self.commit_recency(&round.opened_at),
+            self.commit_recency(previous_approval),
+        ) else {
+            return Vec::new();
+        };
+        if base <= anchor + 1 {
+            return Vec::new();
+        }
+        self.commits[anchor + 1..base].iter().collect()
     }
 }
 
@@ -387,7 +537,7 @@ fn parse_commits_from_comments<'a>(
 
 /// Parse a commit from a body using the given pattern
 /// Supports both full and short SHAs with minimum 7 character length
-fn parse_commit_from_pattern<'a>(body: &'a str, pattern: &str) -> Option<&'a str> {
+pub(crate) fn parse_commit_from_pattern<'a>(body: &'a str, pattern: &str) -> Option<&'a str> {
     let start = body.find(pattern)?;
     let commit_start = start + pattern.len();
 
@@ -1196,6 +1346,78 @@ mod tests {
         assert_eq!(result.file, PathBuf::from("src/test.rs"));
         assert_eq!(result.branch, "feature/test-branch");
         assert_eq!(result.open, true);
+    }
+
+    /// Every existing fixture thread predates the `# QC New Round` marker, so each
+    /// one must fold to exactly one round: "Initial QC", anchored at the issue
+    /// body's initial commit.
+    #[tokio::test]
+    async fn test_existing_fixtures_fold_to_initial_qc_only() {
+        let fixtures = [
+            (
+                "open_issue_with_notifications.json",
+                "open_issue_notifications.json",
+            ),
+            (
+                "closed_approved_issue.json",
+                "closed_approved_comments.json",
+            ),
+            ("unapproved_issue.json", "unapproved_comments.json"),
+            (
+                "open_issue_with_approval_and_notification.json",
+                "open_issue_approval_and_notification.json",
+            ),
+        ];
+
+        for (issue_file, comments_file) in fixtures {
+            let issue = load_issue(issue_file);
+            let git_comments: Vec<GitComment> = load_comments(comments_file)
+                .into_iter()
+                .map(|comment| GitComment {
+                    body: comment["body"].as_str().unwrap().to_string(),
+                    author_login: comment["user"]["login"]
+                        .as_str()
+                        .unwrap_or("test-user")
+                        .to_string(),
+                    created_at: chrono::Utc::now(),
+                    html: None,
+                })
+                .collect();
+
+            let git_info = SimpleMockGitInfo::new()
+                .with_commits(create_test_commits())
+                .with_comments(git_comments);
+
+            let thread = IssueThread::from_issue(&issue, None, &git_info)
+                .await
+                .unwrap();
+
+            assert_eq!(thread.rounds.len(), 1, "{issue_file} should have one round");
+            assert_eq!(thread.rounds[0].index, 1, "{issue_file}");
+            assert_eq!(thread.rounds[0].name(), "Initial QC", "{issue_file}");
+            assert_eq!(
+                thread.rounds[0].opened_at,
+                *thread.initial_commit(),
+                "{issue_file}"
+            );
+            assert_eq!(thread.rounds[0].previous_approval, None, "{issue_file}");
+            // The only anomaly these fixtures legitimately produce is a notification
+            // posted after an approval and before the matching un-approval.
+            assert!(
+                thread.round_anomalies.iter().all(|anomaly| matches!(
+                    anomaly,
+                    crate::round::RoundAnomaly::EventAfterClose { .. }
+                )),
+                "{issue_file} anomalies: {:?}",
+                thread.round_anomalies
+            );
+            // The round-derived standing approval must agree with the legacy accessor.
+            assert_eq!(
+                thread.latest_standing_approval().copied(),
+                thread.approved_commit().map(|c| c.hash),
+                "{issue_file}"
+            );
+        }
     }
 
     #[test]

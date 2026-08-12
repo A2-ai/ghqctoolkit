@@ -288,6 +288,8 @@ mod tests {
             ],
             milestone: "v1.0".to_string(),
             blocking_qcs: vec![],
+            rounds: vec![],
+            round_anomalies: vec![],
         }
     }
 

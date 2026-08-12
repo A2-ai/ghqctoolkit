@@ -667,6 +667,8 @@ mod tests {
                 commits,
                 milestone: "milestone".to_string(),
                 blocking_qcs: vec![],
+                rounds: vec![],
+                round_anomalies: vec![],
             };
 
             let status = QCStatus::determine_status(&issue_thread);

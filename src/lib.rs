@@ -14,6 +14,7 @@ mod qc_status;
 mod record;
 mod relevant_files;
 mod review;
+mod round;
 pub mod utils;
 
 #[cfg(test)]
@@ -74,3 +75,7 @@ pub use record::{
 };
 pub use relevant_files::{RelevantFile, RelevantFileClass};
 pub use review::{QCReview, ReviewStashResult, ReviewStashStatus, stash_review_file};
+pub use round::{
+    ChecklistSource, Extension, ExtensionReason, Retraction, Round, RoundAnomaly, RoundEvent,
+    RoundOpen, RoundState,
+};
