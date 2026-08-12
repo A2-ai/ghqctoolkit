@@ -294,3 +294,47 @@ test('api_available false renders distinctly from an empty downstream list', asy
   await expect(page.getByTestId('impact-unavailable')).toContainText('could not be checked')
   await expect(page.getByTestId('impact-empty')).toHaveCount(0)
 })
+
+// ---------------------------------------------------------------------------
+// The round rail's action (in the issue detail modal) opens the same modal
+// ---------------------------------------------------------------------------
+
+test('the round rail offers Start a new round, which opens the start-round modal', async ({ page }) => {
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [multiRoundIssue] },
+    issueStatuses: { results: [multiRoundStatus], errors: [] },
+  })
+
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+  await page.getByTestId('issue-card-112').click()
+
+  // The rail is rendered in every tab, so scope to the visible panel.
+  const railAction = page.getByRole('tabpanel').getByTestId('round-rail-start')
+  await expect(railAction).toBeVisible()
+  await railAction.click()
+
+  // One dialog at a time: the detail modal gives way to the round modal, which is
+  // the single owner of this state — no second copy of it anywhere.
+  await expect(page.getByRole('heading', { name: 'Start New QC Round' })).toBeVisible()
+  await expect(page.getByTestId('round-rail')).toHaveCount(0)
+  await expect(page.getByTestId('next-round-name')).toHaveText('Round 2')
+})
+
+test('a single Initial QC round still shows the rail without collapse chrome', async ({ page }) => {
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [legacyRoundIssue] },
+    issueStatuses: { results: [legacyRoundStatus], errors: [] },
+  })
+
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+  await page.getByTestId('issue-card-110').click()
+
+  // The quiet case: one line, and the action is offered without extra sections.
+  const panel = page.getByRole('tabpanel')
+  await expect(panel.getByTestId('round-line-1')).toBeVisible()
+  await expect(panel.getByTestId('round-section-1')).toHaveCount(0)
+  // The action is still offered on the quiet single-round case.
+  await expect(panel.getByTestId('round-rail-start')).toBeVisible()
+})
