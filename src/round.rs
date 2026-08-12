@@ -66,9 +66,16 @@ pub enum RoundOpen {
     /// Round 1 ("Initial QC"), opened when the issue was created.
     IssueCreated,
     /// Round N > 1, opened by a `# QC New Round` comment.
-    // TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
     NewRound {
+        /// Position of the opening comment in the folded comment slice. Always
+        /// available, and how the fold addresses the slice.
         comment_index: usize,
+        /// GitHub's id for the opening comment. `None` when the comment came from
+        /// a cache written before ids were recorded.
+        comment_id: Option<u64>,
+        /// Permalink to the opening comment. `None` for the same reason as
+        /// `comment_id`.
+        comment_url: Option<String>,
         author: String,
         at: DateTime<Utc>,
         note: Option<String>,
@@ -79,8 +86,11 @@ pub enum RoundOpen {
 /// extended the current one instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extension {
-    // TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
     pub comment_index: usize,
+    /// GitHub's id for the extending comment; `None` for cache-loaded comments.
+    pub comment_id: Option<u64>,
+    /// Permalink to the extending comment; `None` for cache-loaded comments.
+    pub comment_url: Option<String>,
     pub by: String,
     pub at: DateTime<Utc>,
     /// The written `round commit:`, if present and resolvable. The round's own
@@ -105,8 +115,13 @@ pub enum ChecklistSource {
     /// Initial QC: the checklist is in the issue body.
     IssueBody,
     /// Round N > 1: the checklist is in the `# QC New Round` comment.
-    // TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
-    Comment { comment_index: usize },
+    Comment {
+        comment_index: usize,
+        /// GitHub's id for that comment; `None` for cache-loaded comments.
+        comment_id: Option<u64>,
+        /// Permalink to that comment; `None` for cache-loaded comments.
+        comment_url: Option<String>,
+    },
 }
 
 /// Whether a round is still being reviewed, or has been closed by an approval.
@@ -117,8 +132,11 @@ pub enum RoundState {
         commit: ObjectId,
         by: String,
         at: DateTime<Utc>,
-        // TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
         comment_index: usize,
+        /// GitHub's id for the approving comment; `None` for cache-loaded comments.
+        comment_id: Option<u64>,
+        /// Permalink to the approving comment; `None` for cache-loaded comments.
+        comment_url: Option<String>,
     },
 }
 
@@ -128,8 +146,11 @@ pub struct Retraction {
     pub retracted_commit: ObjectId,
     pub by: String,
     pub at: DateTime<Utc>,
-    // TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
     pub comment_index: usize,
+    /// GitHub's id for the un-approval comment; `None` for cache-loaded comments.
+    pub comment_id: Option<u64>,
+    /// Permalink to the un-approval comment; `None` for cache-loaded comments.
+    pub comment_url: Option<String>,
 }
 
 /// Something that happened inside a round without closing it.
@@ -139,15 +160,21 @@ pub enum RoundEvent {
         commit: ObjectId,
         by: String,
         at: DateTime<Utc>,
-        // TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
         comment_index: usize,
+        /// GitHub's id for the comment; `None` for cache-loaded comments.
+        comment_id: Option<u64>,
+        /// Permalink to the comment; `None` for cache-loaded comments.
+        comment_url: Option<String>,
     },
     Review {
         commit: ObjectId,
         by: String,
         at: DateTime<Utc>,
-        // TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
         comment_index: usize,
+        /// GitHub's id for the comment; `None` for cache-loaded comments.
+        comment_id: Option<u64>,
+        /// Permalink to the comment; `None` for cache-loaded comments.
+        comment_url: Option<String>,
     },
 }
 
@@ -211,8 +238,9 @@ impl Round {
 
 /// A problem found while folding rounds. The fold never fails; it accumulates
 /// anomalies instead so callers can surface them without losing the derived state.
+/// Anomalies are diagnostics, so they identify comments by index only — no
+/// comment id or URL is carried here.
 #[derive(Debug, Clone, PartialEq)]
-// TODO(P2): replace comment_index with a real comment id/url once GitComment carries them
 pub enum RoundAnomaly {
     /// A `# QC New Round` comment could not open a new round, so it extended the
     /// current one instead. The comment's checklist is never discarded.
@@ -258,6 +286,8 @@ pub(crate) enum RawRoundOpen<'a> {
     IssueCreated,
     NewRound {
         comment_index: usize,
+        comment_id: Option<u64>,
+        comment_url: Option<&'a str>,
         author: &'a str,
         at: DateTime<Utc>,
         note: Option<&'a str>,
@@ -272,6 +302,8 @@ pub(crate) enum RawRoundState<'a> {
         by: &'a str,
         at: DateTime<Utc>,
         comment_index: usize,
+        comment_id: Option<u64>,
+        comment_url: Option<&'a str>,
     },
 }
 
@@ -281,6 +313,8 @@ pub(crate) struct RawRetraction<'a> {
     pub by: &'a str,
     pub at: DateTime<Utc>,
     pub comment_index: usize,
+    pub comment_id: Option<u64>,
+    pub comment_url: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -290,18 +324,24 @@ pub(crate) enum RawRoundEvent<'a> {
         by: &'a str,
         at: DateTime<Utc>,
         comment_index: usize,
+        comment_id: Option<u64>,
+        comment_url: Option<&'a str>,
     },
     Review {
         commit: &'a str,
         by: &'a str,
         at: DateTime<Utc>,
         comment_index: usize,
+        comment_id: Option<u64>,
+        comment_url: Option<&'a str>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RawExtension<'a> {
     pub comment_index: usize,
+    pub comment_id: Option<u64>,
+    pub comment_url: Option<&'a str>,
     pub by: &'a str,
     pub at: DateTime<Utc>,
     pub at_commit: Option<&'a str>,
@@ -433,6 +473,10 @@ pub(crate) fn fold_rounds_from_comments<'a>(
         let metadata = metadata_section(body);
         let author = comment.author_login.as_str();
         let at = comment.created_at;
+        // Real comment identity, when the comment carries it. Cache-loaded
+        // comments legitimately have neither, hence `Option`.
+        let comment_id = comment.id;
+        let comment_url = comment.html_url.as_deref();
 
         // F4: a new round opens only on top of a closed one whose derived round
         // number the comment agrees with. Otherwise the comment extends the current
@@ -464,9 +508,15 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                         cur.index
                     );
                     cur.state = RawRoundState::Open;
-                    cur.checklist = ChecklistSource::Comment { comment_index };
+                    cur.checklist = ChecklistSource::Comment {
+                        comment_index,
+                        comment_id,
+                        comment_url: comment_url.map(|url| url.to_string()),
+                    };
                     cur.extensions.push(RawExtension {
                         comment_index,
+                        comment_id,
+                        comment_url,
                         by: author,
                         at,
                         at_commit: metadata_commit(metadata, ROUND_COMMIT_KEY),
@@ -508,11 +558,17 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                         previous_approval: Some(derived_base),
                         opened: RawRoundOpen::NewRound {
                             comment_index,
+                            comment_id,
+                            comment_url,
                             author,
                             at,
                             note: metadata_line(metadata, NOTE_KEY),
                         },
-                        checklist: ChecklistSource::Comment { comment_index },
+                        checklist: ChecklistSource::Comment {
+                            comment_index,
+                            comment_id,
+                            comment_url: comment_url.map(|url| url.to_string()),
+                        },
                         state: RawRoundState::Open,
                         events: Vec::new(),
                         retractions: Vec::new(),
@@ -537,6 +593,8 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                         by: author,
                         at,
                         comment_index,
+                        comment_id,
+                        comment_url,
                     });
                     cur.state = RawRoundState::Open;
                 }
@@ -565,12 +623,16 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                 by: author,
                 at,
                 comment_index,
+                comment_id,
+                comment_url,
             }),
             review.map(|commit| RawRoundEvent::Review {
                 commit,
                 by: author,
                 at,
                 comment_index,
+                comment_id,
+                comment_url,
             }),
         ]
         .into_iter()
@@ -596,6 +658,8 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                 by: author,
                 at,
                 comment_index,
+                comment_id,
+                comment_url,
             };
         }
     }
@@ -711,12 +775,16 @@ pub(crate) fn resolve_rounds(
                 by,
                 at,
                 comment_index,
+                comment_id,
+                comment_url,
             } => match resolve_sha(commit, commits) {
                 Some(id) => RoundState::Closed {
                     commit: id,
                     by: by.to_string(),
                     at,
                     comment_index,
+                    comment_id,
+                    comment_url: comment_url.map(|url| url.to_string()),
                 },
                 None => {
                     anomalies.push(RoundAnomaly::AnchorUnreachable {
@@ -730,32 +798,49 @@ pub(crate) fn resolve_rounds(
 
         let mut events = Vec::with_capacity(raw.events.len());
         for event in raw.events {
-            let (commit, by, at, comment_index, is_notification) = match event {
-                RawRoundEvent::Notification {
-                    commit,
-                    by,
-                    at,
-                    comment_index,
-                } => (commit, by, at, comment_index, true),
-                RawRoundEvent::Review {
-                    commit,
-                    by,
-                    at,
-                    comment_index,
-                } => (commit, by, at, comment_index, false),
-            };
+            let (commit, by, at, comment_index, comment_id, comment_url, is_notification) =
+                match event {
+                    RawRoundEvent::Notification {
+                        commit,
+                        by,
+                        at,
+                        comment_index,
+                        comment_id,
+                        comment_url,
+                    } => (commit, by, at, comment_index, comment_id, comment_url, true),
+                    RawRoundEvent::Review {
+                        commit,
+                        by,
+                        at,
+                        comment_index,
+                        comment_id,
+                        comment_url,
+                    } => (
+                        commit,
+                        by,
+                        at,
+                        comment_index,
+                        comment_id,
+                        comment_url,
+                        false,
+                    ),
+                };
             match resolve_sha(commit, commits) {
                 Some(id) if is_notification => events.push(RoundEvent::Notification {
                     commit: id,
                     by: by.to_string(),
                     at,
                     comment_index,
+                    comment_id,
+                    comment_url: comment_url.map(|url| url.to_string()),
                 }),
                 Some(id) => events.push(RoundEvent::Review {
                     commit: id,
                     by: by.to_string(),
                     at,
                     comment_index,
+                    comment_id,
+                    comment_url: comment_url.map(|url| url.to_string()),
                 }),
                 None => anomalies.push(RoundAnomaly::AnchorUnreachable {
                     comment_index,
@@ -772,6 +857,8 @@ pub(crate) fn resolve_rounds(
                     by: retraction.by.to_string(),
                     at: retraction.at,
                     comment_index: retraction.comment_index,
+                    comment_id: retraction.comment_id,
+                    comment_url: retraction.comment_url.map(|url| url.to_string()),
                 }),
                 None => anomalies.push(RoundAnomaly::AnchorUnreachable {
                     comment_index: retraction.comment_index,
@@ -784,11 +871,15 @@ pub(crate) fn resolve_rounds(
             RawRoundOpen::IssueCreated => RoundOpen::IssueCreated,
             RawRoundOpen::NewRound {
                 comment_index,
+                comment_id,
+                comment_url,
                 author,
                 at,
                 note,
             } => RoundOpen::NewRound {
                 comment_index,
+                comment_id,
+                comment_url: comment_url.map(|url| url.to_string()),
                 author: author.to_string(),
                 at,
                 note: note.map(|n| n.to_string()),
@@ -802,6 +893,8 @@ pub(crate) fn resolve_rounds(
             .into_iter()
             .map(|extension| Extension {
                 comment_index: extension.comment_index,
+                comment_id: extension.comment_id,
+                comment_url: extension.comment_url.map(|url| url.to_string()),
                 by: extension.by.to_string(),
                 at: extension.at,
                 at_commit: extension
@@ -841,12 +934,24 @@ mod tests {
     const D: &str = "ddddddd000000000000000000000000000000004";
     const E: &str = "eeeeeee000000000000000000000000000000005";
 
+    /// A comment as loaded from the on-disk cache: no id, no URL.
     fn comment(body: &str) -> GitComment {
         GitComment {
             body: body.to_string(),
             author_login: "tester".to_string(),
             created_at: Utc::now(),
+            id: None,
+            html_url: None,
             html: None,
+        }
+    }
+
+    /// A comment carrying real GitHub identity, as fetched fresh from the API.
+    fn identified(body: &str, id: u64, url: &str) -> GitComment {
+        GitComment {
+            id: Some(id),
+            html_url: Some(url.to_string()),
+            ..comment(body)
         }
     }
 
@@ -1014,7 +1119,11 @@ mod tests {
         assert!(second.events.is_empty());
         assert_eq!(
             second.checklist,
-            ChecklistSource::Comment { comment_index: 2 }
+            ChecklistSource::Comment {
+                comment_index: 2,
+                comment_id: None,
+                comment_url: None,
+            }
         );
         assert!(matches!(
             &second.opened,
@@ -1045,7 +1154,11 @@ mod tests {
         // The comment's checklist is adopted; the anchor stays where it was.
         assert_eq!(
             round.checklist,
-            ChecklistSource::Comment { comment_index: 1 }
+            ChecklistSource::Comment {
+                comment_index: 1,
+                comment_id: None,
+                comment_url: None,
+            }
         );
         assert_eq!(round.opened_at, A);
         assert_eq!(round.extensions.len(), 1);
@@ -1073,7 +1186,11 @@ mod tests {
         assert_eq!(rounds[0].state, RawRoundState::Open);
         assert_eq!(
             rounds[0].checklist,
-            ChecklistSource::Comment { comment_index: 1 }
+            ChecklistSource::Comment {
+                comment_index: 1,
+                comment_id: None,
+                comment_url: None,
+            }
         );
         assert_eq!(rounds[0].opened_at, A);
 
@@ -1504,6 +1621,157 @@ mod tests {
             thread.next_notification_from(),
             ObjectId::from_str(A).unwrap()
         );
+    }
+
+    // ── Comment identity (id / URL) ──────────────────────────────────────────
+
+    #[test]
+    fn comment_id_and_url_reach_every_record_that_names_a_comment() {
+        const URL: &str = "https://github.com/o/r/issues/1#issuecomment-";
+        let comments = vec![
+            identified(
+                &format!("# QC Notification\n\n## Metadata\ncurrent commit: {B}\n"),
+                10,
+                &format!("{URL}10"),
+            ),
+            identified(
+                &format!("# QC Review\n\n## Metadata\ncomparing commit: {B}\n"),
+                11,
+                &format!("{URL}11"),
+            ),
+            identified(
+                &format!("# QC Approval\n\n## Metadata\napproved qc commit: {B}\n"),
+                12,
+                &format!("{URL}12"),
+            ),
+            identified("# QC Un-Approval\n", 13, &format!("{URL}13")),
+            identified(
+                &format!("# QC Approval\n\n## Metadata\napproved qc commit: {B}\n"),
+                14,
+                &format!("{URL}14"),
+            ),
+            identified(
+                &format!(
+                    "# QC New Round\n\n## Metadata\nround: 2\nround commit: {C}\nprevious approved commit: {B}\nnote: second pass\n"
+                ),
+                15,
+                &format!("{URL}15"),
+            ),
+            // Round 2 is open, so this one extends it rather than opening round 3.
+            identified(
+                &format!("# QC New Round\n\n## Metadata\nround: 3\nround commit: {D}\n"),
+                16,
+                &format!("{URL}16"),
+            ),
+        ];
+        let thread = thread(&[A, B, C, D, E], A, &comments);
+        assert_eq!(thread.rounds.len(), 2);
+
+        let first = &thread.rounds[0];
+        assert!(matches!(
+            &first.events[0],
+            RoundEvent::Notification { comment_id: Some(10), comment_url: Some(url), .. }
+                if url == &format!("{URL}10")
+        ));
+        assert!(matches!(
+            &first.events[1],
+            RoundEvent::Review { comment_id: Some(11), comment_url: Some(url), .. }
+                if url == &format!("{URL}11")
+        ));
+        assert_eq!(first.retractions[0].comment_id, Some(13));
+        assert_eq!(
+            first.retractions[0].comment_url.as_deref(),
+            Some(format!("{URL}13").as_str())
+        );
+        assert!(matches!(
+            &first.state,
+            RoundState::Closed { comment_id: Some(14), comment_url: Some(url), .. }
+                if url == &format!("{URL}14")
+        ));
+
+        let second = &thread.rounds[1];
+        assert!(matches!(
+            &second.opened,
+            RoundOpen::NewRound { comment_index: 5, comment_id: Some(15), comment_url: Some(url), .. }
+                if url == &format!("{URL}15")
+        ));
+        // The extension re-points the checklist, so the checklist names comment 6.
+        assert_eq!(
+            second.checklist,
+            ChecklistSource::Comment {
+                comment_index: 6,
+                comment_id: Some(16),
+                comment_url: Some(format!("{URL}16")),
+            }
+        );
+        assert_eq!(second.extensions[0].comment_id, Some(16));
+        assert_eq!(
+            second.extensions[0].comment_url.as_deref(),
+            Some(format!("{URL}16").as_str())
+        );
+    }
+
+    #[test]
+    fn cache_loaded_comments_without_identity_fold_cleanly_with_none() {
+        // Every comment here is built by `comment()`, i.e. id/url are `None`.
+        let comments = vec![
+            notification(B),
+            approval(B),
+            new_round(2, C, B),
+            notification(D),
+            approval(D),
+            unapproval(),
+        ];
+        let (raw, raw_anomalies) = fold_rounds_from_comments(A, &comments);
+        assert!(
+            raw_anomalies.is_empty(),
+            "unexpected anomalies: {raw_anomalies:?}"
+        );
+        assert_eq!(raw.len(), 2);
+
+        let thread = resolve_rounds(
+            raw,
+            raw_anomalies,
+            &thread(&[A, B, C, D], A, &comments).commits,
+        );
+        let (rounds, anomalies) = thread;
+        assert!(anomalies.is_empty());
+        assert_eq!(rounds.len(), 2);
+
+        assert!(matches!(
+            &rounds[0].state,
+            RoundState::Closed {
+                comment_id: None,
+                comment_url: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &rounds[0].events[0],
+            RoundEvent::Notification {
+                comment_id: None,
+                comment_url: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &rounds[1].opened,
+            RoundOpen::NewRound {
+                comment_id: None,
+                comment_url: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            rounds[1].checklist,
+            ChecklistSource::Comment {
+                comment_index: 2,
+                comment_id: None,
+                comment_url: None,
+            }
+        );
+        assert_eq!(rounds[1].retractions[0].comment_id, None);
+        assert_eq!(rounds[1].retractions[0].comment_url, None);
     }
 
     #[test]

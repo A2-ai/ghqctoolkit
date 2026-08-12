@@ -849,6 +849,18 @@ mod tests {
     use std::path::PathBuf;
     use std::str::FromStr;
 
+    /// A `GitComment` as loaded from the cache: no comment id or URL.
+    fn test_comment(body: String, author_login: String) -> GitComment {
+        GitComment {
+            body,
+            author_login,
+            created_at: chrono::Utc::now(),
+            id: None,
+            html_url: None,
+            html: None,
+        }
+    }
+
     fn load_issue(file_name: &str) -> Issue {
         let path = format!("src/tests/issue_threads/{}", file_name);
         let content = std::fs::read_to_string(&path)
@@ -1079,14 +1091,14 @@ mod tests {
         // Convert JSON comments to GitComment objects
         let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| GitComment {
-                body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"]
-                    .as_str()
-                    .unwrap_or("test-user")
-                    .to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
+            .map(|comment| {
+                test_comment(
+                    comment["body"].as_str().unwrap().to_string(),
+                    comment["user"]["login"]
+                        .as_str()
+                        .unwrap_or("test-user")
+                        .to_string(),
+                )
             })
             .collect();
 
@@ -1141,14 +1153,14 @@ mod tests {
         // Convert JSON comments to GitComment objects
         let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| GitComment {
-                body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"]
-                    .as_str()
-                    .unwrap_or("test-user")
-                    .to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
+            .map(|comment| {
+                test_comment(
+                    comment["body"].as_str().unwrap().to_string(),
+                    comment["user"]["login"]
+                        .as_str()
+                        .unwrap_or("test-user")
+                        .to_string(),
+                )
             })
             .collect();
 
@@ -1207,14 +1219,14 @@ mod tests {
         // Convert JSON comments to GitComment objects
         let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| GitComment {
-                body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"]
-                    .as_str()
-                    .unwrap_or("test-user")
-                    .to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
+            .map(|comment| {
+                test_comment(
+                    comment["body"].as_str().unwrap().to_string(),
+                    comment["user"]["login"]
+                        .as_str()
+                        .unwrap_or("test-user")
+                        .to_string(),
+                )
             })
             .collect();
 
@@ -1274,14 +1286,14 @@ mod tests {
         // Convert JSON comments to GitComment objects
         let git_comments: Vec<GitComment> = comments
             .into_iter()
-            .map(|comment| GitComment {
-                body: comment["body"].as_str().unwrap().to_string(),
-                author_login: comment["user"]["login"]
-                    .as_str()
-                    .unwrap_or("test-user")
-                    .to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
+            .map(|comment| {
+                test_comment(
+                    comment["body"].as_str().unwrap().to_string(),
+                    comment["user"]["login"]
+                        .as_str()
+                        .unwrap_or("test-user")
+                        .to_string(),
+                )
             })
             .collect();
 
@@ -1373,14 +1385,14 @@ mod tests {
             let issue = load_issue(issue_file);
             let git_comments: Vec<GitComment> = load_comments(comments_file)
                 .into_iter()
-                .map(|comment| GitComment {
-                    body: comment["body"].as_str().unwrap().to_string(),
-                    author_login: comment["user"]["login"]
-                        .as_str()
-                        .unwrap_or("test-user")
-                        .to_string(),
-                    created_at: chrono::Utc::now(),
-                    html: None,
+                .map(|comment| {
+                    test_comment(
+                        comment["body"].as_str().unwrap().to_string(),
+                        comment["user"]["login"]
+                            .as_str()
+                            .unwrap_or("test-user")
+                            .to_string(),
+                    )
                 })
                 .collect();
 
@@ -1463,18 +1475,14 @@ mod tests {
     #[test]
     fn test_parse_commits_from_comments_with_approval() {
         let comments = vec![
-            GitComment {
-                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
-            },
-            GitComment {
-                body: "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
-            },
+            test_comment(
+                "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                "test-user".to_string(),
+            ),
+            test_comment(
+                "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+                "test-user".to_string(),
+            ),
         ];
 
         let commit_statuses = parse_commits_from_comments(&comments);
@@ -1498,18 +1506,14 @@ mod tests {
     #[test]
     fn test_parse_commits_from_comments_notifications_only() {
         let comments = vec![
-            GitComment {
-                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
-            },
-            GitComment {
-                body: "current commit: def456789abc012345678901234567890123abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
-            },
+            test_comment(
+                "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                "test-user".to_string(),
+            ),
+            test_comment(
+                "current commit: def456789abc012345678901234567890123abcd".to_string(),
+                "test-user".to_string(),
+            ),
         ];
 
         let commit_statuses = parse_commits_from_comments(&comments);
@@ -1533,24 +1537,18 @@ mod tests {
     #[test]
     fn test_parse_commits_from_comments_with_unapproval() {
         let comments = vec![
-            GitComment {
-                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
-            },
-            GitComment {
-                body: "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
-            },
-            GitComment {
-                body: "# QC Un-Approval\nWithdrawing approval".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None,
-            },
+            test_comment(
+                "current commit: abc123def456789012345678901234567890abcd".to_string(),
+                "test-user".to_string(),
+            ),
+            test_comment(
+                "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
+                "test-user".to_string(),
+            ),
+            test_comment(
+                "# QC Un-Approval\nWithdrawing approval".to_string(),
+                "test-user".to_string(),
+            ),
         ];
 
         let commit_statuses = parse_commits_from_comments(&comments);
@@ -1574,18 +1572,8 @@ mod tests {
     #[test]
     fn test_parse_commits_from_comments_with_review() {
         let comments = vec![
-            GitComment {
-                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
-            GitComment {
-                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: def456789abc012345678901234567890123abcd\n[file at commit](url)".to_string(),
-                author_login: "reviewer".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
+            test_comment("current commit: abc123def456789012345678901234567890abcd".to_string(), "test-user".to_string()),
+            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: def456789abc012345678901234567890123abcd\n[file at commit](url)".to_string(), "reviewer".to_string()),
         ];
 
         let commit_statuses = parse_commits_from_comments(&comments);
@@ -1609,18 +1597,8 @@ mod tests {
     #[test]
     fn test_parse_commits_from_comments_notification_then_review() {
         let comments = vec![
-            GitComment {
-                body: "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
-            GitComment {
-                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
-                author_login: "reviewer".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
+            test_comment("current commit: abc123def456789012345678901234567890abcd".to_string(), "test-user".to_string()),
+            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer".to_string()),
         ];
 
         let commit_statuses = parse_commits_from_comments(&comments);
@@ -1638,18 +1616,8 @@ mod tests {
     #[test]
     fn test_parse_commits_from_comments_review_then_approval() {
         let comments = vec![
-            GitComment {
-                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
-                author_login: "reviewer".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
-            GitComment {
-                body: "approved qc commit: abc123def456789012345678901234567890abcd".to_string(),
-                author_login: "test-user".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
+            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer".to_string()),
+            test_comment("approved qc commit: abc123def456789012345678901234567890abcd".to_string(), "test-user".to_string()),
         ];
 
         let commit_statuses = parse_commits_from_comments(&comments);
@@ -1667,18 +1635,8 @@ mod tests {
     #[test]
     fn test_parse_commits_from_comments_multiple_reviews_same_commit() {
         let comments = vec![
-            GitComment {
-                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
-                author_login: "reviewer1".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
-            GitComment {
-                body: "# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(),
-                author_login: "reviewer2".to_string(),
-                created_at: chrono::Utc::now(),
-                html: None
-            },
+            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer1".to_string()),
+            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer2".to_string()),
         ];
 
         let commit_statuses = parse_commits_from_comments(&comments);

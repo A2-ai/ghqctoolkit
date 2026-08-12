@@ -1,0 +1,15 @@
+---
+source: src/new_round.rs
+expression: body
+---
+# QC New Round
+
+## Metadata
+* round: 2
+* round commit: ccccccc000000000000000000000000000000003
+* previous approved commit: bbbbbbb000000000000000000000000000000002
+* note: Second pass after the refactor.
+
+## Checklist
+- [ ] item one
+- [ ] item two

@@ -10,6 +10,7 @@ mod create;
 mod diff_utils;
 mod git;
 mod issue;
+mod new_round;
 mod qc_status;
 mod record;
 mod relevant_files;
@@ -63,6 +64,11 @@ pub use issue::{
     BlockingQC, BlockingRelationship, CommitStatus, FileRenameEvent, IssueCommit, IssueError,
     IssueThread, determine_relationship_from_body, file_history_section, find_checklist_start,
     parse_blocking_qcs, parse_branch_from_body, parse_file_history, splice_file_history,
+};
+pub use new_round::{
+    CHECKLIST_HEADING, QCNewRound, ROUND_MARKER_HEADING, RoundMarker, checklist_from_issue_body,
+    checklist_from_round_comment, parse_round_marker, reset_checklist, seed_checklist,
+    upsert_round_marker,
 };
 pub use qc_status::{
     BlockingQCStatus, ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists,
