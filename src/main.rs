@@ -225,25 +225,24 @@ enum IssueCommands {
         #[arg(long)]
         force: bool,
     },
-    /// Retract the approval of a closed issue
+    /// Unapprove a closed issue
     ///
     /// Use this when the approval itself was wrong — recorded against the wrong commit,
-    /// by the wrong person, or on an inadequate review. Retracting invalidates the claim
+    /// by the wrong person, or on an inadequate review. Unapproving invalidates the claim
     /// that the round was approved, so downstream QCs that relied on it may need redoing.
     ///
     /// If the file simply changed again and needs another QC pass, use `new-round`
     /// instead: that leaves the previous approval standing.
-    #[command(visible_alias = "retract-approval")]
     Unapprove {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
         milestone: Option<String>,
 
-        /// File path of the issue whose approval should be retracted (will prompt if not provided)
+        /// File path of the issue to unapprove (will prompt if not provided)
         #[arg(short, long)]
         file: Option<PathBuf>,
 
-        /// Reason the approval is being retracted (will prompt if not provided)
+        /// Reason the issue is being unapproved (will prompt if not provided)
         #[arg(short, long)]
         reason: Option<String>,
     },
@@ -264,6 +263,12 @@ enum IssueCommands {
         /// Start from this configuration checklist instead of the previous round's
         #[arg(short, long)]
         checklist_name: Option<String>,
+
+        /// Base the checklist on this round's instead of the previous round's, e.g.
+        /// `1` for Initial QC. Useful when the last round was a narrow pass and this
+        /// one needs the full checklist back.
+        #[arg(long, conflicts_with = "checklist_name")]
+        from_round: Option<u32>,
 
         /// Optional note explaining why the round was opened
         #[arg(short, long)]
@@ -677,6 +682,7 @@ async fn main() -> Result<()> {
                     milestone,
                     file,
                     checklist_name,
+                    from_round,
                     note,
                     notification,
                     edit,
@@ -693,6 +699,7 @@ async fn main() -> Result<()> {
                             milestone,
                             file,
                             checklist_name,
+                            from_round,
                             note,
                             notification: notification.into(),
                             edit,

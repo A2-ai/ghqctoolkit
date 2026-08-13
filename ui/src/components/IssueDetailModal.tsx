@@ -108,7 +108,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
           <Tabs.Tab value="notify" color="yellow">Notify</Tabs.Tab>
           <Tabs.Tab value="review" color="orange">Review</Tabs.Tab>
           <Tabs.Tab value="approve" color="green" disabled={isApproved}>Approve</Tabs.Tab>
-          <Tabs.Tab value="unapprove" color="red" disabled={unapproveDisabled}>Retract approval</Tabs.Tab>
+          <Tabs.Tab value="unapprove" color="red" disabled={unapproveDisabled}>Unapprove</Tabs.Tab>
         </Tabs.List>
         <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close">
           <IconX size={16} />
@@ -239,7 +239,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     apiFromIdx === findCommitIndex(orderedCommits, openRound.previous_approval) &&
     fromOrigIdx === apiFromIdx
 
-  // S5: an empty diff. Happens after a retraction, where the last notified commit
+  // S5: an empty diff. Happens after an unapproval, where the last notified commit
   // is the commit that was just approved. Only surfaced when there is a better
   // range to offer — the open round's previous approval — so single-round issues,
   // where from === to is an ordinary state, are untouched.
@@ -305,10 +305,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
       {isApproved && (
         <Alert color="orange">
           <Text size="sm" fw={600}>This issue is already approved</Text>
-          <Text size="xs" mt={4}>
-            If the file changed again, start a new round — the existing approval stays valid. Only
-            retract the approval if the approval itself was wrong.
-          </Text>
+          <Text size="xs" mt={4}>For another QC pass, start a new round.</Text>
           <Checkbox
             mt="xs"
             label="Notify anyway"
@@ -342,7 +339,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
                       {shortHash(toCommit?.hash)}).
                     </Text>
                     <Text size="xs" mt={2}>
-                      This is usual right after a retraction: the last notification landed on the
+                      This is usual right after unapproving: the last notification landed on the
                       commit that was just approved.
                     </Text>
                     <Button
@@ -667,10 +664,7 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
       {isApproved && (
         <Alert color="orange">
           <Text size="sm" fw={600}>This issue is already approved</Text>
-          <Text size="xs" mt={4}>
-            If the file changed again, start a new round — the existing approval stays valid. Only
-            retract the approval if the approval itself was wrong.
-          </Text>
+          <Text size="xs" mt={4}>For another QC pass, start a new round.</Text>
           <Checkbox
             mt="xs"
             label="Review anyway"
@@ -1017,7 +1011,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 }
 
 // ---------------------------------------------------------------------------
-// Retract-approval tab — swim lane layout with cascade impact
+// Unapprove tab — swim lane layout with cascade impact
 // ---------------------------------------------------------------------------
 function UnapproveTab({ status, onStatusUpdate, onBlockedUnavailable }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; onBlockedUnavailable: () => void }) {
   return (

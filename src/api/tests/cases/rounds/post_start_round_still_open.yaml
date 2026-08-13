@@ -34,4 +34,4 @@ response:
   body:
     match_type: partial
     fields:
-      error: "Cannot start a new round: Initial QC is still open. Approve it first — a `# QC New Round` comment posted now would extend that round instead of opening a new one."
+      error: "Cannot start a new round: Initial QC is still open. Approve it first — a `# QC Round` comment posted now would extend that round instead of opening a new one."

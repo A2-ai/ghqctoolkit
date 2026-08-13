@@ -1,7 +1,7 @@
 //! Repairing an open QC round: re-running the follow-up steps that
 //! [`crate::start_round`] left incomplete.
 //!
-//! [`crate::start_round`] posts the `# QC New Round` comment first — that is what
+//! [`crate::start_round`] posts the round comment first — that is what
 //! creates the round — and then performs three recoverable steps: reopen the
 //! issue, refresh the `## QC Round` body marker, and optionally notify. Those
 //! three are reported per step rather than aborting the action, on the promise
@@ -9,7 +9,7 @@
 //!
 //! This module is that retry. It cannot be the new-round action re-run, because
 //! the round is now *open*: `start_round` refuses to run against an open round,
-//! and a second `# QC New Round` comment would **extend** the round (see
+//! and a second round comment would **extend** the round (see
 //! [`crate::round`]'s extension semantics) rather than repair anything. So the
 //! repair works on the currently open round and touches nothing else.
 //!
@@ -83,7 +83,7 @@ pub fn plan_repair(issue: &Issue, round: &Round) -> RepairPlan {
 ///
 /// `None` when the round's identity URL is unknown — `RoundOpen::NewRound`'s
 /// `comment_url` is optional because comments loaded from the disk cache carry no
-/// identity, and for Initial QC, which no `# QC New Round` comment opened. In
+/// identity, and for Initial QC, which no round comment opened. In
 /// neither case can a correct marker be derived, so the body is left alone rather
 /// than rewritten with an invented URL: the marker is only a cache, and a wrong
 /// one is worse than a stale one.
@@ -127,7 +127,7 @@ pub struct RepairRoundResult {
     pub round: u32,
     /// Human-readable name of that round, e.g. `"Round 2"`.
     pub round_name: String,
-    /// URL of the round's `# QC New Round` comment; `None` when the comment came
+    /// URL of the round's round comment; `None` when the comment came
     /// from the disk cache and therefore carries no identity.
     pub round_comment_url: Option<String>,
     /// What was found to be incomplete before anything was written.
@@ -215,7 +215,7 @@ pub enum RepairRoundError {
     )]
     NoOpenRound { round: u32, round_name: String },
     #[error(
-        "Nothing to repair: the open round is {round_name}, which was opened when the issue was created rather than by a `# QC New Round` comment, so it has no follow-up steps."
+        "Nothing to repair: the open round is {round_name}, which was opened when the issue was created rather than by a round comment, so it has no follow-up steps."
     )]
     InitialRound { round: u32, round_name: String },
     #[error(

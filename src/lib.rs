@@ -68,10 +68,10 @@ pub use issue::{
     parse_blocking_qcs, parse_branch_from_body, parse_file_history, splice_file_history,
 };
 pub use new_round::{
-    CHECKLIST_HEADING, QCNewRound, ROUND_MARKER_HEADING, RoundMarker, SeededChecklist,
-    checklist_from_issue_body, checklist_from_round_comment, checklist_name_from_round_comment,
-    parse_round_marker, prior_round_comment_body, reset_checklist, seed_checklist,
-    upsert_round_marker,
+    ChecklistOption, QCNewRound, ROUND_MARKER_HEADING, RoundMarker, SeededChecklist,
+    available_checklists, checklist_from_issue_body, checklist_from_round_comment,
+    checklist_name_from_round_comment, parse_round_marker, prior_round_comment_body,
+    reset_checklist, seed_checklist, upsert_round_marker,
 };
 pub use qc_status::{
     BlockingQCStatus, ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists,

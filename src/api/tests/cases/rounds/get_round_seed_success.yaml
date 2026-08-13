@@ -39,10 +39,18 @@ response:
   body:
     match_type: exact
     value:
+      file: "src/test.rs"
       next_round: 2
       next_round_name: "Round 2"
       checklist_content: "- [ ] Reviewed the logic\n- [ ] Checked the tests"
       checklist_name: "Code Review Checklist"
+      # Only Initial QC exists, so it is the only choice and the default.
+      checklist_options:
+        - round: 1
+          round_name: "Initial QC"
+          checklist_name: "Code Review Checklist"
+          content: "- [ ] Reviewed the logic\n- [ ] Checked the tests"
+      default_round: 1
       anchor: "abc1234567890abcdef1234567890abcdef12340"
       previous_approval: "456def789abc012345678901234567890123cdef"
       can_start: true

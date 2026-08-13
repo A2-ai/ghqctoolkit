@@ -312,6 +312,11 @@ pub fn diff_text_files(from_bytes: Vec<u8>, to_bytes: Vec<u8>) -> Option<String>
     Some(diff(&from_str, &to_str))
 }
 
+/// Rendered when two file versions are identical. A sentinel rather than an empty
+/// string because it is embedded directly in comment bodies; callers that need to
+/// branch on "no diff" compare against this.
+pub const NO_DIFFERENCE: &str = "\nNo difference between file versions.\n";
+
 /// Generate a markdown-formatted diff between two strings showing only changed hunks with context
 pub fn diff(old_content: &str, new_content: &str) -> String {
     let old_lines: Vec<&str> = old_content.lines().collect();
@@ -319,7 +324,7 @@ pub fn diff(old_content: &str, new_content: &str) -> String {
 
     // Check if files are identical
     if old_lines == new_lines {
-        return "\nNo difference between file versions.\n".to_string();
+        return NO_DIFFERENCE.to_string();
     }
 
     let changeset = lines(old_content, new_content);
@@ -328,7 +333,7 @@ pub fn diff(old_content: &str, new_content: &str) -> String {
     let hunks = create_hunks(&changeset, 3); // 3 lines of context
 
     if hunks.is_empty() {
-        return "\nNo difference between file versions.\n".to_string();
+        return NO_DIFFERENCE.to_string();
     }
 
     let mut result = Vec::new();

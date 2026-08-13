@@ -62,7 +62,7 @@ test('modal has 4 tabs; Notify panel shows Commit Range', async ({ page }) => {
   await expect(tablist.getByRole('tab', { name: 'Notify', exact: true })).toBeVisible()
   await expect(tablist.getByRole('tab', { name: 'Review', exact: true })).toBeVisible()
   await expect(tablist.getByRole('tab', { name: 'Approve', exact: true })).toBeVisible()
-  await expect(tablist.getByRole('tab', { name: 'Retract approval', exact: true })).toBeVisible()
+  await expect(tablist.getByRole('tab', { name: 'Unapprove', exact: true })).toBeVisible()
 
   await page.getByRole('tab', { name: 'Notify', exact: true }).click()
   await expect(page.getByRole('tabpanel', { name: 'Notify' }).getByText('Select Commits to Compare')).toBeVisible()
@@ -484,7 +484,7 @@ test('after approval with closed:false, issue card remains in swimlane', async (
 test('unapprove tab shows status card', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
   // defaultTab for 'approved' is 'unapprove'
-  const unapprovePanel = page.getByRole('tabpanel', { name: 'Retract approval' })
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await expect(unapprovePanel.getByText(/Branch:.*feature-branch/).first()).toBeVisible()
 })
 
@@ -493,8 +493,8 @@ test('unapprove tab shows status card', async ({ page }) => {
 // ---------------------------------------------------------------------------
 test('unapprove button disabled when reason is empty', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
-  const unapprovePanel = page.getByRole('tabpanel', { name: 'Retract approval' })
-  await expect(unapprovePanel.getByRole('button', { name: 'Retract approval' })).toBeDisabled()
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
+  await expect(unapprovePanel.getByRole('button', { name: 'Unapprove' })).toBeDisabled()
 })
 
 // ---------------------------------------------------------------------------
@@ -502,9 +502,9 @@ test('unapprove button disabled when reason is empty', async ({ page }) => {
 // ---------------------------------------------------------------------------
 test('unapprove button enabled when reason is provided', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
-  const unapprovePanel = page.getByRole('tabpanel', { name: 'Retract approval' })
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await unapprovePanel.getByPlaceholder('Reason (required)').fill('Rolling back due to regression')
-  await expect(unapprovePanel.getByRole('button', { name: 'Retract approval' })).not.toBeDisabled()
+  await expect(unapprovePanel.getByRole('button', { name: 'Unapprove' })).not.toBeDisabled()
 })
 
 // ---------------------------------------------------------------------------
@@ -524,9 +524,9 @@ test('unapprove preview button opens preview modal (fallback mode)', async ({ pa
   await page.getByTestId(`issue-card-${approvedModalIssue.number}`).click()
   await expect(page.getByRole('tablist')).toBeVisible()
 
-  const unapprovePanel = page.getByRole('tabpanel', { name: 'Retract approval' })
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await unapprovePanel.getByRole('button', { name: 'Preview' }).click()
-  await expect(page.getByTitle('Retraction Comment Preview')).toBeVisible()
+  await expect(page.getByTitle('Unapproval Comment Preview')).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -534,12 +534,12 @@ test('unapprove preview button opens preview modal (fallback mode)', async ({ pa
 // ---------------------------------------------------------------------------
 test('unapprove post shows success modal', async ({ page }) => {
   await setupAndOpenModal(page, approvedModalIssue, approvedModalStatus)
-  const unapprovePanel = page.getByRole('tabpanel', { name: 'Retract approval' })
+  const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await unapprovePanel.getByPlaceholder('Reason (required)').fill('Rolling back approval')
-  await unapprovePanel.getByRole('button', { name: 'Retract approval' }).click()
-  await expect(page.getByRole('heading', { name: 'Approval Retracted' })).toBeVisible()
+  await unapprovePanel.getByRole('button', { name: 'Unapprove' }).click()
+  await expect(page.getByRole('heading', { name: 'Issue Unapproved' })).toBeVisible()
   // Result modal links by issue title, not generic "View on GitHub"
-  await expect(page.getByLabel('Approval Retracted').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+  await expect(page.getByLabel('Issue Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------

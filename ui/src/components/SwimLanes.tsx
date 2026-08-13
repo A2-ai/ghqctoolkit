@@ -165,6 +165,7 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
     <StartRoundModal
       issueNumber={startRoundFor?.issue.number ?? null}
       issueTitle={startRoundFor?.issue.title}
+      issueUrl={startRoundFor?.issue.html_url}
       repair={startRoundFor?.round_repair ?? null}
       onClose={() => setStartRoundFor(null)}
     />

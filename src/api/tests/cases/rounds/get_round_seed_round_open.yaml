@@ -33,4 +33,4 @@ response:
       next_round: 2
       can_start: false
       previous_approval: null
-      blocked_reason: "Initial QC is still open. Approve it first — a `# QC New Round` comment posted now would extend that round instead of opening a new one."
+      blocked_reason: "Initial QC is still open. Approve it first — a `# QC Round` comment posted now would extend that round instead of opening a new one."

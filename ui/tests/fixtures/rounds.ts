@@ -46,7 +46,7 @@ export function initialQcRound(
   return makeRound({ index: 1, name: 'Initial QC', opened_at, ...overrides })
 }
 
-/** Round N > 1 — checklist lives in the `# QC New Round` comment. */
+/** Round N > 1 — checklist lives in the `# QC Round` comment. */
 export function laterRound(
   index: number,
   opened_at: string,
@@ -271,10 +271,56 @@ export const quietRoundStatus: IssueStatusResponse = {
 
 /** Seed for #111: the last round is closed, so a round may be started. */
 export const roundSeedCanStart: RoundSeedResponse = {
+  file: 'src/approved-round.rs',
   next_round: 2,
   next_round_name: 'Round 2',
   checklist_content: '- [ ] Review logic\n- [ ] Check tests',
   checklist_name: 'Code Review',
+  // Starting round 2, so Initial QC is the only possible base: one option, and the
+  // picker stays hidden because there is no choice to make.
+  checklist_options: [
+    {
+      round: 1,
+      round_name: 'Initial QC',
+      checklist_name: 'Code Review',
+      content: '- [ ] Review logic\n- [ ] Check tests',
+    },
+  ],
+  default_round: 1,
+  anchor: ROUND2_OPENED,
+  previous_approval: ROUND1_CLOSED,
+  can_start: true,
+  blocked_reason: null,
+}
+
+/** The trimmed checklist round 2 was QC'd against, carrying its own `## ` heading. */
+export const ROUND2_CHECKLIST = '- [ ] Spot-check the refactor\n\n## Technical Review\n\n- [ ] Renders clean'
+
+/**
+ * Seed for starting round 3, where both Initial QC's checklist and round 2's are
+ * selectable — the case the picker exists for.
+ */
+export const roundSeedMultipleChecklists: RoundSeedResponse = {
+  file: 'src/approved-round.rs',
+  next_round: 3,
+  next_round_name: 'Round 3',
+  checklist_content: ROUND2_CHECKLIST,
+  checklist_name: 'Focused Re-review',
+  checklist_options: [
+    {
+      round: 1,
+      round_name: 'Initial QC',
+      checklist_name: 'Code Review',
+      content: '- [ ] Review logic\n- [ ] Check tests',
+    },
+    {
+      round: 2,
+      round_name: 'Round 2',
+      checklist_name: 'Focused Re-review',
+      content: ROUND2_CHECKLIST,
+    },
+  ],
+  default_round: 2,
   anchor: ROUND2_OPENED,
   previous_approval: ROUND1_CLOSED,
   can_start: true,
@@ -283,15 +329,18 @@ export const roundSeedCanStart: RoundSeedResponse = {
 
 /** Seed for an issue whose last round is still open. */
 export const roundSeedBlocked: RoundSeedResponse = {
+  file: 'src/approved-round.rs',
   next_round: 2,
   next_round_name: 'Round 2',
   checklist_content: '- [ ] Review logic\n- [ ] Check tests',
   checklist_name: 'Code Review',
+  checklist_options: roundSeedCanStart.checklist_options,
+  default_round: 1,
   anchor: ROUND2_OPENED,
   previous_approval: null,
   can_start: false,
   blocked_reason:
-    'Initial QC is still open. Approve it first — a `# QC New Round` comment posted now would extend that round instead of opening a new one.',
+    'Initial QC is still open. Approve it first — a `# QC Round` comment posted now would extend that round instead of opening a new one.',
 }
 
 /** Seed blocked because HEAD of the branch could not be resolved locally. */

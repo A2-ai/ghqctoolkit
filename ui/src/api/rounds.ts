@@ -42,7 +42,7 @@ export interface RoundInfo {
   event_count: number
   /** `# QC Un-Approval` comments that took back this round's approval. */
   retraction_count: number
-  /** `# QC New Round` comments that extended this round instead of opening one. */
+  /** `# QC Round` comments that extended this round instead of opening one. */
   extension_count: number
 }
 
@@ -98,7 +98,7 @@ export interface StartRoundResponse {
   round: number
   /** e.g. `"Round 2"`. */
   round_name: string
-  /** URL of the `# QC New Round` comment: the round's identity. */
+  /** URL of the `# QC Round` comment: the round's identity. */
   round_comment_url: string
   /** The commit the round opened at (HEAD at open time). */
   anchor: string
@@ -177,13 +177,36 @@ export interface RepairRoundResponse {
 }
 
 /** Everything a "start new round" form needs. Side-effect free. */
+/**
+ * One selectable checklist source for a new round: an existing round, and the
+ * checklist it was QC'd against with every box already reset.
+ */
+export interface RoundChecklistOption {
+  /** Index of the round this checklist came from. */
+  round: number
+  /** That round's display name, e.g. `"Initial QC"` or `"Round 2"`. */
+  round_name: string
+  checklist_name: string | null
+  content: string
+}
+
 export interface RoundSeedResponse {
+  /** Repo-relative path of the QC'd file, for diffing without guessing at it. */
+  file: string
   next_round: number
   /** e.g. `"Round 2"`. */
   next_round_name: string
   /** Seeded checklist markdown, boxes reset. null when no checklist was found. */
   checklist_content: string | null
   checklist_name: string | null
+  /**
+   * Every round's checklist, oldest first. Rounds whose checklist could not be
+   * recovered are absent, so this can be shorter than the round list — and empty,
+   * meaning there is nothing to seed from.
+   */
+  checklist_options: RoundChecklistOption[]
+  /** `round` of the pre-selected option; null when there are none. */
+  default_round: number | null
   /** HEAD of the issue's branch; null when it could not be resolved. */
   anchor: string | null
   /** The last round's closing commit; null while that round is still open. */

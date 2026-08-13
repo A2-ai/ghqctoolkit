@@ -3,12 +3,12 @@
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{
-    RepairRoundApiRequest, RepairRoundResponse, RoundSeedResponse, StartRoundApiRequest,
-    StartRoundResponse,
+    RepairRoundApiRequest, RepairRoundResponse, RoundChecklistOption, RoundSeedResponse,
+    StartRoundApiRequest, StartRoundResponse,
 };
 use crate::{
     GitProvider, IssueThread, RepairRoundRequest, RoundState, StartRoundRequest,
-    get_issue_comments, prior_round_comment_body, repair_round, seed_checklist, start_round,
+    available_checklists, get_issue_comments, repair_round, start_round,
 };
 use axum::{
     Json,
@@ -105,7 +105,7 @@ pub async fn get_round_seed<G: GitProvider + 'static>(
         RoundState::Open => (
             None,
             Some(format!(
-                "{} is still open. Approve it first — a `# QC New Round` comment posted now would \
+                "{} is still open. Approve it first — a `# QC Round` comment posted now would \
                  extend that round instead of opening a new one.",
                 last.name()
             )),
@@ -125,10 +125,16 @@ pub async fn get_round_seed<G: GitProvider + 'static>(
         .ok()
         .map(|anchor| anchor.to_string());
 
-    let seeded = seed_checklist(
-        prior_round_comment_body(&thread, &comments),
-        issue.body.as_deref(),
-    );
+    // Every round's checklist, so the form can offer a choice rather than assuming
+    // the next round follows the last one. The most recent recoverable checklist is
+    // the pre-selected default, which is what the form used to get unconditionally.
+    let options = available_checklists(&thread, &comments, issue.body.as_deref());
+    let default = options.last();
+    let checklist_content = default.map(|option| option.content.clone());
+    let checklist_name = default.and_then(|option| option.checklist_name.clone());
+    let default_round = default.map(|option| option.round);
+    let checklist_options: Vec<RoundChecklistOption> =
+        options.iter().map(RoundChecklistOption::from).collect();
 
     let next_round = last.index.saturating_add(1);
     let blocked_reason = blocked_reason.or_else(|| {
@@ -141,10 +147,13 @@ pub async fn get_round_seed<G: GitProvider + 'static>(
     });
 
     Ok(Json(RoundSeedResponse {
+        file: thread.file.to_string_lossy().to_string(),
         next_round,
         next_round_name: format!("Round {next_round}"),
-        checklist_content: seeded.as_ref().map(|seed| seed.content.clone()),
-        checklist_name: seeded.and_then(|seed| seed.name),
+        checklist_content,
+        checklist_name,
+        checklist_options,
+        default_round,
         anchor,
         previous_approval,
         can_start: blocked_reason.is_none(),
@@ -305,7 +314,7 @@ mod tests {
     fn new_round_comment() -> GitComment {
         GitComment {
             body: format!(
-                "# QC New Round\n\n## Metadata\n* round: 2\n* round commit: {HEAD}\n* previous approved commit: {COMMIT}\n* checklist: Code Review Checklist\n"
+                "# QC Round\n\n## Metadata\n* round: 2\n* initial qc round commit: {HEAD}\n* previous approved commit: {COMMIT}\n\n# Code Review Checklist\n- [ ] Reviewed the logic\n"
             ),
             author_login: "author".to_string(),
             created_at: chrono::Utc::now(),

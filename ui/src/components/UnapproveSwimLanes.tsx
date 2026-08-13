@@ -1,9 +1,9 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ActionIcon, Alert, Anchor, Badge, Button, Group, Loader, Modal, Stack, Text, Textarea, TextInput, Tooltip } from '@mantine/core'
+import { ActionIcon, Anchor, Badge, Button, Group, Loader, Modal, Stack, Text, Textarea, TextInput, Tooltip } from '@mantine/core'
 import type { DropResult } from '@hello-pangea/dnd'
 import { DragDropContext, Draggable, Droppable } from '@hello-pangea/dnd'
-import { IconAlertTriangle, IconMinus, IconPlus, IconX } from '@tabler/icons-react'
+import { IconMinus, IconPlus, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { BlockedIssueStatus, Issue, IssueStatusResponse, QCStatus } from '~/api/issues'
 import { ApiRequestError, fetchBlockedIssues, fetchSingleIssueStatus, postUnapprove, useInvalidateBlockingDependents } from '~/api/issues'
@@ -301,9 +301,9 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
       <>
         <Stack gap="md" style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
           <Stack gap="md" style={{ maxWidth: 380, margin: '0 auto', width: '100%' }}>
-            <RetractGuidance />
+            <UnapproveNote />
             <Text size="xs" c="dimmed" ta="center">
-              Impact analysis is unavailable for this GitHub instance — only this issue's approval will be retracted.
+              Impact analysis is unavailable for this GitHub instance — only this issue will be unapproved.
             </Text>
             <Textarea
               label="Reason (required)"
@@ -320,7 +320,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
                 Preview
               </Button>
               <Button color="red" loading={postLoading} disabled={!canPost} onClick={() => void handlePost()}>
-                Retract approval
+                Unapprove
               </Button>
             </Group>
           </Stack>
@@ -328,7 +328,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
         <Modal
           opened={previewOpen}
           onClose={() => setPreviewOpen(false)}
-          title="Retraction Comment Preview"
+          title="Unapproval Comment Preview"
           size={800}
           centered
           withinPortal={false}
@@ -337,7 +337,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
           <iframe
             srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
             style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
-            title="Retraction Comment Preview"
+            title="Unapproval Comment Preview"
           />
         </Modal>
         <ResultModal
@@ -356,7 +356,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
       <DragDropContext onDragEnd={onDragEnd}>
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
           <div style={{ paddingBottom: 12 }}>
-            <RetractGuidance />
+            <UnapproveNote />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'start', minHeight: 200 }}>
 
@@ -451,10 +451,10 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
                     transition: 'background-color 0.15s',
                   }}
                 >
-                  <LaneHeader color="#fee2e2" title="To Retract" count={state.toUnapprove.length} />
+                  <LaneHeader color="#fee2e2" title="To Unapprove" count={state.toUnapprove.length} />
                   <Stack gap="xs" p="xs" style={{ minHeight: 120 }}>
                     {state.toUnapprove.length === 0 && (
-                      <Text size="sm" c="dimmed" ta="center" py="sm">Nothing to retract</Text>
+                      <Text size="sm" c="dimmed" ta="center" py="sm">Nothing to unapprove</Text>
                     )}
                     {state.toUnapprove.map((n, idx) => {
                       const data = state.nodeData.get(n)
@@ -495,7 +495,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
           disabled={!canPost}
           onClick={() => void handlePost()}
         >
-          Retract approval{state.toUnapprove.length > 1 ? ` (${state.toUnapprove.length})` : ''}
+          Unapprove{state.toUnapprove.length > 1 ? ` (${state.toUnapprove.length})` : ''}
         </Button>
       </div>
 
@@ -511,33 +511,19 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
 }
 
 // ---------------------------------------------------------------------------
-// Decision-point guidance (P4): retract vs. start a new round
+// Orientation note: unapprove vs. start a new round
 // ---------------------------------------------------------------------------
 
 /**
- * The one place a user can reach retraction, so the one place the distinction has
- * to be legible. Retraction is an amend — it says a past approval was wrong, which
- * is why the QCs that relied on it may need redoing. A file that simply changed
- * again wants a new round instead, which leaves that approval standing.
+ * A one-line note, deliberately not an alert. The two actions are separate places
+ * in the UI, so this only has to name the alternative — the lane layout below
+ * already shows what unapproving puts at risk.
  */
-function RetractGuidance() {
+function UnapproveNote() {
   return (
-    <Alert
-      color="red"
-      variant="light"
-      icon={<IconAlertTriangle size={16} />}
-      data-testid="retract-guidance"
-    >
-      <Text size="sm">
-        Retracting says the approval itself was <b>wrong</b> — recorded against the wrong commit, by
-        the wrong person, or on an inadequate review. QCs that relied on it may no longer be valid
-        and may need to be redone.
-      </Text>
-      <Text size="sm" mt={4}>
-        If the file simply changed again and needs another QC pass, use <b>Start new round</b>
-        {' '}instead: the previous approval stays valid and nothing downstream is invalidated.
-      </Text>
-    </Alert>
+    <Text size="xs" c="dimmed" data-testid="unapprove-note">
+      Unapprove this QC round. For a new QC pass, <b>start a new round</b>.
+    </Text>
   )
 }
 
@@ -559,7 +545,7 @@ function ResultModal({
     <Modal
       opened={opened}
       onClose={onClose}
-      title={allFailed ? 'Retraction Failed' : 'Approval Retracted'}
+      title={allFailed ? "Unapproval Failed" : "Issue Unapproved"}
       size="sm"
       centered
       withinPortal={false}
@@ -570,7 +556,7 @@ function ResultModal({
           return (
             <Text key={r.issueNumber} size="sm">
               <Anchor href={r.url} target="_blank">{title}</Anchor>
-              {' '}{r.opened ? 'approval retracted; the issue is open again' : 'approval retracted'}.
+              {" "}{r.opened ? "unapproved; the issue is open again" : "unapproved"}.
             </Text>
           )
         })}
@@ -636,7 +622,7 @@ function ToUnapproveCard({
           color="gray"
           style={{ position: 'absolute', top: 6, right: 6 }}
           onClick={onRemove}
-          aria-label="Remove from retraction"
+          aria-label="Remove from unapproval"
         >
           <IconX size={12} />
         </ActionIcon>

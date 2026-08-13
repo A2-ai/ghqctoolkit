@@ -37,3 +37,30 @@ export async function fetchBranchCommits(
   }
   return res.json()
 }
+
+export interface CommitDiffResponse {
+  /**
+   * Markdown diff of the file between the two commits. `null` when there is no
+   * difference, or the file could not be read at one of them — neither of which is
+   * an error, so callers render it as "no changes" rather than as a failure.
+   */
+  diff: string | null
+}
+
+export async function fetchCommitDiff(
+  file: string,
+  from: string,
+  to: string,
+): Promise<CommitDiffResponse> {
+  const params = new URLSearchParams({ file, from, to })
+  const res = await fetch(`${API_BASE}/commits/diff?${params.toString()}`)
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to fetch diff: ${res.status}`)
+  }
+  return res.json()
+}
+
+export function commitDiffQueryKey(file: string, from: string, to: string) {
+  return ['commit-diff', file, from, to] as const
+}

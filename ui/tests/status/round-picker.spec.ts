@@ -250,7 +250,7 @@ test('S5: an empty diff is called out and offers a one-click whole-round preset'
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('Nothing to compare')
   await expect(alert).toContainText(SHORT(ROUND2_OPENED))
-  await expect(alert).toContainText('retraction')
+  await expect(alert).toContainText('unapproving')
 
   const preset = panel.getByTestId('present-whole-round')
   await expect(preset).toContainText('Initial QC')

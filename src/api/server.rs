@@ -122,6 +122,7 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
         .route("/api/assignees", get(status::list_assignees))
         .route("/api/repo", get(status::repo_info))
         .route("/api/commits", get(commits::get_commits))
+        .route("/api/commits/diff", get(commits::get_commit_diff))
         // Record PDF generation
         .route(
             "/api/record/upload",

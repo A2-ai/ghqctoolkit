@@ -30,8 +30,12 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
   // `Initial QC` case stays exactly as quiet as it is today.
   const rounds = status.rounds ?? []
   const latestRound = rounds.length > 1 ? rounds[rounds.length - 1] : null
-  // The model's cue that the file moved after approval → offer a new round.
-  const showStartRound = qc_status.status === 'changes_after_approval' && onStartRound !== undefined
+  // Any approved QC can start a new round, whether or not the file has moved since.
+  // Gating on `changes_after_approval` made the affordance appear and disappear based
+  // on unrelated commits, so a cleanly approved issue had no way in.
+  const showStartRound =
+    (qc_status.status === 'approved' || qc_status.status === 'changes_after_approval') &&
+    onStartRound !== undefined
   // A round is open but one of its follow-up steps never landed. `needs_repair` is
   // the only flag to branch on: a round with no notification is not broken, just
   // quiet, so the common single-round case stays exactly as quiet as before.
@@ -159,10 +163,10 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
         />
       )}
 
-      {/* Approved, then the file changed again — offer a new QC round */}
+      {/* Approved — offer another QC round, identically whether or not the file moved */}
       {showStartRound && (
         <Tooltip
-          label="The file changed after approval. A new round is the routine next step — the previous approval stays valid."
+          label="Start another QC round on this file. The previous approval stays valid."
           withArrow
           position="top"
           multiline

@@ -91,6 +91,8 @@ export interface RouteOverrides {
   recordUploadResponse: { temp_path: string } | null
   /** Response for POST /api/archive/generate; null → 500 */
   archiveGenerateResponse: { output_path: string } | null
+  /** Response for GET /api/commits/diff */
+  commitDiffResponse: { diff: string | null }
   /** Response for GET /api/commits */
   commitsResponse: { commits: { hash: string; message: string; file_changed: boolean }[]; total: number; page: number; page_size: number }
   /** Default response for GET /api/issues/:n/rounds/seed; null → 500 */
@@ -156,6 +158,7 @@ const defaultOverrides: RouteOverrides = {
   recordUploadResponse: { temp_path: '/tmp/ghqc-uploads/test123.pdf' },
   archiveGenerateResponse: { output_path: '/mock/repo/test-archive.tar.gz' },
   commitsResponse: { commits: [{ hash: 'abc1234567890', message: 'Initial commit', file_changed: true }], total: 1, page: 0, page_size: 10 },
+  commitDiffResponse: { diff: '```diff\n@@ -1,3 +1,3 @@\n context line\n-removed line\n+added line\n```' },
   roundSeedResponse: roundSeedCanStart,
   roundSeedResponseByIssue: {},
   startRoundResponse: startRoundSuccess,
@@ -492,6 +495,14 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(cfg.commitsResponse),
+    })
+  })
+
+  await page.route(/\/api\/commits\/diff/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(cfg.commitDiffResponse),
     })
   })
 

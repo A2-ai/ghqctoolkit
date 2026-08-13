@@ -114,7 +114,7 @@ function StateBadge({ round }: { round: RoundInfo }) {
 function Counts({ round }: { round: RoundInfo }) {
   const parts: string[] = []
   if (round.event_count > 0) parts.push(plural(round.event_count, 'event'))
-  if (round.retraction_count > 0) parts.push(plural(round.retraction_count, 'retraction'))
+  if (round.retraction_count > 0) parts.push(plural(round.retraction_count, 'unapproval'))
   if (round.extension_count > 0) parts.push(plural(round.extension_count, 'extension'))
   if (parts.length === 0) return null
   return (

@@ -1,9 +1,9 @@
 //! Starting a new QC round: the write half of [`crate::round`]'s model.
 //!
-//! [`crate::new_round`] renders the `# QC New Round` comment; this module performs
+//! [`crate::new_round`] renders the round comment; this module performs
 //! the *action* — four separate GitHub calls, in this order:
 //!
-//! 1. post the `# QC New Round` comment (this is what actually creates the round),
+//! 1. post the round comment (this is what actually creates the round),
 //! 2. reopen the issue,
 //! 3. upsert the `## QC Round` cache block into the issue body,
 //! 4. optionally post a `# QC Notification` for `previous approval → anchor`.
@@ -93,7 +93,7 @@ impl StepOutcome {
 pub struct StartRoundResult {
     /// Derived index of the round that was opened (always >= 2).
     pub round: u32,
-    /// URL of the `# QC New Round` comment: the round's identity.
+    /// URL of the round comment: the round's identity.
     pub round_comment_url: String,
     /// The anchor the round opened at (HEAD at open time).
     pub anchor: ObjectId,
@@ -166,7 +166,7 @@ impl fmt::Display for StartRoundResult {
 #[derive(Debug, thiserror::Error)]
 pub enum StartRoundError {
     #[error(
-        "Cannot start a new round: {round_name} is still open. Approve it first — a `# QC New Round` comment posted now would extend that round instead of opening a new one."
+        "Cannot start a new round: {round_name} is still open. Approve it first — a `# QC Round` comment posted now would extend that round instead of opening a new one."
     )]
     RoundStillOpen { round: u32, round_name: String },
     #[error(
@@ -1118,7 +1118,7 @@ mod tests {
 
     /// P4: a new round is an *append*. Its impact list is a notice — the previous
     /// approval still stands and nothing was written downstream — and must stay
-    /// clearly distinct from the retraction copy in [`crate::approve`], which is an
+    /// clearly distinct from the unapproval copy in [`crate::approve`], which is an
     /// amend and does read as invalidation.
     #[test]
     fn new_round_impact_reads_as_a_notice_not_as_invalidation() {
@@ -1143,8 +1143,8 @@ mod tests {
         assert!(display.contains("For your information"));
         assert!(display.contains("approval still stands"));
         assert!(display.contains("nothing was written to them"));
-        // Never the retraction wording: nothing here was invalidated.
-        assert!(!display.contains("retract"));
+        // Never the unapproval wording: nothing here was invalidated.
+        assert!(!display.to_lowercase().contains("unapprove"));
         assert!(!display.contains("no longer be valid"));
         assert!(!display.contains("redone"));
         // "re-open" collides with GitHub's own issue reopen — never in user copy.

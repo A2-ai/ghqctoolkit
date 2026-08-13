@@ -39,15 +39,14 @@ fixtures:
       id: 456
       html_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
       body: |
-        # QC New Round
+        # QC Round
 
         ## Metadata
         * round: 2
-        * round commit: abc1234567890abcdef1234567890abcdef12340
+        * initial qc round commit: abc1234567890abcdef1234567890abcdef12340
         * previous approved commit: 456def789abc012345678901234567890123cdef
-        * checklist: Code Review Checklist
 
-        ## Checklist
+        # Code Review Checklist
         - [ ] Reviewed the logic
     # Round 2 was notified, so nothing is missing there either.
     - issue: 1

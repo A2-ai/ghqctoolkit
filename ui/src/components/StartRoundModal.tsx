@@ -8,7 +8,9 @@ import {
   Loader,
   Modal,
   SegmentedControl,
+  Select,
   Stack,
+  Tabs,
   Text,
   TextInput,
 } from '@mantine/core'
@@ -27,6 +29,8 @@ import {
   type StartRoundResponse,
   type StepOutcome,
 } from '~/api/rounds'
+import { useQuery } from '@tanstack/react-query'
+import { commitDiffQueryKey, fetchCommitDiff } from '~/api/commits'
 import { CommentEditor } from './CommentEditor'
 
 export interface StartRoundModalProps {
@@ -34,6 +38,8 @@ export interface StartRoundModalProps {
   issueNumber: number | null
   /** File name of the QC'd file, shown as context in the header. Optional. */
   issueTitle?: string
+  /** The issue's GitHub URL, so the header line links to it. Optional. */
+  issueUrl?: string
   /**
    * `round_repair` from the issue's status: which of the open round's follow-up
    * steps are incomplete. When it reports `needs_repair`, the modal offers a repair
@@ -51,7 +57,7 @@ export interface StartRoundModalProps {
  * the action is not offered and the backend's `blocked_reason` is rendered
  * verbatim (a round already open, or an anchor that could not be resolved).
  */
-export function StartRoundModal({ issueNumber, issueTitle, repair, onClose }: StartRoundModalProps) {
+export function StartRoundModal({ issueNumber, issueTitle, issueUrl, repair, onClose }: StartRoundModalProps) {
   return (
     <Modal
       opened={issueNumber !== null}
@@ -67,6 +73,7 @@ export function StartRoundModal({ issueNumber, issueTitle, repair, onClose }: St
           key={issueNumber}
           issueNumber={issueNumber}
           issueTitle={issueTitle}
+          issueUrl={issueUrl}
           repair={repair}
           onClose={onClose}
         />
@@ -78,11 +85,13 @@ export function StartRoundModal({ issueNumber, issueTitle, repair, onClose }: St
 function StartRoundBody({
   issueNumber,
   issueTitle,
+  issueUrl,
   repair,
   onClose,
 }: {
   issueNumber: number
   issueTitle?: string
+  issueUrl?: string
   repair?: RoundRepairStatus | null
   onClose: () => void
 }) {
@@ -114,12 +123,19 @@ function StartRoundBody({
     <StartRoundForm
       issueNumber={issueNumber}
       issueTitle={issueTitle}
+      issueUrl={issueUrl}
       seed={seedQuery.data}
       repair={repair}
       onClose={onClose}
     />
   )
 }
+
+/**
+ * The form's three concerns, in the order the work happens: what changed since the
+ * last approval, what to review it against, and who hears about it.
+ */
+type FormTab = 'changes' | 'checklist' | 'notification'
 
 const NOTIFICATION_OPTIONS: { value: NotificationMode; label: string; description: string }[] = [
   {
@@ -143,20 +159,28 @@ const NOTIFICATION_OPTIONS: { value: NotificationMode; label: string; descriptio
 function StartRoundForm({
   issueNumber,
   issueTitle,
+  issueUrl,
   seed,
   repair,
   onClose,
 }: {
   issueNumber: number
   issueTitle?: string
+  issueUrl?: string
   seed: RoundSeedResponse
   repair?: RoundRepairStatus | null
   onClose: () => void
 }) {
   const [checklistContent, setChecklistContent] = useState(seed.checklist_content ?? '')
   const [checklistName, setChecklistName] = useState(seed.checklist_name ?? '')
+  // Which round's checklist the editor was seeded from. Rounds diverge, so the
+  // newest is only the default, not the only sensible base.
+  const [sourceRound, setSourceRound] = useState<string | null>(
+    seed.default_round === null ? null : String(seed.default_round),
+  )
   const [note, setNote] = useState('')
   const [notification, setNotification] = useState<NotificationMode>('full')
+  const [tab, setTab] = useState<FormTab>('checklist')
   const startRound = useStartRound(issueNumber)
 
   // A 201 is a success even when it reports failed steps — see StartRoundResultPanel.
@@ -177,6 +201,19 @@ function StartRoundForm({
   // The expected 409 precondition: a round is already open, so nothing was posted.
   const roundAlreadyOpen: boolean = startRound.error !== null && isRoundStillOpenError(startRound.error)
 
+  /**
+   * Re-seed the editor from another round. Replacing the content outright is the
+   * point of the control — the author asked to base this round on that one — so
+   * edits made before switching are deliberately discarded.
+   */
+  function selectSourceRound(value: string | null) {
+    setSourceRound(value)
+    const option = seed.checklist_options.find((o) => String(o.round) === value)
+    if (!option) return
+    setChecklistContent(option.content)
+    setChecklistName(option.checklist_name ?? '')
+  }
+
   function handleSubmit() {
     startRound.mutate({
       checklist_content: checklistContent,
@@ -190,38 +227,25 @@ function StartRoundForm({
     <Stack gap="md">
       <Stack gap={2}>
         <Text size="sm" fw={700} data-testid="next-round-name">{seed.next_round_name}</Text>
-        {issueTitle && (
-          <Text size="xs" c="dimmed">#{issueNumber} · {issueTitle}</Text>
+        {/*
+          Linked so the issue is one click away — a reviewer opening a round often
+          wants the thread it belongs to.
+        */}
+        {issueUrl ? (
+          <Anchor
+            href={issueUrl}
+            target="_blank"
+            rel="noreferrer"
+            size="xs"
+            data-testid="round-issue-link"
+          >
+            #{issueNumber} · {issueTitle ?? seed.file}
+          </Anchor>
+        ) : (
+          <Text size="xs" c="dimmed">#{issueNumber} · {issueTitle ?? seed.file}</Text>
         )}
-      </Stack>
-
-      {/*
-        P4: the decision point. A new round is an append — routine work, nothing was
-        wrong — so this must not read like the retraction path, which is an amend.
-      */}
-      <Alert
-        color="blue"
-        variant="light"
-        icon={<IconInfoCircle size={16} />}
-        data-testid="new-round-guidance"
-      >
-        <Text size="sm">
-          A new round is an <b>append</b>: the previous round's approval remains valid, and
-          downstream QCs that relied on it still stand. This is the normal way to QC a file that
-          changed again — nothing was wrong.
-        </Text>
-        <Text size="sm" mt={4}>
-          Use <b>Retract approval</b> instead only if a past approval was itself wrong; that does
-          invalidate the QCs that relied on it.
-        </Text>
-      </Alert>
-
-      {/* Target commit — read-only by design: the anchor is always branch HEAD. */}
-      <Stack gap={4} data-testid="round-anchor">
-        <CommitLine label="Target commit (HEAD)" hash={seed.anchor} />
-        <CommitLine label="Compared against" hash={seed.previous_approval} />
-        <Text size="xs" c="dimmed">
-          A round always opens at the current HEAD of the issue's branch, so there is nothing to choose here.
+        <Text size="xs" c="dimmed" mt={2} data-testid="new-round-guidance">
+          The previous round's approval stays valid — nothing downstream is affected.
         </Text>
       </Stack>
 
@@ -267,70 +291,127 @@ function StartRoundForm({
       {noPriorChecklist && (
         <Alert color="blue" icon={<IconInfoCircle size={16} />} data-testid="no-prior-checklist">
           <Text size="sm">
-            No prior checklist was found for this issue, so the editor below starts empty. Write the
-            checklist this round should be reviewed against.
+            No prior checklist was found — write the one this round should be reviewed against.
           </Text>
         </Alert>
       )}
 
-      <TextInput
-        label="Checklist name"
-        placeholder="e.g. Code Review"
-        description="Recorded in the round comment as the audit record of which template this round used. Clear it to record none."
-        value={checklistName}
-        onChange={(e) => setChecklistName(e.currentTarget.value)}
-        disabled={!seed.can_start}
-      />
+      {/*
+        Two tabs, matching the create-issue modal's one-concern-per-tab idiom. It
+        also collapses the form to a single panel, and it puts the source picker in
+        the same row as the name it fills in — the link that was missing when the
+        picker floated above as a third unrelated field.
 
-      <CommentEditor
-        label="Checklist"
-        placeholder="- [ ] Checklist item"
-        value={checklistContent}
-        onChange={setChecklistContent}
-        minHeight={180}
-        monospace
-        showPreviewTabs
-        required
-      />
-      <Text size="xs" c="dimmed" mt={-8}>
-        The full checklist for this round — add, reword, reorder or delete items freely.
-      </Text>
-
-      <TextInput
-        label="Note (optional)"
-        placeholder="Why this round is being opened"
-        description="Kept to a single line: the round metadata records one line only."
-        value={note}
-        onChange={(e) => setNote(e.currentTarget.value)}
-        disabled={!seed.can_start}
-      />
-
-      <Stack gap={4}>
-        <Text size="sm" fw={500}>Notification</Text>
-        <SegmentedControl
-          data-testid="notification-mode"
-          value={notification}
-          onChange={(v) => setNotification(v as NotificationMode)}
-          disabled={!seed.can_start}
-          fullWidth
-          data={NOTIFICATION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-        />
-        <Text size="xs" c="dimmed" data-testid="notification-description">
-          {selectedOption.description}
-        </Text>
-        {notification === 'none' && (
-          <Alert
-            color="orange"
-            icon={<IconAlertTriangle size={16} />}
-            data-testid="notification-none-warning"
-            mt={4}
+        The read-only context above and the actions below stay outside the tabs, so
+        what the round *is* and how to commit it are never a tab away.
+      */}
+      <Tabs keepMounted={false} value={tab} onChange={(value) => setTab((value as FormTab | null) ?? 'checklist')}>
+        <Tabs.List grow>
+          <Tabs.Tab
+            value="checklist"
+            // The only required field lives here, so an empty one is flagged on the
+            // tab itself rather than only on a panel the user may not be looking at.
+            rightSection={
+              checklistContent.trim() === '' ? (
+                <Text span c="red" size="sm" data-testid="checklist-tab-required">*</Text>
+              ) : null
+            }
           >
-            <Text size="sm">
-              The reviewer will not be notified. The round opens silently and nobody is told it exists.
+            Checklist
+          </Tabs.Tab>
+          <Tabs.Tab value="changes">Changes</Tabs.Tab>
+          <Tabs.Tab value="notification">Notification</Tabs.Tab>
+        </Tabs.List>
+
+        <Tabs.Panel value="checklist" pt="md" data-testid="checklist-panel">
+          <Stack gap="sm">
+            <Group grow align="flex-end" wrap="nowrap">
+              {seed.checklist_options.length > 1 && (
+                <Select
+                  label="Start from"
+                  data={seed.checklist_options.map((option) => ({
+                    value: String(option.round),
+                    label: option.round_name,
+                  }))}
+                  value={sourceRound}
+                  onChange={selectSourceRound}
+                  allowDeselect={false}
+                  disabled={!seed.can_start}
+                  data-testid="checklist-source-round"
+                />
+              )}
+              <TextInput
+                label="Name"
+                placeholder="e.g. Code Review"
+                value={checklistName}
+                onChange={(e) => setChecklistName(e.currentTarget.value)}
+                disabled={!seed.can_start}
+              />
+            </Group>
+
+            <CommentEditor
+              placeholder="- [ ] Checklist item"
+              value={checklistContent}
+              onChange={setChecklistContent}
+              minHeight={200}
+              monospace
+              showPreviewTabs
+            />
+          </Stack>
+        </Tabs.Panel>
+
+        {/*
+          What the reviewer is actually being asked to look at: the two ends of the
+          round and the diff between them. The note lives here because it is the
+          author's answer to that diff — "why this round is being opened".
+        */}
+        <Tabs.Panel value="changes" pt="md" data-testid="changes-panel">
+          <Stack gap="sm">
+            <Stack gap={4} data-testid="round-anchor">
+              <CommitLine label="Opens at (HEAD)" hash={seed.anchor} />
+              <CommitLine label="Compares against" hash={seed.previous_approval} />
+            </Stack>
+
+            <RoundDiff file={seed.file} from={seed.previous_approval} to={seed.anchor} />
+
+            <TextInput
+              label="Note (optional)"
+              placeholder="Why this round is being opened"
+              value={note}
+              onChange={(e) => setNote(e.currentTarget.value)}
+              disabled={!seed.can_start}
+            />
+          </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="notification" pt="md" data-testid="notification-panel">
+          <Stack gap={4}>
+            <SegmentedControl
+              data-testid="notification-mode"
+              value={notification}
+              onChange={(v) => setNotification(v as NotificationMode)}
+              disabled={!seed.can_start}
+              fullWidth
+              data={NOTIFICATION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+            <Text size="xs" c="dimmed" data-testid="notification-description">
+              {selectedOption.description}
             </Text>
-          </Alert>
-        )}
-      </Stack>
+            {notification === 'none' && (
+              <Alert
+                color="orange"
+                icon={<IconAlertTriangle size={16} />}
+                data-testid="notification-none-warning"
+                mt={4}
+              >
+                <Text size="sm">
+                  The reviewer will not be notified. The round opens silently and nobody is told it exists.
+                </Text>
+              </Alert>
+            )}
+          </Stack>
+        </Tabs.Panel>
+      </Tabs>
 
       {startRound.error && (
         // Boolean, not a narrowing guard: the failure branch still needs the message.
@@ -380,6 +461,126 @@ function CommitLine({ label, hash }: { label: string; hash: string | null }) {
         <Text span size="sm" c="dimmed">not available</Text>
       )}
     </Text>
+  )
+}
+
+/**
+ * The diff between the round's two ends.
+ *
+ * Fetched on demand: the tabs above set `keepMounted={false}`, so this mounts only
+ * when the Changes tab is opened and a user who never looks costs no request.
+ *
+ * Nothing here is an error path in the usual sense. A round can legitimately open at
+ * the very commit it compares against — which is exactly the state right after an
+ * approval — so "no changes" is a normal, expected answer.
+ */
+function RoundDiff({ file, from, to }: { file: string; from: string | null; to: string | null }) {
+  const enabled = from !== null && to !== null
+  const query = useQuery({
+    queryKey: commitDiffQueryKey(file, from ?? '', to ?? ''),
+    queryFn: () => fetchCommitDiff(file, from as string, to as string),
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  if (!enabled) {
+    return (
+      <Text size="xs" c="dimmed" data-testid="round-diff-unavailable">
+        No commit range to compare.
+      </Text>
+    )
+  }
+  if (query.isPending) {
+    return (
+      <Group gap="xs" data-testid="round-diff-loading">
+        <Loader size="xs" />
+        <Text size="xs" c="dimmed">Loading changes…</Text>
+      </Group>
+    )
+  }
+  if (query.error) {
+    return (
+      <Alert color="red" data-testid="round-diff-error">
+        <Text size="sm">{query.error.message}</Text>
+      </Alert>
+    )
+  }
+  if (!query.data.diff) {
+    return (
+      <Text size="xs" c="dimmed" data-testid="round-diff-empty">
+        No changes to {file} between these commits.
+      </Text>
+    )
+  }
+  return <DiffView diff={query.data.diff} />
+}
+
+/** A fenced ```diff block as the backend renders it, minus the fence. */
+function stripDiffFence(diff: string): string {
+  const trimmed = diff.trim()
+  if (!trimmed.startsWith('```')) return trimmed
+  const lines = trimmed.split('\n')
+  if (lines[lines.length - 1]?.trim() === '```') lines.pop()
+  return lines.slice(1).join('\n')
+}
+
+/**
+ * Renders the diff with per-line colouring. Deliberately not a markdown renderer:
+ * the payload is one fenced block (or, for spreadsheets, a table the same colouring
+ * leaves alone), and a `pre` that scrolls on both axes keeps long lines from forcing
+ * the modal wider.
+ */
+function DiffView({ diff }: { diff: string }) {
+  const lines = stripDiffFence(diff).split('\n')
+  return (
+    <div
+      data-testid="round-diff"
+      style={{
+        border: '1px solid var(--mantine-color-gray-3)',
+        borderRadius: 6,
+        maxHeight: 300,
+        overflow: 'auto',
+        background: 'var(--mantine-color-gray-0)',
+      }}
+    >
+      <pre
+        style={{
+          margin: 0,
+          padding: '8px 10px',
+          fontSize: 12,
+          lineHeight: 1.5,
+          fontFamily: 'monospace',
+        }}
+      >
+        {lines.map((line, index) => {
+          const added = line.startsWith('+')
+          const removed = line.startsWith('-')
+          const meta = line.startsWith('@@')
+          return (
+            <div
+              key={index}
+              style={{
+                color: added
+                  ? 'var(--mantine-color-green-9)'
+                  : removed
+                  ? 'var(--mantine-color-red-9)'
+                  : meta
+                  ? 'var(--mantine-color-blue-7)'
+                  : undefined,
+                background: added
+                  ? 'var(--mantine-color-green-0)'
+                  : removed
+                  ? 'var(--mantine-color-red-0)'
+                  : undefined,
+                whiteSpace: 'pre',
+              }}
+            >
+              {line === '' ? ' ' : line}
+            </div>
+          )
+        })}
+      </pre>
+    </div>
   )
 }
 

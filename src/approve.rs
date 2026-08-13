@@ -291,7 +291,7 @@ pub struct UnapprovalResult {
 
 impl fmt::Display for UnapprovalResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "🚫 Approval retracted — the issue is open again!")?;
+        writeln!(f, "🚫 Issue unapproved — it is open again!")?;
         writeln!(f, "{}", self.unapproval_url)?;
 
         match &self.impacted_issues {
@@ -305,7 +305,7 @@ impl fmt::Display for UnapprovalResult {
             ImpactedIssues::Some(nodes) => {
                 writeln!(
                     f,
-                    "\nThese QCs relied on the approval just retracted, so their own approvals may \
+                    "\nThese QCs relied on that approval, so their own approvals may \
                      no longer be valid and may need to be redone:"
                 )?;
                 for node in nodes {
@@ -787,7 +787,7 @@ mod tests {
         };
 
         let display = format!("{}", result);
-        assert!(display.contains("🚫 Approval retracted — the issue is open again!"));
+        assert!(display.contains("🚫 Issue unapproved — it is open again!"));
         assert!(display.contains("https://github.com/owner/repo/issues/25#issuecomment-123"));
         assert!(!display.contains("impacted"));
     }
@@ -826,7 +826,7 @@ mod tests {
         assert!(display.contains("previous QC"));
     }
 
-    /// P4: retraction is an *amend* — it says the approval was wrong, so what relied
+    /// Unapproving is an *amend* — it says the approval was wrong, so what relied
     /// on it may not survive. A new round is an *append* and must never borrow this
     /// wording, or routine work reads as an alarm. Guards the two copies apart.
     #[test]
@@ -848,10 +848,10 @@ mod tests {
             }
         );
 
-        assert!(display.contains("retracted"));
+        assert!(display.contains("relied on that approval"));
         assert!(display.contains("may no longer be valid"));
         assert!(display.contains("redone"));
-        // The new-round promise must not appear here: retraction withdraws it.
+        // The new-round promise must not appear here: unapproving withdraws it.
         assert!(!display.contains("still stands"));
         assert!(!display.contains("nothing was written"));
         // "re-open" collides with GitHub's own issue reopen — never in user copy.

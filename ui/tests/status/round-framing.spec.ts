@@ -1,14 +1,19 @@
-// P4: the user-facing language of the two approval-lifecycle actions.
+// The user-facing language of the two approval-lifecycle actions.
 //
 // "Start new round" is an append — the previous approval stays true, downstream QCs
-// that relied on it still stand — while "Retract approval" is an amend that says a
-// past approval was wrong and so may invalidate what depended on it. These tests
-// pin that the two surfaces read differently, and that neither uses "re-open"
-// language, which collides with GitHub's own issue-reopen and made routine work
-// look like an alarm.
+// that relied on it still stand — while "Unapprove" is an amend that says a past
+// approval was wrong and so may invalidate what depended on it. These tests pin
+// that the two surfaces read differently, and that neither uses "re-open" language,
+// which collides with GitHub's own issue-reopen and made routine work look like an
+// alarm.
+//
+// The orientation notes on both surfaces are deliberately one line each: the heavy
+// lifting is done by having two separate actions and by the impact readouts, which
+// are where the real difference has to be legible. So the assertions below are
+// light on the notes and firm on the impact lists.
 //
 // Scope is deliberately narrow: only the two surfaces this phase reworded — the
-// retract-approval tab and the start-new-round modal — so GitHub's own terminology
+// unapprove tab and the start-new-round modal — so GitHub's own terminology
 // elsewhere in the app cannot false-positive here.
 
 import { test, expect, type Page } from 'playwright/test'
@@ -32,8 +37,8 @@ async function selectSprint1(page: Page) {
   await page.getByRole('option', { name: /Sprint 1/ }).click()
 }
 
-/** Status tab → #42's detail modal, which defaults to the retract-approval tab. */
-async function openRetractTab(page: Page) {
+/** Status tab → #42's detail modal, which defaults to the unapprove tab. */
+async function openUnapproveTab(page: Page) {
   await setupRoutes(page, {
     milestones: [openMilestone],
     milestoneIssues: { 1: [approvedModalIssue] },
@@ -43,7 +48,7 @@ async function openRetractTab(page: Page) {
   await page.goto('/')
   await selectSprint1(page)
   await page.getByTestId(`issue-card-${approvedModalIssue.number}`).click()
-  const panel = page.getByRole('tabpanel', { name: 'Retract approval' })
+  const panel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await expect(panel).toBeVisible()
   return panel
 }
@@ -77,10 +82,10 @@ async function openStartRoundModal(page: Page) {
 // "re-open" must not appear on either surface
 // ---------------------------------------------------------------------------
 
-test('retract-approval surface uses no re-open language', async ({ page }) => {
-  const panel = await openRetractTab(page)
+test('unapprove surface uses no re-open language', async ({ page }) => {
+  const panel = await openUnapproveTab(page)
   expect(await panel.innerText()).not.toMatch(REOPEN_LANGUAGE)
-  await expect(page.getByRole('tab', { name: 'Retract approval', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Unapprove', exact: true })).toBeVisible()
 })
 
 test('start-new-round surface uses no re-open language, including its step list', async ({ page }) => {
@@ -96,31 +101,28 @@ test('start-new-round surface uses no re-open language, including its step list'
 })
 
 // ---------------------------------------------------------------------------
-// The two framings are distinguishable to a user who sees them a week apart
+// The two framings stay distinguishable
 // ---------------------------------------------------------------------------
 
-test('retraction reads as invalidation; a new round reads as a notice', async ({ page }) => {
-  const panel = await openRetractTab(page)
-  const retractText = await panel.getByTestId('retract-guidance').innerText()
-  // Amend: the approval was wrong, and what relied on it may not survive.
-  expect(retractText).toMatch(/wrong/i)
-  expect(retractText).toMatch(/no longer be valid/i)
-  expect(retractText).toMatch(/redone/i)
-  // …and it points at the other action rather than leaving the user to guess.
-  expect(retractText).toMatch(/Start new round/i)
-  // Never the new-round promise: retraction does not leave approvals standing.
-  expect(retractText).not.toMatch(/still stands/i)
+test('each surface names the other action without borrowing its promise', async ({ page }) => {
+  const panel = await openUnapproveTab(page)
+  const note = await panel.getByTestId('unapprove-note').innerText()
+  // Points at the other action rather than leaving the user to guess…
+  expect(note).toMatch(/start a new round/i)
+  // …but never borrows the new-round promise: unapproving does not leave
+  // approvals standing, which is the whole reason the two actions are separate.
+  expect(note).not.toMatch(/stays valid|still stands/i)
 
   await openStartRoundModal(page)
-  const roundText = await page.getByTestId('new-round-guidance').innerText()
-  // Append: routine, blameless, and nothing downstream is invalidated.
-  expect(roundText).toMatch(/append/i)
-  expect(roundText).toMatch(/remains valid/i)
-  expect(roundText).toMatch(/nothing was wrong/i)
-  expect(roundText).toMatch(/Retract approval/i)
-  expect(roundText).not.toMatch(/redone/i)
+  const roundNote = await page.getByTestId('new-round-guidance').innerText()
+  // The one fact a user cannot derive from the form itself.
+  expect(roundNote).toMatch(/stays valid/i)
+  // And never the invalidation vocabulary, or routine work reads as an alarm.
+  expect(roundNote).not.toMatch(/redone|no longer be valid|wrong/i)
+})
 
-  // The two impact readouts are worded apart too: a notice, not an invalidation.
+test('the impact readouts are worded apart: a notice, not an invalidation', async ({ page }) => {
+  await openStartRoundModal(page)
   await page.getByTestId('start-round-submit').click()
   const impact = await page.getByTestId('impact-list').innerText()
   expect(impact).toMatch(/Notice only/i)

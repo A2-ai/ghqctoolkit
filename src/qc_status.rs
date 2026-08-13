@@ -48,7 +48,22 @@ impl QCStatus {
     pub fn determine_status(issue_thread: &IssueThread) -> Self {
         let commits = &issue_thread.commits;
 
-        let status = if let Some(approved) = issue_thread.approved_commit() {
+        // An open round supersedes any earlier round's approval. Once a new QC pass
+        // has been started the issue is not "approved with subsequent changes" — it
+        // is awaiting review of the round now in progress, and reporting it as
+        // approved would hide live QC work behind a stale approval.
+        //
+        // This is a no-op for legacy threads: a `# QC Un-Approval` strips the
+        // `Approved` status from its commit (see `IssueThread::from_issue_comments`),
+        // so on a single-round thread an open round always coincides with
+        // `approved_commit() == None` and the branch below is unchanged.
+        let open_round = issue_thread.open_round();
+        let standing_approval = match open_round {
+            Some(_) => None,
+            None => issue_thread.approved_commit(),
+        };
+
+        let status = if let Some(approved) = standing_approval {
             // Find the approved commit index in the chronological sequence
             let approved_index = commits
                 .iter()
@@ -72,16 +87,31 @@ impl QCStatus {
             if !issue_thread.open {
                 Self::ApprovalRequired
             } else {
+                // When a later round is open, only that round's window is relevant:
+                // its anchor and everything newer. Looking further back would read
+                // this round's status off a previous round's notification or
+                // approval. Initial QC keeps the full history, since it owns it —
+                // which is also what makes this identical for legacy threads.
+                let search: &[crate::issue::IssueCommit] = match open_round {
+                    Some(round) if round.previous_approval.is_some() => {
+                        match commits.iter().position(|c| c.hash == round.opened_at) {
+                            Some(anchor) => &commits[..=anchor],
+                            None => &commits[..],
+                        }
+                    }
+                    _ => &commits[..],
+                };
+
                 // Find the newest (lowest index) file-changing commit.
                 // Commits are stored newest-first, so lower index = more recent.
-                let latest_file_entry = commits.iter().enumerate().find(|(_, c)| c.file_changed);
+                let latest_file_entry = search.iter().enumerate().find(|(_, c)| c.file_changed);
 
                 match latest_file_entry {
                     Some((file_idx, latest_fc)) => {
                         // Find the newest commit that carries any status.
                         // A status commit "covers" the file change if it is at the same
                         // position or newer (index ≤ file_idx).
-                        let latest_status_entry = commits
+                        let latest_status_entry = search
                             .iter()
                             .enumerate()
                             .find(|(_, c)| !c.statuses.is_empty());
@@ -108,7 +138,7 @@ impl QCStatus {
                         // No file-changing commit found, but the issue has been posted
                         // (an Initial/Notification commit exists). Treat like a covered
                         // status commit: awaiting review unless already reviewed.
-                        let latest_status_entry = commits.iter().find(|c| !c.statuses.is_empty());
+                        let latest_status_entry = search.iter().find(|c| !c.statuses.is_empty());
                         match latest_status_entry {
                             Some(sc)
                                 if sc.statuses.contains(&crate::issue::CommitStatus::Reviewed) =>
@@ -783,6 +813,141 @@ mod tests {
                 ObjectId::from_str("0000000000000000000000000000000000000001").unwrap()
             )
             .is_approved()
+        );
+    }
+
+    // ── An open round supersedes the previous round's approval ───────────────
+
+    use crate::issue::{CommitStatus, IssueCommit};
+    use std::collections::HashSet;
+
+    fn oid(n: u8) -> ObjectId {
+        ObjectId::from_str(&format!("{:040x}", n)).unwrap()
+    }
+
+    fn statuses(items: &[CommitStatus]) -> HashSet<CommitStatus> {
+        items.iter().cloned().collect()
+    }
+
+    fn epoch() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(0, 0).unwrap()
+    }
+
+    /// Approve at 2, change the file at 3, then open round 2 anchored at 3.
+    /// Commits are newest-first, so `[3, 2, 1]`.
+    fn thread_with_rounds(rounds: Vec<crate::round::Round>) -> IssueThread {
+        let commits = vec![
+            IssueCommit {
+                hash: oid(3),
+                message: "update file b".to_string(),
+                statuses: statuses(&[CommitStatus::Notification]),
+                file_changed: true,
+            },
+            IssueCommit {
+                hash: oid(2),
+                message: "approved commit".to_string(),
+                statuses: statuses(&[CommitStatus::Approved]),
+                file_changed: true,
+            },
+            IssueCommit {
+                hash: oid(1),
+                message: "initial".to_string(),
+                statuses: statuses(&[CommitStatus::Initial]),
+                file_changed: true,
+            },
+        ];
+        IssueThread {
+            file: PathBuf::from("scripts/file_b.R"),
+            branch: "main".to_string(),
+            open: true,
+            commits,
+            milestone: "milestone".to_string(),
+            blocking_qcs: vec![],
+            rounds,
+            round_anomalies: vec![],
+        }
+    }
+
+    fn initial_round_closed_at_2() -> crate::round::Round {
+        crate::round::Round {
+            index: 1,
+            opened_at: oid(1),
+            previous_approval: None,
+            opened: crate::round::RoundOpen::IssueCreated,
+            checklist: crate::round::ChecklistSource::IssueBody,
+            checklist_name: None,
+            state: crate::round::RoundState::Closed {
+                commit: oid(2),
+                by: "reviewer".to_string(),
+                at: epoch(),
+                comment_index: 1,
+                comment_id: None,
+                comment_url: None,
+            },
+            events: vec![],
+            retractions: vec![],
+            extensions: vec![],
+        }
+    }
+
+    /// Before the new round exists, a file change after the approval is exactly
+    /// `ChangesAfterApproval` — the behaviour the fix must leave alone.
+    #[test]
+    fn changes_after_approval_when_no_round_is_open() {
+        let thread = thread_with_rounds(vec![initial_round_closed_at_2()]);
+        let status = QCStatus::determine_status(&thread);
+        assert!(
+            matches!(status, QCStatus::ChangesAfterApproval(hash) if hash == oid(3)),
+            "expected ChangesAfterApproval, got {status:?}"
+        );
+    }
+
+    /// Once round 2 is open the issue is under review again, so it must not be
+    /// reported as approved-with-changes. This is the bug that motivated the fix:
+    /// approve, commit, start a new round, and the card still read "Approved".
+    #[test]
+    fn open_round_supersedes_previous_round_approval() {
+        let round2 = crate::round::Round {
+            index: 2,
+            opened_at: oid(3),
+            previous_approval: Some(oid(2)),
+            opened: crate::round::RoundOpen::NewRound {
+                comment_index: 2,
+                comment_id: None,
+                comment_url: None,
+                author: "author".to_string(),
+                at: epoch(),
+                note: None,
+            },
+            checklist: crate::round::ChecklistSource::Comment {
+                comment_index: 2,
+                comment_id: None,
+                comment_url: None,
+            },
+            checklist_name: None,
+            state: crate::round::RoundState::Open,
+            events: vec![crate::round::RoundEvent::Notification {
+                commit: oid(3),
+                by: "author".to_string(),
+                at: epoch(),
+                comment_index: 3,
+                comment_id: None,
+                comment_url: None,
+            }],
+            retractions: vec![],
+            extensions: vec![],
+        };
+
+        let thread = thread_with_rounds(vec![initial_round_closed_at_2(), round2]);
+        let status = QCStatus::determine_status(&thread);
+
+        assert!(
+            !status.is_approved(),
+            "an open round must not report as approved, got {status:?}"
+        );
+        assert!(
+            matches!(status, QCStatus::AwaitingReview),
+            "expected AwaitingReview for a notified open round, got {status:?}"
         );
     }
 }

@@ -316,7 +316,7 @@ pub enum RoundStateEnum {
 pub enum ChecklistSourceKind {
     /// Initial QC: the checklist is in the issue body.
     IssueBody,
-    /// Round N > 1: the checklist is in the `# QC New Round` comment.
+    /// Round N > 1: the checklist is in the round comment.
     Comment,
 }
 
@@ -376,7 +376,7 @@ pub struct RoundInfo {
     pub event_count: u32,
     /// `# QC Un-Approval` comments that took back this round's approval.
     pub retraction_count: u32,
-    /// `# QC New Round` comments that extended this round instead of opening one.
+    /// round comments that extended this round instead of opening one.
     pub extension_count: u32,
 }
 
@@ -719,7 +719,7 @@ pub struct StartRoundResponse {
     pub round: u32,
     /// Human-readable name of the new round, e.g. `"Round 2"`.
     pub round_name: String,
-    /// URL of the `# QC New Round` comment: the round's identity.
+    /// URL of the round comment: the round's identity.
     pub round_comment_url: String,
     /// The commit the round opened at (HEAD at open time).
     pub anchor: String,
@@ -773,7 +773,7 @@ pub struct RoundRepairStatus {
 }
 
 impl RoundRepairStatus {
-    /// `None` unless `round` is open **and** was opened by a `# QC New Round`
+    /// `None` unless `round` is open **and** was opened by a `# QC Round`
     /// comment: Initial QC is opened by creating the issue, so it has no follow-up
     /// steps of a start-round action to complete.
     pub fn derive(issue: &octocrab::models::issues::Issue, round: &crate::Round) -> Option<Self> {
@@ -803,7 +803,7 @@ pub struct RepairRoundResponse {
     pub round: u32,
     /// Name of that round, e.g. `"Round 2"`.
     pub round_name: String,
-    /// URL of the round's `# QC New Round` comment. `null` when the comment came
+    /// URL of the round's round comment. `null` when the comment came
     /// from the disk cache and so carries no identity — in which case the body
     /// marker is deliberately left alone rather than rewritten with a wrong URL.
     pub round_comment_url: Option<String>,
@@ -838,15 +838,26 @@ impl From<&crate::RepairRoundResult> for RepairRoundResponse {
 /// Everything a "start new round" form needs, with no side effects.
 #[derive(Debug, Clone, Serialize)]
 pub struct RoundSeedResponse {
+    /// Repo-relative path of the QC'd file, so a caller can diff it without
+    /// inferring the path from the issue title.
+    pub file: String,
     /// Index the next round would get.
     pub next_round: u32,
     /// Name the next round would get, e.g. `"Round 2"`.
     pub next_round_name: String,
-    /// Seeded checklist markdown, boxes reset. `None` when neither the most recent
-    /// round comment nor the issue body carries a checklist.
+    /// Seeded checklist markdown, boxes reset — the `default_round` entry of
+    /// `checklist_options`. `None` when no round's checklist could be recovered.
     pub checklist_content: Option<String>,
     /// Name of the template the seed came from, when recorded.
     pub checklist_name: Option<String>,
+    /// Every round's checklist, oldest first, so the form can offer a choice of
+    /// which round to base the new one on. Rounds whose checklist could not be
+    /// recovered are absent, so this may be shorter than the round list — and
+    /// empty, in which case there is nothing to seed from.
+    pub checklist_options: Vec<RoundChecklistOption>,
+    /// `round` of the pre-selected entry of `checklist_options` (the most recent
+    /// one). `None` when `checklist_options` is empty.
+    pub default_round: Option<u32>,
     /// The anchor the round would open at (HEAD of the issue's branch). `None`
     /// when HEAD could not be resolved.
     pub anchor: Option<String>,
@@ -857,6 +868,31 @@ pub struct RoundSeedResponse {
     pub can_start: bool,
     /// Why not, when `can_start` is false.
     pub blocked_reason: Option<String>,
+}
+
+/// One selectable checklist source for a new round: an existing round, and the
+/// checklist it was QC'd against with every box reset.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundChecklistOption {
+    /// Index of the round this checklist came from.
+    pub round: u32,
+    /// That round's display name, e.g. `"Initial QC"` or `"Round 2"`.
+    pub round_name: String,
+    /// Template name that round recorded, when it recorded one.
+    pub checklist_name: Option<String>,
+    /// Checklist markdown, boxes reset.
+    pub content: String,
+}
+
+impl From<&crate::ChecklistOption> for RoundChecklistOption {
+    fn from(option: &crate::ChecklistOption) -> Self {
+        Self {
+            round: option.round,
+            round_name: option.round_name.clone(),
+            checklist_name: option.checklist_name.clone(),
+            content: option.content.clone(),
+        }
+    }
 }
 
 /// Repository assignee.

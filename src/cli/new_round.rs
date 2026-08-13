@@ -21,8 +21,9 @@ use super::config_init::edit_markdown_checklist;
 use super::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::{
     Configuration, DiskCache, GitHubReader, GitInfo, IssueThread, NotificationMode,
-    RepairRoundRequest, RepairRoundResult, StartRoundRequest, StartRoundResult, get_issue_comments,
-    prior_round_comment_body, repair_round, reset_checklist, seed_checklist, start_round,
+    RepairRoundRequest, RepairRoundResult, StartRoundRequest, StartRoundResult,
+    available_checklists, get_issue_comments, prior_round_comment_body, repair_round,
+    reset_checklist, seed_checklist, start_round,
 };
 
 /// CLI spelling of [`NotificationMode`].
@@ -55,6 +56,8 @@ pub struct NewRoundArgs {
     pub file: Option<PathBuf>,
     /// Use this configuration checklist instead of the previous round's.
     pub checklist_name: Option<String>,
+    /// Base the checklist on this round's instead of the previous round's.
+    pub from_round: Option<u32>,
     pub note: Option<String>,
     pub notification: NotificationMode,
     /// Open the checklist in `$EDITOR` before posting. Implied interactively.
@@ -88,6 +91,7 @@ pub async fn new_round(
 
     let (content, name) = resolve_checklist(
         args.checklist_name.as_deref(),
+        args.from_round,
         configuration,
         &thread,
         &comments,
@@ -156,7 +160,7 @@ pub struct RepairRoundArgs {
 /// Complete the follow-up steps of an issue's open round, printing the outcome.
 ///
 /// The counterpart to [`new_round`]: once a round is open the new-round action
-/// cannot be re-run (a second `# QC New Round` comment would extend the round), so
+/// cannot be re-run (a second `# QC Round` comment would extend the round), so
 /// this is how a partially-applied round start is finished.
 pub async fn repair_open_round(
     args: RepairRoundArgs,
@@ -203,15 +207,40 @@ pub fn report_repair(result: &RepairRoundResult) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the checklist for the new round: a named configuration template if one
-/// was asked for, otherwise the previous round's checklist with boxes reset.
+/// Resolve the checklist for the new round, in precedence order: a named
+/// configuration template, then a specific earlier round's checklist, then the
+/// previous round's — each with boxes reset.
 fn resolve_checklist(
     checklist_name: Option<&str>,
+    from_round: Option<u32>,
     configuration: &Configuration,
     thread: &IssueThread,
     comments: &[crate::GitComment],
     issue_body: Option<&str>,
 ) -> Result<(String, Option<String>)> {
+    if let Some(round) = from_round {
+        let options = available_checklists(thread, comments, issue_body);
+        let chosen = options
+            .iter()
+            .find(|option| option.round == round)
+            .ok_or_else(|| {
+                let mut available: Vec<String> = options
+                    .iter()
+                    .map(|option| format!("{} (--from-round {})", option.round_name, option.round))
+                    .collect();
+                available.sort();
+                anyhow!(
+                    "No checklist could be recovered for round {round} of this issue. Available: {}",
+                    if available.is_empty() {
+                        "none".to_string()
+                    } else {
+                        available.join(", ")
+                    }
+                )
+            })?;
+        return Ok((chosen.content.clone(), chosen.checklist_name.clone()));
+    }
+
     if let Some(name) = checklist_name {
         let checklist = configuration.checklists.get(name).ok_or_else(|| {
             let mut available: Vec<&str> = configuration
@@ -383,6 +412,7 @@ mod tests {
 
         let (content, name) = resolve_checklist(
             Some("Code Review"),
+            None,
             &configuration,
             &thread,
             &[],
@@ -406,7 +436,7 @@ mod tests {
             ),
         );
 
-        let error = resolve_checklist(Some("Nope"), &configuration, &thread(), &[], None)
+        let error = resolve_checklist(Some("Nope"), None, &configuration, &thread(), &[], None)
             .expect_err("an unknown name must fail loudly");
         assert!(error.to_string().contains("Available: Code Review"));
     }
@@ -414,6 +444,7 @@ mod tests {
     #[test]
     fn without_a_name_the_issue_body_seeds_the_checklist() {
         let (content, name) = resolve_checklist(
+            None,
             None,
             &Configuration::default(),
             &thread(),
@@ -428,9 +459,44 @@ mod tests {
 
     #[test]
     fn without_any_checklist_at_all_the_command_says_so() {
-        let error = resolve_checklist(None, &Configuration::default(), &thread(), &[], None)
+        let error = resolve_checklist(None, None, &Configuration::default(), &thread(), &[], None)
             .expect_err("nothing to seed from");
         assert!(error.to_string().contains("--checklist-name"));
+    }
+
+    #[test]
+    fn from_round_picks_that_rounds_checklist() {
+        let (content, name) = resolve_checklist(
+            None,
+            Some(1),
+            &Configuration::default(),
+            &thread(),
+            &[],
+            Some("## Metadata\nx\n\n# Code Review\n- [x] Reviewed"),
+        )
+        .expect("Initial QC's checklist is recoverable");
+
+        assert_eq!(content, "- [ ] Reviewed");
+        assert_eq!(name.as_deref(), Some("Code Review"));
+    }
+
+    /// The error has to name the rounds that *do* have a checklist, since which
+    /// rounds those are is not something the user can work out from the flag.
+    #[test]
+    fn an_unknown_from_round_lists_the_rounds_that_have_one() {
+        let error = resolve_checklist(
+            None,
+            Some(7),
+            &Configuration::default(),
+            &thread(),
+            &[],
+            Some("## Metadata\nx\n\n# Code Review\n- [x] Reviewed"),
+        )
+        .expect_err("round 7 does not exist on this issue");
+        assert!(
+            error.to_string().contains("Initial QC (--from-round 1)"),
+            "unhelpful error: {error}"
+        );
     }
 
     /// A thread whose only round is Initial QC, so seeding falls back to the body.

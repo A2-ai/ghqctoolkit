@@ -99,7 +99,7 @@ pub struct IssueThread {
     /// Includes both Gating QC and Previous QC sections
     pub blocking_qcs: Vec<BlockingQC>,
     /// QC rounds derived from the comment thread, oldest first.
-    /// Round 1 is "Initial QC"; a thread with no `# QC New Round` markers has
+    /// Round 1 is "Initial QC"; a thread with no round headings has
     /// exactly one round. Purely derived and additive: no existing accessor
     /// consults this.
     pub rounds: Vec<Round>,
@@ -1371,7 +1371,7 @@ mod tests {
         assert_eq!(result.open, true);
     }
 
-    /// Every existing fixture thread predates the `# QC New Round` marker, so each
+    /// Every existing fixture thread predates the `# QC Round` marker, so each
     /// one must fold to exactly one round: "Initial QC", anchored at the issue
     /// body's initial commit.
     #[tokio::test]

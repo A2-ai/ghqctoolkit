@@ -2,13 +2,13 @@
 //!
 //! A QC issue is a sequence of *rounds*. Round 1 is "Initial QC": it opens at the
 //! `initial qc commit:` recorded in the issue body and closes when an approval is
-//! posted. A later round is opened explicitly by a `# QC New Round` comment, which
-//! carries its own anchor commit (`round commit:`) and its own checklist.
+//! posted. A later round is opened explicitly by a round comment, which
+//! carries its own anchor commit (`initial qc round commit:`) and its own checklist.
 //!
 //! The fold trusts written metadata only for values it cannot derive from the
 //! comment log. The anchor is such a value, so it is authoritative; the round
 //! number and the approval a round builds on are both derivable, so they are always
-//! derived. A `# QC New Round` comment that cannot open a new round — because the
+//! derived. A round comment that cannot open a new round — because the
 //! current round is still open, or because its written `round:` disagrees with the
 //! derived number — instead *extends* the current round, so its author-written
 //! checklist is never discarded.
@@ -35,8 +35,11 @@ use gix::ObjectId;
 use crate::git::GitComment;
 use crate::issue::IssueCommit;
 
-/// Comment marker opening a new QC round.
-pub(crate) const NEW_ROUND_MARKER: &str = "# QC New Round";
+/// Heading that opens a round comment, written as `# QC Round <n>`.
+///
+/// The trailing number is for readers only — the round's identity always comes from
+/// the `round:` metadata line, never from this heading.
+pub(crate) const ROUND_HEADING: &str = "# QC Round";
 /// Comment marker for a QC notification.
 pub(crate) const NOTIFICATION_MARKER: &str = "# QC Notification";
 /// Comment marker for a QC review.
@@ -51,24 +54,23 @@ pub(crate) const CURRENT_COMMIT_KEY: &str = "current commit: ";
 pub(crate) const APPROVED_COMMIT_KEY: &str = "approved qc commit: ";
 /// Metadata key holding the commit a review compared against.
 pub(crate) const COMPARING_COMMIT_KEY: &str = "comparing commit: ";
-/// Metadata key holding the 1-based round number of a `# QC New Round` comment.
+/// Metadata key holding the 1-based round number of a round comment — the round's
+/// identity, and the only place it is read from.
 pub(crate) const ROUND_KEY: &str = "round: ";
-/// Metadata key holding the anchor commit of a `# QC New Round` comment.
-pub(crate) const ROUND_COMMIT_KEY: &str = "round commit: ";
+/// Metadata key holding the anchor commit of a round comment — the commit the round
+/// opened at. Named to mirror the issue body's `initial qc commit`.
+pub(crate) const INITIAL_ROUND_COMMIT_KEY: &str = "initial qc round commit: ";
 /// Metadata key holding the approval the new round builds on.
 pub(crate) const PREVIOUS_APPROVED_COMMIT_KEY: &str = "previous approved commit: ";
-/// Metadata key holding a free-text note on a `# QC New Round` comment.
+/// Metadata key holding a free-text note on a round comment.
 pub(crate) const NOTE_KEY: &str = "note: ";
-/// Metadata key holding the name of the checklist template a round was QC'd
-/// against. Not derivable from anywhere else, so it is trusted as written.
-pub(crate) const CHECKLIST_NAME_KEY: &str = "checklist: ";
 
 /// How a round came into being.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoundOpen {
     /// Round 1 ("Initial QC"), opened when the issue was created.
     IssueCreated,
-    /// Round N > 1, opened by a `# QC New Round` comment.
+    /// Round N > 1, opened by a round comment.
     NewRound {
         /// Position of the opening comment in the folded comment slice. Always
         /// available, and how the fold addresses the slice.
@@ -85,7 +87,7 @@ pub enum RoundOpen {
     },
 }
 
-/// A `# QC New Round` comment that could not open a new round and therefore
+/// A round comment that could not open a new round and therefore
 /// extended the current one instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extension {
@@ -102,7 +104,7 @@ pub struct Extension {
     pub note: Option<String>,
 }
 
-/// Why a `# QC New Round` comment extended the current round instead of opening
+/// Why a round comment extended the current round instead of opening
 /// a new one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExtensionReason {
@@ -117,7 +119,7 @@ pub enum ExtensionReason {
 pub enum ChecklistSource {
     /// Initial QC: the checklist is in the issue body.
     IssueBody,
-    /// Round N > 1: the checklist is in the `# QC New Round` comment.
+    /// Round N > 1: the checklist is in the round comment.
     Comment {
         comment_index: usize,
         /// GitHub's id for that comment; `None` for cache-loaded comments.
@@ -215,7 +217,7 @@ pub struct Round {
     pub state: RoundState,
     pub events: Vec<RoundEvent>,
     pub retractions: Vec<Retraction>,
-    /// `# QC New Round` comments that extended this round rather than opening a
+    /// round comments that extended this round rather than opening a
     /// new one, oldest first.
     pub extensions: Vec<Extension>,
 }
@@ -249,7 +251,7 @@ impl Round {
 /// comment id or URL is carried here.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoundAnomaly {
-    /// A `# QC New Round` comment could not open a new round, so it extended the
+    /// A round comment could not open a new round, so it extended the
     /// current one instead. The comment's checklist is never discarded.
     RoundExtended {
         comment_index: usize,
@@ -373,13 +375,25 @@ pub(crate) struct RawRound<'a> {
 /// Heading that opens the metadata block every QC comment renders.
 const METADATA_HEADING: &str = "## Metadata";
 
+/// Whether `line` opens an ATX heading of any level.
+///
+/// Metadata sections hold nothing but `* key: value` lines, so *any* heading ends
+/// one. Level matters: a round comment names its checklist with a
+/// level-1 heading, so stopping only at `## ` would pull the whole checklist into
+/// the metadata slice and let its prose be read as metadata.
+fn is_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('#') && trimmed.trim_start_matches('#').starts_with(' ')
+}
+
 /// The slice of `body` that belongs to its `## Metadata` section: everything after
-/// a line equal to `## Metadata` up to the next line beginning with `## ` (or the
-/// end of the body). Empty if the body has no metadata section.
+/// a line equal to `## Metadata` up to the next heading of any level (or the end of
+/// the body). Empty if the body has no metadata section.
 ///
 /// Metadata keys are only ever looked up inside this slice, so text that merely
 /// *looks* like metadata elsewhere in the comment — a `current commit: ` line
-/// inside an inlined `## File Difference` diff, for instance — is never parsed.
+/// inside an inlined `## File Difference` diff, or inside a checklist, for
+/// instance — is never parsed.
 fn metadata_section(body: &str) -> &str {
     let mut start: Option<usize> = None;
     let mut offset = 0usize;
@@ -393,7 +407,7 @@ fn metadata_section(body: &str) -> &str {
                 }
             }
             Some(begin) => {
-                if line.starts_with("## ") {
+                if is_heading(line) {
                     return &body[begin..offset];
                 }
             }
@@ -403,6 +417,68 @@ fn metadata_section(body: &str) -> &str {
     match start {
         Some(begin) => &body[begin..],
         None => "",
+    }
+}
+
+/// Heading of the generic checklist section, used when no template name is recorded.
+pub(crate) const UNNAMED_CHECKLIST_HEADING: &str = "## Checklist";
+
+/// The heading that introduces a round comment's checklist.
+pub(crate) enum ChecklistHeading<'a> {
+    /// `# <name>` — named by its template, exactly as in an issue body.
+    Named { name: &'a str, start: usize },
+    /// `## Checklist` — no template name was recorded.
+    Unnamed { start: usize },
+}
+
+impl ChecklistHeading<'_> {
+    /// Byte offset just past the heading line: where the checklist content begins.
+    pub(crate) fn start(&self) -> usize {
+        match *self {
+            ChecklistHeading::Named { start, .. } | ChecklistHeading::Unnamed { start } => start,
+        }
+    }
+}
+
+/// Where a round comment's checklist begins, and whether its heading names it.
+///
+/// One pass, one rule: the checklist is introduced by the first line that is either a
+/// level-1 heading other than the round heading, or exactly `## Checklist`. Because
+/// whichever comes *first* wins, a level-1 heading inside an unnamed checklist's
+/// content can never be mistaken for the checklist's name.
+///
+/// The round heading is matched by [`is_round_heading`] rather than by prefix, so a
+/// checklist whose name merely starts with "QC Round" is still found.
+pub(crate) fn find_checklist_heading(body: &str) -> Option<ChecklistHeading<'_>> {
+    let mut offset = 0usize;
+    for raw_line in body.split_inclusive('\n') {
+        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let trimmed = line.trim();
+        let start = offset + raw_line.len();
+
+        if trimmed == UNNAMED_CHECKLIST_HEADING {
+            return Some(ChecklistHeading::Unnamed { start });
+        }
+        if !is_round_heading(trimmed)
+            && let Some(name) = trimmed.strip_prefix("# ")
+        {
+            let name = name.trim();
+            if !name.is_empty() {
+                return Some(ChecklistHeading::Named { name, start });
+            }
+        }
+        offset += raw_line.len();
+    }
+    None
+}
+
+/// The checklist template name a round comment records: its `# <name>` heading, or
+/// `None` when the checklist is under the generic `## Checklist` heading.
+pub(crate) fn checklist_name_from_body(body: &str) -> Option<&str> {
+    match find_checklist_heading(body)? {
+        ChecklistHeading::Named { name, .. } => Some(name),
+        ChecklistHeading::Unnamed { .. } => None,
     }
 }
 
@@ -427,24 +503,27 @@ fn metadata_line<'a>(section: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
-/// The value of `key` in `body`'s `## Metadata` section, using exactly the same
-/// scoping and bullet rules the fold uses.
-///
-/// Exposed so writers (see [`crate::new_round`]) can read back a metadata value
-/// they wrote without reimplementing — and thereby diverging from — the parser.
-pub(crate) fn metadata_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
-    metadata_line(metadata_section(body), key)
-}
-
 /// The first whitespace-delimited token after `key` in the metadata section, which
 /// is how every commit-valued key is read.
 fn metadata_commit<'a>(section: &'a str, key: &str) -> Option<&'a str> {
     metadata_line(section, key)?.split_whitespace().next()
 }
 
+/// Whether `line` is the heading that opens a round comment: `# QC Round <n>`.
+///
+/// The heading carries the round number, so it is matched as the prefix followed by
+/// digits only — a checklist named "QC Rounds" is not a round heading.
+pub(crate) fn is_round_heading(line: &str) -> bool {
+    let trimmed = line.trim();
+    match trimmed.strip_prefix(ROUND_HEADING) {
+        Some(rest) => rest.trim().chars().all(|c| c.is_ascii_digit()),
+        None => false,
+    }
+}
+
 /// Whether any line of `body` begins with `marker`, ignoring leading whitespace.
 ///
-/// Anchoring at the start of a line means a quoted `> # QC New Round` does not
+/// Anchoring at the start of a line means a quoted `> # QC Round` does not
 /// count, while a split header such as `# QC Notification (2/3)` still does.
 fn has_marker(body: &str, marker: &str) -> bool {
     body.lines()
@@ -465,7 +544,7 @@ fn sha_equivalent(a: &str, b: &str) -> bool {
 /// The returned rounds are ordered oldest-first (Initial QC is always index 0 of
 /// the vec). This function never fails; every problem is reported as an anomaly.
 ///
-/// A thread with no `# QC New Round` markers always folds to exactly one round.
+/// A thread with no round headings always folds to exactly one round.
 /// There is deliberately no legacy reinterpretation: un-approvals in such a thread
 /// are plain retractions on round 1.
 ///
@@ -505,7 +584,7 @@ pub(crate) fn fold_rounds_from_comments<'a>(
         // F4: a new round opens only on top of a closed one whose derived round
         // number the comment agrees with. Otherwise the comment extends the current
         // round, so its author-written checklist is never silently discarded.
-        if has_marker(body, NEW_ROUND_MARKER) {
+        if body.lines().any(is_round_heading) {
             let cur = rounds.last().expect("rounds is never empty");
             let derived_index = cur.index.saturating_add(1);
             let written_index =
@@ -528,7 +607,7 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                 Some(reason) => {
                     let cur = rounds.last_mut().expect("rounds is never empty");
                     log::debug!(
-                        "comment {comment_index}: '{NEW_ROUND_MARKER}' extends round {} ({reason:?})",
+                        "comment {comment_index}: round heading extends round {} ({reason:?})",
                         cur.index
                     );
                     cur.state = RawRoundState::Open;
@@ -540,14 +619,14 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                     // The checklist name travels with the checklist it names: the
                     // round is now QC'd against this comment's checklist, so an
                     // unnamed one legitimately leaves the round unnamed.
-                    cur.checklist_name = metadata_line(metadata, CHECKLIST_NAME_KEY);
+                    cur.checklist_name = checklist_name_from_body(body);
                     cur.extensions.push(RawExtension {
                         comment_index,
                         comment_id,
                         comment_url,
                         by: author,
                         at,
-                        at_commit: metadata_commit(metadata, ROUND_COMMIT_KEY),
+                        at_commit: metadata_commit(metadata, INITIAL_ROUND_COMMIT_KEY),
                         note: metadata_line(metadata, NOTE_KEY),
                     });
                     anomalies.push(RoundAnomaly::RoundExtended {
@@ -575,7 +654,7 @@ pub(crate) fn fold_rounds_from_comments<'a>(
 
                     // The anchor is the one value the comment log cannot derive.
                     let opened_at =
-                        metadata_commit(metadata, ROUND_COMMIT_KEY).unwrap_or(derived_base);
+                        metadata_commit(metadata, INITIAL_ROUND_COMMIT_KEY).unwrap_or(derived_base);
 
                     log::debug!(
                         "comment {comment_index}: opening round {derived_index} at {opened_at}"
@@ -597,7 +676,7 @@ pub(crate) fn fold_rounds_from_comments<'a>(
                             comment_id,
                             comment_url: comment_url.map(|url| url.to_string()),
                         },
-                        checklist_name: metadata_line(metadata, CHECKLIST_NAME_KEY),
+                        checklist_name: checklist_name_from_body(body),
                         state: RawRoundState::Open,
                         events: Vec::new(),
                         retractions: Vec::new(),
@@ -1011,10 +1090,10 @@ mod tests {
         new_round_raw(&round.to_string(), round_commit, previous)
     }
 
-    /// `# QC New Round` with an arbitrary (possibly non-numeric) `round:` value.
+    /// `# QC Round` with an arbitrary (possibly non-numeric) `round:` value.
     fn new_round_raw(round: &str, round_commit: &str, previous: &str) -> GitComment {
         comment(&format!(
-            "# QC New Round\n\n## Metadata\nround: {round}\nround commit: {round_commit}\nprevious approved commit: {previous}\nnote: second pass\n\n# Checklist\n- [ ] item\n"
+            "# QC Round\n\n## Metadata\nround: {round}\ninitial qc round commit: {round_commit}\nprevious approved commit: {previous}\nnote: second pass\n\n# Checklist\n- [ ] item\n"
         ))
     }
 
@@ -1258,7 +1337,7 @@ mod tests {
 
     #[test]
     fn new_round_without_written_index_opens_the_derived_round() {
-        let body = format!("# QC New Round\n\n## Metadata\nround commit: {D}\n");
+        let body = format!("# QC Round\n\n## Metadata\ninitial qc round commit: {D}\n");
         let comments = vec![approval(B), comment(&body)];
         let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
 
@@ -1517,9 +1596,11 @@ mod tests {
 
     #[test]
     fn quoted_marker_does_not_trigger_and_split_header_does() {
-        let quoted =
-            format!("Replying:\n\n> # QC New Round\n\n## Metadata\nround: 2\nround commit: {C}\n");
-        assert!(!has_marker(&quoted, NEW_ROUND_MARKER));
+        let quoted = format!(
+            "Replying:\n\n> # QC Round 2\n\n## Metadata\nround: 2\ninitial qc round commit: {C}\n"
+        );
+        // Anchored at the start of a line, so a quoted heading is not a round heading.
+        assert!(!quoted.lines().any(is_round_heading));
         let comments = vec![approval(B), comment(&quoted)];
         let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
         assert_eq!(rounds.len(), 1, "a quoted marker must not open a round");
@@ -1573,7 +1654,7 @@ mod tests {
     #[test]
     fn short_previous_approved_commit_is_not_a_base_mismatch() {
         let body = format!(
-            "# QC New Round\n\n## Metadata\nround: 2\nround commit: {}\nprevious approved commit: {}\n",
+            "# QC Round\n\n## Metadata\nround: 2\ninitial qc round commit: {}\nprevious approved commit: {}\n",
             &C[..7],
             &B[..7]
         );
@@ -1682,14 +1763,14 @@ mod tests {
             ),
             identified(
                 &format!(
-                    "# QC New Round\n\n## Metadata\nround: 2\nround commit: {C}\nprevious approved commit: {B}\nnote: second pass\n"
+                    "# QC Round\n\n## Metadata\nround: 2\ninitial qc round commit: {C}\nprevious approved commit: {B}\nnote: second pass\n"
                 ),
                 15,
                 &format!("{URL}15"),
             ),
             // Round 2 is open, so this one extends it rather than opening round 3.
             identified(
-                &format!("# QC New Round\n\n## Metadata\nround: 3\nround commit: {D}\n"),
+                &format!("# QC Round\n\n## Metadata\nround: 3\ninitial qc round commit: {D}\n"),
                 16,
                 &format!("{URL}16"),
             ),

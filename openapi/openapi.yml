@@ -236,7 +236,7 @@ paths:
     post:
       summary: Start a new QC round
       description: |
-        Posts a `# QC New Round` comment (which is what creates the round), then
+        Posts a `# QC Round` comment (which is what creates the round), then
         reopens the issue, refreshes the `## QC Round` body marker and optionally
         posts a `# QC Notification`.
 
@@ -310,7 +310,7 @@ paths:
         it is missing or disagrees with the open round.
 
         This is the retry the start-round action promises. Once a round is open it
-        cannot be started again — a second `# QC New Round` comment extends the round
+        cannot be started again — a second `# QC Round` comment extends the round
         rather than opening one — so this endpoint is the only way to finish a round
         start whose later steps failed.
 
@@ -738,6 +738,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PagedCommitsResponse'
+
+  /commits/diff:
+    get:
+      summary: Diff one file between two commits
+      description: |
+        Returns the diff of a single file between two commits, as markdown, in the
+        same form the `## File Difference` section of a QC Notification uses — so a
+        reviewer previewing changes here sees what a notification would show them.
+
+        `diff` is null when the two commits produce no difference for the file, or
+        when the file cannot be read at one of them (added or removed between the
+        two). Neither is an error: a round opened at the commit it compares against
+        legitimately has no changes to show.
+      operationId: getCommitDiff
+      tags: [commits]
+      parameters:
+        - name: file
+          in: query
+          required: true
+          description: Repo-relative path of the file to diff
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: true
+          description: Commit to diff from — the older side
+          schema:
+            type: string
+        - name: to
+          in: query
+          required: true
+          description: Commit to diff to — the newer side
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The file's diff, or null when there is nothing to show
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitDiffResponse'
+        '400':
+          description: Invalid commit hash format
 
   /files/tree:
     get:
@@ -1261,7 +1304,7 @@ components:
           description: Un-approvals that took back this round's approval
         extension_count:
           type: integer
-          description: QC New Round comments that extended this round instead of opening one
+          description: QC Round comments that extended this round instead of opening one
 
     RoundChecklistSource:
       type: object
@@ -1734,7 +1777,7 @@ components:
           type: string
         round_comment_url:
           type: string
-          description: URL of the QC New Round comment — the round's identity
+          description: URL of the QC Round comment — the round's identity
         anchor:
           type: string
           description: The commit the round opened at (HEAD at open time)
@@ -1752,7 +1795,7 @@ components:
 
     RoundSeedResponse:
       type: object
-      required: [next_round, next_round_name, can_start]
+      required: [next_round, next_round_name, checklist_options, can_start]
       properties:
         next_round:
           type: integer
@@ -1761,10 +1804,28 @@ components:
         checklist_content:
           type: string
           nullable: true
-          description: Seeded checklist markdown, boxes reset
+          description: >
+            Seeded checklist markdown, boxes reset — the content of the
+            default_round entry of checklist_options. Null when no round's
+            checklist could be recovered.
         checklist_name:
           type: string
           nullable: true
+        checklist_options:
+          type: array
+          description: >
+            Every round's checklist, oldest first, so the form can offer a choice
+            of which round to base the new one on. Rounds whose checklist could
+            not be recovered are absent, so this may be shorter than the issue's
+            round list, and empty when there is nothing to seed from.
+          items:
+            $ref: '#/components/schemas/RoundChecklistOption'
+        default_round:
+          type: integer
+          nullable: true
+          description: >
+            round of the pre-selected checklist_options entry (the most recent
+            one). Null when checklist_options is empty.
         anchor:
           type: string
           nullable: true
@@ -1779,6 +1840,24 @@ components:
           type: string
           nullable: true
           description: Why a round cannot be started, when can_start is false
+
+    RoundChecklistOption:
+      type: object
+      required: [round, round_name, content]
+      properties:
+        round:
+          type: integer
+          description: Index of the round this checklist came from
+        round_name:
+          type: string
+          description: That round's display name, e.g. "Initial QC" or "Round 2"
+        checklist_name:
+          type: string
+          nullable: true
+          description: Template name that round recorded, when it recorded one
+        content:
+          type: string
+          description: Checklist markdown, boxes reset
 
     RoundRepairStatus:
       type: object
@@ -1834,7 +1913,7 @@ components:
           type: string
           nullable: true
           description: |
-            URL of the round's QC New Round comment. Null when the comment came from
+            URL of the round's QC Round comment. Null when the comment came from
             the disk cache and so carries no identity — in which case the body marker
             is deliberately left alone rather than rewritten with a wrong URL.
         reopened:
@@ -2138,6 +2217,17 @@ components:
         - behind: Remote commits not local
         - diverged: Both ahead and behind
         - conflict: Merge conflicts present
+
+    CommitDiffResponse:
+      type: object
+      required: [diff]
+      properties:
+        diff:
+          type: string
+          nullable: true
+          description: >
+            Markdown diff of the file between the two commits. Null when there is
+            no difference, or the file could not be read at one of them.
 
     PagedCommitsResponse:
       type: object

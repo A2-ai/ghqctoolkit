@@ -1,6 +1,6 @@
 //! Writing a new QC round, and the pure text helpers that seed its checklist.
 //!
-//! [`crate::round`] *reads* a `# QC New Round` comment; this module *writes* one.
+//! [`crate::round`] *reads* a round comment; this module *writes* one.
 //! The two must agree exactly, so every metadata key used here is imported from
 //! [`crate::round`] rather than retyped, and a round-trip test in this module
 //! generates a body and folds it back with
@@ -28,27 +28,21 @@ use std::sync::LazyLock;
 use crate::comment_system::CommentBody;
 use crate::git::{GitFileOps, GitHelpers};
 use crate::round::{
-    CHECKLIST_NAME_KEY, ChecklistSource, NEW_ROUND_MARKER, NOTE_KEY, PREVIOUS_APPROVED_COMMIT_KEY,
-    ROUND_COMMIT_KEY, ROUND_KEY, metadata_value,
+    ChecklistSource, INITIAL_ROUND_COMMIT_KEY, NOTE_KEY, PREVIOUS_APPROVED_COMMIT_KEY,
+    ROUND_HEADING, ROUND_KEY, UNNAMED_CHECKLIST_HEADING, checklist_name_from_body,
+    find_checklist_heading,
 };
-
-/// Heading of the checklist section of a `# QC New Round` comment.
-///
-/// Two hashes is load-bearing: [`crate::round`]'s metadata section ends at the
-/// next line starting with `## `, so a single-`#` heading would leave checklist
-/// lines inside the metadata slice.
-pub const CHECKLIST_HEADING: &str = "## Checklist";
 
 /// Heading of the denormalised round cache block in an issue body.
 pub const ROUND_MARKER_HEADING: &str = "## QC Round";
 /// Round-marker key holding the current round number.
 const CURRENT_ROUND_KEY: &str = "current round: ";
-/// Round-marker key holding the URL of the round's `# QC New Round` comment.
+/// Round-marker key holding the URL of the round's round comment.
 const ROUND_COMMENT_KEY: &str = "round comment: ";
 /// Preamble explaining that the checklist below the marker is the *initial* one.
 const STRANDED_CHECKLIST_NOTE: &str = "> Checklist below is from Initial QC. The current round's checklist is in the round comment above.";
 
-/// A `# QC New Round` comment: it opens a new round and carries that round's
+/// A round comment: it opens a new round and carries that round's
 /// checklist.
 #[derive(Debug, Clone)]
 pub struct QCNewRound {
@@ -69,11 +63,16 @@ pub struct QCNewRound {
 }
 
 impl CommentBody for QCNewRound {
+    /// Only ever a label — for logs and for the part headers of a split comment. The
+    /// round number lives in the body's heading and in its `round:` metadata.
     fn title(&self) -> &str {
-        "QC New Round"
+        "QC Round"
     }
 
-    /// Marker, `## Metadata`, then `## Checklist` — nothing else.
+    /// `# QC Round <n>`, `## Metadata`, then the named checklist — nothing else.
+    ///
+    /// The number in the heading is for readers; the fold identifies the round from
+    /// the `round:` metadata line, so the two can never disagree about identity.
     ///
     /// SHAs are written in full: the fold accepts abbreviations, but a full SHA
     /// can never become ambiguous.
@@ -81,20 +80,12 @@ impl CommentBody for QCNewRound {
         let mut metadata = vec![
             "## Metadata".to_string(),
             format!("{ROUND_KEY}{}", self.round),
-            format!("{ROUND_COMMIT_KEY}{}", self.round_commit),
+            format!("{INITIAL_ROUND_COMMIT_KEY}{}", self.round_commit),
             format!(
                 "{PREVIOUS_APPROVED_COMMIT_KEY}{}",
                 self.previous_approved_commit
             ),
         ];
-        if let Some(name) = &self.checklist_name {
-            // One metadata line, like the note: the fold reads the remainder of the
-            // line as the value.
-            let name = flatten_to_one_line(name);
-            if !name.is_empty() {
-                metadata.push(format!("{CHECKLIST_NAME_KEY}{name}"));
-            }
-        }
         if let Some(note) = &self.note {
             // The fold reads a note as the remainder of a single metadata line,
             // so a multi-line note is flattened rather than silently truncated.
@@ -104,11 +95,28 @@ impl CommentBody for QCNewRound {
             }
         }
 
-        let mut body = vec![NEW_ROUND_MARKER.to_string(), metadata.join("\n* ")];
+        let mut body = vec![
+            format!("{ROUND_HEADING} {}", self.round),
+            metadata.join("\n* "),
+        ];
 
+        // The checklist is named by a level-1 heading, exactly as in an issue body,
+        // so the two read the same way and there is no separate `checklist:`
+        // metadata line to keep in step with it. An unnamed checklist falls back to
+        // the `## Checklist` heading: the metadata section ends at the next heading,
+        // so this section always needs one.
         let checklist = self.checklist_content.trim();
-        if !checklist.is_empty() {
-            body.push(format!("{CHECKLIST_HEADING}\n{checklist}"));
+        let name = self
+            .checklist_name
+            .as_deref()
+            .map(flatten_to_one_line)
+            .filter(|name| !name.is_empty());
+        match (name, checklist.is_empty()) {
+            // Emitted even with empty content: the heading is the only record of the
+            // name, so dropping the section would lose it.
+            (Some(name), _) => body.push(format!("# {name}\n{checklist}").trim_end().to_string()),
+            (None, false) => body.push(format!("{UNNAMED_CHECKLIST_HEADING}\n{checklist}")),
+            (None, true) => {}
         }
 
         body.join("\n\n")
@@ -147,39 +155,6 @@ pub fn reset_checklist(content: &str) -> String {
         .into_owned()
 }
 
-/// The body of `section_heading`'s section: everything after a line equal to it
-/// (once trimmed) up to the next line starting with `## `, or the end of `body`.
-///
-/// `None` when the heading is absent or its section holds nothing but whitespace.
-/// `###`-and-deeper subheadings — which is how nested checklists render — do not
-/// terminate a section.
-fn section_body(body: &str, section_heading: &str) -> Option<String> {
-    let mut collected: Option<String> = None;
-    for line in body.lines() {
-        match &mut collected {
-            None => {
-                if line.trim() == section_heading {
-                    collected = Some(String::new());
-                }
-            }
-            Some(buffer) => {
-                if line.starts_with("## ") {
-                    break;
-                }
-                buffer.push_str(line);
-                buffer.push('\n');
-            }
-        }
-    }
-    let collected = collected?;
-    let trimmed = collected.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 /// A checklist recovered from an issue body or a round comment, together with the
 /// name of the template it came from.
 ///
@@ -194,17 +169,39 @@ pub struct SeededChecklist {
     pub name: Option<String>,
 }
 
-/// Extract the `## Checklist` section of a `# QC New Round` comment.
+/// Extract the checklist from a round comment.
+///
+/// The checklist begins at its heading — `# <name>`, or `## Checklist` when no
+/// template name was recorded — and runs to the **end of the body**, deliberately
+/// *not* to the next `## ` heading. Real checklists carry their own `## `-level
+/// section titles — `## Technical Review`, `## Rendering Instructions and Other
+/// Comments` — so stopping at the first one truncated the checklist to whatever few
+/// lines preceded it, and every later round inherited the stump.
+/// [`QCNewRound::generate_body`] puts the checklist last, so end-of-body is exactly
+/// the section's extent, and this is the same rule [`checklist_from_issue_body`]
+/// applies to issue bodies.
+///
+/// The trade-off is intentional. Prose hand-appended after the checklist would be
+/// absorbed into it, which the author can see and delete in the seeded editor,
+/// whereas a silently truncated checklist loses items with no visible cause.
+///
+/// The heading line itself is never part of the content; the name comes back from
+/// [`checklist_name_from_round_comment`].
+///
+/// `None` when there is no checklist heading, or the section holds only whitespace.
 pub fn checklist_from_round_comment(body: &str) -> Option<String> {
-    section_body(body, CHECKLIST_HEADING)
+    let start = find_checklist_heading(body)?.start();
+    let trimmed = body[start..].trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// The checklist template name a `# QC New Round` comment recorded, if any.
+/// The checklist template name a round comment recorded, if any.
 ///
-/// Read with [`crate::round`]'s own metadata parser, so writer and reader cannot
-/// drift apart.
+/// Delegates to [`crate::round`]'s own reader — the one the fold uses — so the
+/// writer here and the reader there cannot drift apart, and both formats are
+/// understood identically.
 pub fn checklist_name_from_round_comment(body: &str) -> Option<String> {
-    metadata_value(body, CHECKLIST_NAME_KEY).map(|name| name.to_string())
+    checklist_name_from_body(body).map(|name| name.to_string())
 }
 
 /// Extract the checklist from an issue body, for seeding round 2 from Initial QC.
@@ -220,7 +217,7 @@ pub fn checklist_name_from_round_comment(body: &str) -> Option<String> {
 /// returned, concatenated in document order. The `# <name>` heading lines
 /// themselves are dropped from the content: the round comment supplies its own
 /// `## Checklist` heading, and a level-1 heading nested under it would misnest
-/// the comment's own `# QC New Round` heading. The *first* such heading's text is
+/// the comment's own `# QC Round` heading. The *first* such heading's text is
 /// returned as [`SeededChecklist::name`] instead, so the template a round was
 /// QC'd against survives into the round comment's metadata.
 pub fn checklist_from_issue_body(body: &str) -> Option<SeededChecklist> {
@@ -285,6 +282,62 @@ pub fn seed_checklist(
         content: reset_checklist(&seeded.content),
         name: seeded.name,
     })
+}
+
+/// A checklist a new round can be based on: one entry per existing round whose
+/// checklist could be recovered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChecklistOption {
+    /// [`crate::Round::index`] of the round this checklist belongs to.
+    pub round: u32,
+    /// That round's display name, e.g. `"Initial QC"` or `"Round 2"`.
+    pub round_name: String,
+    /// Template name that round recorded, when it recorded one.
+    pub checklist_name: Option<String>,
+    /// Checklist markdown with every box reset, ready to seed an editor.
+    pub content: String,
+}
+
+/// Every round's checklist, oldest round first.
+///
+/// A new round does not have to follow the one before it: rounds diverge, and the
+/// author may want to go back to the original checklist rather than inherit a
+/// trimmed one. So all of them are offered, and the caller picks.
+///
+/// Rounds whose checklist cannot be recovered — no `## Checklist` section, or an
+/// opening comment no longer present in `comments` — are omitted rather than
+/// returned empty, so every entry is a choice that will actually work. The result
+/// is therefore not indexed by round: match on [`ChecklistOption::round`].
+pub fn available_checklists(
+    thread: &crate::IssueThread,
+    comments: &[crate::GitComment],
+    issue_body: Option<&str>,
+) -> Vec<ChecklistOption> {
+    thread
+        .rounds
+        .iter()
+        .filter_map(|round| {
+            let (content, checklist_name) = match &round.checklist {
+                ChecklistSource::IssueBody => {
+                    let seeded = issue_body.and_then(checklist_from_issue_body)?;
+                    (seeded.content, seeded.name)
+                }
+                ChecklistSource::Comment { comment_index, .. } => {
+                    let body = comments.get(*comment_index)?.body.as_str();
+                    (
+                        checklist_from_round_comment(body)?,
+                        checklist_name_from_round_comment(body),
+                    )
+                }
+            };
+            Some(ChecklistOption {
+                round: round.index,
+                round_name: round.name(),
+                checklist_name,
+                content: reset_checklist(&content),
+            })
+        })
+        .collect()
 }
 
 /// The body of the comment that opened `thread`'s most recent round, which is
@@ -496,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn body_has_no_mention_no_diff_and_a_level_two_checklist_heading() {
+    fn body_has_no_mention_no_diff_and_names_the_checklist_with_a_level_one_heading() {
         let round = new_round(Some("note"));
         let body = round.generate_body(&MockGitHelpers);
 
@@ -506,13 +559,45 @@ mod tests {
         );
         assert!(!body.contains("## File Difference"));
         assert!(!body.contains("commit comparison"));
-        assert!(body.contains("\n## Checklist\n"));
-        assert!(!body.contains("\n# Checklist"));
+        // The heading carries the round number, and the checklist is named by a
+        // level-1 heading exactly as in an issue body.
+        assert!(body.starts_with("# QC Round 2\n"), "{body}");
+        assert!(body.contains("\n# Code Review Checklist\n"), "{body}");
+        assert!(!body.contains("## Checklist"), "{body}");
+        // Identity stays in the metadata, not in the heading.
+        assert!(body.contains("* round: 2\n"), "{body}");
         // Full SHAs, never abbreviated.
         assert!(body.contains(C));
         assert!(body.contains(B));
-        assert_eq!(round.title(), "QC New Round");
+        assert_eq!(round.title(), "QC Round");
         assert_eq!(round.issue().number, round.issue.number);
+    }
+
+    /// The heading number is decoration; `round:` is the identity. A heading that
+    /// disagrees with the metadata must not change which round the fold sees.
+    #[test]
+    fn the_round_number_comes_from_metadata_not_the_heading() {
+        let comment = |body: &str| GitComment {
+            body: body.to_string(),
+            author_login: "tester".to_string(),
+            created_at: chrono::Utc::now(),
+            id: None,
+            html_url: None,
+            html: None,
+        };
+        let approval = format!("# QC Approval\n\n## Metadata\napproved qc commit: {B}\n");
+        let body = format!(
+            "# QC Round 97\n\n## Metadata\n* round: 2\n* initial qc round commit: {C}\n\
+             * previous approved commit: {B}\n\n# Code Review Checklist\n- [ ] one\n"
+        );
+
+        let comments = vec![comment(&approval), comment(&body)];
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
+
+        assert_eq!(rounds.len(), 2);
+        // Derived from the fold, not read from "97".
+        assert_eq!(rounds[1].index, 2);
+        assert_eq!(rounds[1].opened_at, C);
     }
 
     #[test]
@@ -597,7 +682,10 @@ mod tests {
         let mut round = new_round(None);
         round.checklist_name = Some("Stats Review Checklist".to_string());
         let body = round.generate_body(&MockGitHelpers);
-        assert!(body.contains("* checklist: Stats Review Checklist\n"));
+        // The name *is* the checklist heading — there is no separate metadata line
+        // that could drift out of step with it.
+        assert!(body.contains("\n# Stats Review Checklist\n"), "{body}");
+        assert!(!body.contains("checklist: "), "{body}");
         // The written value is recoverable both by the fold and by the reader used
         // when seeding the next round.
         assert_eq!(
@@ -622,12 +710,18 @@ mod tests {
         assert_eq!(rounds[0].checklist_name, Some("Code Review Checklist"));
     }
 
+    /// A heading is one line by definition, so a multi-line name is flattened rather
+    /// than breaking the heading in two.
     #[test]
-    fn multi_line_checklist_name_is_flattened_onto_one_metadata_line() {
+    fn multi_line_checklist_name_is_flattened_onto_one_heading_line() {
         let mut round = new_round(None);
         round.checklist_name = Some("first line\nsecond line".to_string());
         let body = round.generate_body(&MockGitHelpers);
-        assert!(body.contains("* checklist: first line second line\n"));
+        assert!(body.contains("\n# first line second line\n"), "{body}");
+        assert_eq!(
+            checklist_name_from_round_comment(&body).as_deref(),
+            Some("first line second line")
+        );
     }
 
     // ── reset_checklist ──────────────────────────────────────────────────────
@@ -671,23 +765,29 @@ mod tests {
         );
     }
 
+    /// The checklist runs to the end of the body, so a later `## ` section is part
+    /// of it. That is the deliberate trade-off for not truncating checklists at
+    /// their own section titles — see [`checklist_from_round_comment`].
     #[test]
-    fn checklist_from_round_comment_stops_at_the_next_level_two_heading() {
-        let body = "# QC New Round\n\n## Metadata\n* round: 2\n\n## Checklist\n- [ ] one\n### Sub\n- [x] two\n\n## Something Else\n- [ ] not mine\n";
+    fn checklist_from_round_comment_runs_to_the_end_of_the_body() {
+        let body = "# QC Round\n\n## Metadata\n* round: 2\n\n## Checklist\n- [ ] one\n### Sub\n- [x] two\n\n## Something Else\n- [ ] also mine\n";
         assert_eq!(
             checklist_from_round_comment(body).as_deref(),
-            Some("- [ ] one\n### Sub\n- [x] two")
+            Some("- [ ] one\n### Sub\n- [x] two\n\n## Something Else\n- [ ] also mine")
         );
     }
 
     #[test]
     fn checklist_from_round_comment_is_none_when_absent_or_empty() {
         assert_eq!(
-            checklist_from_round_comment("# QC New Round\n\n## Metadata\n* round: 2\n"),
+            checklist_from_round_comment("# QC Round\n\n## Metadata\n* round: 2\n"),
             None
         );
+        // Heading present but nothing below it.
         assert_eq!(
-            checklist_from_round_comment("# QC New Round\n\n## Checklist\n\n## Metadata\n* x: 1\n"),
+            checklist_from_round_comment(
+                "# QC Round\n\n## Metadata\n* x: 1\n\n## Checklist\n\n   \n"
+            ),
             None
         );
     }
@@ -730,8 +830,75 @@ mod tests {
     // ── seed_checklist ───────────────────────────────────────────────────────
 
     #[test]
+    /// A real checklist carries `## `-level section titles. Reading the round
+    /// comment's `## Checklist` section only as far as the next `## ` truncated it
+    /// to the couple of lines before the first title, and because every later round
+    /// seeds from the previous one, the stump was inherited forever.
+    #[test]
+    fn round_comment_checklist_survives_its_own_level_two_headings() {
+        let body = "\
+# QC Round
+
+## Metadata
+* round: 2
+* initial qc round commit: f564644
+* previous approved commit: 13dc55a
+
+# PK NONMEM Model Diagnostics
+
+**Clockify code**: [INSERT]
+
+**QC review due date**: [INSERT]
+
+## Rendering Instructions and Other Comments
+
+[INSERT]
+
+## Technical Review
+
+### General
+
+- [x] Script renders free of error within the Rproject space
+- [ ] Relative paths are used for all files
+
+## Parameter Table
+
+- [X] Condition number < 1,000
+";
+
+        let extracted = checklist_from_round_comment(body).expect("checklist section");
+
+        // Everything after the heading, including the later `## ` sections.
+        assert!(extracted.contains("**Clockify code**: [INSERT]"));
+        assert!(extracted.contains("## Rendering Instructions and Other Comments"));
+        assert!(extracted.contains("## Technical Review"));
+        assert!(extracted.contains("### General"));
+        assert!(extracted.contains("Script renders free of error"));
+        assert!(extracted.contains("## Parameter Table"));
+        assert!(extracted.contains("Condition number < 1,000"));
+        // And nothing from above the heading leaks in.
+        assert!(!extracted.contains("## Metadata"));
+        assert!(!extracted.contains("round commit:"));
+        assert!(!extracted.contains("# QC Round"));
+
+        // Seeding round 3 from it keeps the whole thing and resets every box.
+        let seeded = seed_checklist(Some(body), None).expect("seeded checklist");
+        assert_eq!(seeded.name.as_deref(), Some("PK NONMEM Model Diagnostics"));
+        assert!(seeded.content.contains("## Technical Review"));
+        assert!(
+            seeded
+                .content
+                .contains("- [ ] Script renders free of error")
+        );
+        assert!(seeded.content.contains("- [ ] Condition number < 1,000"));
+        assert!(!seeded.content.contains("[x]"));
+        assert!(!seeded.content.contains("[X]"));
+    }
+
+    #[test]
     fn seed_checklist_prefers_the_prior_round_comment_and_resets_boxes() {
-        let prior = "# QC New Round\n\n## Metadata\n* round: 2\n\n## Checklist\n- [x] one\n  - [X] nested\n";
+        let prior =
+            "# QC Round\n\n## Metadata\n* round: 2\n\n## Checklist\n- [x] one\n  - [X] nested\n";
         let issue = "## Metadata\n* a: 1\n\n# Checklist\n- [x] from the issue body\n";
         assert_eq!(
             seed_checklist(Some(prior), Some(issue)),
@@ -742,9 +909,8 @@ mod tests {
             })
         );
 
-        // ...and when it does record one, that name is carried over.
-        let named = format!("{prior}\n");
-        let named = named.replace("* round: 2", "* round: 2\n* checklist: Stats Review");
+        // ...and when it names its checklist, that name is carried over.
+        let named = prior.replace("## Checklist", "# Stats Review");
         assert_eq!(
             seed_checklist(Some(&named), Some(issue)),
             Some(SeededChecklist {
@@ -766,11 +932,8 @@ mod tests {
         );
         // A prior comment without a checklist section falls back too.
         assert_eq!(
-            seed_checklist(
-                Some("# QC New Round\n\n## Metadata\n* round: 2\n"),
-                Some(issue)
-            )
-            .map(|seeded| seeded.content),
+            seed_checklist(Some("# QC Round\n\n## Metadata\n* round: 2\n"), Some(issue))
+                .map(|seeded| seeded.content),
             Some("- [ ] from the issue body".to_string())
         );
         assert_eq!(seed_checklist(None, None), None);
