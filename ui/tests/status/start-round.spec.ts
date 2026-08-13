@@ -49,6 +49,24 @@ const changedAfterApprovalStatus: IssueStatusResponse = {
   },
 }
 
+/**
+ * #111 approved, then a real commit touched the file afterwards.
+ *
+ * `changedAfterApprovalStatus` above only flips the status string — its newest commit
+ * is still the approval — so it carries no post-approval file commit. That is the
+ * signal the card's tint and the button's colour both derive from, so a drifted
+ * history has to be spelled out.
+ */
+const DRIFT_COMMIT = 'f00dcafe0000000000000000000000000000beef'
+
+const driftedAfterApprovalStatus: IssueStatusResponse = {
+  ...changedAfterApprovalStatus,
+  commits: [
+    { hash: DRIFT_COMMIT, message: 'edit after approval', statuses: [], file_changed: true },
+    ...approvedRoundStatus.commits,
+  ],
+}
+
 /** #112's rounds, with Round 2 closed too, so a third round is legal. */
 const multiRoundApprovedStatus: IssueStatusResponse = {
   ...multiRoundStatus,
@@ -209,7 +227,8 @@ test('S6: the new-round affordance is offered for a cleanly approved issue too',
   await expect(page.getByTestId('start-round-action-111')).toBeVisible()
 })
 
-test('S6: the affordance reads identically whether or not the file changed after approval', async ({ page }) => {
+// Only the colour differs (see below); the wording and the action are the same.
+test('S6: the affordance is worded identically whether or not the file changed after approval', async ({ page }) => {
   await setupRoutes(page, {
     milestoneIssues: { 1: [changedIssue] },
     issueStatuses: { results: [cleanlyApprovedStatus], errors: [] },
@@ -227,6 +246,36 @@ test('S6: the affordance reads identically whether or not the file changed after
   const changedLabel = await page.getByTestId('start-round-action-111').innerText()
 
   expect(approvedLabel).toBe(changedLabel)
+})
+
+const GREEN_LIGHT = 'rgba(64, 192, 87, 0.1)'
+const ORANGE_LIGHT = 'rgba(253, 126, 20, 0.1)'
+
+/**
+ * A cleanly approved file is green: starting a round is a free choice. A file that
+ * drifted since its approval is orange, matching the card's own orange tint — both
+ * read off the same post-approval file commit, so they can never disagree.
+ */
+test('S6: the affordance is green when the file is unchanged since approval', async ({ page }) => {
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [changedIssue] },
+    issueStatuses: { results: [cleanlyApprovedStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  await expect(page.getByTestId('start-round-action-111')).toHaveCSS('background-color', GREEN_LIGHT)
+})
+
+test('S6: the affordance is orange when the file changed after approval', async ({ page }) => {
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [changedIssue] },
+    issueStatuses: { results: [driftedAfterApprovalStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  await expect(page.getByTestId('start-round-action-111')).toHaveCSS('background-color', ORANGE_LIGHT)
 })
 
 // ---------------------------------------------------------------------------

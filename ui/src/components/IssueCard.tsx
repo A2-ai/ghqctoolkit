@@ -163,10 +163,20 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
         />
       )}
 
-      {/* Approved — offer another QC round, identically whether or not the file moved */}
+      {/*
+        Approved — offer another QC round, identically whether or not the file moved.
+        Only the colour distinguishes the two: orange when the file has drifted since
+        the approval, so the button reads as attention-wanting in step with the card's
+        own orange tint (both derive from `postApprovalCommit`); green when the file is
+        unchanged and a new round is a free choice rather than a response to drift.
+      */}
       {showStartRound && (
         <Tooltip
-          label="Start another QC round on this file. The previous approval stays valid."
+          label={
+            postApprovalCommit
+              ? 'The file has changed since it was approved. Start another QC round to review those changes; the previous approval stays valid.'
+              : 'Start another QC round on this file. The previous approval stays valid.'
+          }
           withArrow
           position="top"
           multiline
@@ -175,7 +185,7 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
           <Button
             size="xs"
             variant="light"
-            color="orange"
+            color={postApprovalCommit ? 'orange' : 'green'}
             data-testid={`start-round-action-${issue.number}`}
             onClick={(event) => {
               event.stopPropagation()
