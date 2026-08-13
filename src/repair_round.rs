@@ -166,7 +166,12 @@ impl fmt::Display for RepairRoundResult {
             StepOutcome::Skipped => writeln!(f, "  ⏭️ {label} ({skip_reason})"),
             StepOutcome::Failed(error) => writeln!(f, "  ⚠️ {label} failed: {error}"),
         };
-        step(f, "Issue reopened", &self.reopened, "issue is already open")?;
+        step(
+            f,
+            "Issue set back to open",
+            &self.reopened,
+            "issue is already open",
+        )?;
         step(
             f,
             "Issue body round marker updated",
@@ -598,7 +603,7 @@ mod tests {
 
         let display = result.to_string();
         assert!(display.contains("Repairing Round 2"));
-        assert!(display.contains("✅ Issue reopened"));
+        assert!(display.contains("✅ Issue set back to open"));
         assert!(display.contains("marker already matches this round"));
         assert!(display.contains("this round was already notified"));
     }
@@ -811,7 +816,7 @@ mod tests {
         assert!(result.needs_repair());
         assert!(result.repaired());
         let display = result.to_string();
-        assert!(display.contains("⚠️ Issue reopened failed"));
+        assert!(display.contains("⚠️ Issue set back to open failed"));
         assert!(display.contains("can be run again safely"));
     }
 

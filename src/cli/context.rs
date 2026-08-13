@@ -661,7 +661,11 @@ impl QCApprove {
 
 impl QCUnapprove {
     pub async fn from_interactive(milestones: &[Milestone], git_info: &GitInfo) -> Result<Self> {
-        println!("🚫 Welcome to GHQC Unapprove Mode!");
+        println!("🚫 Welcome to GHQC Retract Approval Mode!");
+        println!(
+            "   This says a past approval was wrong. If the file simply changed again and needs \
+             another QC pass, use `ghqc issue new-round` instead."
+        );
 
         // Select milestone (existing only)
         let milestone = prompt_existing_milestone(milestones)?;
@@ -697,7 +701,7 @@ impl QCUnapprove {
 
         if closed_issues.is_empty() {
             bail!(
-                "No closed issues found in milestone '{}' to unapprove",
+                "No closed issues found in milestone '{}' whose approval could be retracted",
                 milestone.title
             );
         }
@@ -706,7 +710,7 @@ impl QCUnapprove {
         let issue = prompt_issue(&closed_issues)?;
 
         // Prompt for reason
-        let reason_input = Text::new("📝 Enter reason for unapproval:")
+        let reason_input = Text::new("📝 Why is this approval being retracted?")
             .with_validator(|input: &str| {
                 if input.trim().is_empty() {
                     Ok(Validation::Invalid("Reason cannot be empty".into()))
@@ -720,7 +724,7 @@ impl QCUnapprove {
         let reason = reason_input.trim().to_string();
 
         // Display summary
-        println!("\n✨ Creating unapproval with:");
+        println!("\n✨ Retracting approval with:");
         println!("   🎯 Milestone: {}", milestone.title);
         println!("   🎫 Issue: #{} - {}", issue.number, issue.title);
         println!("   🚫 Reason: {}", reason);

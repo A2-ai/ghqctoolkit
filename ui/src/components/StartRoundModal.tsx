@@ -195,6 +195,27 @@ function StartRoundForm({
         )}
       </Stack>
 
+      {/*
+        P4: the decision point. A new round is an append — routine work, nothing was
+        wrong — so this must not read like the retraction path, which is an amend.
+      */}
+      <Alert
+        color="blue"
+        variant="light"
+        icon={<IconInfoCircle size={16} />}
+        data-testid="new-round-guidance"
+      >
+        <Text size="sm">
+          A new round is an <b>append</b>: the previous round's approval remains valid, and
+          downstream QCs that relied on it still stand. This is the normal way to QC a file that
+          changed again — nothing was wrong.
+        </Text>
+        <Text size="sm" mt={4}>
+          Use <b>Retract approval</b> instead only if a past approval was itself wrong; that does
+          invalidate the QCs that relied on it.
+        </Text>
+      </Alert>
+
       {/* Target commit — read-only by design: the anchor is always branch HEAD. */}
       <Stack gap={4} data-testid="round-anchor">
         <CommitLine label="Target commit (HEAD)" hash={seed.anchor} />
@@ -363,7 +384,7 @@ function CommitLine({ label, hash }: { label: string; hash: string | null }) {
 }
 
 const STEP_LABELS: { key: keyof Pick<StartRoundResponse, 'reopened' | 'body_marker' | 'notification'>; label: string }[] = [
-  { key: 'reopened', label: 'Reopen the issue' },
+  { key: 'reopened', label: 'Set the issue back to open' },
   { key: 'body_marker', label: 'Refresh the QC Round block in the issue body' },
   { key: 'notification', label: 'Post the QC Notification comment' },
 ]
@@ -509,7 +530,7 @@ const REPAIR_STEP_LABELS: {
   key: keyof Pick<RepairRoundResponse, 'reopened' | 'body_marker' | 'notification'>
   label: string
 }[] = [
-  { key: 'reopened', label: 'Reopen the issue' },
+  { key: 'reopened', label: 'Set the issue back to open' },
   { key: 'body_marker', label: 'Refresh the QC Round block in the issue body' },
   { key: 'notification', label: 'Post the QC Notification comment' },
 ]
@@ -596,8 +617,9 @@ function ImpactPreview({ impacted }: { impacted: ImpactedIssues }) {
     return (
       <Alert color="gray" icon={<IconInfoCircle size={16} />} data-testid="impact-unavailable">
         <Text size="sm">
-          Downstream impact could not be checked — the dependency API was unavailable. There may or
-          may not be issues affected by this round.
+          Which QCs depend on this file could not be checked — the dependency API was unavailable.
+          Nothing was written to any downstream issue either way, and the previous approval still
+          stands.
         </Text>
       </Alert>
     )
@@ -606,16 +628,17 @@ function ImpactPreview({ impacted }: { impacted: ImpactedIssues }) {
   if (impacted.issues.length === 0) {
     return (
       <Text size="sm" c="dimmed" data-testid="impact-empty">
-        No downstream issues appear to be affected by this round.
+        No downstream QCs appear to depend on this file.
       </Text>
     )
   }
 
   return (
     <Stack gap={6} data-testid="impact-list">
-      <Text size="sm" fw={700}>Downstream issues that may be affected</Text>
+      <Text size="sm" fw={700}>Downstream QCs that depend on this file</Text>
       <Text size="xs" c="dimmed">
-        Information only — nothing was written to these issues, and no action was taken on them.
+        Notice only — the previous approval still stands, so these QCs remain valid. Nothing was
+        written to them and no action was taken on them.
       </Text>
       {impacted.issues.map((item) => (
         <Text key={item.issue_number} size="sm" data-testid={`impact-issue-${item.issue_number}`}>

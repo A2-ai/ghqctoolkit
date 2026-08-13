@@ -225,21 +225,33 @@ enum IssueCommands {
         #[arg(long)]
         force: bool,
     },
-    /// Unapprove a closed issue
+    /// Retract the approval of a closed issue
+    ///
+    /// Use this when the approval itself was wrong — recorded against the wrong commit,
+    /// by the wrong person, or on an inadequate review. Retracting invalidates the claim
+    /// that the round was approved, so downstream QCs that relied on it may need redoing.
+    ///
+    /// If the file simply changed again and needs another QC pass, use `new-round`
+    /// instead: that leaves the previous approval standing.
+    #[command(visible_alias = "retract-approval")]
     Unapprove {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
         milestone: Option<String>,
 
-        /// File path of issue to un-approve and re-open (will prompt if not provided)
+        /// File path of the issue whose approval should be retracted (will prompt if not provided)
         #[arg(short, long)]
         file: Option<PathBuf>,
 
-        /// Reason to re-open issue (will prompt if not provided)
+        /// Reason the approval is being retracted (will prompt if not provided)
         #[arg(short, long)]
         reason: Option<String>,
     },
     /// Start a new QC round on an issue whose previous round is approved
+    ///
+    /// A new round is an append: the previous round's approval remains true forever, and
+    /// downstream QCs built on it stay valid. Use this when the file changed again and
+    /// needs another QC pass. To say a past approval was itself wrong, use `unapprove`.
     NewRound {
         /// Milestone for the issue (will prompt if not provided)
         #[arg(short, long)]
@@ -267,8 +279,8 @@ enum IssueCommands {
     },
     /// Complete the follow-up steps of an issue's open QC round
     ///
-    /// Reopens the issue and refreshes its `## QC Round` body marker when those are
-    /// out of step with the open round. Use this after `new-round` reported a failed
+    /// Sets the issue back to open and refreshes its `## QC Round` body marker when those
+    /// are out of step with the open round. Use this after `new-round` reported a failed
     /// follow-up step: re-running `new-round` would extend the round instead.
     RepairRound {
         /// Milestone for the issue (will prompt if not provided)

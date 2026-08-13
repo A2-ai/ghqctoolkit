@@ -108,7 +108,7 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
           <Tabs.Tab value="notify" color="yellow">Notify</Tabs.Tab>
           <Tabs.Tab value="review" color="orange">Review</Tabs.Tab>
           <Tabs.Tab value="approve" color="green" disabled={isApproved}>Approve</Tabs.Tab>
-          <Tabs.Tab value="unapprove" color="red" disabled={unapproveDisabled}>Unapprove</Tabs.Tab>
+          <Tabs.Tab value="unapprove" color="red" disabled={unapproveDisabled}>Retract approval</Tabs.Tab>
         </Tabs.List>
         <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label="Close">
           <IconX size={16} />
@@ -305,7 +305,10 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
       {isApproved && (
         <Alert color="orange">
           <Text size="sm" fw={600}>This issue is already approved</Text>
-          <Text size="xs" mt={4}>Consider unapproving first before posting a notification comment.</Text>
+          <Text size="xs" mt={4}>
+            If the file changed again, start a new round — the existing approval stays valid. Only
+            retract the approval if the approval itself was wrong.
+          </Text>
           <Checkbox
             mt="xs"
             label="Notify anyway"
@@ -664,7 +667,10 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
       {isApproved && (
         <Alert color="orange">
           <Text size="sm" fw={600}>This issue is already approved</Text>
-          <Text size="xs" mt={4}>Consider unapproving first before posting a review comment.</Text>
+          <Text size="xs" mt={4}>
+            If the file changed again, start a new round — the existing approval stays valid. Only
+            retract the approval if the approval itself was wrong.
+          </Text>
           <Checkbox
             mt="xs"
             label="Review anyway"
@@ -1011,7 +1017,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 }
 
 // ---------------------------------------------------------------------------
-// Unapprove tab — swim lane layout with cascade impact
+// Retract-approval tab — swim lane layout with cascade impact
 // ---------------------------------------------------------------------------
 function UnapproveTab({ status, onStatusUpdate, onBlockedUnavailable }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; onBlockedUnavailable: () => void }) {
   return (

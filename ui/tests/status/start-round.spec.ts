@@ -266,7 +266,7 @@ test('impacted issues render as information only', async ({ page }) => {
 
   const list = page.getByTestId('impact-list')
   await expect(list).toBeVisible()
-  await expect(list).toContainText('Information only — nothing was written to these issues')
+  await expect(list).toContainText('Notice only — the previous approval still stands')
   await expect(page.getByTestId('impact-issue-91')).toContainText('src/file_a.rs')
   await expect(page.getByTestId('impact-empty')).toHaveCount(0)
   await expect(page.getByTestId('impact-unavailable')).toHaveCount(0)
@@ -277,7 +277,7 @@ test('no downstream issues renders an empty-list message', async ({ page }) => {
 
   await page.getByTestId('start-round-submit').click()
 
-  await expect(page.getByTestId('impact-empty')).toContainText('No downstream issues appear to be affected')
+  await expect(page.getByTestId('impact-empty')).toContainText('No downstream QCs appear to depend on this file')
   await expect(page.getByTestId('impact-unavailable')).toHaveCount(0)
 })
 

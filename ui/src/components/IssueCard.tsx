@@ -161,18 +161,26 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
 
       {/* Approved, then the file changed again — offer a new QC round */}
       {showStartRound && (
-        <Button
-          size="xs"
-          variant="light"
-          color="orange"
-          data-testid={`start-round-action-${issue.number}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            onStartRound?.()
-          }}
+        <Tooltip
+          label="The file changed after approval. A new round is the routine next step — the previous approval stays valid."
+          withArrow
+          position="top"
+          multiline
+          w={260}
         >
-          Start new round
-        </Button>
+          <Button
+            size="xs"
+            variant="light"
+            color="orange"
+            data-testid={`start-round-action-${issue.number}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onStartRound?.()
+            }}
+          >
+            Start new round
+          </Button>
+        </Tooltip>
       )}
 
       {/* The open round exists but is incomplete — offer to finish it */}

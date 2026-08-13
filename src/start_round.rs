@@ -125,7 +125,7 @@ impl fmt::Display for StartRoundResult {
             StepOutcome::Skipped => writeln!(f, "  ⏭️ {label} (skipped)"),
             StepOutcome::Failed(error) => writeln!(f, "  ⚠️ {label} failed: {error}"),
         };
-        step(f, "Issue reopened", &self.reopened)?;
+        step(f, "Issue set back to open", &self.reopened)?;
         step(f, "Issue body round marker updated", &self.body_marker)?;
         step(f, "QC notification posted", &self.notification)?;
 
@@ -144,11 +144,15 @@ impl fmt::Display for StartRoundResult {
             ImpactedIssues::ApiUnavailable => {
                 writeln!(
                     f,
-                    "\n⚠️ Could not check for impacted issues (API may not be supported)"
+                    "\n⚠️ Could not check which QCs depend on this file (API may not be supported)"
                 )?;
             }
             ImpactedIssues::Some(nodes) => {
-                writeln!(f, "\nThe following QCs may be impacted by this new round:")?;
+                writeln!(
+                    f,
+                    "\nFor your information — these QCs depend on this file. The previous round's \
+                     approval still stands, so they remain valid; nothing was written to them:"
+                )?;
                 for node in nodes {
                     node.fmt_tree_root(f)?;
                 }
@@ -862,7 +866,7 @@ mod tests {
         assert!(result.needs_repair());
         let display = result.to_string();
         assert!(display.contains("Round 2 started!"));
-        assert!(display.contains("Issue reopened failed"));
+        assert!(display.contains("Issue set back to open failed"));
         assert!(display.contains("retried safely"));
     }
 
@@ -1001,7 +1005,7 @@ mod tests {
         assert!(
             result
                 .to_string()
-                .contains("Could not check for impacted issues")
+                .contains("Could not check which QCs depend on this file")
         );
     }
 
@@ -1106,9 +1110,45 @@ mod tests {
         };
         let display = result.to_string();
         assert!(display.contains("Round 3 started!"));
-        assert!(display.contains("Issue reopened"));
+        assert!(display.contains("Issue set back to open"));
         assert!(display.contains("boom"));
         assert!(display.contains("(skipped)"));
         assert!(display.contains("#30 a/b.R (Sprint 1) (previous QC)"));
+    }
+
+    /// P4: a new round is an *append*. Its impact list is a notice — the previous
+    /// approval still stands and nothing was written downstream — and must stay
+    /// clearly distinct from the retraction copy in [`crate::approve`], which is an
+    /// amend and does read as invalidation.
+    #[test]
+    fn new_round_impact_reads_as_a_notice_not_as_invalidation() {
+        let display = StartRoundResult {
+            round: 2,
+            round_comment_url: URL.to_string(),
+            anchor: oid(C),
+            reopened: StepOutcome::Done,
+            body_marker: StepOutcome::Done,
+            notification: StepOutcome::Done,
+            impacted_issues: ImpactedIssues::Some(vec![ImpactNode {
+                issue_number: 30,
+                file_name: PathBuf::from("a/b.R"),
+                milestone: "Sprint 1".to_string(),
+                relationship: BlockingRelationship::PreviousQC,
+                children: Vec::new(),
+                fetch_error: None,
+            }]),
+        }
+        .to_string();
+
+        assert!(display.contains("For your information"));
+        assert!(display.contains("approval still stands"));
+        assert!(display.contains("nothing was written to them"));
+        // Never the retraction wording: nothing here was invalidated.
+        assert!(!display.contains("retract"));
+        assert!(!display.contains("no longer be valid"));
+        assert!(!display.contains("redone"));
+        // "re-open" collides with GitHub's own issue reopen — never in user copy.
+        assert!(!display.to_lowercase().contains("reopen"));
+        assert!(!display.to_lowercase().contains("re-open"));
     }
 }
