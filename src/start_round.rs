@@ -60,7 +60,15 @@ pub struct StartRoundRequest {
     pub checklist_content: String,
     /// Name of the checklist template the content came from, for the audit record.
     pub checklist_name: Option<String>,
+    /// Why the round is being opened. Recorded in the `# QC Round` comment, which
+    /// is the round's durable audit record.
     pub note: Option<String>,
+    /// Context for the reviewer, carried by the `# QC Notification` comment only.
+    ///
+    /// Separate from `note` on purpose: the reason a round exists and the message
+    /// addressed to whoever must review it are different things, and only the
+    /// former belongs in the permanent record.
+    pub notification_note: Option<String>,
     pub notification: NotificationMode,
 }
 
@@ -257,9 +265,10 @@ where
         &request.issue,
         anchor,
         Some(previous_approval),
-        // The round's note is repeated here: this is the comment reviewers are
-        // @-mentioned in, so it must carry the reason for the round.
-        request.note.clone(),
+        // The notification's own note, not the round's: this is the comment
+        // reviewers are @-mentioned in, so it carries what the author wants to tell
+        // them rather than the audit reason recorded on the round comment.
+        request.notification_note.clone(),
         request.notification,
         git_info,
     )
@@ -676,6 +685,7 @@ mod tests {
             checklist_content: "- [ ] item one\n- [ ] item two".to_string(),
             checklist_name: Some("Code Review Checklist".to_string()),
             note: Some("Second pass after the refactor.".to_string()),
+            notification_note: Some("Please re-check the covariate block.".to_string()),
             notification,
         }
     }
@@ -737,6 +747,8 @@ mod tests {
                     && round.round_commit == oid(C)
                     && round.previous_approved_commit == oid(B)
                     && round.checklist_name.as_deref() == Some("Code Review Checklist")
+                    // The audit reason, not the message addressed to the reviewer.
+                    && round.note.as_deref() == Some("Second pass after the refactor.")
             })
             .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
         git.writer
@@ -766,6 +778,8 @@ mod tests {
                 !comment.no_diff
                     && comment.current_commit == oid(C)
                     && comment.previous_commit == Some(oid(B))
+                    // The reviewer-facing message, not the round's audit reason.
+                    && comment.note.as_deref() == Some("Please re-check the covariate block.")
             })
             .returning(|_| Box::pin(async { Ok(format!("{URL}2")) }));
 
@@ -781,6 +795,71 @@ mod tests {
         assert_eq!(result.notification, StepOutcome::Done);
         assert!(!result.needs_repair());
         assert!(matches!(result.impacted_issues, ImpactedIssues::None));
+    }
+
+    /// The two notes answer different questions — "why does this round exist" is a
+    /// permanent record, "here is what you need to know" is addressed to a person —
+    /// so neither comment may carry the other's text. A single shared `note` used to
+    /// go to both, which is what made the distinction impossible to express.
+    #[tokio::test]
+    async fn each_note_reaches_only_its_own_comment() {
+        let mut git = MockGit::new().without_downstream();
+        git.writer
+            .expect_post_comment::<QCNewRound>()
+            .times(1)
+            .withf(|round: &QCNewRound| {
+                round.note.as_deref() == Some("Second pass after the refactor.")
+            })
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+        git.writer
+            .expect_open_issue()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_update_issue()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_post_comment::<QCComment>()
+            .times(1)
+            .withf(|comment: &QCComment| {
+                comment.note.as_deref() == Some("Please re-check the covariate block.")
+            })
+            .returning(|_| Box::pin(async { Ok(format!("{URL}2")) }));
+
+        let result = start_round(&request(NotificationMode::Full), &thread(false), &git)
+            .await
+            .expect("both comments post");
+        assert_eq!(result.notification, StepOutcome::Done);
+    }
+
+    /// A round can be opened with an audit reason and no message for the reviewer.
+    /// The notification must then carry nothing rather than falling back to the
+    /// reason: the API is explicit, and only the CLI substitutes one for the other.
+    #[tokio::test]
+    async fn an_absent_notification_note_leaves_the_notification_noteless() {
+        let mut git = MockGit::new().without_downstream();
+        git.writer
+            .expect_post_comment::<QCNewRound>()
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+        git.writer
+            .expect_open_issue()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_update_issue()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_post_comment::<QCComment>()
+            .times(1)
+            .withf(|comment: &QCComment| comment.note.is_none())
+            .returning(|_| Box::pin(async { Ok(format!("{URL}2")) }));
+
+        let mut request = request(NotificationMode::Full);
+        request.notification_note = None;
+        assert!(request.note.is_some(), "the round's own note is unaffected");
+
+        let result = start_round(&request, &thread(false), &git)
+            .await
+            .expect("the round still opens");
+        assert_eq!(result.notification, StepOutcome::Done);
     }
 
     #[tokio::test]

@@ -21,6 +21,13 @@ import {
   startRoundNeedsRepair,
   startRoundWithImpactedIssues,
   roundStillOpenError,
+  roundFields,
+  closeRound,
+  initialQcRound,
+  laterRound,
+  ROUND1_OPENED,
+  ROUND1_CLOSED,
+  ROUND2_OPENED,
 } from '../fixtures/index'
 import type { Issue, IssueStatusResponse } from '../../src/api/issues'
 import type { RouteOverrides } from '../helpers/routes'
@@ -42,6 +49,20 @@ const changedAfterApprovalStatus: IssueStatusResponse = {
   },
 }
 
+/** #112's rounds, with Round 2 closed too, so a third round is legal. */
+const multiRoundApprovedStatus: IssueStatusResponse = {
+  ...multiRoundStatus,
+  qc_status: {
+    ...multiRoundStatus.qc_status,
+    status: 'approved',
+    status_detail: 'Approved',
+  },
+  ...roundFields([
+    closeRound(initialQcRound(ROUND1_OPENED), ROUND1_CLOSED),
+    closeRound(laterRound(2, ROUND2_OPENED, ROUND1_CLOSED, { event_count: 1 }), ROUND2_OPENED),
+  ]),
+}
+
 async function selectMilestone(page: Page, milestoneTitle: string) {
   await page.getByPlaceholder('Search milestones…').click()
   await page.getByRole('option', { name: new RegExp(milestoneTitle) }).click()
@@ -58,6 +79,16 @@ async function openStartRoundModal(page: Page, overrides: Partial<RouteOverrides
   await selectMilestone(page, 'Sprint 1')
   await page.getByTestId('start-round-action-111').click()
   await expect(page.getByRole('heading', { name: 'Start New QC Round' })).toBeVisible()
+}
+
+/**
+ * Opens the Checklist tab. The modal now opens on Changes, so any test touching the
+ * editor, the name or the source picker has to get there first — and an assertion
+ * that something is *absent* would otherwise pass vacuously.
+ */
+async function openChecklistTab(page: Page) {
+  await page.getByRole('tab', { name: 'Checklist' }).click()
+  await expect(page.getByTestId('checklist-panel')).toBeVisible()
 }
 
 /** Opens the Changes tab, which holds the commit range, the diff and the note. */
@@ -78,6 +109,24 @@ function captureStartRoundRequests(page: Page): StartRoundRequest[] {
   page.on('request', (request) => {
     if (request.method() === 'POST' && /\/api\/issues\/\d+\/rounds$/.test(request.url())) {
       bodies.push(request.postDataJSON() as StartRoundRequest)
+    }
+  })
+  return bodies
+}
+
+interface CommentPreviewBody {
+  current_commit: string
+  previous_commit: string | null
+  note: string | null
+  include_diff: boolean
+}
+
+/** Bodies POSTed to the notify tab's comment-preview endpoint, which rounds reuse. */
+function captureCommentPreviewRequests(page: Page): CommentPreviewBody[] {
+  const bodies: CommentPreviewBody[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/api\/preview\/\d+\/comment$/.test(request.url())) {
+      bodies.push(request.postDataJSON() as CommentPreviewBody)
     }
   })
   return bodies
@@ -227,7 +276,7 @@ test('notification mode metadata_only reaches the request body', async ({ page }
   await openStartRoundModal(page)
 
   await openNotificationTab(page)
-  await page.getByTestId('notification-mode').getByText('Metadata only').click()
+  await page.getByTestId('notification-mode-metadata_only').click()
   await page.getByTestId('start-round-submit').click()
   await expect(page.getByTestId('start-round-result')).toBeVisible()
 
@@ -240,8 +289,8 @@ test('notification mode none warns that the reviewer is not notified and reaches
 
   await openNotificationTab(page)
   await expect(page.getByTestId('notification-none-warning')).toHaveCount(0)
-  await page.getByTestId('notification-mode').getByText('No notification').click()
-  await expect(page.getByTestId('notification-none-warning')).toContainText('reviewer will not be notified')
+  await page.getByTestId('notification-mode-none').click()
+  await expect(page.getByTestId('notification-none-warning')).toContainText('Nobody is told the round exists')
 
   await page.getByTestId('start-round-submit').click()
   await expect(page.getByTestId('start-round-result')).toBeVisible()
@@ -256,6 +305,7 @@ test('notification mode none warns that the reviewer is not notified and reaches
 test('checklist editor is seeded, freely editable, and the edit reaches the request body', async ({ page }) => {
   const bodies = captureStartRoundRequests(page)
   await openStartRoundModal(page)
+  await openChecklistTab(page)
 
   const editor = page.locator('.mantine-Modal-body textarea')
   await expect(editor).toHaveValue(roundSeedCanStart.checklist_content!)
@@ -275,11 +325,15 @@ test('with a single recoverable checklist there is no picker to show', async ({ 
   // Starting round 2, so Initial QC is the only possible base — a one-item
   // dropdown would be noise.
   await openStartRoundModal(page)
+  await openChecklistTab(page)
+  // Meaningful only from inside the panel: an unrendered panel has no picker either.
+  await expect(page.getByTestId('checklist-panel')).toBeVisible()
   await expect(page.getByTestId('checklist-source-round')).toHaveCount(0)
 })
 
 test('the picker offers every round and defaults to the most recent', async ({ page }) => {
   await openStartRoundModal(page, { roundSeedResponse: roundSeedMultipleChecklists })
+  await openChecklistTab(page)
 
   const picker = page.getByTestId('checklist-source-round')
   await expect(picker).toBeVisible()
@@ -295,6 +349,7 @@ test('the picker offers every round and defaults to the most recent', async ({ p
 test('picking an earlier round re-seeds the editor and the name, and that reaches the request body', async ({ page }) => {
   const bodies = captureStartRoundRequests(page)
   await openStartRoundModal(page, { roundSeedResponse: roundSeedMultipleChecklists })
+  await openChecklistTab(page)
 
   const initialQc = roundSeedMultipleChecklists.checklist_options[0]
   await page.getByTestId('checklist-source-round').click()
@@ -322,7 +377,9 @@ test('null checklist_content starts an empty editor with a note, and blocks subm
     },
   })
 
+  // The empty-state alert sits outside the tabs, so it is visible on any of them.
   await expect(page.getByTestId('no-prior-checklist')).toContainText('No prior checklist was found')
+  await openChecklistTab(page)
   await expect(page.locator('.mantine-Modal-body textarea')).toHaveValue('')
   // Nothing to review against yet, so the action stays unavailable until filled.
   await expect(page.getByTestId('start-round-submit')).toBeDisabled()
@@ -416,15 +473,17 @@ test('api_available false renders distinctly from an empty downstream list', asy
 test('the round rail offers Start a new round, which opens the start-round modal', async ({ page }) => {
   await setupRoutes(page, {
     milestoneIssues: { 1: [multiRoundIssue] },
-    issueStatuses: { results: [multiRoundStatus], errors: [] },
+    issueStatuses: { results: [multiRoundApprovedStatus], errors: [] },
   })
 
   await page.goto('/')
   await selectMilestone(page, 'Sprint 1')
   await page.getByTestId('issue-card-112').click()
 
-  // The rail is rendered in every tab, so scope to the visible panel.
-  const railAction = page.getByRole('tabpanel').getByTestId('round-rail-start')
+  // An approved issue's modal opens on Unapprove, which has no rail; the rail lives
+  // on the comment-posting tabs.
+  await page.getByRole('tab', { name: 'Notify', exact: true }).click()
+  const railAction = page.getByRole('tabpanel', { name: 'Notify' }).getByTestId('round-rail-start')
   await expect(railAction).toBeVisible()
   await railAction.click()
 
@@ -435,22 +494,41 @@ test('the round rail offers Start a new round, which opens the start-round modal
   await expect(page.getByTestId('next-round-name')).toHaveText('Round 2')
 })
 
-test('a single Initial QC round still shows the rail without collapse chrome', async ({ page }) => {
+test('a single approved Initial QC round shows the rail without collapse chrome', async ({ page }) => {
   await setupRoutes(page, {
-    milestoneIssues: { 1: [legacyRoundIssue] },
-    issueStatuses: { results: [legacyRoundStatus], errors: [] },
+    milestoneIssues: { 1: [changedIssue] },
+    issueStatuses: { results: [changedAfterApprovalStatus], errors: [] },
   })
 
   await page.goto('/')
   await selectMilestone(page, 'Sprint 1')
-  await page.getByTestId('issue-card-110').click()
+  await page.getByTestId('issue-card-111').click()
+  await page.getByRole('tab', { name: 'Notify', exact: true }).click()
 
   // The quiet case: one line, and the action is offered without extra sections.
-  const panel = page.getByRole('tabpanel')
+  const panel = page.getByRole('tabpanel', { name: 'Notify' })
   await expect(panel.getByTestId('round-line-1')).toBeVisible()
   await expect(panel.getByTestId('round-section-1')).toHaveCount(0)
-  // The action is still offered on the quiet single-round case.
   await expect(panel.getByTestId('round-rail-start')).toBeVisible()
+})
+
+test('the rail offers no new round while the current one is open', async ({ page }) => {
+  // A new round builds on an approval, and the backend refuses one over an open
+  // round — a second round comment there extends the round instead of opening one.
+  // So the affordance must not be reachable from an issue under review.
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [multiRoundIssue] },
+    issueStatuses: { results: [multiRoundStatus], errors: [] },
+  })
+
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+  await page.getByTestId('issue-card-112').click()
+
+  const panel = page.getByRole('tabpanel')
+  await expect(panel.getByTestId('round-rail')).toBeVisible()
+  await expect(panel.getByTestId('round-section-2')).toBeVisible()
+  await expect(panel.getByTestId('round-rail-start')).toHaveCount(0)
 })
 
 // ---------------------------------------------------------------------------
@@ -473,17 +551,14 @@ test('the Changes tab shows both ends of the round and the diff between them', a
   await expect(diff).not.toContainText('```')
 })
 
-test('the diff is requested for the seed file across the round range, and only when opened', async ({ page }) => {
+test('the diff is requested once for the seed file across the round range', async ({ page }) => {
   const urls: string[] = []
   page.on('request', (request) => {
     if (request.url().includes('/api/commits/diff')) urls.push(request.url())
   })
 
+  // Changes is the tab the modal opens on, so the diff is fetched straight away.
   await openStartRoundModal(page, { roundSeedResponse: roundSeedMultipleChecklists })
-  // Lazily mounted: nothing fetched while the Checklist tab is showing.
-  expect(urls).toHaveLength(0)
-
-  await openChangesTab(page)
   await expect(page.getByTestId('round-diff')).toBeVisible()
 
   expect(urls).toHaveLength(1)
@@ -491,6 +566,13 @@ test('the diff is requested for the seed file across the round range, and only w
   expect(url.searchParams.get('file')).toBe(roundSeedMultipleChecklists.file)
   expect(url.searchParams.get('from')).toBe(roundSeedMultipleChecklists.previous_approval)
   expect(url.searchParams.get('to')).toBe(roundSeedMultipleChecklists.anchor)
+
+  // Panels unmount when inactive, so leaving and returning remounts the component.
+  // The query cache must absorb that rather than re-diffing on every tab click.
+  await openChecklistTab(page)
+  await openChangesTab(page)
+  await expect(page.getByTestId('round-diff')).toBeVisible()
+  expect(urls).toHaveLength(1)
 })
 
 test('a null diff reads as no changes rather than as a failure', async ({ page }) => {
@@ -518,6 +600,127 @@ test('the note lives on the Changes tab and reaches the request body', async ({ 
   await expect(page.getByTestId('start-round-result')).toBeVisible()
 
   expect(bodies[0].note).toBe('New data arrived from the client')
+})
+
+/**
+ * The round's note and the reviewer's message answer different questions, and one
+ * shared `note` used to serve both. Filling only one must leave the other null.
+ */
+test('the round note and the reviewer message are sent as separate fields', async ({ page }) => {
+  const bodies = captureStartRoundRequests(page)
+  await openStartRoundModal(page)
+
+  await openChangesTab(page)
+  await page.getByLabel('Note (optional)').fill('Rerun after the covariate fix')
+  await openNotificationTab(page)
+  await page.getByTestId('notification-note').fill('Focus on the ETA block, the rest is unchanged')
+
+  await page.getByTestId('start-round-submit').click()
+  await expect(page.getByTestId('start-round-result')).toBeVisible()
+
+  expect(bodies[0].note).toBe('Rerun after the covariate fix')
+  expect(bodies[0].notification_note).toBe('Focus on the ETA block, the rest is unchanged')
+})
+
+test('a round note alone leaves the reviewer message null', async ({ page }) => {
+  const bodies = captureStartRoundRequests(page)
+  await openStartRoundModal(page)
+
+  await openChangesTab(page)
+  await page.getByLabel('Note (optional)').fill('Rerun after the covariate fix')
+  await page.getByTestId('start-round-submit').click()
+  await expect(page.getByTestId('start-round-result')).toBeVisible()
+
+  expect(bodies[0].note).toBe('Rerun after the covariate fix')
+  // No fallback: an unwritten message is not the round's reason repeated.
+  expect(bodies[0].notification_note).toBeNull()
+})
+
+/**
+ * A message with no comment to ride on would be silently discarded, so the field is
+ * not offered at all once nothing is being posted.
+ */
+test('the reviewer message is withdrawn when no notification is posted', async ({ page }) => {
+  await openStartRoundModal(page)
+  await openNotificationTab(page)
+
+  await expect(page.getByTestId('notification-note')).toBeVisible()
+  await page.getByTestId('notification-mode-none').click()
+  await expect(page.getByTestId('notification-note')).toHaveCount(0)
+
+  // ...and offered again on any mode that does post one.
+  await page.getByTestId('notification-mode-metadata_only').click()
+  await expect(page.getByTestId('notification-note')).toBeVisible()
+})
+
+/**
+ * A blocked seed offers no submit, so the mode is moot — but the whole card is the
+ * hit target, and a card that still responds reads as a form that will act.
+ */
+test('a blocked round cannot change its notification mode', async ({ page }) => {
+  await openStartRoundModal(page, { roundSeedResponse: roundSeedBlocked })
+  await openNotificationTab(page)
+
+  await page.getByTestId('notification-mode-none').click({ force: true })
+  await expect(page.getByTestId('notification-none-warning')).toHaveCount(0)
+  // Still on the default, and the message field never appeared to be filled in.
+  await expect(page.getByTestId('notification-note')).toBeDisabled()
+})
+
+/**
+ * The preview reuses the notify tab's endpoint because the round's notification *is*
+ * a QCComment. What it must carry is the round's own range plus whatever the form
+ * currently says — not the round note, and not a fixed diff setting.
+ */
+test('the notification preview renders the comment for the round range and message', async ({ page }) => {
+  const previews = captureCommentPreviewRequests(page)
+  await openStartRoundModal(page)
+
+  await openChangesTab(page)
+  await page.getByLabel('Note (optional)').fill('Round reason, not for the reviewer')
+  await openNotificationTab(page)
+  await page.getByTestId('notification-note').fill('Check the ETA block')
+  await page.getByTestId('notification-preview').click()
+
+  await expect(page.getByTestId('notification-preview-frame')).toBeVisible()
+
+  expect(previews).toHaveLength(1)
+  expect(previews[0].current_commit).toBe(roundSeedCanStart.anchor)
+  expect(previews[0].previous_commit).toBe(roundSeedCanStart.previous_approval)
+  expect(previews[0].note).toBe('Check the ETA block')
+  expect(previews[0].include_diff).toBe(true)
+})
+
+test('previewing in metadata-only mode asks for no diff', async ({ page }) => {
+  const previews = captureCommentPreviewRequests(page)
+  await openStartRoundModal(page)
+  await openNotificationTab(page)
+
+  await page.getByTestId('notification-mode-metadata_only').click()
+  await page.getByTestId('notification-preview').click()
+  await expect(page.getByTestId('notification-preview-frame')).toBeVisible()
+
+  expect(previews[0].include_diff).toBe(false)
+})
+
+/** Nothing is posted in silent mode, so there is nothing to preview. */
+test('the preview is withdrawn when no notification is posted', async ({ page }) => {
+  await openStartRoundModal(page)
+  await openNotificationTab(page)
+
+  await expect(page.getByTestId('notification-preview')).toBeVisible()
+  await page.getByTestId('notification-mode-none').click()
+  await expect(page.getByTestId('notification-preview')).toHaveCount(0)
+})
+
+/** Each mode's rationale is readable without selecting it — the point of the cards. */
+test('every notification mode shows its description at once', async ({ page }) => {
+  await openStartRoundModal(page)
+  await openNotificationTab(page)
+
+  await expect(page.getByTestId('notification-mode-full')).toContainText('inline diff')
+  await expect(page.getByTestId('notification-mode-metadata_only')).toContainText('without the inline diff')
+  await expect(page.getByTestId('notification-mode-none')).toContainText('silently')
 })
 
 // ---------------------------------------------------------------------------

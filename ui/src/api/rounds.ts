@@ -82,7 +82,16 @@ export interface ImpactedIssues {
 export interface StartRoundRequest {
   checklist_content: string
   checklist_name?: string | null
+  /** Why the round is being opened. Recorded on the `# QC Round` comment. */
   note?: string | null
+  /**
+   * Context for the reviewer, carried by the `# QC Notification` comment only.
+   *
+   * Separate from `note` on purpose, and with no fallback between them: the reason
+   * a round exists and the message addressed to whoever must review it are
+   * different things.
+   */
+  notification_note?: string | null
   notification: NotificationMode
 }
 
@@ -149,6 +158,13 @@ export interface RoundRepairStatus {
  */
 export interface RepairRoundRequest {
   notification: NotificationMode
+  /**
+   * Context for the reviewer on the notification this repair may post. A
+   * notification-only message lives nowhere but that comment, so when its post is
+   * the step being repaired the text is gone and we send it again. Absent falls
+   * back to the round's own note.
+   */
+  notification_note?: string | null
 }
 
 /**

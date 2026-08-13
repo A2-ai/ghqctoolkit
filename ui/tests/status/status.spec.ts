@@ -24,7 +24,18 @@ import {
   partialIssue2,
   partialIssue3,
   partialBatchResponse,
+  multiRoundIssue,
+  multiRoundStatus,
+  approvedRoundIssue,
+  approvedRoundStatus,
+  ROUND1_CLOSED,
+  ROUND1_OPENED,
+  DRAFT_GAP_COMMIT,
+  roundFields,
+  closeRound,
+  initialQcRound,
 } from '../fixtures/index'
+import type { IssueStatusResponse } from '../../src/api/issues'
 
 // ---------------------------------------------------------------------------
 // Helper: select a milestone from the combobox in the sidebar
@@ -254,4 +265,80 @@ test('206 partial response — partial issues shown and milestone shows warning'
 
   // The selected milestone pill should show the partial warning icon
   await expect(page.locator('[data-testid="partial-warning"]')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// "File has changed since approval" must not fire while a round is open
+// ---------------------------------------------------------------------------
+
+/** The card tint SwimLanes applies for an unreviewed change after approval. */
+const POST_APPROVAL_ORANGE = 'rgb(255, 237, 213)'
+
+test('an open round suppresses the changed-since-approval warning on the card', async ({ page }) => {
+  // #112: Initial QC approved at ROUND1_CLOSED, then two newer file-changing
+  // commits, with Round 2 open over them. Those changes are what Round 2 is
+  // reviewing — the normal approve/edit/start-a-round flow — so the card must not
+  // colour them as unreviewed drift against the *previous* round's approval.
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [multiRoundIssue] },
+    issueStatuses: { results: [multiRoundStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const card = page.getByTestId(`issue-card-${multiRoundIssue.number}`)
+  await expect(card).toBeVisible()
+  // The card's own background is the visible symptom, so assert on it directly
+  // rather than on a row that this status would not render anyway.
+  await expect(card).not.toHaveCSS('background-color', POST_APPROVAL_ORANGE)
+
+  // The row that is shown reports the open round's own commit, not the earlier
+  // round's approval — the approval-priority tier must not win here.
+  await expect(card).toContainText('Latest')
+  await expect(card).toContainText(multiRoundStatus.qc_status.latest_commit.slice(0, 7))
+  await expect(card).not.toContainText(ROUND1_CLOSED.slice(0, 7))
+
+  await card.hover()
+  await expect(page.getByText('File has changed since approval')).toHaveCount(0)
+})
+
+/**
+ * Approved, then the file moved again, with every round closed. Kept `open` so the
+ * closed-issues filter plays no part in whether the card is on screen.
+ */
+const driftedIssue = { ...approvedRoundIssue, state: 'open' as const, closed_at: null }
+
+const driftedAfterApproval: IssueStatusResponse = {
+  ...approvedRoundStatus,
+  issue: driftedIssue,
+  commits: [
+    { hash: DRAFT_GAP_COMMIT, message: 'edit after approval', statuses: [], file_changed: true },
+    { hash: ROUND1_CLOSED, message: 'address review', statuses: ['approved'], file_changed: true },
+    { hash: ROUND1_OPENED, message: 'initial commit', statuses: ['initial'], file_changed: true },
+  ],
+  qc_status: {
+    ...approvedRoundStatus.qc_status,
+    status: 'changes_after_approval',
+    status_detail: 'Approved; subsequent file changes',
+  },
+  ...roundFields([closeRound(initialQcRound(ROUND1_OPENED), ROUND1_CLOSED)]),
+}
+
+test('with no round open, a change after approval still warns', async ({ page }) => {
+  // The counterpart: suppressing the warning must depend on a round being open,
+  // not on rounds existing at all, or the warning would never fire again.
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [driftedIssue] },
+    issueStatuses: { results: [driftedAfterApproval], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const card = page.getByTestId(`issue-card-${driftedIssue.number}`)
+  await expect(card).toHaveCSS('background-color', POST_APPROVAL_ORANGE)
+  await expect(card).toContainText('Changed')
+  await expect(card).toContainText(DRAFT_GAP_COMMIT.slice(0, 7))
+
+  await card.hover()
+  await expect(page.getByText('File has changed since approval')).toBeVisible()
 })

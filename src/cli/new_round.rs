@@ -60,6 +60,9 @@ pub struct NewRoundArgs {
     pub from_round: Option<u32>,
     pub note: Option<String>,
     pub notification: NotificationMode,
+    /// Message for the reviewer, on the notification comment only. `None` falls back
+    /// to `note`, so an invocation that names only `--note` reads as it always has.
+    pub notification_note: Option<String>,
     /// Open the checklist in `$EDITOR` before posting. Implied interactively.
     pub edit: bool,
 }
@@ -117,6 +120,7 @@ pub async fn new_round(
         issue,
         checklist_content: content,
         checklist_name: name,
+        notification_note: args.notification_note.or_else(|| note.clone()),
         note,
         notification: args.notification,
     };
@@ -155,6 +159,9 @@ pub struct RepairRoundArgs {
     /// notifying: a round opened with `--notification none` is in exactly the state
     /// its author chose, so a repair never pings a reviewer on its own.
     pub notification: NotificationMode,
+    /// Message for the reviewer on that notification. `None` falls back to the
+    /// round's own note.
+    pub notification_note: Option<String>,
 }
 
 /// Complete the follow-up steps of an issue's open round, printing the outcome.
@@ -184,6 +191,7 @@ pub async fn repair_open_round(
     let request = RepairRoundRequest {
         issue,
         notification: args.notification,
+        notification_note: args.notification_note,
     };
 
     let result = repair_round(&request, &thread, git_info).await?;
@@ -316,7 +324,8 @@ async fn prompt_round_issue(milestones: &[Milestone], git_info: &GitInfo) -> Res
     prompt_issue(&issues)
 }
 
-/// Optional free-text note, repeated in the round comment and the notification.
+/// Optional free-text reason, recorded on the round comment. Interactively it also
+/// seeds the notification, matching the CLI's `--note`-only fallback.
 fn prompt_note() -> Result<Option<String>> {
     let note = Text::new("📝 Reason for the new round (optional):")
         .prompt()

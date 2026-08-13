@@ -46,6 +46,7 @@ pub async fn start_new_round<G: GitProvider + 'static>(
         checklist_content: request.checklist_content,
         checklist_name: request.checklist_name,
         note: request.note,
+        notification_note: request.notification_note,
         notification: request.notification.into(),
     };
 
@@ -71,6 +72,7 @@ pub async fn repair_open_round<G: GitProvider + 'static>(
     let repair_request = RepairRoundRequest {
         issue,
         notification: request.notification.into(),
+        notification_note: request.notification_note,
     };
 
     let result = repair_round(&repair_request, &thread, state.git_info()).await?;
@@ -202,6 +204,7 @@ mod tests {
             checklist_content: "- [ ] Reviewed the logic".to_string(),
             checklist_name: Some("Code Review Checklist".to_string()),
             note: None,
+            notification_note: None,
             notification: NotificationModeRequest::None,
         }
     }
@@ -366,6 +369,7 @@ mod tests {
             State(state(mock)),
             Path(1),
             Json(RepairRoundApiRequest {
+                notification_note: None,
                 notification: NotificationModeRequest::None,
             }),
         )
@@ -402,6 +406,7 @@ mod tests {
             State(state(mock.clone())),
             Path(1),
             Json(RepairRoundApiRequest {
+                notification_note: None,
                 notification: NotificationModeRequest::Full,
             }),
         )

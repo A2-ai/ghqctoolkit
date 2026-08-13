@@ -107,16 +107,24 @@ fn marker_is_stale(body: Option<&str>, expected: &RoundMarker) -> bool {
     }
 }
 
-/// Everything the caller decides about a repair — which is only whether to notify.
+/// Everything the caller decides about a repair — whether to notify, and what the
+/// notification should say.
 ///
-/// The round, its anchor, its note and its comparison base are all read from the
-/// derived round, so a repair cannot invent a round state the model does not have.
+/// The round, its anchor and its comparison base are all read from the derived
+/// round, so a repair cannot invent a round state the model does not have.
 #[derive(Debug, Clone)]
 pub struct RepairRoundRequest {
     pub issue: Issue,
     /// Post a `# QC Notification` when the open round has none.
     /// [`NotificationMode::None`] (the default for every caller) posts nothing.
     pub notification: NotificationMode,
+    /// Context for the reviewer, for the notification this repair may post.
+    ///
+    /// A notification-only note lives nowhere but the notification comment, so when
+    /// that post is the step that failed the text is gone: the caller passes it
+    /// again. `None` falls back to the round's own note, which is what a repair had
+    /// to use before the two were separable.
+    pub notification_note: Option<String>,
 }
 
 /// Outcome of [`repair_round`], in the same per-step shape as
@@ -276,15 +284,15 @@ where
     };
 
     // A notification is only ever posted on an explicit request, and only when the
-    // round has none: the anchor and the note are the round's own, so the comment
-    // is the one the failed start would have posted, not one describing HEAD now.
+    // round has none: the anchor is the round's own, so the comment is the one the
+    // failed start would have posted, not one describing HEAD now.
     let notification = if plan.notification_missing {
         notification_step(
             &thread.file,
             &request.issue,
             round.opened_at,
             round.previous_approval,
-            note.clone(),
+            request.notification_note.clone().or_else(|| note.clone()),
             request.notification,
             git_info,
         )
@@ -502,6 +510,8 @@ mod tests {
         RepairRoundRequest {
             issue,
             notification,
+            // Unset: these tests exercise the fallback to the round's own note.
+            notification_note: None,
         }
     }
 
@@ -758,6 +768,35 @@ mod tests {
         )
         .await
         .expect("a requested notification is posted");
+
+        assert_eq!(result.notification, StepOutcome::Done);
+    }
+
+    /// A notification-only message survives nowhere but the notification comment, so
+    /// when that post is the step that failed the text is gone and the caller must
+    /// supply it again. Given one, the repair prefers it over the round's own note.
+    #[tokio::test]
+    async fn a_supplied_notification_note_overrides_the_rounds_own() {
+        let mut git = MockGit::new();
+        git.writer.expect_open_issue().times(0);
+        git.writer.expect_update_issue().times(0);
+        git.writer
+            .expect_post_comment::<QCComment>()
+            .times(1)
+            .withf(|comment: &QCComment| {
+                comment.note.as_deref() == Some("Reposting: covariate block still open.")
+            })
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+
+        let issue = issue("open", &body_with_marker(2, URL));
+        let thread = thread(vec![closed_initial_round(), round_two(Some(URL), vec![])]);
+
+        let mut repair = request(issue, NotificationMode::MetadataOnly);
+        repair.notification_note = Some("Reposting: covariate block still open.".to_string());
+
+        let result = repair_round(&repair, &thread, &git)
+            .await
+            .expect("a requested notification is posted");
 
         assert_eq!(result.notification, StepOutcome::Done);
     }

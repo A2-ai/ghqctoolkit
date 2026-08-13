@@ -829,7 +829,6 @@ mod tests {
 
     // ── seed_checklist ───────────────────────────────────────────────────────
 
-    #[test]
     /// A real checklist carries `## `-level section titles. Reading the round
     /// comment's `## Checklist` section only as far as the next `## ` truncated it
     /// to the couple of lines before the first title, and because every later round

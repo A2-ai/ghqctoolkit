@@ -7,11 +7,12 @@ import {
   Group,
   Loader,
   Modal,
-  SegmentedControl,
+  Radio,
   Select,
   Stack,
   Tabs,
   Text,
+  Textarea,
   TextInput,
 } from '@mantine/core'
 import { IconAlertTriangle, IconInfoCircle } from '@tabler/icons-react'
@@ -31,6 +32,8 @@ import {
 } from '~/api/rounds'
 import { useQuery } from '@tanstack/react-query'
 import { commitDiffQueryKey, fetchCommitDiff } from '~/api/commits'
+import { fetchCommentPreview } from '~/api/preview'
+import { wrapInGithubStyles } from '~/utils/github'
 import { CommentEditor } from './CommentEditor'
 
 export interface StartRoundModalProps {
@@ -180,7 +183,16 @@ function StartRoundForm({
   )
   const [note, setNote] = useState('')
   const [notification, setNotification] = useState<NotificationMode>('full')
-  const [tab, setTab] = useState<FormTab>('checklist')
+  // Distinct from `note`: that one records why the round exists, this one is
+  // addressed to the reviewer who is about to be @-mentioned.
+  const [notificationNote, setNotificationNote] = useState('')
+  // Notification preview, in the same shape as the notify tab's: a nested modal
+  // holding the rendered comment. Plain state rather than a query because it is
+  // fired by a button and reflects unsaved form input, not server state.
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [tab, setTab] = useState<FormTab>('changes')
   const startRound = useStartRound(issueNumber)
 
   // A 201 is a success even when it reports failed steps — see StartRoundResultPanel.
@@ -190,6 +202,7 @@ function StartRoundForm({
         issueNumber={issueNumber}
         result={startRound.data}
         notificationMode={notification}
+        notificationNote={notificationNote}
         onClose={onClose}
       />
     )
@@ -197,7 +210,6 @@ function StartRoundForm({
 
   const noPriorChecklist = seed.checklist_content === null
   const canSubmit = seed.can_start && checklistContent.trim().length > 0
-  const selectedOption = NOTIFICATION_OPTIONS.find((o) => o.value === notification)!
   // The expected 409 precondition: a round is already open, so nothing was posted.
   const roundAlreadyOpen: boolean = startRound.error !== null && isRoundStillOpenError(startRound.error)
 
@@ -214,16 +226,46 @@ function StartRoundForm({
     setChecklistName(option.checklist_name ?? '')
   }
 
+  /**
+   * Preview the notification comment this round would post.
+   *
+   * Reuses the notify tab's endpoint rather than adding a round-specific one: the
+   * round's notification *is* a `QCComment` built from the same four inputs, so the
+   * preview is rendered by the very code that will post it.
+   */
+  async function handlePreview() {
+    if (seed.anchor === null) return
+    setPreviewLoading(true)
+    try {
+      const html = await fetchCommentPreview(issueNumber, {
+        current_commit: seed.anchor,
+        previous_commit: seed.previous_approval,
+        note: notificationNote.trim() === '' ? null : notificationNote.trim(),
+        include_diff: notification === 'full',
+      })
+      setPreviewHtml(html)
+    } catch (error) {
+      setPreviewHtml(`<pre>Error: ${(error as Error).message}</pre>`)
+    } finally {
+      setPreviewLoading(false)
+      setPreviewOpen(true)
+    }
+  }
+
   function handleSubmit() {
     startRound.mutate({
       checklist_content: checklistContent,
       checklist_name: checklistName.trim() === '' ? null : checklistName.trim(),
       note: note.trim() === '' ? null : note.trim(),
+      // Sent independently of `note`: the API has no fallback between the two, so
+      // an empty message means the notification carries none.
+      notification_note: notificationNote.trim() === '' ? null : notificationNote.trim(),
       notification,
     })
   }
 
   return (
+    <>
     <Stack gap="md">
       <Stack gap={2}>
         <Text size="sm" fw={700} data-testid="next-round-name">{seed.next_round_name}</Text>
@@ -305,12 +347,15 @@ function StartRoundForm({
         The read-only context above and the actions below stay outside the tabs, so
         what the round *is* and how to commit it are never a tab away.
       */}
-      <Tabs keepMounted={false} value={tab} onChange={(value) => setTab((value as FormTab | null) ?? 'checklist')}>
+      <Tabs keepMounted={false} value={tab} onChange={(value) => setTab((value as FormTab | null) ?? 'changes')}>
         <Tabs.List grow>
+          {/* Changes leads: what moved is the reason the round exists. */}
+          <Tabs.Tab value="changes">Changes</Tabs.Tab>
           <Tabs.Tab
             value="checklist"
-            // The only required field lives here, so an empty one is flagged on the
-            // tab itself rather than only on a panel the user may not be looking at.
+            // The only required field lives here, and this is no longer the tab the
+            // modal opens on — so an empty one is flagged on the tab itself rather
+            // than only inside a panel the user may not have visited.
             rightSection={
               checklistContent.trim() === '' ? (
                 <Text span c="red" size="sm" data-testid="checklist-tab-required">*</Text>
@@ -319,9 +364,32 @@ function StartRoundForm({
           >
             Checklist
           </Tabs.Tab>
-          <Tabs.Tab value="changes">Changes</Tabs.Tab>
           <Tabs.Tab value="notification">Notification</Tabs.Tab>
         </Tabs.List>
+
+        {/*
+          What the reviewer is actually being asked to look at: the two ends of the
+          round and the diff between them. The note lives here because it is the
+          author's answer to that diff — "why this round is being opened".
+        */}
+        <Tabs.Panel value="changes" pt="md" data-testid="changes-panel">
+          <Stack gap="sm">
+            <Stack gap={4} data-testid="round-anchor">
+              <CommitLine label="Opens at (HEAD)" hash={seed.anchor} />
+              <CommitLine label="Compares against" hash={seed.previous_approval} />
+            </Stack>
+
+            <RoundDiff file={seed.file} from={seed.previous_approval} to={seed.anchor} />
+
+            <TextInput
+              label="Note (optional)"
+              placeholder="Why this round is being opened"
+              value={note}
+              onChange={(e) => setNote(e.currentTarget.value)}
+              disabled={!seed.can_start}
+            />
+          </Stack>
+        </Tabs.Panel>
 
         <Tabs.Panel value="checklist" pt="md" data-testid="checklist-panel">
           <Stack gap="sm">
@@ -361,53 +429,92 @@ function StartRoundForm({
         </Tabs.Panel>
 
         {/*
-          What the reviewer is actually being asked to look at: the two ends of the
-          round and the diff between them. The note lives here because it is the
-          author's answer to that diff — "why this round is being opened".
+          Radio cards rather than a segmented control. A segmented control is a
+          view-switcher: it suits options that need no explanation and a row too
+          cramped to give them one, which is what this was before it had a tab. Here
+          each mode needs a sentence, and showing all three at once beats a single
+          line that swaps as you click. The cards also give the silent-mode warning
+          somewhere to sit inside the option it belongs to.
         */}
-        <Tabs.Panel value="changes" pt="md" data-testid="changes-panel">
-          <Stack gap="sm">
-            <Stack gap={4} data-testid="round-anchor">
-              <CommitLine label="Opens at (HEAD)" hash={seed.anchor} />
-              <CommitLine label="Compares against" hash={seed.previous_approval} />
-            </Stack>
-
-            <RoundDiff file={seed.file} from={seed.previous_approval} to={seed.anchor} />
-
-            <TextInput
-              label="Note (optional)"
-              placeholder="Why this round is being opened"
-              value={note}
-              onChange={(e) => setNote(e.currentTarget.value)}
-              disabled={!seed.can_start}
-            />
-          </Stack>
-        </Tabs.Panel>
-
         <Tabs.Panel value="notification" pt="md" data-testid="notification-panel">
-          <Stack gap={4}>
-            <SegmentedControl
-              data-testid="notification-mode"
+          <Stack gap="sm">
+            <Radio.Group
               value={notification}
               onChange={(v) => setNotification(v as NotificationMode)}
-              disabled={!seed.can_start}
-              fullWidth
-              data={NOTIFICATION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-            />
-            <Text size="xs" c="dimmed" data-testid="notification-description">
-              {selectedOption.description}
-            </Text>
-            {notification === 'none' && (
-              <Alert
-                color="orange"
-                icon={<IconAlertTriangle size={16} />}
-                data-testid="notification-none-warning"
-                mt={4}
-              >
-                <Text size="sm">
-                  The reviewer will not be notified. The round opens silently and nobody is told it exists.
-                </Text>
-              </Alert>
+              data-testid="notification-mode"
+            >
+              <Stack gap={6}>
+                {NOTIFICATION_OPTIONS.map((option) => (
+                  <Radio.Card
+                    key={option.value}
+                    value={option.value}
+                    p="xs"
+                    // On the card as well as the indicator: the whole card is the
+                    // hit target, so an indicator-only guard leaves a blocked form
+                    // still switching modes.
+                    disabled={!seed.can_start}
+                    data-testid={`notification-mode-${option.value}`}
+                    style={{ cursor: seed.can_start ? 'pointer' : 'not-allowed' }}
+                  >
+                    <Group gap="sm" wrap="nowrap" align="flex-start">
+                      <Radio.Indicator disabled={!seed.can_start} mt={2} />
+                      <Stack gap={2}>
+                        <Text size="sm" fw={600}>{option.label}</Text>
+                        <Text size="xs" c="dimmed">{option.description}</Text>
+                        {option.value === 'none' && notification === 'none' && (
+                          <Group gap={4} wrap="nowrap" data-testid="notification-none-warning">
+                            <IconAlertTriangle size={14} color="var(--mantine-color-orange-7)" />
+                            <Text size="xs" c="orange.7">
+                              Nobody is told the round exists.
+                            </Text>
+                          </Group>
+                        )}
+                      </Stack>
+                    </Group>
+                  </Radio.Card>
+                ))}
+              </Stack>
+            </Radio.Group>
+
+            {/*
+              The reviewer-facing message, kept with the comment that carries it
+              rather than with the round's own note on the Changes tab. Hidden when
+              nothing will be posted: a message with no comment to ride on is a field
+              that silently discards what you type.
+            */}
+            {notification !== 'none' && (
+              <Textarea
+                label="Message to the reviewer (optional)"
+                description="Added to the QC Notification comment, above the commit metadata."
+                placeholder="Anything they should know before reviewing"
+                value={notificationNote}
+                onChange={(e) => setNotificationNote(e.currentTarget.value)}
+                disabled={!seed.can_start}
+                autosize
+                minRows={2}
+                maxRows={6}
+                data-testid="notification-note"
+              />
+            )}
+
+            {/*
+              Only offered when something will actually be posted: there is no comment
+              to preview in silent mode. The anchor guard mirrors the submit button's —
+              without it there is no commit to render against.
+            */}
+            {notification !== 'none' && (
+              <Group justify="flex-end">
+                <Button
+                  variant="default"
+                  size="xs"
+                  loading={previewLoading}
+                  disabled={seed.anchor === null}
+                  onClick={handlePreview}
+                  data-testid="notification-preview"
+                >
+                  Preview notification
+                </Button>
+              </Group>
             )}
           </Stack>
         </Tabs.Panel>
@@ -448,6 +555,24 @@ function StartRoundForm({
         )}
       </Group>
     </Stack>
+
+    {/* Rendered by the same builder that will post it — see handlePreview. */}
+    <Modal
+      opened={previewOpen}
+      onClose={() => setPreviewOpen(false)}
+      title="Notification Preview"
+      size={800}
+      centered
+      styles={{ header: { paddingTop: 12, paddingBottom: 12 }, body: { paddingBottom: 20 } }}
+    >
+      <iframe
+        srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
+        style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
+        title="Notification Preview"
+        data-testid="notification-preview-frame"
+      />
+    </Modal>
+    </>
   )
 }
 
@@ -467,8 +592,9 @@ function CommitLine({ label, hash }: { label: string; hash: string | null }) {
 /**
  * The diff between the round's two ends.
  *
- * Fetched on demand: the tabs above set `keepMounted={false}`, so this mounts only
- * when the Changes tab is opened and a user who never looks costs no request.
+ * The tabs set `keepMounted={false}`, so this unmounts whenever another tab is
+ * showing. React Query's cache is what makes that cheap — the diff is fetched once
+ * per commit range, not once per visit to this tab.
  *
  * Nothing here is an error path in the usual sense. A round can legitimately open at
  * the very commit it compares against — which is exactly the state right after an
@@ -599,12 +725,15 @@ function StartRoundResultPanel({
   issueNumber,
   result,
   notificationMode,
+  notificationNote,
   onClose,
 }: {
   issueNumber: number
   result: StartRoundResponse
   /** The mode the start attempted, so a failed notification is retried as asked. */
   notificationMode: NotificationMode
+  /** The message it attempted to send, so the retry is not silently emptier. */
+  notificationNote: string
   onClose: () => void
 }) {
   return (
@@ -656,6 +785,7 @@ function StartRoundResultPanel({
           // send one and failed. Otherwise `none`: a round opened deliberately
           // without notifying must never grow a notification out of a repair.
           notification={result.notification.status === 'failed' ? notificationMode : 'none'}
+          notificationNote={notificationNote.trim() === '' ? undefined : notificationNote.trim()}
         />
       )}
 
@@ -682,11 +812,19 @@ function RepairAction({
   label,
   testId,
   notification,
+  notificationNote,
 }: {
   issueNumber: number
   label: string
   testId: string
   notification: NotificationMode
+  /**
+   * Message for the reviewer, when this repair is retrying a notification the user
+   * had already written one for. It exists nowhere but the comment that failed to
+   * post, so re-sending it is the only way it survives. Omitted → the backend falls
+   * back to the round's own note.
+   */
+  notificationNote?: string
 }) {
   const repair = useRepairRound(issueNumber)
   // Boolean, not a narrowing guard: the other branch still needs the message.
@@ -718,7 +856,7 @@ function RepairAction({
           color="yellow"
           data-testid={testId}
           loading={repair.isPending}
-          onClick={() => repair.mutate({ notification })}
+          onClick={() => repair.mutate({ notification, notification_note: notificationNote ?? null })}
         >
           {repair.data || repair.error ? `${label} again` : label}
         </Button>

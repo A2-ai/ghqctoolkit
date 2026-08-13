@@ -38,7 +38,17 @@ interface Props {
 }
 
 // Commits are newest-first; commits before the approved index are temporally later.
+/**
+ * The newest file change that landed after the standing approval and is *not* being
+ * reviewed — the card's "File has changed since approval" warning.
+ *
+ * An open round means those changes are the subject of a QC pass in progress, not
+ * unreviewed drift, so the warning is suppressed. Without this the model's normal
+ * case — approve, edit, start a round — reads as a problem, and the approval it
+ * points at belongs to the round before the one under review.
+ */
 function postApprovalFileCommit(s: IssueStatusResponse): string | undefined {
+  if (s.open_round_index !== null) return undefined
   const { approved_commit } = s.qc_status
   if (!approved_commit) return undefined
   const approvedIdx = s.commits.findIndex((c) => c.hash === approved_commit)

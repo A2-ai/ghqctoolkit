@@ -949,5 +949,22 @@ mod tests {
             matches!(status, QCStatus::AwaitingReview),
             "expected AwaitingReview for a notified open round, got {status:?}"
         );
+
+        // The card's "Latest" row reads this. The approval-priority tier must not
+        // hand back round 1's approved commit while round 2 is under review.
+        assert_eq!(
+            thread.latest_commit().hash,
+            oid(3),
+            "latest_commit must be the open round's notified commit, not the \
+             previous round's approval"
+        );
+    }
+
+    /// The counterpart: with every round closed, the approval still outranks
+    /// everything, which is the long-standing behaviour for approved issues.
+    #[test]
+    fn a_closed_round_still_reports_its_approval_as_latest() {
+        let thread = thread_with_rounds(vec![initial_round_closed_at_2()]);
+        assert_eq!(thread.latest_commit().hash, oid(2));
     }
 }

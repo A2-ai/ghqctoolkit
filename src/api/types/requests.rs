@@ -220,8 +220,12 @@ pub struct StartRoundApiRequest {
     /// Name of the checklist template the content came from, for the audit record.
     #[serde(default)]
     pub checklist_name: Option<String>,
+    /// Why the round is being opened, recorded on the `# QC Round` comment.
     #[serde(default)]
     pub note: Option<String>,
+    /// Context for the reviewer, carried by the `# QC Notification` comment only.
+    #[serde(default)]
+    pub notification_note: Option<String>,
     #[serde(default)]
     pub notification: NotificationModeRequest,
 }
@@ -240,6 +244,10 @@ pub struct StartRoundApiRequest {
 pub struct RepairRoundApiRequest {
     #[serde(default = "no_notification")]
     pub notification: NotificationModeRequest,
+    /// Context for the reviewer. Absent falls back to the round's own note — see
+    /// [`crate::RepairRoundRequest::notification_note`].
+    #[serde(default)]
+    pub notification_note: Option<String>,
 }
 
 fn no_notification() -> NotificationModeRequest {

@@ -310,10 +310,20 @@ impl IssueThread {
         // Priority: Approved > (Notification | Initial | Reviewed) - with tie-break to most recent
         let mut latest_commentable = None; // Notification, Initial, or Reviewed
 
+        // An open round supersedes an earlier round's approval, so that approval must
+        // not outrank the open round's own notifications and reviews — otherwise a
+        // round under review reports the *previous* round's approved commit as its
+        // latest, which is what a status card shows as "Latest".
+        //
+        // No-op for legacy threads: a `# QC Un-Approval` strips the `Approved` status
+        // from its commit, so a single-round thread whose round is open has no
+        // approved commit for this tier to rank in the first place.
+        let approval_outranks = self.open_round().is_none();
+
         // Iterate in forward order (newest first) to find most recent commits first
         for commit in &self.commits {
             // Return immediately on first approved commit (highest priority)
-            if commit.statuses.contains(&CommitStatus::Approved) {
+            if approval_outranks && commit.statuses.contains(&CommitStatus::Approved) {
                 return &commit;
             }
 

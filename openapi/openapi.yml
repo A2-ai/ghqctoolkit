@@ -1720,6 +1720,17 @@ components:
         note:
           type: string
           nullable: true
+          description: |
+            Why the round is being opened. Recorded on the `# QC Round` comment,
+            which is the round's durable audit record.
+        notification_note:
+          type: string
+          nullable: true
+          description: |
+            Context for the reviewer, carried by the `# QC Notification` comment
+            only. Separate from `note` on purpose: the reason a round exists and
+            the message addressed to whoever must review it are different things,
+            and there is no fallback between them here.
         notification:
           type: string
           enum: [full, metadata_only, none]
@@ -1899,6 +1910,14 @@ components:
             - full: QC Notification with the inline file diff
             - metadata_only: QC Notification without the diff
             - none: post nothing
+        notification_note:
+          type: string
+          nullable: true
+          description: |
+            Context for the reviewer on that notification. A notification-only
+            message lives nowhere but the notification comment, so when that post
+            is the step being repaired the text is gone and the caller supplies it
+            again. Absent falls back to the round's own note.
 
     RepairRoundResponse:
       type: object

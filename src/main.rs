@@ -278,6 +278,11 @@ enum IssueCommands {
         #[arg(long, value_enum, default_value_t = NotificationArg::Full)]
         notification: NotificationArg,
 
+        /// Optional message for the reviewer, on the QC Notification comment only.
+        /// Use this for context they need now; `--note` records why the round exists.
+        #[arg(long)]
+        notification_note: Option<String>,
+
         /// Open the checklist in $EDITOR before posting (always on in interactive mode)
         #[arg(long)]
         edit: bool,
@@ -299,6 +304,12 @@ enum IssueCommands {
         /// Post a QC Notification if the open round has none (default: post nothing)
         #[arg(long, value_enum, default_value_t = NotificationArg::None)]
         notification: NotificationArg,
+
+        /// Optional message for the reviewer on that notification. Defaults to the
+        /// round's own note, since a notification-only message did not survive the
+        /// failed post being repaired.
+        #[arg(long)]
+        notification_note: Option<String>,
     },
     /// Review current working directory changes against a commit
     Review {
@@ -685,6 +696,7 @@ async fn main() -> Result<()> {
                     from_round,
                     note,
                     notification,
+                    notification_note,
                     edit,
                 } => {
                     let config_dir = determine_config_dir(cli.config_dir, &env)?;
@@ -702,6 +714,7 @@ async fn main() -> Result<()> {
                             from_round,
                             note,
                             notification: notification.into(),
+                            notification_note,
                             edit,
                         },
                         &configuration,
@@ -715,6 +728,7 @@ async fn main() -> Result<()> {
                     milestone,
                     file,
                     notification,
+                    notification_note,
                 } => {
                     let milestones = git_info.get_milestones().await?;
                     let cache = DiskCache::from_git_info(&git_info).ok();
@@ -724,6 +738,7 @@ async fn main() -> Result<()> {
                             milestone,
                             file,
                             notification: notification.into(),
+                            notification_note,
                         },
                         &milestones,
                         cache.as_ref(),

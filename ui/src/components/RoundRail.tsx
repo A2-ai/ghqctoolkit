@@ -23,6 +23,13 @@ interface Props {
 export function RoundRail({ rounds, onStartRound }: Props) {
   if (rounds.length === 0) return null
 
+  // A new round builds on an approval, so it is only offered once the current round
+  // has one. While a round is open the backend's `can_start` is false anyway — the
+  // link could only ever lead to a modal that refuses — and offering it invites the
+  // very thing that should not happen: a second round opened over an unfinished one,
+  // which the fold would treat as an extension rather than a new round.
+  const lastRoundClosed = rounds[rounds.length - 1].state === 'closed'
+
   return (
     <Stack
       gap={4}
@@ -36,7 +43,7 @@ export function RoundRail({ rounds, onStartRound }: Props) {
           <RoundSection key={round.index} round={round} defaultOpen={i === rounds.length - 1} />
         ))
       )}
-      {onStartRound && (
+      {onStartRound && lastRoundClosed && (
         <UnstyledButton onClick={onStartRound} data-testid="round-rail-start">
           <Text size="xs" c="blue">+ Start a new round</Text>
         </UnstyledButton>

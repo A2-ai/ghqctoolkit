@@ -84,10 +84,9 @@ test('S1: a single Initial QC round renders as one quiet line, with no extra chr
   await expect(panel.getByTestId('round-section-1')).toHaveCount(0)
   await expect(panel.getByTestId('picker-scope')).toHaveCount(0)
   await expect(panel.getByTestId('draft-gap-row')).toHaveCount(0)
-  // The rail's start-round action is the one addition: it is now wired to the
-  // start-round modal (it used to be unreachable), and it is a single quiet line
-  // rather than chrome around the round itself.
-  await expect(panel.getByTestId('round-rail-start')).toHaveCount(1)
+  // No start-round action: this issue's only round is still open, and a new round
+  // builds on an approval. It is offered once the round closes — see start-round.spec.
+  await expect(panel.getByTestId('round-rail-start')).toHaveCount(0)
 })
 
 test('S1: both rounds appear in the rail, newest expanded', async ({ page }) => {

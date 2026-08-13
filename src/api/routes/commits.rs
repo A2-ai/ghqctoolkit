@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use gix::ObjectId;
 use std::str::FromStr;
 
-use crate::GitFileOps;
 use crate::GitProvider;
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
