@@ -6,6 +6,7 @@ use octocrab::models::Milestone;
 
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::cli::rename::alert_renames;
+use crate::round::{GapContinuity, Placement, Segment};
 use crate::{
     BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState, IssueThread,
     QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
@@ -58,7 +59,7 @@ pub async fn interactive_status(
         single_issue_status(
             &issue_thread,
             &git_status.state,
-            &qc_status,
+            qc_status.as_ref(),
             &git_status.dirty,
             &file_commits,
             &checklist_summary,
@@ -69,10 +70,117 @@ pub async fn interactive_status(
     Ok(())
 }
 
+/// Abbreviated commit, as everywhere else the CLI prints one.
+fn short(commit: &ObjectId) -> String {
+    commit.to_string()[..7].to_string()
+}
+
+fn plural_commits(count: usize) -> String {
+    if count == 1 {
+        "1 commit".to_string()
+    } else {
+        format!("{count} commits")
+    }
+}
+
+/// A short suffix for the status line when the active segment cannot be taken at face
+/// value — the CLI's equivalent of the card graying (**D15**/**U3 revised**).
+///
+/// The status itself stays a function of the record alone (**D8**); this only says the
+/// record is not describing the history the user is looking at. Kept to a phrase per
+/// **Q5** — the `Segments:` block below carries the detail.
+fn trust_marker(issue_thread: &IssueThread) -> Option<String> {
+    let active = issue_thread.active_segment();
+    if let Placement::Unplaceable(reason) = active.placement() {
+        return Some(format!(" (not placeable — {})", reason.describe()));
+    }
+
+    // Defensive only: a trailing gap walks the previous round's branch, and a placed
+    // closed round has its closing commit on that walk, so the fold cannot produce an
+    // unrelated trailing gap. Cheap to keep in case the model grows one.
+    match active.as_gap().map(|gap| &gap.continuity) {
+        Some(GapContinuity::Unrelated) => Some(" (history unrelated to the approval)".to_string()),
+        _ => None,
+    }
+}
+
+/// One line per segment: each round's index, branch, state and approval, and how much
+/// drifted between two of them (**C1**).
+///
+/// High level on purpose (**Q5**): this says what the issue's history *is*, not what
+/// every commit in it did.
+fn segment_summary(issue_thread: &IssueThread) -> Vec<String> {
+    issue_thread
+        .segments
+        .iter()
+        .enumerate()
+        .map(|(position, segment)| match segment {
+            Segment::Round(round) => {
+                // An unplaceable segment owns no commits, so it reports why rather than
+                // a state derived from nothing.
+                let state = match (&round.placement, round.closing_commit()) {
+                    (Placement::Unplaceable(reason), _) => {
+                        format!("unknown — {}", reason.describe())
+                    }
+                    (Placement::Placed, Some(commit)) => {
+                        format!(
+                            "approved at {} ({})",
+                            short(commit),
+                            plural_commits(round.commits.len())
+                        )
+                    }
+                    (Placement::Placed, None) => {
+                        format!("open ({})", plural_commits(round.commits.len()))
+                    }
+                };
+                format!("{} on '{}': {state}", round.name(), round.branch)
+            }
+            Segment::Gap(gap) => {
+                // A gap's bounding rounds are its immediate neighbours — one position
+                // back and one forward, never two.
+                let previous = position
+                    .checked_sub(1)
+                    .and_then(|older| issue_thread.segments.get(older))
+                    .and_then(Segment::as_round);
+                let next = issue_thread
+                    .segments
+                    .get(position + 1)
+                    .and_then(Segment::as_round);
+                let between = match (previous, next) {
+                    (Some(previous), Some(next)) => {
+                        format!("Between {} and {}", previous.name(), next.name())
+                    }
+                    (Some(previous), None) => format!("Since {}'s approval", previous.name()),
+                    _ => "Outside any round".to_string(),
+                };
+                let continuity = match gap.continuity {
+                    GapContinuity::Linear => String::new(),
+                    GapContinuity::Diverged { merge_base } => {
+                        format!(", diverged — histories meet at {}", short(&merge_base))
+                    }
+                    GapContinuity::Unrelated => {
+                        ", unrelated histories — no comparison is meaningful".to_string()
+                    }
+                };
+                match &gap.placement {
+                    Placement::Unplaceable(reason) => {
+                        format!("{between}: unknown — {}", reason.describe())
+                    }
+                    Placement::Placed => format!(
+                        "{between}: {} on '{}'{continuity}",
+                        plural_commits(gap.commits.len()),
+                        gap.branch
+                    ),
+                }
+            }
+        })
+        .collect()
+}
+
 pub fn single_issue_status(
     issue_thread: &IssueThread,
     git_status: &GitState,
-    qc_status: &QCStatus,
+    qc_status: Option<&QCStatus>,
     dirty_files: &[PathBuf],
     file_commits: &[&ObjectId],
     checklist_summaries: &[(String, ChecklistSummary)],
@@ -80,7 +188,9 @@ pub fn single_issue_status(
 ) -> String {
     let mut res = vec![
         format!("- File:        {}", issue_thread.file.display()),
-        format!("- Branch:      {}", issue_thread.branch),
+        // The branch the issue is being QC'd on now, which is the active segment's —
+        // there is no thread-wide branch to print (**C2**).
+        format!("- Branch:      {}", issue_thread.active_branch()),
     ];
     res.push(format!(
         "- Issue State: {}",
@@ -88,18 +198,32 @@ pub fn single_issue_status(
     ));
 
     let qc_str = match qc_status {
-        QCStatus::Approved => format!("Approved"),
-        QCStatus::ChangesAfterApproval(_) => {
-            format!("Approved. File has changed since approval")
+        Some(QCStatus::Approved) => "Approved".to_string(),
+        Some(QCStatus::ChangesAfterApproval(_)) => {
+            "Approved. File has changed since approval".to_string()
         }
-        QCStatus::AwaitingReview => format!("Awaiting review. Latest commit notified"),
-        QCStatus::ChangeRequested => format!("Changes requested. Latest commit reviewed"),
-        QCStatus::InProgress => format!("Awaiting approval"),
-        QCStatus::ApprovalRequired => format!("Issue closed without approval"),
-        QCStatus::ChangesToComment(commit) => format!(
-            "File change in '{}' not commented",
-            commit.to_string()[..7].to_string()
-        ),
+        Some(QCStatus::AwaitingReview) => "Awaiting review. Latest commit notified".to_string(),
+        Some(QCStatus::ChangeRequested) => "Changes requested. Latest commit reviewed".to_string(),
+        Some(QCStatus::InProgress) => "Awaiting approval".to_string(),
+        Some(QCStatus::ApprovalRequired) => "Issue closed without approval".to_string(),
+        Some(QCStatus::ChangesToComment(commit)) => {
+            format!("File change in '{}' not commented", short(commit))
+        }
+        // An unplaceable active segment has no status to report, and saying so is
+        // honest where a guess would not be.
+        None => match issue_thread.active_segment().placement() {
+            Placement::Unplaceable(reason) => {
+                format!("Unknown — {}", reason.describe())
+            }
+            Placement::Placed => "Unknown".to_string(),
+        },
+    };
+    // A status that exists can still be reporting on a segment nobody should trust: a
+    // closed-without-approval issue is answered before the segment is even consulted.
+    // The `None` arm above already names its reason, so it is not marked twice.
+    let trust = match qc_status {
+        Some(_) => trust_marker(issue_thread).unwrap_or_default(),
+        None => String::new(),
     };
     let is_dirty = dirty_files.contains(&issue_thread.file);
 
@@ -161,8 +285,12 @@ pub fn single_issue_status(
         .collect::<Vec<_>>();
     let checklist_sum = ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
 
-    res.push(format!("- QC Status:   {qc_str}"));
+    res.push(format!("- QC Status:   {qc_str}{trust}"));
     res.push(format!("- Git Status:  {git_str}"));
+    res.push(format!(
+        "- Segments:\n  - {}",
+        segment_summary(issue_thread).join("\n  - ")
+    ));
     res.push(format!(
         "- Checklist Summary: {checklist_sum}\n  - {}",
         indiv_checklist.join("\n  - ")
@@ -314,13 +442,17 @@ async fn get_milestone_status_rows(
                 let row = MilestoneStatusRow {
                     file: issue_thread.file.display().to_string(),
                     milestone: milestone.title.clone(),
-                    branch: issue_thread.branch.clone(),
+                    branch: issue_thread.active_branch().to_string(),
                     issue_state: if issue_thread.open {
                         "open".to_string()
                     } else {
                         "closed".to_string()
                     },
-                    qc_status: qc_status.to_string(),
+                    qc_status: qc_status
+                        .map(|status| status.to_string())
+                        // One row per issue, so an unplaceable active segment says so
+                        // in place of a status rather than dropping the issue.
+                        .unwrap_or_else(|| "Unknown".to_string()),
                     git_status: git_status_str,
                     checklist_summary,
                     blocking_qc_status: get_blocking_qc_status(
@@ -464,4 +596,234 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
         );
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::issue::IssueCommit;
+    use crate::round::{ChecklistSource, Gap, Round, RoundOpen, RoundState, UnplaceableReason};
+    use std::str::FromStr;
+
+    const A: &str = "aaaaaaa000000000000000000000000000000001";
+    const B: &str = "bbbbbbb000000000000000000000000000000002";
+    const C: &str = "ccccccc000000000000000000000000000000003";
+
+    fn oid(sha: &str) -> ObjectId {
+        ObjectId::from_str(sha).unwrap()
+    }
+
+    fn commit(sha: &str) -> IssueCommit {
+        IssueCommit {
+            hash: oid(sha),
+            message: format!("commit {sha}"),
+            file_changed: true,
+        }
+    }
+
+    fn round(index: u32, branch: &str, state: RoundState, placement: Placement) -> Segment {
+        Segment::Round(Round {
+            index,
+            opened_at: oid(A),
+            branch: branch.to_string(),
+            opened: RoundOpen::IssueCreated,
+            checklist: ChecklistSource::IssueBody,
+            checklist_name: None,
+            state,
+            events: Vec::new(),
+            retractions: Vec::new(),
+            extensions: Vec::new(),
+            commits: if placement.is_placed() {
+                vec![commit(B), commit(A)]
+            } else {
+                Vec::new()
+            },
+            placement,
+        })
+    }
+
+    fn closed() -> RoundState {
+        RoundState::Closed {
+            commit: oid(B),
+            by: "reviewer".to_string(),
+            at: chrono::Utc::now(),
+            comment_index: 0,
+            comment_id: None,
+            comment_url: None,
+        }
+    }
+
+    fn thread(segments: Vec<Segment>) -> IssueThread {
+        IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            open: true,
+            milestone: "m1".to_string(),
+            blocking_qcs: Vec::new(),
+            segments,
+            anomalies: Vec::new(),
+        }
+    }
+
+    /// C1: every round's branch, state and approval, and every gap's size — including
+    /// the empty ones, which are the *reason* an issue reads as approved.
+    #[test]
+    fn the_summary_names_every_round_and_gap() {
+        let summary = segment_summary(&thread(vec![
+            round(1, "main", closed(), Placement::Placed),
+            Segment::Gap(Gap {
+                branch: "feature/x".to_string(),
+                commits: vec![commit(C)],
+                continuity: GapContinuity::Diverged { merge_base: oid(A) },
+                placement: Placement::Placed,
+            }),
+            round(2, "feature/x", RoundState::Open, Placement::Placed),
+        ]));
+
+        assert_eq!(
+            summary,
+            vec![
+                format!("Initial QC on 'main': approved at {} (2 commits)", &B[..7]),
+                format!(
+                    "Between Initial QC and Round 2: 1 commit on 'feature/x', diverged — \
+                     histories meet at {}",
+                    &A[..7]
+                ),
+                "Round 2 on 'feature/x': open (2 commits)".to_string(),
+            ]
+        );
+    }
+
+    /// D4: an unplaceable segment is grayed with its reason, never guessed at — and the
+    /// gap beside it says which fact is missing rather than borrowing the other round's
+    /// branch.
+    #[test]
+    fn an_unplaceable_round_reports_why_instead_of_a_state() {
+        let summary = segment_summary(&thread(vec![
+            round(1, "main", closed(), Placement::Placed),
+            Segment::Gap(Gap {
+                branch: String::new(),
+                commits: Vec::new(),
+                continuity: GapContinuity::Linear,
+                placement: Placement::Unplaceable(UnplaceableReason::NeighbourUnplaceable),
+            }),
+            round(
+                2,
+                "",
+                RoundState::Open,
+                Placement::Unplaceable(UnplaceableReason::BranchNotDeclared),
+            ),
+        ]));
+
+        assert_eq!(
+            summary[1],
+            "Between Initial QC and Round 2: unknown — the round bounding it could not be placed"
+        );
+        assert_eq!(
+            summary[2],
+            "Round 2 on '': unknown — its round comment declared no branch"
+        );
+    }
+
+    /// S4: no status at all is a state the CLI has to render, and "Unknown" with the
+    /// reason is the honest rendering — not an error, and not a stale status.
+    #[test]
+    fn an_unplaceable_active_segment_renders_as_unknown() {
+        let thread = thread(vec![round(
+            1,
+            "main",
+            RoundState::Open,
+            Placement::Unplaceable(UnplaceableReason::BranchUnavailable),
+        )]);
+        assert!(QCStatus::determine_status(&thread).is_none());
+
+        let rendered = single_issue_status(
+            &thread,
+            &GitState::Clean,
+            None,
+            &[],
+            &[],
+            &[],
+            &BlockingQCStatus::default(),
+        );
+        assert!(
+            rendered.contains("QC Status:   Unknown — its branch is unavailable locally"),
+            "unexpected: {rendered}"
+        );
+        // C2: the branch line is the active segment's, not a thread-wide field.
+        assert!(
+            rendered.contains("Branch:      main"),
+            "unexpected: {rendered}"
+        );
+        assert!(rendered.contains("Segments:"), "unexpected: {rendered}");
+    }
+
+    /// D15: a status can exist *and* be about a segment nobody should trust — a closed
+    /// issue reports `ApprovalRequired` before the active segment is consulted. The card
+    /// grays here, so the status line has to say so too, or `ghqc issue status` and the
+    /// UI disagree about the same issue (§0).
+    #[test]
+    fn a_status_over_an_unplaceable_segment_is_marked_on_the_status_line() {
+        let mut thread = thread(vec![round(
+            1,
+            "main",
+            RoundState::Open,
+            Placement::Unplaceable(UnplaceableReason::AnchorUnreachable),
+        )]);
+        thread.open = false;
+
+        let status = QCStatus::determine_status(&thread);
+        assert!(matches!(status, Some(QCStatus::ApprovalRequired)));
+
+        let rendered = single_issue_status(
+            &thread,
+            &GitState::Clean,
+            status.as_ref(),
+            &[],
+            &[],
+            &[],
+            &BlockingQCStatus::default(),
+        );
+        assert!(
+            rendered.contains(
+                "QC Status:   Issue closed without approval (not placeable — its commits are \
+                 not on that branch)"
+            ),
+            "unexpected: {rendered}"
+        );
+    }
+
+    /// The other half of the marker, distinguished from *not placeable* because the
+    /// remedies differ. Hand-built on purpose: the fold cannot produce an unrelated
+    /// trailing gap (a trailing gap walks the previous round's branch, where a placed
+    /// closed round's approval necessarily is), so this pins the guard, not a reachable
+    /// state.
+    #[test]
+    fn an_unrelated_trailing_gap_reads_approved_and_says_the_history_is_unrelated() {
+        let thread = thread(vec![
+            round(1, "main", closed(), Placement::Placed),
+            Segment::Gap(Gap {
+                branch: "main".to_string(),
+                commits: Vec::new(),
+                continuity: GapContinuity::Unrelated,
+                placement: Placement::Placed,
+            }),
+        ]);
+
+        let status = QCStatus::determine_status(&thread);
+        assert!(matches!(status, Some(QCStatus::Approved)));
+
+        let rendered = single_issue_status(
+            &thread,
+            &GitState::Clean,
+            status.as_ref(),
+            &[],
+            &[],
+            &[],
+            &BlockingQCStatus::default(),
+        );
+        assert!(
+            rendered.contains("QC Status:   Approved (history unrelated to the approval)"),
+            "unexpected: {rendered}"
+        );
+    }
 }

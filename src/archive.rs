@@ -57,10 +57,17 @@ impl ArchiveFile {
         issue_thread: &IssueThread,
         flatten: bool,
     ) -> Result<Self, ArchiveError> {
-        let (commit, approved) = if let Some(approved_commit) = issue_thread.approved_commit() {
-            (approved_commit.hash, true)
-        } else {
-            (issue_thread.latest_commit().hash.clone(), false)
+        // The newest approval across every round, ungated by whether one is open: an
+        // archive records what was approved, and a round opened afterwards does not
+        // unapprove it. Without any approval the file is archived as it is now.
+        let (commit, approved) = match issue_thread.last_approved_commit() {
+            Some(approved) => (*approved, true),
+            None => match issue_thread.latest_commit() {
+                Some(latest) => (latest.hash, false),
+                // Never approved and no commit could be placed: there is nothing this
+                // archive could honestly point at.
+                None => return Err(ArchiveError::CommitDetermination(issue_thread.file.clone())),
+            },
         };
 
         let archive_file = if flatten {
@@ -243,9 +250,7 @@ pub enum ArchiveError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        IssueCommit, IssueThread, git::MockGitFileOps, issue::CommitStatus, utils::MockEnvProvider,
-    };
+    use crate::{IssueCommit, IssueThread, git::MockGitFileOps, utils::MockEnvProvider};
     use flate2::read::GzDecoder;
     use gix::ObjectId;
     use std::collections::HashMap;
@@ -258,38 +263,58 @@ mod tests {
         ObjectId::from_hex(hex_str.as_bytes()).unwrap()
     }
 
+    fn commit(suffix: &str) -> IssueCommit {
+        IssueCommit {
+            hash: create_test_object_id(suffix),
+            message: format!("commit {suffix}"),
+            file_changed: true,
+        }
+    }
+
+    fn round(state: crate::RoundState, commits: Vec<IssueCommit>) -> crate::Segment {
+        crate::Segment::Round(crate::Round {
+            index: 1,
+            opened_at: create_test_object_id("123"),
+            branch: "main".to_string(),
+            opened: crate::RoundOpen::IssueCreated,
+            checklist: crate::ChecklistSource::IssueBody,
+            checklist_name: None,
+            state,
+            events: Vec::new(),
+            retractions: Vec::new(),
+            extensions: Vec::new(),
+            commits,
+            placement: crate::Placement::Placed,
+        })
+    }
+
+    /// Initial QC approved at `456`, with the empty gap that follows it.
     fn create_test_issue_thread() -> IssueThread {
         IssueThread {
             file: PathBuf::from("src/test.rs"),
-            branch: "main".to_string(),
             open: false,
-            commits: vec![
-                IssueCommit {
-                    hash: create_test_object_id("123"),
-                    message: "Initial commit".to_string(),
-                    statuses: {
-                        let mut set = std::collections::HashSet::new();
-                        set.insert(CommitStatus::Initial);
-                        set
-                    },
-                    file_changed: true,
-                },
-                IssueCommit {
-                    hash: create_test_object_id("456"),
-                    message: "Fix bug".to_string(),
-                    statuses: {
-                        let mut set = std::collections::HashSet::new();
-                        set.insert(CommitStatus::Approved);
-                        set.insert(CommitStatus::Reviewed);
-                        set
-                    },
-                    file_changed: true,
-                },
-            ],
             milestone: "v1.0".to_string(),
             blocking_qcs: vec![],
-            rounds: vec![],
-            round_anomalies: vec![],
+            segments: vec![
+                round(
+                    crate::RoundState::Closed {
+                        commit: create_test_object_id("456"),
+                        by: "reviewer".to_string(),
+                        at: chrono::Utc::now(),
+                        comment_index: 0,
+                        comment_id: None,
+                        comment_url: None,
+                    },
+                    vec![commit("456"), commit("123")],
+                ),
+                crate::Segment::Gap(crate::Gap {
+                    branch: "main".to_string(),
+                    commits: Vec::new(),
+                    continuity: crate::GapContinuity::Linear,
+                    placement: crate::Placement::Placed,
+                }),
+            ],
+            anomalies: vec![],
         }
     }
 
@@ -483,30 +508,12 @@ mod tests {
     #[test]
     fn test_archive_file_from_issue_thread_not_approved() {
         let mut issue_thread = create_test_issue_thread();
-        // Remove the approved commit, should use latest instead
-        // Commits are stored newest first, so 789 should be first to be "latest"
-        issue_thread.commits = vec![
-            IssueCommit {
-                hash: create_test_object_id("789"),
-                message: "Latest commit".to_string(),
-                statuses: {
-                    let mut set = std::collections::HashSet::new();
-                    set.insert(CommitStatus::Notification);
-                    set
-                },
-                file_changed: true,
-            },
-            IssueCommit {
-                hash: create_test_object_id("123"),
-                message: "Initial commit".to_string(),
-                statuses: {
-                    let mut set = std::collections::HashSet::new();
-                    set.insert(CommitStatus::Initial);
-                    set
-                },
-                file_changed: true,
-            },
-        ];
+        // Nothing approved: the round is still open and owns the newest commit, so the
+        // archive records the file as it is now. Commits are newest-first.
+        issue_thread.segments = vec![round(
+            crate::RoundState::Open,
+            vec![commit("789"), commit("123")],
+        )];
 
         let result = ArchiveFile::from_issue_thread(&issue_thread, false);
         assert!(result.is_ok());

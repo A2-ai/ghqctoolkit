@@ -32,7 +32,15 @@ import { STATUS_LANE_COLOR } from '~/utils/statusColors'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
 import { StatusErrorDisplay } from './StatusErrorDisplay'
-import { findCommitIndex, previousRoundName, shortHash, toOrderedCommits } from '~/utils/rounds'
+import {
+  activeRound,
+  activeRoundPos,
+  findCommitIndex,
+  flattenSegmentCommits,
+  previousApprovalOf,
+  previousRoundOf,
+  shortHash,
+} from '~/utils/rounds'
 
 interface Props {
   status: IssueStatusResponse | null
@@ -50,10 +58,10 @@ interface Props {
 /** The rail's "+ Start a new round" action, or undefined when none was supplied. */
 const StartRoundActionContext = createContext<(() => void) | undefined>(undefined)
 
-/** The round rail as every tab renders it: rounds from the status, action from context. */
-function DetailRoundRail({ rounds }: { rounds: IssueStatusResponse['rounds'] }) {
+/** The round rail as every tab renders it: segments from the status, action from context. */
+function DetailRoundRail({ segments }: { segments: IssueStatusResponse['segments'] }) {
   const onStartRound = useContext(StartRoundActionContext)
-  return <RoundRail rounds={rounds} onStartRound={onStartRound} />
+  return <RoundRail segments={segments} onStartRound={onStartRound} />
 }
 
 export function IssueDetailModal({ status, onClose, onStatusUpdate, onStartRound }: Props) {
@@ -87,6 +95,11 @@ function defaultTab(status: IssueStatusResponse): string {
     case 'change_requested':
     case 'in_progress':
     case 'changes_to_comment':
+    // `unknown` has no correct default tab — an unplaceable segment supplies no
+    // commit base for any action. This is where it landed before it had its own
+    // status value, so the default is unchanged; the tab surfaces its own empty
+    // state, and the card is already grayed with the reason.
+    case 'unknown':
       return 'notify'
     case 'approved':
     case 'changes_after_approval':
@@ -134,10 +147,17 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
 function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  // Build oldest-first commit list
-  const orderedCommits = useMemo(() => toOrderedCommits(status.commits), [status.commits])
+  // Build oldest-first commit list from the segments (ordering only — the segment a
+  // commit belongs to was decided server-side, per D7).
+  const orderedCommits = useMemo(() => flattenSegmentCommits(status.segments), [status.segments])
 
-  const openRound = status.rounds.find((r) => r.index === status.open_round_index) ?? null
+  // A1: a round is open iff the last segment is a Round.
+  const openRound = activeRound(status.segments)
+  const openRoundPos = activeRoundPos(status.segments)
+  // Q1: `previous_approval` is an accessor now — the closing commit of the Round two
+  // positions before this one.
+  const openRoundPreviousApproval =
+    openRoundPos !== null ? previousApprovalOf(status.segments, openRoundPos) : null
 
   // S5: the default FROM comes from the API's `next_notification_from` — the
   // newest of {last standing approval, last notified, last reviewed, initial
@@ -169,7 +189,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 
   // Exception index: toDefault when latest commit and NOT file_changed
   const exceptionIdx =
-    toDefault === orderedCommits.length - 1 && !orderedCommits[toDefault].file_changed
+    toDefault === orderedCommits.length - 1 && !orderedCommits[toDefault]?.file_changed
       ? toDefault
       : -1
 
@@ -214,8 +234,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
   )
   const picker = useRoundPicker({
     orderedCommits,
-    rounds: status.rounds,
-    openRoundIndex: status.open_round_index,
+    segments: status.segments,
     mode: 'range',
     a: sliderAOrigIdx,
     setA: setSliderAOrigIdx,
@@ -231,19 +250,20 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 
   // S5: when the open round has no notification yet, `next_notification_from` is
   // the previous round's approval, so the default already spans the whole round.
-  const prevRoundName = openRound ? previousRoundName(status.rounds, openRound) : null
+  const prevRoundName =
+    openRoundPos !== null ? (previousRoundOf(status.segments, openRoundPos)?.name ?? null) : null
   const spansWholeRound =
     !!openRound &&
-    !!openRound.previous_approval &&
+    !!openRoundPreviousApproval &&
     apiFromIdx >= 0 &&
-    apiFromIdx === findCommitIndex(orderedCommits, openRound.previous_approval) &&
+    apiFromIdx === findCommitIndex(orderedCommits, openRoundPreviousApproval) &&
     fromOrigIdx === apiFromIdx
 
   // S5: an empty diff. Happens after an unapproval, where the last notified commit
   // is the commit that was just approved. Only surfaced when there is a better
   // range to offer — the open round's previous approval — so single-round issues,
   // where from === to is an ordinary state, are untouched.
-  const prevApprovalIdx = findCommitIndex(orderedCommits, openRound?.previous_approval)
+  const prevApprovalIdx = findCommitIndex(orderedCommits, openRoundPreviousApproval)
   const emptyDiff =
     fromOrigIdx === toOrigIdx && prevApprovalIdx >= 0 && prevApprovalIdx !== toOrigIdx
 
@@ -300,7 +320,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     <>
     <Stack gap="md">
       <StatusCard status={status} />
-      <DetailRoundRail rounds={status.rounds} />
+      <DetailRoundRail segments={status.segments} />
 
       {isApproved && (
         <Alert color="orange">
@@ -350,7 +370,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
                       onClick={presentWholeRound}
                     >
                       Compare against {prevRoundName ?? 'the previous'} approval (
-                      {shortHash(openRound?.previous_approval)})
+                      {shortHash(openRoundPreviousApproval)})
                     </Button>
                   </Alert>
                 )}
@@ -359,7 +379,19 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
           >
             {/* From / To / Include diff */}
             <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-              {fromCommit && <CommitBlock label="From" commit={fromCommit} />}
+              {/*
+                U1: when a non-linear Gap sits between the two ends, the from-handle
+                is rendered detached — cut off from the To block rather than reading
+                as one continuous span, because the path between them does not exist.
+              */}
+              {fromCommit && (
+                <CommitBlock label="From" commit={fromCommit} detached={picker.detached} />
+              )}
+              {picker.detached && (
+                <Text size="xs" c="orange" data-testid="detached-previous-approval">
+                  Not connected — the history between these two commits is not one path.
+                </Text>
+              )}
               {toCommit && <CommitBlock label="To" commit={toCommit} />}
               <Tooltip
                 label="No changes between selected commits"
@@ -450,7 +482,10 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 const EMPTY_BLOCKING_QC_STATUS = { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] }
 
 function StatusCard({ status }: { status: IssueStatusResponse }) {
-  const { issue, qc_status, branch, checklist_summary } = status
+  // A2: the branch the status was actually computed on — the active segment's — not
+  // the issue body's. `status.issue.branch` still carries the body's answer; showing
+  // that here is the bug the segment model deletes.
+  const { issue, qc_status, active_branch, checklist_summary } = status
   const blocking_qc_status = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const laneColor = STATUS_LANE_COLOR[qc_status.status]
   const formattedStatus = qc_status.status.replace(/_/g, ' ')
@@ -497,7 +532,7 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
             </Tooltip>
           )}
         </div>
-        <Text size="sm"><b>Branch:</b> {branch}</Text>
+        <Text size="sm"><b>Branch:</b> {active_branch}</Text>
         <Text size="sm"><b>Reviewers:</b> {issue.assignees.join(', ') || 'None'}</Text>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Text size="sm" fw={700}>Status:</Text>
@@ -555,7 +590,7 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
 function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  const orderedCommits = useMemo(() => toOrderedCommits(status.commits), [status.commits])
+  const orderedCommits = useMemo(() => flattenSegmentCommits(status.segments), [status.segments])
 
   // Default: newest commit (last in orderedCommits = latest)
   const defaultCommitOrigIdx = orderedCommits.length - 1
@@ -604,8 +639,7 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
   )
   const picker = useRoundPicker({
     orderedCommits,
-    rounds: status.rounds,
-    openRoundIndex: status.open_round_index,
+    segments: status.segments,
     mode: 'single',
     a: commitOrigIdx,
     setA: setCommitOrigIdx,
@@ -659,7 +693,7 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     <>
     <Stack gap="md">
       <StatusCard status={status} />
-      <DetailRoundRail rounds={status.rounds} />
+      <DetailRoundRail segments={status.segments} />
 
       {isApproved && (
         <Alert color="orange">
@@ -794,7 +828,7 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
   const { issue } = status
 
-  const orderedCommits = useMemo(() => toOrderedCommits(status.commits), [status.commits])
+  const orderedCommits = useMemo(() => flattenSegmentCommits(status.segments), [status.segments])
 
   // Default: last commit with non-empty statuses; fall back to latest
   let defaultCommitOrigIdx = orderedCommits.length - 1
@@ -844,8 +878,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
   )
   const picker = useRoundPicker({
     orderedCommits,
-    rounds: status.rounds,
-    openRoundIndex: status.open_round_index,
+    segments: status.segments,
     mode: 'single',
     a: commitOrigIdx,
     setA: setCommitOrigIdx,
@@ -906,7 +939,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     <>
     <Stack gap="md">
       <StatusCard status={status} />
-      <DetailRoundRail rounds={status.rounds} />
+      <DetailRoundRail segments={status.segments} />
 
       {hasBlockingIssues && (
         <Alert color="orange">
@@ -1027,12 +1060,30 @@ function UnapproveTab({ status, onStatusUpdate, onBlockedUnavailable }: { status
 function CommitBlock({
   label,
   commit,
+  detached = false,
 }: {
   label: string
   commit: { hash: string; message: string; statuses: string[] }
+  /** U1: draw this handle as *not* connected to the other end of the comparison. */
+  detached?: boolean
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+    <div
+      data-detached={detached ? 'true' : undefined}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+        overflow: 'hidden',
+        ...(detached
+          ? {
+              borderLeft: '2px dashed var(--mantine-color-orange-6)',
+              paddingLeft: 6,
+            }
+          : undefined),
+      }}
+    >
       <Text size="sm" fw={700} style={{ flexShrink: 0 }}>{label}:</Text>
       <Text size="sm" style={{ fontFamily: 'monospace', flexShrink: 0 }}>{commit.hash.slice(0, 7)}</Text>
       <Text size="sm" c="dimmed" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>

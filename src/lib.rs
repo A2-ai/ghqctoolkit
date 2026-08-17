@@ -63,8 +63,8 @@ pub use git::{
     head_commit_hash,
 };
 pub use issue::{
-    BlockingQC, BlockingRelationship, CommitStatus, FileRenameEvent, IssueCommit, IssueError,
-    IssueThread, determine_relationship_from_body, file_history_section, find_checklist_start,
+    BlockingQC, BlockingRelationship, FileRenameEvent, IssueCommit, IssueError, IssueThread,
+    determine_relationship_from_body, file_history_section, find_checklist_start,
     parse_blocking_qcs, parse_branch_from_body, parse_file_history, splice_file_history,
 };
 pub use new_round::{
@@ -84,14 +84,15 @@ pub use record::{
 };
 pub use relevant_files::{RelevantFile, RelevantFileClass};
 pub use repair_round::{
-    RepairPlan, RepairRoundError, RepairRoundRequest, RepairRoundResult, plan_repair, repair_round,
+    NotificationSkip, RepairPlan, RepairRoundError, RepairRoundRequest, RepairRoundResult,
+    plan_repair, repair_round,
 };
 pub use review::{QCReview, ReviewStashResult, ReviewStashStatus, stash_review_file};
 pub use round::{
-    ChecklistSource, Extension, ExtensionReason, Retraction, Round, RoundAnomaly, RoundEvent,
-    RoundOpen, RoundState,
+    ChecklistSource, Extension, ExtensionReason, Gap, GapContinuity, Placement, Retraction, Round,
+    RoundAnomaly, RoundEvent, RoundOpen, RoundState, Segment, UnplaceableReason,
 };
 pub use start_round::{
-    NotificationMode, StartRoundError, StartRoundRequest, StartRoundResult, StepOutcome,
-    start_round,
+    NotificationMode, RoundBasis, StartRoundError, StartRoundRequest, StartRoundResult,
+    StepOutcome, round_basis, start_round,
 };

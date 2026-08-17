@@ -1,5 +1,5 @@
-name: "GET /api/issues/{number}/rounds/seed - seed from the issue body"
-description: "Seeds the next round's checklist from Initial QC's checklist, boxes reset"
+name: "GET /api/issues/{number}/rounds/seed - an unrelated approval"
+description: "The approval and HEAD share no ancestor at all: the divergence is reported and the approval remains the only base there is"
 
 fixtures:
   issues:
@@ -16,7 +16,6 @@ fixtures:
 
         # Code Review Checklist
         - [x] Reviewed the logic
-        - [ ] Checked the tests
       milestone: 1
   comments:
     - issue: 1
@@ -29,6 +28,8 @@ fixtures:
 
 git_state:
   branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+  merge_base:
+    type: unrelated
 
 request:
   method: GET
@@ -37,27 +38,18 @@ request:
 response:
   status: 200
   body:
-    match_type: exact
-    value:
-      file: "src/test.rs"
+    match_type: partial
+    fields:
       next_round: 2
-      next_round_name: "Round 2"
-      checklist_content: "- [ ] Reviewed the logic\n- [ ] Checked the tests"
-      checklist_name: "Code Review Checklist"
-      # Only Initial QC exists, so it is the only choice and the default.
-      checklist_options:
-        - round: 1
-          round_name: "Initial QC"
-          checklist_name: "Code Review Checklist"
-          content: "- [ ] Reviewed the logic\n- [ ] Checked the tests"
-      default_round: 1
-      anchor: "abc1234567890abcdef1234567890abcdef12340"
       branch: main
-      comparison_base: "456def789abc012345678901234567890123cdef"
-      divergence: null
+      anchor: "abc1234567890abcdef1234567890abcdef12340"
       previous_approval: "456def789abc012345678901234567890123cdef"
+      # No common ancestor leaves nothing better to compare against, so the approval
+      # stands as the base while `divergence` says it cannot be trusted as one.
+      comparison_base: "456def789abc012345678901234567890123cdef"
+      divergence:
+        kind: unrelated
       can_start: true
       blocked_reason: null
 
-# A seed must never write.
 assert_write_calls: []

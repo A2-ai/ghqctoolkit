@@ -48,6 +48,7 @@ fixtures:
         * round: 2
         * initial qc round commit: 456def789abc012345678901234567890123cdef
         * previous approved commit: 456def789abc012345678901234567890123cdef
+        * git branch: main
 
         # Focused Re-review
 
@@ -96,6 +97,9 @@ response:
           content: "**Clockify code**: [INSERT]\n\n## Technical Review\n\n### General\n\n- [ ] Script renders free of error"
       default_round: 2
       anchor: "abc1234567890abcdef1234567890abcdef12340"
+      branch: main
+      comparison_base: "456def789abc012345678901234567890123cdef"
+      divergence: null
       previous_approval: "456def789abc012345678901234567890123cdef"
       can_start: true
       blocked_reason: null

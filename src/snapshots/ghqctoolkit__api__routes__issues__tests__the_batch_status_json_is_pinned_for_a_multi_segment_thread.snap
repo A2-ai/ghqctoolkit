@@ -1,0 +1,209 @@
+---
+source: src/api/routes/issues.rs
+expression: json
+---
+{
+  "results": [
+    {
+      "issue": {
+        "number": 1,
+        "title": "src/test.rs",
+        "state": "open",
+        "html_url": "https://github.com/o/r/issues/1",
+        "assignees": [],
+        "labels": [],
+        "milestone": "v1.0",
+        "created_at": "2011-04-22T13:33:48Z",
+        "updated_at": "2011-04-22T13:33:48Z",
+        "closed_at": null,
+        "created_by": "octocat",
+        "branch": "main",
+        "checklist_name": "Code Review Checklist",
+        "relevant_files": [],
+        "file_history": []
+      },
+      "qc_status": {
+        "status": "changes_to_comment",
+        "status_detail": "Changes to comment",
+        "standing_approval": null,
+        "last_approved_commit": "2222222222222222222222222222222222222222",
+        "initial_commit": "1111111111111111111111111111111111111111",
+        "latest_commit": "5555555555555555555555555555555555555555",
+        "changed_commit": null,
+        "last_reviewed_commit": null,
+        "last_notified_commit": "4444444444444444444444444444444444444444"
+      },
+      "dirty": false,
+      "active_branch": "main",
+      "checklist_summary": {
+        "completed": 1,
+        "total": 2,
+        "percentage": 0.5
+      },
+      "blocking_qc_status": {
+        "total": 0,
+        "approved_count": 0,
+        "summary": "All blocking QCs approved",
+        "approved": [],
+        "not_approved": [],
+        "errors": []
+      },
+      "segments": [
+        {
+          "kind": "round",
+          "index": 1,
+          "name": "Initial QC",
+          "opened_at": "1111111111111111111111111111111111111111",
+          "branch": "main",
+          "opened": {
+            "kind": "issue_created",
+            "comment_id": null,
+            "comment_url": null,
+            "author": null,
+            "at": null,
+            "note": null
+          },
+          "checklist_source": {
+            "kind": "issue_body",
+            "comment_id": null,
+            "comment_url": null
+          },
+          "checklist_name": "Code Review Checklist",
+          "state": "closed",
+          "closing_commit": "2222222222222222222222222222222222222222",
+          "closed_by": "reviewer",
+          "closed_at": "2026-08-01T10:03:00Z",
+          "events": [
+            {
+              "kind": "notification",
+              "commit": "1111111111111111111111111111111111111111",
+              "by": "reviewer",
+              "at": "2026-08-01T10:01:00Z",
+              "comment_id": 101,
+              "comment_url": "https://github.com/o/r/issues/1#issuecomment-101"
+            },
+            {
+              "kind": "review",
+              "commit": "1111111111111111111111111111111111111111",
+              "by": "reviewer",
+              "at": "2026-08-01T10:02:00Z",
+              "comment_id": 102,
+              "comment_url": "https://github.com/o/r/issues/1#issuecomment-102"
+            }
+          ],
+          "retractions": [],
+          "extensions": [],
+          "commits": [
+            {
+              "hash": "2222222222222222222222222222222222222222",
+              "message": "commit 2222222",
+              "statuses": [
+                "approved"
+              ],
+              "file_changed": true
+            },
+            {
+              "hash": "1111111111111111111111111111111111111111",
+              "message": "commit 1111111",
+              "statuses": [
+                "initial",
+                "notification",
+                "reviewed"
+              ],
+              "file_changed": true
+            }
+          ],
+          "placement": {
+            "kind": "placed"
+          }
+        },
+        {
+          "kind": "gap",
+          "branch": "main",
+          "commits": [
+            {
+              "hash": "3333333333333333333333333333333333333333",
+              "message": "commit 3333333",
+              "statuses": [],
+              "file_changed": true
+            }
+          ],
+          "continuity": {
+            "kind": "linear"
+          },
+          "lower_bound": "2222222222222222222222222222222222222222",
+          "upper_bound": "4444444444444444444444444444444444444444",
+          "placement": {
+            "kind": "placed"
+          }
+        },
+        {
+          "kind": "round",
+          "index": 2,
+          "name": "Round 2",
+          "opened_at": "4444444444444444444444444444444444444444",
+          "branch": "main",
+          "opened": {
+            "kind": "new_round",
+            "comment_id": 104,
+            "comment_url": "https://github.com/o/r/issues/1#issuecomment-104",
+            "author": "reviewer",
+            "at": "2026-08-01T10:04:00Z",
+            "note": "Second pass after the refactor."
+          },
+          "checklist_source": {
+            "kind": "comment",
+            "comment_id": 104,
+            "comment_url": "https://github.com/o/r/issues/1#issuecomment-104"
+          },
+          "checklist_name": null,
+          "state": "open",
+          "closing_commit": null,
+          "closed_by": null,
+          "closed_at": null,
+          "events": [
+            {
+              "kind": "notification",
+              "commit": "4444444444444444444444444444444444444444",
+              "by": "reviewer",
+              "at": "2026-08-01T10:05:00Z",
+              "comment_id": 105,
+              "comment_url": "https://github.com/o/r/issues/1#issuecomment-105"
+            }
+          ],
+          "retractions": [],
+          "extensions": [],
+          "commits": [
+            {
+              "hash": "5555555555555555555555555555555555555555",
+              "message": "commit 5555555",
+              "statuses": [],
+              "file_changed": true
+            },
+            {
+              "hash": "4444444444444444444444444444444444444444",
+              "message": "commit 4444444",
+              "statuses": [
+                "notification"
+              ],
+              "file_changed": true
+            }
+          ],
+          "placement": {
+            "kind": "placed"
+          }
+        }
+      ],
+      "next_notification_from": "4444444444444444444444444444444444444444",
+      "round_repair": {
+        "round": 2,
+        "round_name": "Round 2",
+        "reopen": false,
+        "body_marker": true,
+        "notification_missing": false,
+        "needs_repair": true
+      }
+    }
+  ],
+  "errors": []
+}

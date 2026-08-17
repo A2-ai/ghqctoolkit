@@ -26,6 +26,7 @@ import {
   type NotificationMode,
   type RepairRoundResponse,
   type RoundRepairStatus,
+  type GapContinuity,
   type RoundSeedResponse,
   type StartRoundResponse,
   type StepOutcome,
@@ -49,6 +50,16 @@ export interface StartRoundModalProps {
    * instead of leaving the user with nothing to do but read `blocked_reason`.
    */
   repair?: RoundRepairStatus | null
+  /**
+   * The branch the previous approval was reviewed on, for the divergence note.
+   *
+   * `GapContinuity` carries no `previous_branch` and needs none: every Round declares
+   * a branch (D5), so the caller reads it off the last closed Round segment of the
+   * issue status it already holds (see the contract's §7.6). Passed in rather than
+   * fetched, so this modal still needs exactly one request. Omitted → the note drops
+   * the branch label, whose load-bearing content is the merge-base anyway.
+   */
+  previousBranch?: string | null
   onClose: () => void
 }
 
@@ -60,7 +71,7 @@ export interface StartRoundModalProps {
  * the action is not offered and the backend's `blocked_reason` is rendered
  * verbatim (a round already open, or an anchor that could not be resolved).
  */
-export function StartRoundModal({ issueNumber, issueTitle, issueUrl, repair, onClose }: StartRoundModalProps) {
+export function StartRoundModal({ issueNumber, issueTitle, issueUrl, repair, previousBranch, onClose }: StartRoundModalProps) {
   return (
     <Modal
       opened={issueNumber !== null}
@@ -78,6 +89,7 @@ export function StartRoundModal({ issueNumber, issueTitle, issueUrl, repair, onC
           issueTitle={issueTitle}
           issueUrl={issueUrl}
           repair={repair}
+          previousBranch={previousBranch}
           onClose={onClose}
         />
       )}
@@ -90,12 +102,14 @@ function StartRoundBody({
   issueTitle,
   issueUrl,
   repair,
+  previousBranch,
   onClose,
 }: {
   issueNumber: number
   issueTitle?: string
   issueUrl?: string
   repair?: RoundRepairStatus | null
+  previousBranch?: string | null
   onClose: () => void
 }) {
   const seedQuery = useRoundSeed(issueNumber)
@@ -129,6 +143,7 @@ function StartRoundBody({
       issueUrl={issueUrl}
       seed={seedQuery.data}
       repair={repair}
+      previousBranch={previousBranch}
       onClose={onClose}
     />
   )
@@ -165,6 +180,7 @@ function StartRoundForm({
   issueUrl,
   seed,
   repair,
+  previousBranch,
   onClose,
 }: {
   issueNumber: number
@@ -172,6 +188,7 @@ function StartRoundForm({
   issueUrl?: string
   seed: RoundSeedResponse
   repair?: RoundRepairStatus | null
+  previousBranch?: string | null
   onClose: () => void
 }) {
   const [checklistContent, setChecklistContent] = useState(seed.checklist_content ?? '')
@@ -375,11 +392,55 @@ function StartRoundForm({
         <Tabs.Panel value="changes" pt="md" data-testid="changes-panel">
           <Stack gap="sm">
             <Stack gap={4} data-testid="round-anchor">
+              {/*
+                The branch leads: a round is QC'd where the work is now, which need not
+                be where the issue was created, and it changes what the two commits
+                below even mean.
+              */}
+              <Text size="sm" data-testid="round-branch">
+                <b>Branch:</b>{' '}
+                {seed.branch ? (
+                  <span style={{ fontFamily: 'monospace' }}>{seed.branch}</span>
+                ) : (
+                  <Text span size="sm" c="dimmed">not available</Text>
+                )}
+              </Text>
               <CommitLine label="Opens at (HEAD)" hash={seed.anchor} />
-              <CommitLine label="Compares against" hash={seed.previous_approval} />
+              {/*
+                Labelled by what it *is*, which is only the previous approval when that
+                approval is reachable from this branch — see the divergence note below.
+              */}
+              <CommitLine
+                label={seed.divergence ? 'Compares against (merge-base)' : 'Compares against'}
+                hash={seed.comparison_base ?? seed.previous_approval}
+              />
             </Stack>
 
-            <RoundDiff file={seed.file} from={seed.previous_approval} to={seed.anchor} />
+            {seed.divergence && (
+              <DivergenceNote
+                divergence={seed.divergence}
+                branch={seed.branch}
+                previousBranch={previousBranch ?? null}
+              />
+            )}
+
+            {/*
+              Diffed from the comparison base, not the approval: on a divergent branch
+              the approval is not an ancestor, so a diff against it would describe
+              changes that are not this round's.
+
+              Withheld entirely when the two ends share no history (M4 `Unrelated`):
+              the note directly above says no diff between them is meaningful, and
+              rendering one under that sentence would contradict it. There is no
+              base to compare from, so there is nothing to show.
+            */}
+            {seed.divergence?.kind !== 'unrelated' && (
+              <RoundDiff
+                file={seed.file}
+                from={seed.comparison_base ?? seed.previous_approval}
+                to={seed.anchor}
+              />
+            )}
 
             <TextInput
               label="Note (optional)"
@@ -573,6 +634,51 @@ function StartRoundForm({
       />
     </Modal>
     </>
+  )
+}
+
+/**
+ * Why the comparison is not the previous approval.
+ *
+ * Phrased as a fact about git rather than a warning about the round: opening a round on
+ * a branch that does not contain the last approval is legitimate — the round still
+ * opens — but the diff means something different, and that has to be said plainly.
+ */
+function DivergenceNote({
+  divergence,
+  branch,
+  previousBranch,
+}: {
+  divergence: GapContinuity
+  branch: string | null
+  /** Joined in by the caller from the last closed Round segment; see §7.6. */
+  previousBranch: string | null
+}) {
+  const previous = previousBranch
+  const here = branch ?? 'this branch'
+  return (
+    <Alert
+      color="orange"
+      icon={<IconAlertTriangle size={16} />}
+      data-testid="round-divergence"
+      p="xs"
+    >
+      <Text size="xs">
+        {divergence.kind === 'diverged' ? (
+          <>
+            The previous approval{previous ? <> (on <b>{previous}</b>)</> : null} is not part of{' '}
+            <b>{here}</b>, so the comparison uses the last commit the two branches share.
+            Changes made on{previous ? <> <b>{previous}</b></> : <> the other branch</>} after that
+            point are included in the diff below.
+          </>
+        ) : (
+          <>
+            The previous approval{previous ? <> (on <b>{previous}</b>)</> : null} shares no history
+            with <b>{here}</b>. No diff between them is meaningful — review the file directly.
+          </>
+        )}
+      </Text>
+    </Alert>
   )
 }
 
@@ -928,10 +1034,17 @@ function StepRow({
   skippedHint?: string
 }) {
   const base = STEP_PRESENTATION[outcome.status]
+  // A skip the server explained beats any static hint. `skipped_reason` is present only
+  // when the step could not be *attempted* — a repair's notification on a round that
+  // could not be placed, or its body marker when the round comment URL is unknown — so
+  // "Already correct, or not requested" would be actively wrong there. The wording comes
+  // from `UnplaceableReason::describe()`, the same string the CLI prints.
+  const skippedText =
+    outcome.status === 'skipped'
+      ? (outcome.skipped_reason ?? skippedHint)
+      : undefined
   const presentation =
-    outcome.status === 'skipped' && skippedHint !== undefined
-      ? { ...base, hint: skippedHint }
-      : base
+    skippedText !== undefined ? { ...base, hint: skippedText } : base
   return (
     <div data-testid={testId} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
       <Badge color={presentation.color} variant="light" size="sm" style={{ flexShrink: 0 }}>

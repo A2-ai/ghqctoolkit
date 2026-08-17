@@ -42,6 +42,7 @@ fixtures:
         * round: 2
         * initial qc round commit: abc1234567890abcdef1234567890abcdef12340
         * previous approved commit: 456def789abc012345678901234567890123cdef
+        * git branch: main
         * note: Second pass after the refactor.
 
         ## Checklist
@@ -49,6 +50,11 @@ fixtures:
 
 git_state:
   branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+  # Round 2 anchors on HEAD, so HEAD must be on the walk or the round is
+  # unplaceable — which would skip the notification step, not the repair.
+  commits:
+    - "abc1234567890abcdef1234567890abcdef12340"
+    - "456def789abc012345678901234567890123cdef"
 
 request:
   method: POST

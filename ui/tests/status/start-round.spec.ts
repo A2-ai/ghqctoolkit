@@ -14,6 +14,8 @@ import {
   multiRoundStatus,
   roundSeedCanStart,
   roundSeedBlocked,
+  roundSeedDivergentBranch,
+  roundSeedUnrelatedHistory,
   roundSeedAnchorUnresolved,
   roundSeedMultipleChecklists,
   ROUND2_CHECKLIST,
@@ -21,10 +23,13 @@ import {
   startRoundNeedsRepair,
   startRoundWithImpactedIssues,
   roundStillOpenError,
-  roundFields,
+  segmentFields,
   closeRound,
+  commit,
+  gapSegment,
   initialQcRound,
   laterRound,
+  DRAFT_GAP_COMMIT,
   ROUND1_OPENED,
   ROUND1_CLOSED,
   ROUND2_OPENED,
@@ -61,23 +66,47 @@ const DRIFT_COMMIT = 'f00dcafe0000000000000000000000000000beef'
 
 const driftedAfterApprovalStatus: IssueStatusResponse = {
   ...changedAfterApprovalStatus,
-  commits: [
-    { hash: DRIFT_COMMIT, message: 'edit after approval', statuses: [], file_changed: true },
-    ...approvedRoundStatus.commits,
-  ],
+  qc_status: {
+    ...changedAfterApprovalStatus.qc_status,
+    // S1: `changes_after_approval` *is* a non-empty trailing gap, and its newest
+    // commit is what the card colours from.
+    latest_commit: DRIFT_COMMIT,
+    // The trailing gap's newest *file-changing* commit — what the "Changed" row and
+    // the card's tint read. The same commit as `latest_commit` here, because this gap
+    // holds exactly one commit and it touched the file.
+    changed_commit: DRIFT_COMMIT,
+  },
+  ...segmentFields([
+    closeRound(initialQcRound(ROUND1_OPENED), ROUND1_CLOSED),
+    gapSegment({
+      commits: [commit(DRIFT_COMMIT, { message: 'edit after approval' })],
+      lower_bound: ROUND1_CLOSED,
+      upper_bound: DRIFT_COMMIT,
+    }),
+  ]),
 }
 
-/** #112's rounds, with Round 2 closed too, so a third round is legal. */
+/** #112's segments, with Round 2 closed too, so a third round is legal. */
 const multiRoundApprovedStatus: IssueStatusResponse = {
   ...multiRoundStatus,
   qc_status: {
     ...multiRoundStatus.qc_status,
     status: 'approved',
     status_detail: 'Approved',
+    standing_approval: ROUND2_OPENED,
+    last_approved_commit: ROUND2_OPENED,
+    latest_commit: null,
   },
-  ...roundFields([
+  // I3: a closed round is never last, so closing Round 2 appends the empty trailing gap.
+  ...segmentFields([
     closeRound(initialQcRound(ROUND1_OPENED), ROUND1_CLOSED),
-    closeRound(laterRound(2, ROUND2_OPENED, ROUND1_CLOSED, { event_count: 1 }), ROUND2_OPENED),
+    gapSegment({
+      commits: [commit(DRAFT_GAP_COMMIT, { message: 'draft work, no round' })],
+      lower_bound: ROUND1_CLOSED,
+      upper_bound: ROUND2_OPENED,
+    }),
+    closeRound(laterRound(2, ROUND2_OPENED), ROUND2_OPENED),
+    gapSegment({ lower_bound: ROUND2_OPENED, upper_bound: ROUND2_OPENED }),
   ]),
 }
 
@@ -760,6 +789,81 @@ test('the preview is withdrawn when no notification is posted', async ({ page })
   await expect(page.getByTestId('notification-preview')).toBeVisible()
   await page.getByTestId('notification-mode-none').click()
   await expect(page.getByTestId('notification-preview')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Branches: a round can be QC'd on a branch other than the issue's
+// ---------------------------------------------------------------------------
+
+test('the Changes tab names the branch the round will open on', async ({ page }) => {
+  await openStartRoundModal(page)
+  await openChangesTab(page)
+
+  await expect(page.getByTestId('round-branch')).toContainText('main')
+  // Nothing diverged, so the comparison is the approval itself and says nothing extra.
+  await expect(page.getByTestId('round-divergence')).toHaveCount(0)
+  await expect(page.getByTestId('round-anchor')).toContainText('Compares against:')
+})
+
+/**
+ * The case this feature exists for: the work moved to another branch that does not
+ * contain the last approval. The round still opens; the diff falls back to the commit
+ * the two branches share, and the UI says so rather than implying the diff is the
+ * change since approval.
+ */
+test('a divergent branch explains the merge-base comparison', async ({ page }) => {
+  await openStartRoundModal(page, { roundSeedResponse: roundSeedDivergentBranch })
+  await openChangesTab(page)
+
+  await expect(page.getByTestId('round-branch')).toContainText('feature/reanalysis')
+  const note = page.getByTestId('round-divergence')
+  await expect(note).toContainText('is not part of')
+  await expect(note).toContainText('main')
+  // The label admits what the base actually is.
+  await expect(page.getByTestId('round-anchor')).toContainText('merge-base')
+  // Still startable: divergence is a fact about git, not a blocked precondition.
+  await expect(page.getByTestId('start-round-submit')).toBeEnabled()
+})
+
+test('unrelated histories say no comparison is meaningful', async ({ page }) => {
+  await openStartRoundModal(page, { roundSeedResponse: roundSeedUnrelatedHistory })
+  await openChangesTab(page)
+
+  await expect(page.getByTestId('round-divergence')).toContainText('shares no history')
+  await expect(page.getByTestId('start-round-submit')).toBeEnabled()
+  // And no diff is shown under that sentence. The seed carries a `comparison_base`, so
+  // one *would* be fetched and rendered — saying a comparison is meaningless and then
+  // displaying one is the modal contradicting itself.
+  await expect(page.getByTestId('round-diff')).toHaveCount(0)
+
+  // Not vacuous: the same seed with a connected history renders the diff. Only
+  // `divergence.kind` differs, so the absence above is caused by `unrelated` and not
+  // by, say, a fixture with nothing to diff.
+  await openStartRoundModal(page, {
+    roundSeedResponse: {
+      ...roundSeedUnrelatedHistory,
+      divergence: { kind: 'diverged', merge_base: roundSeedUnrelatedHistory.comparison_base! },
+    },
+  })
+  await openChangesTab(page)
+  await expect(page.getByTestId('round-diff')).toBeVisible()
+})
+
+/** The diff is fetched for the base actually being compared, not the approval. */
+test('the diff is requested against the merge-base when the branch diverged', async ({ page }) => {
+  const requests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/commits/diff')) requests.push(request.url())
+  })
+
+  await openStartRoundModal(page, { roundSeedResponse: roundSeedDivergentBranch })
+  await openChangesTab(page)
+  await expect(page.getByTestId('round-diff')).toBeVisible()
+
+  expect(requests).toHaveLength(1)
+  const params = new URL(requests[0]).searchParams
+  expect(params.get('from')).toBe(roundSeedDivergentBranch.comparison_base)
+  expect(params.get('to')).toBe(roundSeedDivergentBranch.anchor)
 })
 
 /** Each mode's rationale is readable without selecting it — the point of the cards. */

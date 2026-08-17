@@ -13,17 +13,19 @@
 
 use anyhow::{Result, anyhow, bail};
 use clap::ValueEnum;
-use inquire::Text;
+use gix::ObjectId;
+use inquire::{Confirm, Text};
 use octocrab::models::{Milestone, issues::Issue};
 use std::path::{Path, PathBuf};
 
 use super::config_init::edit_markdown_checklist;
 use super::interactive::{prompt_existing_milestone, prompt_issue};
+use crate::round::GapContinuity;
 use crate::{
     Configuration, DiskCache, GitHubReader, GitInfo, IssueThread, NotificationMode,
-    RepairRoundRequest, RepairRoundResult, StartRoundRequest, StartRoundResult,
+    RepairRoundRequest, RepairRoundResult, RoundBasis, StartRoundRequest, StartRoundResult,
     available_checklists, get_issue_comments, prior_round_comment_body, repair_round,
-    reset_checklist, seed_checklist, start_round,
+    reset_checklist, round_basis, seed_checklist, start_round,
 };
 
 /// CLI spelling of [`NotificationMode`].
@@ -115,6 +117,17 @@ pub async fn new_round(
         (None, true) => prompt_note()?,
         (None, false) => None,
     };
+
+    // The round opens on the *checked-out* branch, at its HEAD — neither of which the
+    // prompts above ever mention, and the round comment is irreversible once posted. So
+    // the same basis `start_round` will use is resolved and confirmed first; with
+    // explicit arguments the command stays scriptable and reports it in the result.
+    if interactive {
+        let basis = round_basis(&thread, git_info)?;
+        if !confirm_basis(&basis)? {
+            bail!("New round cancelled — nothing was posted.");
+        }
+    }
 
     let request = StartRoundRequest {
         issue,
@@ -324,6 +337,61 @@ async fn prompt_round_issue(milestones: &[Milestone], git_info: &GitInfo) -> Res
     prompt_issue(&issues)
 }
 
+/// Abbreviated commit, as everywhere else the CLI prints one.
+fn short(commit: &ObjectId) -> String {
+    commit.to_string()[..7].to_string()
+}
+
+/// What the round is about to record: the branch it opens on, the anchor it opens at,
+/// and the approval it builds on — plus how the two relate, since a round opened on a
+/// branch that diverged from the approval is the case worth seeing *before* confirming.
+fn basis_report(basis: &RoundBasis) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "Branch:            {} (currently checked out)",
+            basis.branch
+        ),
+        format!(
+            "Anchor:            {} (HEAD of '{}')",
+            short(&basis.anchor),
+            basis.branch
+        ),
+        format!(
+            "Previous approval: {} on '{}'",
+            short(&basis.previous_approval),
+            basis.previous_branch
+        ),
+    ];
+    // Same wording as `StartRoundResult`, so the confirmation and the result agree.
+    match basis.continuity {
+        GapContinuity::Linear => {}
+        GapContinuity::Diverged { merge_base } => lines.push(format!(
+            "⚠️ That approval is not an ancestor of '{}'. The notification will compare against \
+             their common ancestor {} instead.",
+            basis.branch,
+            short(&merge_base),
+        )),
+        GapContinuity::Unrelated => lines.push(format!(
+            "⚠️ That approval shares no history with '{}'. No comparison between them is \
+             meaningful.",
+            basis.branch,
+        )),
+    }
+    lines
+}
+
+/// Confirm the branch and anchor before the round comment — the irreversible step — is
+/// posted. Interactive only; nothing is written before this returns `true`.
+fn confirm_basis(basis: &RoundBasis) -> Result<bool> {
+    for line in basis_report(basis) {
+        println!("  {line}");
+    }
+    Confirm::new("🔄 Open the new round on this branch and commit?")
+        .with_default(true)
+        .prompt()
+        .map_err(|e| anyhow!("Input cancelled: {e}"))
+}
+
 /// Optional free-text reason, recorded on the round comment. Interactively it also
 /// seeds the notification, matching the CLI's `--note`-only fallback.
 fn prompt_note() -> Result<Option<String>> {
@@ -344,6 +412,13 @@ mod tests {
 
     fn result(body_marker: StepOutcome) -> StartRoundResult {
         StartRoundResult {
+            branch: "main".to_string(),
+            previous_approval: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            previous_branch: "main".to_string(),
+            comparison_base: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            continuity: crate::GapContinuity::Linear,
             round: 2,
             round_comment_url: "https://github.com/o/r/issues/1#issuecomment-1".to_string(),
             anchor: ObjectId::from_str("aaaaaaa000000000000000000000000000000001").unwrap(),
@@ -382,6 +457,8 @@ mod tests {
             reopened,
             body_marker: StepOutcome::Skipped,
             notification: StepOutcome::Skipped,
+            // Nothing was requested, which is the default on every surface.
+            notification_skip: Some(crate::NotificationSkip::NotRequested),
         }
     }
 
@@ -508,28 +585,71 @@ mod tests {
         );
     }
 
+    fn basis(continuity: crate::GapContinuity) -> RoundBasis {
+        RoundBasis {
+            branch: "feature/x".to_string(),
+            anchor: ObjectId::from_str("aaaaaaa000000000000000000000000000000001").unwrap(),
+            previous_approval: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            previous_branch: "main".to_string(),
+            comparison_base: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            continuity,
+        }
+    }
+
+    /// The confirmation has to name the branch and the anchor: the round comment is
+    /// irreversible, and neither fact appears in any prompt before it.
+    #[test]
+    fn the_confirmation_names_the_branch_and_the_anchor() {
+        let lines = basis_report(&basis(crate::GapContinuity::Linear));
+
+        assert_eq!(
+            lines,
+            vec![
+                "Branch:            feature/x (currently checked out)".to_string(),
+                "Anchor:            aaaaaaa (HEAD of 'feature/x')".to_string(),
+                "Previous approval: bbbbbbb on 'main'".to_string(),
+            ]
+        );
+    }
+
+    /// Divergence changes what the round's diff means, so it belongs before the post,
+    /// not only in the result printed after it.
+    #[test]
+    fn the_confirmation_surfaces_divergence_from_the_previous_approval() {
+        let merge_base = ObjectId::from_str("ccccccc000000000000000000000000000000003").unwrap();
+        let diverged = basis_report(&basis(crate::GapContinuity::Diverged { merge_base }));
+        assert!(
+            diverged.last().is_some_and(|line| line.starts_with("⚠️")
+                && line.contains("not an ancestor of 'feature/x'")
+                && line.contains("ccccccc")),
+            "unexpected: {diverged:?}"
+        );
+
+        let unrelated = basis_report(&basis(crate::GapContinuity::Unrelated));
+        assert!(
+            unrelated
+                .last()
+                .is_some_and(|line| line.contains("shares no history with 'feature/x'")),
+            "unexpected: {unrelated:?}"
+        );
+    }
+
     /// A thread whose only round is Initial QC, so seeding falls back to the body.
     fn thread() -> IssueThread {
-        use crate::round::{ChecklistSource, Round, RoundOpen, RoundState};
-        use std::collections::HashSet;
+        use crate::round::{ChecklistSource, Placement, Round, RoundOpen, RoundState, Segment};
 
         let commit = ObjectId::from_str("aaaaaaa000000000000000000000000000000001").unwrap();
         IssueThread {
             file: PathBuf::from("src/main.rs"),
-            branch: "main".to_string(),
             open: false,
-            commits: vec![crate::IssueCommit {
-                hash: commit,
-                message: "initial".to_string(),
-                statuses: HashSet::new(),
-                file_changed: true,
-            }],
             milestone: "m1".to_string(),
             blocking_qcs: Vec::new(),
-            rounds: vec![Round {
+            segments: vec![Segment::Round(Round {
                 index: 1,
                 opened_at: commit,
-                previous_approval: None,
+                branch: "main".to_string(),
                 opened: RoundOpen::IssueCreated,
                 checklist: ChecklistSource::IssueBody,
                 checklist_name: None,
@@ -537,8 +657,14 @@ mod tests {
                 events: Vec::new(),
                 retractions: Vec::new(),
                 extensions: Vec::new(),
-            }],
-            round_anomalies: Vec::new(),
+                commits: vec![crate::IssueCommit {
+                    hash: commit,
+                    message: "initial".to_string(),
+                    file_changed: true,
+                }],
+                placement: Placement::Placed,
+            })],
+            anomalies: Vec::new(),
         }
     }
 }

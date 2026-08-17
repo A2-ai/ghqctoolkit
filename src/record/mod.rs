@@ -38,6 +38,11 @@ pub use tables::{
 /// Built-in Typst template embedded at compile time
 pub const BUILTIN_TEMPLATE: &str = include_str!("../templates/record.typ");
 
+/// What the record prints where a value could not be derived — a segment whose
+/// commits could not be located has none, and an audit record says so rather than
+/// leaving the field blank or inventing a plausible commit.
+const UNKNOWN: &str = "Unknown";
+
 /// Load template from configuration or fall back to built-in
 ///
 /// Checks if a custom template exists at the configuration's record_path.
@@ -310,8 +315,11 @@ pub async fn create_issue_information(
     let issue_thread = IssueThread::from_issue_comments(issue, &comments, git_info, cache)?;
     let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
 
-    // QC Status
-    let qc_status = QCStatus::determine_status(&issue_thread).to_string();
+    // QC Status. An active segment whose commits could not be located has no status to
+    // report, and saying so is the honest record — never a guess.
+    let qc_status = QCStatus::determine_status(&issue_thread)
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| UNKNOWN.to_string());
 
     // Checklist Summary
     let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
@@ -379,8 +387,19 @@ pub async fn create_issue_information(
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
 
     // Commit information
-    let initial_qc_commit = issue_thread.initial_commit().to_string();
-    let latest_qc_commit = issue_thread.latest_commit().hash.to_string();
+    let initial_qc_commit = issue_thread
+        .initial_commit()
+        .map(|commit| commit.to_string())
+        .unwrap_or_else(|| UNKNOWN.to_string());
+    // The approval first, the active segment's newest commit only as a fallback.
+    // Records are generated for completed QC, whose trailing gap is empty — reading the
+    // active segment alone reported `Unknown` for the commit that was approved.
+    let latest_qc_commit = issue_thread
+        .last_approved_commit()
+        .copied()
+        .or_else(|| issue_thread.latest_commit().map(|commit| commit.hash))
+        .map(|commit| commit.to_string())
+        .unwrap_or_else(|| UNKNOWN.to_string());
 
     // Create IssueImage structs for all images in the issue and comments
     // Images are downloaded to staging_dir for use during Typst rendering
@@ -746,6 +765,13 @@ mod tests {
     }
 
     impl GitCommitOps for TestGitInfo {
+        fn merge_base(
+            &self,
+            _a: &ObjectId,
+            _b: &ObjectId,
+        ) -> Result<Option<ObjectId>, GitFileOpsError> {
+            unimplemented!("merge-base is only needed when starting a round")
+        }
         fn commits(
             &self,
             _branch: &Option<String>,
@@ -906,5 +932,66 @@ mod tests {
             issue_info.closed_by.as_deref(),
             Some("Alice Reviewer (reviewer1)")
         );
+    }
+
+    /// The state records are generated for: approved and closed. Its trailing gap is
+    /// empty, so the active segment owns nothing — but the approved commit is perfectly
+    /// well known, and the record must print it rather than `Unknown`.
+    #[tokio::test]
+    async fn an_approved_issues_record_names_the_approved_commit() {
+        let initial_commit = "1234567890abcdef1234567890abcdef12345678";
+        let approved_commit = "bbbbbbb000000000000000000000000000000002";
+        let mut issue = create_test_issue(
+            "owner",
+            "repo",
+            2,
+            "src/config.rs",
+            &format!("git branch: main\ninitial qc commit: {initial_commit}\n"),
+            Some(1),
+            "closed",
+        );
+        issue.closed_at = Some(chrono::Utc::now());
+
+        let commit = |sha: &str, message: &str| GitCommit {
+            commit: ObjectId::from_str(sha).unwrap(),
+            message: message.to_string(),
+        };
+        let git_info = TestGitInfo {
+            comments: vec![GitComment {
+                body: format!(
+                    "# QC Approval\n\n## Metadata\napproved qc commit: {approved_commit}\n"
+                ),
+                author_login: "reviewer1".to_string(),
+                created_at: chrono::Utc::now(),
+                id: Some(1),
+                html_url: None,
+                html: None,
+            }],
+            events: Vec::new(),
+            // Newest-first, as a walk returns them.
+            commits: vec![
+                commit(approved_commit, "Address review"),
+                commit(initial_commit, "Initial commit"),
+            ],
+        };
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let issue_info = create_issue_information(
+            &issue,
+            "v1.0",
+            &[],
+            &GitState::Clean,
+            &[],
+            None,
+            &git_info,
+            &TestDownloader,
+            staging_dir.path(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(issue_info.qc_status, "Approved", "the state under test");
+        assert_eq!(issue_info.latest_qc_commit, approved_commit);
+        assert_eq!(issue_info.initial_qc_commit, initial_commit);
     }
 }

@@ -9,4 +9,7 @@ export const STATUS_LANE_COLOR: Record<QCStatus['status'], string> = {
   change_requested:       '#fee2e2',
   in_progress:            '#fef9c3',
   changes_to_comment:     '#fef9c3',
+  // An absence, not an activity: the active segment could not be placed (S4), so no
+  // workflow colour would be truthful. Grey reads as "nothing asserted".
+  unknown:                '#e5e7eb',
 }

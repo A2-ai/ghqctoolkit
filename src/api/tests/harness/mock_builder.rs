@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use super::loader::LoadedFixtures;
-use super::types::{GitState, GitStatusSpec};
+use super::types::{GitState, GitStatusSpec, MergeBaseSpec};
 use crate::GitState as RepoGitState;
 use crate::api::tests::helpers::MockGitInfo;
 use gix::ObjectId;
@@ -55,6 +55,32 @@ impl MockBuilder {
         // Add dirty files
         for file in &git_state.dirty_files {
             builder = builder.with_dirty_file(PathBuf::from(file));
+        }
+
+        // Set the branch walk, when the case needs more than one commit in it
+        if !git_state.commits.is_empty() {
+            builder = builder.with_commits(
+                git_state
+                    .commits
+                    .iter()
+                    .map(|hash| crate::GitCommit {
+                        commit: ObjectId::from_str(hash)
+                            .unwrap_or_else(|_| ObjectId::empty_tree(gix::hash::Kind::Sha1)),
+                        message: format!("commit {hash}"),
+                    })
+                    .collect(),
+            );
+        }
+
+        // Set the ancestry answer, when the case cares about divergence
+        if let Some(spec) = &git_state.merge_base {
+            builder = builder.with_merge_base(match spec {
+                MergeBaseSpec::Commit { commit } => Some(
+                    ObjectId::from_str(commit)
+                        .unwrap_or_else(|_| ObjectId::empty_tree(gix::hash::Kind::Sha1)),
+                ),
+                MergeBaseSpec::Unrelated => None,
+            });
         }
 
         // Set git status

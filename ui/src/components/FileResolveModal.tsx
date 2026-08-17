@@ -37,7 +37,22 @@ import { StatusErrorDisplay } from './StatusErrorDisplay'
 import { useMilestones } from '~/api/milestones'
 import { type BranchCommit, fetchBranchCommits } from '~/api/commits'
 import { CommitSlider } from './CommitSlider'
+import { shortHash } from '~/utils/rounds'
+
 import { FileTreeBrowser } from './FileTreeBrowser'
+
+/**
+ * The commit a file resolves to for a given QC issue.
+ *
+ * `last_approved_commit` is the ungated newest closing commit across all rounds —
+ * precisely what the removed `approved_commit` held on the wire (contract §3) — so
+ * this is the mechanical replacement for the old expression, not a change of
+ * behaviour. Both fields are nullable and are null together only for an unplaceable
+ * segment (S4/I5), which D4 says to grey rather than error.
+ */
+function resolvedCommitOf(s: IssueStatusResponse): string | null {
+  return s.qc_status.last_approved_commit ?? s.qc_status.latest_commit
+}
 
 export interface FileResolution {
   file_name: string
@@ -181,17 +196,22 @@ function CommitIssueStep({
   const pinHash = useMemo(() => {
     if (referencingStatuses.length === 0) return undefined
     return (
-      referencingStatuses[0].qc_status.approved_commit ??
-      referencingStatuses[0].qc_status.latest_commit
+      resolvedCommitOf(referencingStatuses[0]) ?? undefined
     )
   }, [referencingStatuses])
 
+  // Only *commits* count towards "these issues disagree". A referencer that resolves
+  // to no commit at all (an unplaceable segment, S4/I5) is an absence, not a second
+  // opinion — counting the null made two referencers on the same commit plus one
+  // unresolvable one read as a disagreement and warned about nothing.
   const distinctRefCommits = new Set(
-    referencingStatuses.map(s => s.qc_status.approved_commit ?? s.qc_status.latest_commit),
+    referencingStatuses
+      .map(s => resolvedCommitOf(s))
+      .filter((c): c is string => c !== null),
   )
   const differentBranchesAmongReferencers =
     referencingStatuses.length > 0 &&
-    !referencingStatuses.every(s => s.branch === referencingStatuses[0].branch)
+    !referencingStatuses.every(s => s.active_branch === referencingStatuses[0].active_branch)
 
   // ── Commit tab ─────────────────────────────────────────────────────────────
 
@@ -319,10 +339,10 @@ function CommitIssueStep({
   )
 
   function handleIssueSelect(status: IssueStatusResponse) {
-    onResolve(
-      status.qc_status.approved_commit ?? status.qc_status.latest_commit,
-      status.issue.number,
-    )
+    const commit = resolvedCommitOf(status)
+    // Nothing to resolve the file to; the row is not selectable (see below).
+    if (commit === null) return
+    onResolve(commit, status.issue.number)
   }
 
   return (
@@ -468,13 +488,14 @@ function CommitIssueStep({
               const isApproved =
                 s.qc_status.status === 'approved' ||
                 s.qc_status.status === 'changes_after_approval'
-              const commit = s.qc_status.approved_commit ?? s.qc_status.latest_commit
+              const commit = resolvedCommitOf(s)
               return (
                 <div
                   key={s.issue.number}
                   onClick={() => handleIssueSelect(s)}
                   style={{
-                    cursor: 'pointer',
+                    cursor: commit === null ? 'not-allowed' : 'pointer',
+                    opacity: commit === null ? 0.55 : 1,
                     padding: '8px 12px',
                     borderRadius: 6,
                     border: '1px solid var(--mantine-color-gray-3)',
@@ -490,7 +511,7 @@ function CommitIssueStep({
                       : <Badge color="yellow" size="xs">{s.qc_status.status.replace(/_/g, ' ')}</Badge>}
                   </div>
                   {s.issue.milestone && <Text size="xs" c="dimmed">Milestone: {s.issue.milestone}</Text>}
-                  <Text size="xs" c="dimmed">Commit: {commit.slice(0, 7)}</Text>
+                  <Text size="xs" c="dimmed">Commit: {shortHash(commit)}</Text>
                 </div>
               )
             })}

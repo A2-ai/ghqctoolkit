@@ -223,7 +223,25 @@ impl QCIssue {
                     if let Ok(thread) =
                         IssueThread::from_issue(&prev_issue_obj, None, git_info).await
                     {
-                        let prev_commit = thread.latest_commit().hash;
+                        // The approval first, the active segment's newest commit only as
+                        // a fallback — the same order `archive.rs` uses. A Previous QC
+                        // is almost always an approved, closed issue, whose trailing gap
+                        // is empty; reading the active segment alone would find nothing
+                        // there and silently drop the diff from every new issue.
+                        let prev_commit = thread
+                            .last_approved_commit()
+                            .copied()
+                            .or_else(|| thread.latest_commit().map(|c| c.hash));
+                        // Neither an approval nor a placed commit leaves nothing to diff
+                        // against; a diff from an invented base would be worse than no
+                        // comment.
+                        let Some(prev_commit) = prev_commit else {
+                            log::warn!(
+                                "no commit could be located for Previous QC #{prev_issue_number}; \
+                                 skipping its diff comment"
+                            );
+                            continue;
+                        };
                         let diff_comment = PreviousQCDiffComment {
                             issue: issue.clone(),
                             prev_file,
@@ -1168,6 +1186,14 @@ mod tests {
         fail_blocking_ids: Arc<HashSet<u64>>,
         block_calls: Arc<Mutex<Vec<(u64, u64)>>>,
         issues_by_number: Arc<Mutex<HashMap<u64, octocrab::models::issues::Issue>>>,
+        /// Comments every issue is seen to have. Empty unless a test supplies them,
+        /// so an issue folds to Initial QC alone.
+        comments: Arc<Vec<crate::git::GitComment>>,
+        /// The branch walk every issue sees, newest-first. Every commit in it is
+        /// treated as having touched the file.
+        branch_commits: Arc<Vec<crate::git::GitCommit>>,
+        /// Rendered bodies of every comment posted, in order.
+        posted_comments: Arc<Mutex<Vec<String>>>,
     }
 
     impl MockGitInfo {
@@ -1181,7 +1207,27 @@ mod tests {
                 fail_blocking_ids: Arc::new(fail_blocking_ids),
                 block_calls: Arc::new(Mutex::new(Vec::new())),
                 issues_by_number: Arc::new(Mutex::new(issues_by_number)),
+                comments: Arc::new(Vec::new()),
+                branch_commits: Arc::new(Vec::new()),
+                posted_comments: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        /// The comment thread and branch walk every issue is derived from. `shas` is
+        /// oldest-first for readability and reversed into the newest-first order a walk
+        /// uses.
+        fn with_history(mut self, comments: Vec<crate::git::GitComment>, shas: &[&str]) -> Self {
+            self.comments = Arc::new(comments);
+            self.branch_commits = Arc::new(
+                shas.iter()
+                    .rev()
+                    .map(|sha| crate::git::GitCommit {
+                        commit: ObjectId::from_str(sha).unwrap(),
+                        message: format!("commit {sha}"),
+                    })
+                    .collect(),
+            );
+            self
         }
     }
 
@@ -1251,9 +1297,14 @@ mod tests {
 
         fn post_comment<T: crate::comment_system::CommentBody + 'static>(
             &self,
-            _comment: &T,
+            comment: &T,
         ) -> impl std::future::Future<Output = Result<String, GitHubApiError>> + Send {
-            async move { Err(GitHubApiError::NoApi) }
+            let posted = self.posted_comments.clone();
+            let body = comment.generate_body(self);
+            async move {
+                posted.lock().expect("posted_comments lock").push(body);
+                Ok("https://example.com/comment".to_string())
+            }
         }
 
         fn close_issue(
@@ -1369,7 +1420,8 @@ mod tests {
             _issue: &octocrab::models::issues::Issue,
         ) -> impl std::future::Future<Output = Result<Vec<crate::git::GitComment>, GitHubApiError>> + Send
         {
-            async move { Err(GitHubApiError::NoApi) }
+            let comments = self.comments.clone();
+            async move { Ok(comments.as_ref().clone()) }
         }
 
         fn get_issue_events(
@@ -1398,16 +1450,26 @@ mod tests {
     }
 
     impl GitCommitOps for MockGitInfo {
+        fn merge_base(
+            &self,
+            _a: &ObjectId,
+            _b: &ObjectId,
+        ) -> Result<Option<ObjectId>, GitFileOpsError> {
+            unimplemented!("merge-base is only needed when starting a round")
+        }
         fn commits(
             &self,
             _branch: &Option<String>,
             _stop_at: Option<ObjectId>,
         ) -> Result<Vec<crate::git::GitCommit>, GitFileOpsError> {
-            Ok(vec![])
+            Ok(self.branch_commits.as_ref().clone())
         }
 
         fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-            Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
+            match self.branch_commits.first() {
+                Some(newest) => Ok(newest.commit),
+                None => Err(GitFileOpsError::LocalBranchNotFound("mock".to_string())),
+            }
         }
 
         fn file_touching_commits(
@@ -1415,7 +1477,11 @@ mod tests {
             _branch: Option<String>,
             _file: &std::path::Path,
         ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
-            Ok(std::collections::HashSet::new())
+            Ok(self
+                .branch_commits
+                .iter()
+                .map(|commit| commit.commit.to_string())
+                .collect())
         }
 
         fn get_branches_containing_commit(
@@ -1492,6 +1558,95 @@ mod tests {
 
         serde_json::from_str(&content)
             .unwrap_or_else(|e| panic!("Failed to parse issue file {}: {}", path, e))
+    }
+
+    /// A "Previous QC" reference is almost always an approved, closed issue — and that
+    /// shape's trailing gap is empty, so its active segment owns no commits at all. The
+    /// diff comment must still be posted, against the approval. Reading only the active
+    /// segment dropped it from essentially every new issue, with nothing but a
+    /// warn-level log to say so.
+    #[tokio::test]
+    async fn a_previous_qcs_diff_compares_against_its_approval() {
+        use crate::configuration::Checklist;
+
+        /// `initial qc commit` in `test_file_issue.json`.
+        const INITIAL: &str = "456def789abc012345678901234567890123cdef";
+        const APPROVED: &str = "bbbbbbb000000000000000000000000000000002";
+
+        let previous = load_issue("test_file_issue.json");
+        let mut issues_by_number = HashMap::new();
+        issues_by_number.insert(previous.number, previous.clone());
+
+        let git_info = MockGitInfo::new(
+            "https://example.com/issues/99",
+            HashSet::new(),
+            issues_by_number,
+        )
+        .with_history(
+            vec![crate::git::GitComment {
+                body: format!("# QC Approval\n\n## Metadata\napproved qc commit: {APPROVED}\n"),
+                author_login: "reviewer".to_string(),
+                created_at: chrono::Utc::now(),
+                id: Some(1),
+                html_url: None,
+                html: None,
+            }],
+            &[INITIAL, APPROVED],
+        );
+
+        let issue = QCIssue {
+            milestone_id: 1,
+            title: PathBuf::from("src/example.rs"),
+            commit: "aaaaaaa000000000000000000000000000000001".to_string(),
+            branch: "main".to_string(),
+            author: "Unknown".to_string(),
+            collaborators: vec![],
+            checklist: Checklist::new("Test".to_string(), None, "- [ ] item".to_string()),
+            assignees: vec![],
+            relevant_files: vec![RelevantFile {
+                file_name: PathBuf::from("src/test.rs"),
+                class: RelevantFileClass::PreviousQC {
+                    issue_number: previous.number,
+                    issue_id: Some(previous.id.0),
+                    description: None,
+                    include_diff: true,
+                },
+            }],
+        };
+
+        // The state the fix is about: approved, closed, nothing on the active segment.
+        let thread = crate::IssueThread::from_issue(&previous, None, &git_info)
+            .await
+            .expect("the previous QC's thread derives");
+        assert_eq!(
+            thread.last_approved_commit().map(|c| c.to_string()),
+            Some(APPROVED.to_string())
+        );
+        assert!(
+            thread.latest_commit().is_none(),
+            "the trailing gap of an approved issue is empty"
+        );
+
+        issue
+            .post_with_blocking(&git_info)
+            .await
+            .expect("the issue posts");
+
+        let posted = git_info
+            .posted_comments
+            .lock()
+            .expect("posted_comments lock")
+            .clone();
+        assert_eq!(
+            posted.len(),
+            1,
+            "the Previous QC diff comment must be posted: {posted:?}"
+        );
+        assert!(
+            posted[0].contains(&format!("latest qc commit: {APPROVED}")),
+            "the diff must be taken against the approval: {}",
+            posted[0]
+        );
     }
 
     #[tokio::test]

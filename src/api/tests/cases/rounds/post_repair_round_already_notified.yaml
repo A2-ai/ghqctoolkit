@@ -1,11 +1,12 @@
-name: "POST /api/issues/{number}/rounds/repair - a missing notification is never implicit"
-description: "The same round with no QC Notification, repaired with the default request: nothing is written and nobody is pinged"
+name: "POST /api/issues/{number}/rounds/repair - an already-notified round is never notified twice"
+description: "Round 2 carries a QC Notification, so a repair that asks for one still posts nothing: the round is in the state it should be"
 
 fixtures:
   issues:
     - type: mock
       number: 1
       title: "src/test.rs"
+      # Open, with a correct marker: nothing at all is incomplete.
       state: "open"
       body: |
         Quality check issue for src/test.rs
@@ -45,11 +46,19 @@ fixtures:
 
         # Code Review Checklist
         - [ ] Reviewed the logic
+    # `current commit: ` is the key the fold reads and the key `QCComment` writes. Spelled
+    # any other way this comment carries no notification event and the round would read
+    # un-notified, so a requested notification would be posted a second time.
+    - issue: 1
+      author: author
+      body: |
+        # QC Notification
+
+        ## Metadata
+        current commit: abc1234567890abcdef1234567890abcdef12340
 
 git_state:
   branch_tip: "abc1234567890abcdef1234567890abcdef12340"
-  # Round 2 anchors on HEAD, so HEAD must be on the walk or the round is
-  # unplaceable — which would skip the notification step, not the repair.
   commits:
     - "abc1234567890abcdef1234567890abcdef12340"
     - "456def789abc012345678901234567890123cdef"
@@ -57,21 +66,26 @@ git_state:
 request:
   method: POST
   path: "/api/issues/1/rounds/repair"
-  body: {}
+  # Asked for, and still not posted: the round already has one.
+  body:
+    notification: "full"
 
 response:
   status: 200
   body:
     match_type: partial
     fields:
+      round: 2
       reopened:
         status: "skipped"
       body_marker:
         status: "skipped"
+      # Skipped for the honest reason — the notification exists — so no reason is
+      # reported: `skipped_reason` names a step that *could not* be attempted.
       notification:
         status: "skipped"
       repaired: false
       needs_repair: false
 
-# Nothing at all was written: `notification: none` is a decision, not a defect.
+# Nothing was written: a repair never double-posts.
 assert_write_calls: []

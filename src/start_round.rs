@@ -26,6 +26,7 @@
 //! [`notification_step`], which [`crate::repair_round`] also calls: the start and
 //! repair paths run the *same* code so they cannot drift apart.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
 
@@ -34,10 +35,12 @@ use octocrab::models::issues::Issue;
 
 use crate::approve::{ImpactNode, ImpactedIssues, extract_file_from_title};
 use crate::comment::QCComment;
-use crate::git::{GitCommitOps, GitFileOpsError, GitHubApiError, GitHubReader, GitHubWriter};
+use crate::git::{
+    GitCommitOps, GitFileOpsError, GitHubApiError, GitHubReader, GitHubWriter, GitRepository,
+};
 use crate::issue::{BlockingRelationship, IssueThread, determine_relationship_from_body};
 use crate::new_round::{QCNewRound, RoundMarker, upsert_round_marker};
-use crate::round::RoundState;
+use crate::round::{GapContinuity, RoundState};
 
 /// Whether — and how loudly — reviewers are notified about the new round.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +108,18 @@ pub struct StartRoundResult {
     pub round_comment_url: String,
     /// The anchor the round opened at (HEAD at open time).
     pub anchor: ObjectId,
+    /// The branch the round was opened on, recorded in its round comment.
+    pub branch: String,
+    /// The approval this round builds on, as the fold derives it.
+    pub previous_approval: ObjectId,
+    /// The branch the round that granted `previous_approval` was reviewed on.
+    pub previous_branch: String,
+    /// What the notification diff compared against: the previous approval, unless it
+    /// was unreachable from `branch`.
+    pub comparison_base: ObjectId,
+    /// How `previous_approval` relates to `anchor` — the same fact the gap this round
+    /// closes will carry once the round comment lands.
+    pub continuity: GapContinuity,
     /// Step 2: reopening the issue.
     pub reopened: StepOutcome,
     /// Step 3: refreshing the `## QC Round` block in the issue body.
@@ -127,6 +142,32 @@ impl fmt::Display for StartRoundResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "🔄 Round {} started!", self.round)?;
         writeln!(f, "{}", self.round_comment_url)?;
+        writeln!(f, "  Branch: {}", self.branch)?;
+
+        // Reported before the per-step outcomes: it changes what the diff in the
+        // notification actually means, so it is not a footnote.
+        // D5 says a branch is always declared, so an empty one means the previous
+        // round's comment was malformed. Naming that beats rendering `(on '')`.
+        let previous_branch = if self.previous_branch.is_empty() {
+            Cow::Borrowed("an undeclared branch")
+        } else {
+            Cow::Owned(format!("'{}'", self.previous_branch))
+        };
+        match self.continuity {
+            GapContinuity::Linear => {}
+            GapContinuity::Diverged { merge_base } => writeln!(
+                f,
+                "  ⚠️ The previous approval {} (on {previous_branch}) is not an ancestor of '{}'. \
+                 Compared against their common ancestor {merge_base} instead.",
+                self.previous_approval, self.branch,
+            )?,
+            GapContinuity::Unrelated => writeln!(
+                f,
+                "  ⚠️ The previous approval (on {previous_branch}) shares no history with '{}'. \
+                 The comparison is not meaningful; review the file directly.",
+                self.branch,
+            )?,
+        }
 
         let step = |f: &mut fmt::Formatter<'_>, label: &str, outcome: &StepOutcome| match outcome {
             StepOutcome::Done => writeln!(f, "  ✅ {label}"),
@@ -189,6 +230,101 @@ pub enum StartRoundError {
     },
     #[error("GitHub API error: {0}")]
     GitHubApiError(#[from] GitHubApiError),
+    #[error("Could not determine the current branch: {0}")]
+    BranchUnresolved(String),
+}
+
+/// Where a new round would anchor, and what its diff compares against.
+///
+/// Derived, never accepted from a caller, and shared by [`start_round`] and the seed
+/// endpoint so what the form previews is what the action performs.
+#[derive(Debug, Clone)]
+pub struct RoundBasis {
+    /// The branch the round opens on: whatever is currently checked out.
+    pub branch: String,
+    /// HEAD of `branch`.
+    pub anchor: ObjectId,
+    /// The previous round's approval — the round's base as the fold derives it.
+    pub previous_approval: ObjectId,
+    /// The branch the round that granted `previous_approval` was reviewed on.
+    pub previous_branch: String,
+    /// What the diff actually compares against: `previous_approval` normally, or the
+    /// merge-base when that approval is not an ancestor of `anchor`.
+    pub comparison_base: ObjectId,
+    /// How `previous_approval` relates to `anchor`: [`GapContinuity::Linear`] unless
+    /// the approval is unreachable from it.
+    pub continuity: GapContinuity,
+}
+
+/// Resolve the branch, anchor and comparison base for the next round on `thread`.
+///
+/// The branch is the one currently checked out, not the issue body's: a round is QC'd
+/// where the work is now. The anchor is HEAD of it, read from the repository rather
+/// than accepted from a caller, so a round can never claim a commit nobody was at.
+pub fn round_basis<T>(thread: &IssueThread, git_info: &T) -> Result<RoundBasis, StartRoundError>
+where
+    T: GitCommitOps + GitRepository,
+{
+    let last = thread
+        .rounds()
+        .next_back()
+        .ok_or(StartRoundError::NoRounds)?;
+    let previous_approval = match &last.state {
+        RoundState::Closed { commit, .. } => *commit,
+        RoundState::Open => {
+            return Err(StartRoundError::RoundStillOpen {
+                round: last.index,
+                round_name: last.name(),
+            });
+        }
+    };
+
+    let branch = git_info
+        .branch()
+        .map_err(|error| StartRoundError::BranchUnresolved(error.to_string()))?;
+    let anchor = git_info
+        .branch_tip(&Some(branch.clone()))
+        .map_err(|source| StartRoundError::AnchorUnresolved {
+            branch: branch.clone(),
+            source,
+        })?;
+
+    // `merge_base(a, b) == Some(a)` *is* the ancestry test — see `GitCommitOps`.
+    // A lookup failure is treated as "no divergence": the round must not be blocked or
+    // silently re-based because an ancestry query failed.
+    let base = git_info
+        .merge_base(&previous_approval, &anchor)
+        .unwrap_or_else(|error| {
+            log::warn!("merge-base lookup failed, assuming no divergence: {error}");
+            Some(previous_approval)
+        });
+
+    // The same fact the gap this round closes carries, so the write path and the fold
+    // describe divergence with one type rather than two.
+    let continuity = match base {
+        Some(base) if base == previous_approval => GapContinuity::Linear,
+        Some(merge_base) => GapContinuity::Diverged { merge_base },
+        None => GapContinuity::Unrelated,
+    };
+    if continuity != GapContinuity::Linear {
+        log::warn!(
+            "{}'s approval {previous_approval} is not an ancestor of {branch}@{anchor}; comparing \
+             against {continuity:?} instead",
+            last.name(),
+        );
+    }
+
+    Ok(RoundBasis {
+        branch,
+        anchor,
+        previous_approval,
+        // The branch of the round that granted the approval we may be diverging from.
+        previous_branch: last.branch.clone(),
+        // No common ancestor at all leaves nothing better to compare against; the
+        // divergence is reported so the caller can say so.
+        comparison_base: base.unwrap_or(previous_approval),
+        continuity,
+    })
 }
 
 /// Start a new QC round on `thread`'s issue.
@@ -206,28 +342,27 @@ pub async fn start_round<T>(
     git_info: &T,
 ) -> Result<StartRoundResult, StartRoundError>
 where
-    T: GitHubWriter + GitHubReader + GitCommitOps + Sync,
+    T: GitHubWriter + GitHubReader + GitCommitOps + GitRepository + Sync,
 {
-    let last = thread.rounds.last().ok_or(StartRoundError::NoRounds)?;
-    let previous_approval = match &last.state {
-        RoundState::Closed { commit, .. } => *commit,
-        RoundState::Open => {
-            return Err(StartRoundError::RoundStillOpen {
-                round: last.index,
-                round_name: last.name(),
-            });
-        }
-    };
+    let last = thread
+        .rounds()
+        .next_back()
+        .ok_or(StartRoundError::NoRounds)?;
     // Derived exactly as the fold derives it, so the written `round:` agrees and
     // the comment opens a round rather than extending one.
     let round = last.index.saturating_add(1);
 
-    let anchor = git_info
-        .branch_tip(&Some(thread.branch.clone()))
-        .map_err(|source| StartRoundError::AnchorUnresolved {
-            branch: thread.branch.clone(),
-            source,
-        })?;
+    // Branch, anchor and comparison base together, so the form's preview and this
+    // action can never disagree about where the round lands.
+    let basis = round_basis(thread, git_info)?;
+    let RoundBasis {
+        branch,
+        anchor,
+        previous_approval,
+        previous_branch,
+        comparison_base,
+        continuity,
+    } = basis;
 
     // ── Step 1: the round comment. The only hard failure. ───────────────────
     let new_round = QCNewRound {
@@ -237,6 +372,7 @@ where
         previous_approved_commit: previous_approval,
         checklist_name: request.checklist_name.clone(),
         note: request.note.clone(),
+        branch: branch.clone(),
         checklist_content: request.checklist_content.clone(),
     };
     let round_comment_url = git_info.post_comment(&new_round).await?;
@@ -264,7 +400,10 @@ where
         &thread.file,
         &request.issue,
         anchor,
-        Some(previous_approval),
+        // The comparison base, which is the approval itself unless it is unreachable
+        // from this branch — diffing against a commit that is not an ancestor would
+        // describe changes that are not this round's.
+        Some(comparison_base),
         // The notification's own note, not the round's: this is the comment
         // reviewers are @-mentioned in, so it carries what the author wants to tell
         // them rather than the audit reason recorded on the round comment.
@@ -280,6 +419,11 @@ where
         round,
         round_comment_url,
         anchor,
+        branch,
+        previous_approval,
+        previous_branch,
+        comparison_base,
+        continuity,
         reopened,
         body_marker,
         notification,
@@ -395,12 +539,13 @@ mod tests {
         GitAuthor, GitComment, GitCommit, GitFileOps, GitFileOpsError, GitHelpers,
         MockGitHubReader, MockGitHubWriter, RepoUser,
     };
-    use crate::issue::{CommitStatus, IssueCommit};
+    use crate::issue::IssueCommit;
     use crate::round::{
-        ChecklistSource, Round, RoundOpen, fold_rounds_from_comments, resolve_rounds,
+        BranchWalks, ChecklistSource, Gap, Placement, Round, RoundOpen, Segment,
+        fold_rounds_from_comments, resolve_segments, round_branches,
     };
     use octocrab::models::Milestone;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::future::Future;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
@@ -421,6 +566,10 @@ mod tests {
         writer: MockGitHubWriter,
         reader: MockGitHubReader,
         tip: ObjectId,
+        branch: String,
+        /// What `merge_base` reports. `None` means the default: the first argument,
+        /// i.e. the previous approval *is* an ancestor of the anchor — no divergence.
+        merge_base: Option<Option<ObjectId>>,
     }
 
     impl MockGit {
@@ -429,7 +578,21 @@ mod tests {
                 writer: MockGitHubWriter::new(),
                 reader: MockGitHubReader::new(),
                 tip: oid(C),
+                branch: "main".to_string(),
+                merge_base: None,
             }
+        }
+
+        /// The previous approval is not an ancestor of the anchor; the histories meet
+        /// at `base` (or nowhere, for `None`).
+        fn diverged(mut self, base: Option<ObjectId>) -> Self {
+            self.merge_base = Some(base);
+            self
+        }
+
+        fn on_branch(mut self, branch: &str) -> Self {
+            self.branch = branch.to_string();
+            self
         }
 
         /// No downstream issues: the impact lookup is display-only noise here.
@@ -554,7 +717,48 @@ mod tests {
         }
     }
 
+    impl GitRepository for MockGit {
+        fn branch(&self) -> Result<String, crate::git::GitRepositoryError> {
+            Ok(self.branch.clone())
+        }
+        fn commit(&self) -> Result<String, crate::git::GitRepositoryError> {
+            Ok(self.tip.to_string())
+        }
+        fn owner(&self) -> &str {
+            "o"
+        }
+        fn repo(&self) -> &str {
+            "r"
+        }
+        fn remote_name(&self) -> &str {
+            "origin"
+        }
+        fn path(&self) -> &Path {
+            Path::new(".")
+        }
+        fn fetch(&self) -> Result<bool, crate::git::GitRepositoryError> {
+            Ok(false)
+        }
+        fn stash_file(
+            &self,
+            _file: &Path,
+            _message: &str,
+        ) -> Result<crate::git::FileStashOutcome, crate::git::GitRepositoryError> {
+            unimplemented!("start_round never stashes")
+        }
+        fn configured_author(&self) -> Option<crate::git::GitAuthor> {
+            None
+        }
+    }
+
     impl GitCommitOps for MockGit {
+        fn merge_base(
+            &self,
+            a: &ObjectId,
+            _b: &ObjectId,
+        ) -> Result<Option<ObjectId>, GitFileOpsError> {
+            Ok(self.merge_base.unwrap_or(Some(*a)))
+        }
         fn commits(
             &self,
             _branch: &Option<String>,
@@ -626,56 +830,96 @@ mod tests {
         serde_json::from_str(&json).unwrap()
     }
 
-    fn issue_commits(shas: &[&str], initial: &str) -> Vec<IssueCommit> {
-        shas.iter()
-            .rev()
-            .map(|sha| IssueCommit {
-                hash: oid(sha),
-                message: format!("commit {sha}"),
-                statuses: if *sha == initial {
-                    HashSet::from([CommitStatus::Initial])
-                } else {
-                    HashSet::new()
-                },
-                file_changed: true,
-            })
-            .collect()
+    fn commit(sha: &str) -> IssueCommit {
+        IssueCommit {
+            hash: oid(sha),
+            message: format!("commit {sha}"),
+            file_changed: true,
+        }
     }
 
-    /// A thread whose only round is Initial QC, closed at `B` (or left open).
-    fn thread(open: bool) -> IssueThread {
-        let state = if open {
-            RoundState::Open
-        } else {
-            RoundState::Closed {
-                commit: oid(B),
+    /// `shas` oldest-first, as a segment's newest-first commit list.
+    fn issue_commits(shas: &[&str]) -> Vec<IssueCommit> {
+        shas.iter().rev().map(|sha| commit(sha)).collect()
+    }
+
+    fn initial_qc(state: RoundState, commits: Vec<IssueCommit>) -> Round {
+        Round {
+            index: 1,
+            opened_at: oid(A),
+            branch: "main".to_string(),
+            opened: RoundOpen::IssueCreated,
+            checklist: ChecklistSource::IssueBody,
+            checklist_name: Some("Code Review Checklist".to_string()),
+            state,
+            events: Vec::new(),
+            retractions: Vec::new(),
+            extensions: Vec::new(),
+            commits,
+            placement: Placement::Placed,
+        }
+    }
+
+    /// A closed round on a named branch, for threads with more than one.
+    fn closed_round(
+        index: u32,
+        opened_at: &str,
+        branch: &str,
+        closed_at: &str,
+        commits: Vec<IssueCommit>,
+    ) -> Round {
+        Round {
+            index,
+            opened_at: oid(opened_at),
+            branch: branch.to_string(),
+            state: RoundState::Closed {
+                commit: oid(closed_at),
                 by: "reviewer".to_string(),
                 at: chrono::Utc::now(),
-                comment_index: 0,
+                comment_index: index as usize,
                 comment_id: None,
                 comment_url: None,
-            }
+            },
+            ..initial_qc(RoundState::Open, commits)
+        }
+    }
+
+    /// A thread whose only round is Initial QC, closed at `B` — leaving `C` in the
+    /// trailing gap — or left open, in which case it owns `C` itself.
+    fn thread(open: bool) -> IssueThread {
+        let segments = if open {
+            vec![Segment::Round(initial_qc(
+                RoundState::Open,
+                issue_commits(&[A, B, C]),
+            ))]
+        } else {
+            vec![
+                Segment::Round(initial_qc(
+                    RoundState::Closed {
+                        commit: oid(B),
+                        by: "reviewer".to_string(),
+                        at: chrono::Utc::now(),
+                        comment_index: 0,
+                        comment_id: None,
+                        comment_url: None,
+                    },
+                    issue_commits(&[A, B]),
+                )),
+                Segment::Gap(Gap {
+                    branch: "main".to_string(),
+                    commits: vec![commit(C)],
+                    continuity: GapContinuity::Linear,
+                    placement: Placement::Placed,
+                }),
+            ]
         };
         IssueThread {
             file: PathBuf::from("src/main.rs"),
-            branch: "main".to_string(),
             open: !open,
-            commits: issue_commits(&[A, B, C], A),
             milestone: "m1".to_string(),
             blocking_qcs: Vec::new(),
-            rounds: vec![Round {
-                index: 1,
-                opened_at: oid(A),
-                previous_approval: None,
-                opened: RoundOpen::IssueCreated,
-                checklist: ChecklistSource::IssueBody,
-                checklist_name: Some("Code Review Checklist".to_string()),
-                state,
-                events: Vec::new(),
-                retractions: Vec::new(),
-                extensions: Vec::new(),
-            }],
-            round_anomalies: Vec::new(),
+            segments,
+            anomalies: Vec::new(),
         }
     }
 
@@ -723,7 +967,7 @@ mod tests {
         let mut git = MockGit::new();
         git.writer.expect_post_comment::<QCNewRound>().times(0);
         let mut thread = thread(false);
-        thread.rounds.clear();
+        thread.segments.clear();
 
         let error = start_round(&request(NotificationMode::None), &thread, &git)
             .await
@@ -795,6 +1039,255 @@ mod tests {
         assert_eq!(result.notification, StepOutcome::Done);
         assert!(!result.needs_repair());
         assert!(matches!(result.impacted_issues, ImpactedIssues::None));
+    }
+
+    // ── Branches ─────────────────────────────────────────────────────────────
+
+    /// A round is QC'd where the work is *now*, which need not be where the issue was
+    /// created: analysis moves between branches. The round comment records the branch
+    /// it was actually reviewed on; the issue body is never rewritten.
+    #[tokio::test]
+    async fn the_round_records_the_checked_out_branch_not_the_issue_bodys() {
+        let mut git = MockGit::new()
+            .without_downstream()
+            .on_branch("feature/reanalysis");
+        git.writer
+            .expect_post_comment::<QCNewRound>()
+            .times(1)
+            .withf(|round: &QCNewRound| round.branch == "feature/reanalysis")
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+        git.writer
+            .expect_open_issue()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_update_issue()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+        // The thread's own branch is `main` — deliberately different.
+        let thread = thread(false);
+        assert_eq!(thread.active_branch(), "main");
+
+        let result = start_round(&request(NotificationMode::None), &thread, &git)
+            .await
+            .expect("the round opens on the checked-out branch");
+
+        assert_eq!(result.branch, "feature/reanalysis");
+        assert_eq!(
+            result.continuity,
+            GapContinuity::Linear,
+            "an ancestor approval is not divergence"
+        );
+        assert_eq!(result.comparison_base, oid(B), "the approval itself");
+    }
+
+    /// The common case for cross-branch QC: the older round's branch was merged into
+    /// this one, so its approval is an ancestor of the new tip and nothing changes.
+    #[tokio::test]
+    async fn a_merged_in_approval_is_not_a_divergence() {
+        let mut git = MockGit::new()
+            .without_downstream()
+            .on_branch("feature/reanalysis");
+        git.writer
+            .expect_post_comment::<QCNewRound>()
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+        git.writer
+            .expect_open_issue()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_update_issue()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_post_comment::<QCComment>()
+            .times(1)
+            // Compared against the approval, because it is reachable.
+            .withf(|comment: &QCComment| comment.previous_commit == Some(oid(B)))
+            .returning(|_| Box::pin(async { Ok(format!("{URL}2")) }));
+
+        let result = start_round(&request(NotificationMode::Full), &thread(false), &git)
+            .await
+            .expect("the round opens");
+        assert_eq!(result.continuity, GapContinuity::Linear);
+    }
+
+    /// The divergent case: the previous branch was never merged in, so its approval is
+    /// not an ancestor of this tip. Diffing against it would describe changes that are
+    /// not this round's, so the comparison falls back to the common ancestor — and the
+    /// round still opens, because a QC round is a human judgement, not a git property.
+    #[tokio::test]
+    async fn a_divergent_approval_is_compared_against_the_merge_base() {
+        let mut git = MockGit::new()
+            .without_downstream()
+            .on_branch("feature/reanalysis")
+            .diverged(Some(oid(A)));
+        git.writer
+            .expect_post_comment::<QCNewRound>()
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+        git.writer
+            .expect_open_issue()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_update_issue()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_post_comment::<QCComment>()
+            .times(1)
+            // The merge-base, not the unreachable approval.
+            .withf(|comment: &QCComment| comment.previous_commit == Some(oid(A)))
+            .returning(|_| Box::pin(async { Ok(format!("{URL}2")) }));
+
+        let result = start_round(&request(NotificationMode::Full), &thread(false), &git)
+            .await
+            .expect("divergence does not block the round");
+
+        assert_eq!(result.comparison_base, oid(A));
+        assert_eq!(
+            result.continuity,
+            GapContinuity::Diverged { merge_base: oid(A) }
+        );
+        // The round comment still anchors at HEAD and records the round's real base.
+        assert_eq!(result.anchor, oid(C));
+
+        // The whole sentence, not just its shape. Every value in it has a near neighbour
+        // that would read just as plausibly and be wrong: the *comparison base* is the
+        // merge-base, not the approval, and the round's own branch is not the branch the
+        // approval was granted on.
+        assert_eq!(
+            result.to_string().lines().nth(3).unwrap(),
+            format!(
+                "  ⚠️ The previous approval {} (on 'main') is not an ancestor of \
+                 'feature/reanalysis'. Compared against their common ancestor {} instead.",
+                oid(B),
+                oid(A),
+            )
+        );
+    }
+
+    /// Wholly unrelated histories share no ancestor at all. There is nothing better to
+    /// compare against, so the approval stands as the base and the report says the
+    /// comparison is not meaningful rather than implying the diff is trustworthy.
+    #[tokio::test]
+    async fn unrelated_histories_report_that_no_comparison_is_meaningful() {
+        let mut git = MockGit::new()
+            .without_downstream()
+            .on_branch("orphan")
+            .diverged(None);
+        git.writer
+            .expect_post_comment::<QCNewRound>()
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+        git.writer
+            .expect_open_issue()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_update_issue()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+        let result = start_round(&request(NotificationMode::None), &thread(false), &git)
+            .await
+            .expect("the round still opens");
+
+        assert_eq!(result.comparison_base, oid(B), "nothing better to use");
+        assert_eq!(result.continuity, GapContinuity::Unrelated);
+
+        // `previous_branch` is `main` and the round's own branch is `orphan`, so the
+        // sentence discriminates: rendering the round's branch here would read
+        // "(on 'orphan') shares no history with 'orphan'".
+        assert_eq!(
+            result.to_string().lines().nth(3).unwrap(),
+            "  ⚠️ The previous approval (on 'main') shares no history with 'orphan'. The \
+             comparison is not meaningful; review the file directly."
+        );
+    }
+
+    /// `round_basis` builds on the *newest* round. Every other fixture here has exactly
+    /// one round, which makes newest and oldest the same value and leaves the choice
+    /// untested — reading the oldest round would open round 2 forever and diff against
+    /// Initial QC's approval no matter how many rounds had closed since.
+    #[tokio::test]
+    async fn the_next_round_builds_on_the_newest_closed_round() {
+        // [Initial QC(closed at A), Gap, Round 2(closed at B), Gap(C)] — the shape I3
+        // guarantees after two completed rounds, the second QC'd on another branch.
+        let mut thread = thread(false);
+        thread.segments = vec![
+            Segment::Round(closed_round(1, A, "main", A, issue_commits(&[A]))),
+            Segment::Gap(Gap {
+                branch: "main".to_string(),
+                commits: Vec::new(),
+                continuity: GapContinuity::Linear,
+                placement: Placement::Placed,
+            }),
+            Segment::Round(closed_round(2, A, "release/1.0", B, issue_commits(&[B]))),
+            Segment::Gap(Gap {
+                branch: "release/1.0".to_string(),
+                commits: vec![commit(C)],
+                continuity: GapContinuity::Linear,
+                placement: Placement::Placed,
+            }),
+        ];
+
+        let basis = round_basis(&thread, &MockGit::new()).expect("both rounds are closed");
+        assert_eq!(
+            basis.previous_approval,
+            oid(B),
+            "round 2's approval, not round 1's"
+        );
+        assert_eq!(basis.previous_branch, "release/1.0");
+
+        let mut git = MockGit::new().without_downstream();
+        git.writer
+            .expect_post_comment::<QCNewRound>()
+            .times(1)
+            .withf(|round: &QCNewRound| {
+                round.round == 3 && round.previous_approved_commit == oid(B)
+            })
+            .returning(|_| Box::pin(async { Ok(URL.to_string()) }));
+        git.writer
+            .expect_open_issue()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        git.writer
+            .expect_update_issue()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+        let result = start_round(&request(NotificationMode::None), &thread, &git)
+            .await
+            .expect("the round opens");
+        assert_eq!(result.round, 3);
+        assert_eq!(result.previous_approval, oid(B));
+    }
+
+    /// D5 says a branch is always declared, so an empty `previous_branch` means the
+    /// previous round's comment was malformed — reachable, since the fold degrades such a
+    /// round rather than failing. Saying so beats `(on '')`.
+    #[test]
+    fn an_undeclared_previous_branch_is_named_rather_than_rendered_empty() {
+        let mut result = StartRoundResult {
+            round: 2,
+            round_comment_url: URL.to_string(),
+            anchor: oid(C),
+            branch: "feature/x".to_string(),
+            previous_approval: oid(B),
+            previous_branch: String::new(),
+            comparison_base: oid(A),
+            continuity: GapContinuity::Diverged { merge_base: oid(A) },
+            reopened: StepOutcome::Done,
+            body_marker: StepOutcome::Done,
+            notification: StepOutcome::Skipped,
+            impacted_issues: ImpactedIssues::None,
+        };
+
+        let display = result.to_string();
+        assert!(
+            display.contains("(on an undeclared branch)"),
+            "unexpected: {display}"
+        );
+        assert!(!display.contains("(on '')"), "unexpected: {display}");
+
+        result.continuity = GapContinuity::Unrelated;
+        let display = result.to_string();
+        assert!(
+            display.contains("(on an undeclared branch)"),
+            "unexpected: {display}"
+        );
+        assert!(!display.contains("(on '')"), "unexpected: {display}");
     }
 
     /// The two notes answer different questions — "why does this round exist" is a
@@ -1134,16 +1627,31 @@ mod tests {
         ];
         let (raw, raw_anomalies) =
             fold_rounds_from_comments(A, Some("Code Review Checklist"), &comments);
-        let (rounds, anomalies) = resolve_rounds(raw, raw_anomalies, &issue_commits(&[A, B, C], A));
+        // Both rounds declare `main` — the mock's checked-out branch — so the whole
+        // thread is one walk.
+        let branches = round_branches(&raw, "main");
+        let mut walks: BranchWalks = HashMap::new();
+        walks.insert("main".to_string(), Ok(issue_commits(&[A, B, C])));
+        let (segments, anomalies) =
+            resolve_segments(raw, &branches, &walks, &|a, _| Some(*a), raw_anomalies);
 
         assert!(anomalies.is_empty(), "unexpected anomalies: {anomalies:?}");
-        assert_eq!(rounds.len(), 2);
-        let second = &rounds[1];
+        // Round 1, the gap it left behind, and the round we just opened.
+        assert_eq!(segments.len(), 3);
+        let second = segments[2].as_round().expect("round 2 is the last segment");
         assert_eq!(second.index, 2);
         // The anchor is HEAD at open time; the base is derived, not written.
         assert_eq!(second.opened_at, oid(C));
-        assert_eq!(second.previous_approval, Some(oid(B)));
+        assert_eq!(
+            segments[0]
+                .as_round()
+                .and_then(Round::closing_commit)
+                .copied(),
+            Some(oid(B)),
+            "the approval round 2 builds on is Initial QC's, derived not written"
+        );
         assert!(second.is_open());
+        assert_eq!(second.branch, "main");
         assert_eq!(
             second.checklist_name.as_deref(),
             Some("Code Review Checklist")
@@ -1172,6 +1680,11 @@ mod tests {
     #[test]
     fn step_outcome_display_covers_every_variant() {
         let result = StartRoundResult {
+            branch: "main".to_string(),
+            previous_approval: oid(B),
+            previous_branch: "main".to_string(),
+            comparison_base: oid(B),
+            continuity: GapContinuity::Linear,
             round: 3,
             round_comment_url: URL.to_string(),
             anchor: oid(C),
@@ -1202,6 +1715,11 @@ mod tests {
     #[test]
     fn new_round_impact_reads_as_a_notice_not_as_invalidation() {
         let display = StartRoundResult {
+            branch: "main".to_string(),
+            previous_approval: oid(B),
+            previous_branch: "main".to_string(),
+            comparison_base: oid(B),
+            continuity: GapContinuity::Linear,
             round: 2,
             round_comment_url: URL.to_string(),
             anchor: oid(C),

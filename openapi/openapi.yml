@@ -325,6 +325,16 @@ paths:
         `needs_repair` flags that one still wants another attempt. Use
         `IssueStatusResponse.round_repair` to detect that a repair is worth offering
         without attempting one.
+
+        A round the model could not place (grayed: its branch is not fetched locally,
+        its commits are not on that branch) is repaired too, minus its notification:
+        that step names the round's own anchor and the approval before it, and an
+        unplaceable round owns no commits. It comes back as
+        `notification: { status: "skipped", skipped_reason: … }` while the reopen and
+        the body marker — which need only the issue number and the round's index and
+        comment URL — still run. This is never a 409: `round_repair.needs_repair` is
+        `reopen || body_marker`, neither of which reads placement, so refusing would
+        offer a repair that could not be taken.
       operationId: repairRound
       tags: [rounds]
       parameters:
@@ -1218,6 +1228,17 @@ components:
 
     IssueStatusResponse:
       type: object
+      description: |
+        Every key listed in `required` is always present. Fields documented as
+        nullable are emitted as an explicit `null`, never omitted.
+
+        `responses.rs` uses `skip_serializing_if` only where absence is itself the
+        fact — none of those fields are on this response — so every key here is
+        always emitted, including `blocking_qc_status`, whose Rust field is a plain
+        (non-`Option`) struct.
+      required:
+        [issue, qc_status, dirty, active_branch, checklist_summary,
+         blocking_qc_status, segments, next_notification_from, round_repair]
       properties:
         issue:
           $ref: '#/components/schemas/Issue'
@@ -1226,29 +1247,40 @@ components:
         dirty:
           type: boolean
           description: Whether the file for this issue has uncommitted changes
-        branch:
+        active_branch:
           type: string
-          description: The git branch this issue was created on
-        commits:
-          type: array
-          items:
-            $ref: '#/components/schemas/IssueCommit'
+          description: |
+            The branch of the active (last) segment — the branch the status was
+            computed on. Never a function of the viewer's checkout: two people on
+            different branches see the same status for the same issue. A client
+            compares this with `/api/repo`'s `branch` at render time to decide
+            whether to gray a card.
         checklist_summary:
           $ref: '#/components/schemas/ChecklistSummary'
         blocking_qc_status:
           $ref: '#/components/schemas/BlockingQCStatus'
-        rounds:
+        segments:
           type: array
-          description: Derived QC rounds, oldest first. A legacy single-round issue yields exactly one entry named "Initial QC".
+          description: |
+            The thread as a strictly alternating list of segments — Round, Gap,
+            Round, Gap … — oldest first. Replaces both `rounds` and the former
+            top-level `commits`: every known commit is owned by exactly one
+            segment, and only boundary commits may be shared.
+
+            `segments[0]` is always the Initial QC round; the last segment is
+            either an open Round or a Gap, never a closed Round. A round is open
+            iff `segments.at(-1).kind == "round"`; there is no
+            `open_round_index`.
           items:
-            $ref: '#/components/schemas/RoundInfo'
-        open_round_index:
-          type: integer
-          nullable: true
-          description: Index of the currently open round, or null when the last round is closed (i.e. a new round may be started)
+            $ref: '#/components/schemas/Segment'
         next_notification_from:
           type: string
-          description: The commit a new notification would diff against — the default comparison base
+          nullable: true
+          description: |
+            The commit a new notification would diff against — the default
+            comparison base. Null when the active segment cannot supply one — an
+            `unplaceable` active segment owns no commits (S4/I5), so there is no
+            newest event commit and no standing approval to fall back to.
         round_repair:
           allOf:
             - $ref: '#/components/schemas/RoundRepairStatus'
@@ -1258,10 +1290,133 @@ components:
             offer a repair without asking. Null when no round is open, or when the open
             round is Initial QC (which no start-round action opened).
 
-    RoundInfo:
+    GapContinuity:
+      description: |
+        How a Gap's two bounding commits relate. Replaces `BranchDivergence` — same
+        fact, one type.
+
+        Divergence is not an error: analysis moves between branches, and the older
+        work is usually merged into the current one, in which case the bounds are
+        ancestrally connected (`linear`). Internally tagged on `kind`; only
+        `diverged` carries data.
+      oneOf:
+        - $ref: '#/components/schemas/GapContinuityLinear'
+        - $ref: '#/components/schemas/GapContinuityDiverged'
+        - $ref: '#/components/schemas/GapContinuityUnrelated'
+      discriminator:
+        propertyName: kind
+        mapping:
+          linear: '#/components/schemas/GapContinuityLinear'
+          diverged: '#/components/schemas/GapContinuityDiverged'
+          unrelated: '#/components/schemas/GapContinuityUnrelated'
+
+    GapContinuityLinear:
       type: object
-      required: [index, name, opened_at, checklist_source, state, event_count, retraction_count, extension_count]
+      description: The bounds are ancestrally connected — the normal case.
+      required: [kind]
       properties:
+        kind:
+          type: string
+          enum: [linear]
+
+    GapContinuityDiverged:
+      type: object
+      description: The bounds diverge; the histories meet at `merge_base`.
+      required: [kind, merge_base]
+      properties:
+        kind:
+          type: string
+          enum: [diverged]
+        merge_base:
+          type: string
+          description: Full sha of the commit where the two histories meet.
+
+    GapContinuityUnrelated:
+      type: object
+      description: |
+        The bounds share no history, so no diff between them is meaningful. Carries
+        no merge-base because there is none.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [unrelated]
+
+    UnplaceableReason:
+      type: string
+      description: |
+        Why a segment's commits could not be resolved.
+
+        - `branch_not_declared`: the round comment carried no `git branch` — malformed input, not a legacy case.
+        - `branch_unavailable`: the branch is not fetched locally, or was deleted.
+        - `anchor_unreachable`: the anchor is not on the branch (force-push, gc).
+        - `merge_base_unreachable`: a Gap whose bounds both resolved, but whose common ancestor lies outside the walked range. Nothing is missing, so the remedy is not to look for a lost commit; walks stop at Initial QC, so an ordinary later-round branch that forked before Initial QC produces this.
+        - `neighbour_unplaceable`: a Gap whose bounding Round could not be placed. No substitution onto the other Round's branch is attempted.
+      enum: [branch_not_declared, branch_unavailable, anchor_unreachable, merge_base_unreachable, neighbour_unplaceable]
+
+    Placement:
+      description: |
+        Whether a segment's commits could be resolved. One degradation path shared by
+        every failure mode: an unplaceable segment owns no commits and renders grayed
+        with its reason, rather than as an error. Internally tagged on `kind`.
+      oneOf:
+        - $ref: '#/components/schemas/PlacementPlaced'
+        - $ref: '#/components/schemas/PlacementUnplaceable'
+      discriminator:
+        propertyName: kind
+        mapping:
+          placed: '#/components/schemas/PlacementPlaced'
+          unplaceable: '#/components/schemas/PlacementUnplaceable'
+
+    PlacementPlaced:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [placed]
+
+    PlacementUnplaceable:
+      type: object
+      description: The segment's `commits` is empty; the segment renders grayed.
+      required: [kind, reason]
+      properties:
+        kind:
+          type: string
+          enum: [unplaceable]
+        reason:
+          $ref: '#/components/schemas/UnplaceableReason'
+
+    Segment:
+      description: |
+        One segment of a QC thread, discriminated on `kind`. Segments are positional:
+        Gaps carry no index and no stable id.
+      oneOf:
+        - $ref: '#/components/schemas/RoundSegment'
+        - $ref: '#/components/schemas/GapSegment'
+      discriminator:
+        propertyName: kind
+        mapping:
+          round: '#/components/schemas/RoundSegment'
+          gap: '#/components/schemas/GapSegment'
+
+    RoundSegment:
+      type: object
+      description: |
+        A QC round and the commits it owns. The round owns its own anchor
+        (`opened_at`) — the Gap before it does not.
+
+        Every key is always present. `checklist_name` and the three closing fields
+        are nullable and emitted as an explicit `null`, never omitted: the closing
+        fields are non-null iff `state == "closed"`.
+      required:
+        [kind, index, name, opened_at, branch, opened, checklist_source,
+         checklist_name, state, closing_commit, closed_by, closed_at, events,
+         retractions, extensions, commits, placement]
+      properties:
+        kind:
+          type: string
+          enum: [round]
         index:
           type: integer
           description: 1-based derived round number; 1 is Initial QC
@@ -1270,16 +1425,26 @@ components:
           description: '"Initial QC" or "Round N"'
         opened_at:
           type: string
-          description: The commit the round opened at (its anchor)
-        previous_approval:
-          type: string
           nullable: true
-          description: The approval this round builds on; null for Initial QC
+          description: |
+            The commit the round opened at (its anchor). Null when the round could not
+            be placed: the fold leaves an unresolved anchor as the all-zero OID, which
+            is not a commit anyone can address, so it is nulled rather than emitted as
+            a fake sha.
+        branch:
+          type: string
+          description: |
+            The branch this round was reviewed on. Always present: Round 1's is the
+            issue body's `git branch`, Round N > 1's is its round comment's. A round
+            comment without one is malformed, and yields
+            `placement.reason == branch_not_declared` rather than a null branch.
+        opened:
+          $ref: '#/components/schemas/RoundOpenInfo'
+        checklist_source:
+          $ref: '#/components/schemas/RoundChecklistSource'
         checklist_name:
           type: string
           nullable: true
-        checklist_source:
-          $ref: '#/components/schemas/RoundChecklistSource'
         state:
           type: string
           enum: [open, closed]
@@ -1296,19 +1461,194 @@ components:
           format: date-time
           nullable: true
           description: Set only when state is closed
-        event_count:
+        events:
+          type: array
+          description: Notifications and reviews inside this round, oldest first
+          items:
+            $ref: '#/components/schemas/RoundEventInfo'
+        retractions:
+          type: array
+          description: Un-approvals that took back this round's approval, oldest first
+          items:
+            $ref: '#/components/schemas/RetractionInfo'
+        extensions:
+          type: array
+          description: Round comments that extended this round instead of opening one, oldest first
+          items:
+            $ref: '#/components/schemas/ExtensionInfo'
+        commits:
+          type: array
+          description: |
+            The commits this round owns, newest first, walked on its own `branch`:
+            from the closing commit (or the branch tip while open) back to
+            `opened_at` inclusive. Empty when the round is unplaceable.
+          items:
+            $ref: '#/components/schemas/IssueCommit'
+        placement:
+          $ref: '#/components/schemas/Placement'
+
+    GapSegment:
+      type: object
+      description: |
+        The commits between two rounds, or after the last round. Gaps are unnamed and
+        positional, and empty Gaps are legal and expected. A trailing Gap walks the
+        previous round's branch — never the viewer's checkout.
+
+        `lower_bound` and `upper_bound` are nullable but always present — they are
+        emitted as an explicit `null` when unresolvable, never omitted.
+      required:
+        [kind, branch, commits, continuity, lower_bound, upper_bound, placement]
+      properties:
+        kind:
+          type: string
+          enum: [gap]
+        branch:
+          type: string
+          description: |
+            The branch this gap was walked on: the branch of the Round bounding its
+            newer end, or — for a trailing gap — of the Round bounding its older end.
+        commits:
+          type: array
+          description: |
+            The commits this gap owns, newest first: from `upper_bound` (exclusive,
+            or the branch tip inclusive when trailing) back to `lower_bound`
+            exclusive. Empty when the gap is unplaceable, and legitimately empty when
+            nothing landed between the two rounds.
+          items:
+            $ref: '#/components/schemas/IssueCommit'
+        continuity:
+          $ref: '#/components/schemas/GapContinuity'
+        lower_bound:
+          type: string
+          nullable: true
+          description: |
+            Older bounding commit: the previous Round's closing commit, exclusive.
+            Null when it could not be resolved (e.g. an unplaceable neighbour).
+        upper_bound:
+          type: string
+          nullable: true
+          description: |
+            Newer bounding commit: the next Round's `opened_at` (exclusive), or the
+            branch tip for a trailing gap. Null when it could not be resolved.
+        placement:
+          $ref: '#/components/schemas/Placement'
+
+    RoundOpenInfo:
+      type: object
+      description: |
+        What opened a round: creating the issue (Initial QC) or a `# QC Round`
+        comment. Comment metadata is null for `issue_created`, and for comments
+        loaded from the disk cache which carry no identity.
+
+        All six keys are always present; the five metadata fields are nullable and
+        emitted as an explicit `null`, never omitted. That is why this is projected
+        as a struct with a `kind` enum rather than an internally-tagged enum — a
+        consumer can read `comment_url` without narrowing on `kind`.
+      required: [kind, comment_id, comment_url, author, at, note]
+      properties:
+        kind:
+          type: string
+          enum: [issue_created, new_round]
+        comment_id:
           type: integer
-          description: Notifications and reviews inside this round
-        retraction_count:
+          nullable: true
+        comment_url:
+          type: string
+          nullable: true
+        author:
+          type: string
+          nullable: true
+        at:
+          type: string
+          format: date-time
+          nullable: true
+        note:
+          type: string
+          nullable: true
+          description: The `note:` recorded on the round comment, when written
+
+    RoundEventInfo:
+      type: object
+      description: |
+        A notification or review posted inside a round. `comment_id` and
+        `comment_url` are nullable but always present — they are `null` for
+        comments loaded from the disk cache, which carry no identity.
+      required: [kind, commit, by, at, comment_id, comment_url]
+      properties:
+        kind:
+          type: string
+          enum: [notification, review]
+        commit:
+          type: string
+          description: The commit the event names
+        by:
+          type: string
+        at:
+          type: string
+          format: date-time
+        comment_id:
           type: integer
-          description: Un-approvals that took back this round's approval
-        extension_count:
+          nullable: true
+        comment_url:
+          type: string
+          nullable: true
+
+    RetractionInfo:
+      type: object
+      description: |
+        A QC Un-Approval comment that took back a round's approval. `comment_id`
+        and `comment_url` are nullable but always present.
+      required: [retracted_commit, by, at, comment_id, comment_url]
+      properties:
+        retracted_commit:
+          type: string
+        by:
+          type: string
+        at:
+          type: string
+          format: date-time
+        comment_id:
           type: integer
-          description: QC Round comments that extended this round instead of opening one
+          nullable: true
+        comment_url:
+          type: string
+          nullable: true
+
+    ExtensionInfo:
+      type: object
+      description: |
+        A round comment that extended an open round instead of opening a new one.
+        `at_commit`, `note`, `comment_id` and `comment_url` are nullable but always
+        present.
+      required: [by, at, at_commit, note, comment_id, comment_url]
+      properties:
+        by:
+          type: string
+        at:
+          type: string
+          format: date-time
+        at_commit:
+          type: string
+          nullable: true
+          description: The written `round commit:`, when present and resolvable
+        note:
+          type: string
+          nullable: true
+        comment_id:
+          type: integer
+          nullable: true
+        comment_url:
+          type: string
+          nullable: true
 
     RoundChecklistSource:
       type: object
-      required: [kind]
+      description: |
+        Where a round's checklist lives. All three keys are always present;
+        `comment_id`/`comment_url` are nullable and emitted as an explicit `null` —
+        they are `null` for `issue_body`, and for comments loaded from the disk
+        cache, which carry no identity.
+      required: [kind, comment_id, comment_url]
       properties:
         kind:
           type: string
@@ -1322,6 +1662,13 @@ components:
 
     QCStatus:
       type: object
+      description: |
+        All nine keys are always present. The seven sha fields are all nullable and
+        are emitted as an explicit `null`, never omitted.
+      required:
+        [status, status_detail, standing_approval, last_approved_commit,
+         initial_commit, latest_commit, changed_commit, last_reviewed_commit,
+         last_notified_commit]
       properties:
         status:
           type: string
@@ -1333,24 +1680,87 @@ components:
             - in_progress
             - approval_required
             - changes_to_comment
+            - unknown
           description: |
             - approved: Issue approved, no changes after
             - changes_after_approval: Approved but file changed since
             - awaiting_review: Latest commit notified but not reviewed
             - change_requested: Reviewed with changes requested
-            - in_progress: Awaiting approval
+            - in_progress: Awaiting approval — the round is open and placed, but
+              nothing it owns has touched the file and nothing has been announced
             - approval_required: Closed without approval
             - changes_to_comment: File changes not yet commented on
+            - unknown: No status could be determined, because the active segment is
+              `unplaceable` (S4). Distinct from `in_progress`: that one asserts the
+              round is open and understood, this one asserts nothing at all. A client
+              seeing `unknown` should render an absence, not an activity, and read
+              `segments.at(-1).placement.reason` for why.
         status_detail:
           type: string
           description: Human-readable status description
-        approved_commit:
+        standing_approval:
           type: string
           nullable: true
+          description: |
+            The approval currently standing: the previous round's closing commit when
+            the last segment is a Gap. Null while a round is open — i.e. null exactly
+            when the file is back under review. Replaces half of the removed
+            `approved_commit`.
+        last_approved_commit:
+          type: string
+          nullable: true
+          description: |
+            Newest closing commit across all rounds, ungated by whether a round is
+            open. Null when nothing was ever approved. Replaces the other half of
+            `approved_commit`, which silently meant both and was the field that
+            contradicted `status`.
         initial_commit:
           type: string
+          nullable: true
+          description: |
+            Round 1's anchor — the commit Initial QC opened at. Null when Round 1
+            is `unplaceable`: an unplaceable segment owns no commits (S4/I5), so
+            its anchor cannot be resolved to a sha.
         latest_commit:
           type: string
+          nullable: true
+          description: |
+            Newest commit of the active (last) segment. Null whenever that segment
+            owns no commits: the steady approved state is
+            `[…, Round(closed), Gap(empty)]` (D6/S1) and an empty trailing Gap has
+            no newest commit, and an `unplaceable` active segment owns none either
+            (S4/I5).
+        changed_commit:
+          type: string
+          nullable: true
+          description: |
+            **The newest file-changing commit of the trailing Gap** — the commit
+            `changes_after_approval` is reported *about*. Null in every other state,
+            including `approved`: a trailing Gap whose commits never touched the file
+            is approved, not changed.
+
+            Distinct from `latest_commit`, deliberately. S1 selects the newest commit
+            of the Gap that *touched the file*, because drift that never touched it is
+            not something a reviewer is asked to comment on — so for a Gap
+            `[X(file_changed: false), Y(file_changed: true)]` this names `Y` while
+            `latest_commit` is `X`. A client rendering "changed at" from
+            `latest_commit` would name a commit that never touched the file.
+        last_reviewed_commit:
+          type: string
+          nullable: true
+          description: |
+            The newest commit the **active round** reviewed. Null when the active
+            segment is a Gap, or when that round has posted no review.
+
+            Round-scoped deliberately: `latest_commit` now means the newest commit of
+            the active segment (≈ the branch tip), so rendering it under a *Reviewed*
+            label would report unreviewed drift as reviewed.
+        last_notified_commit:
+          type: string
+          nullable: true
+          description: |
+            The newest commit the **active round** notified, on the same terms as
+            `last_reviewed_commit`.
 
     GitStatus:
       type: object
@@ -1377,6 +1787,9 @@ components:
 
     IssueCommit:
       type: object
+      description: |
+        A commit owned by one segment. Appears only inside a segment's `commits`.
+      required: [hash, message, statuses, file_changed]
       properties:
         hash:
           type: string
@@ -1384,6 +1797,11 @@ components:
           type: string
         statuses:
           type: array
+          description: |
+            Projection computed by the API from the owning segment's events and
+            state — not a stored parse of the comment thread. Wire shape unchanged.
+            Emitted in the fixed order initial, notification, approved, reviewed,
+            without duplicates; may be empty.
           items:
             type: string
             enum: [initial, notification, approved, reviewed]
@@ -1708,6 +2126,8 @@ components:
 
     StartRoundRequest:
       type: object
+      # `notification` is NOT required: the Rust field carries #[serde(default)],
+      # so the server accepts its absence and defaults it.
       required: [checklist_content]
       properties:
         checklist_content:
@@ -1750,6 +2170,23 @@ components:
         error:
           type: string
           description: Present only when status is failed
+        skipped_reason:
+          type: string
+          description: |
+            Why the step was skipped, when the reason is not simply that there was
+            nothing to do. Two of a repair's steps can carry one:
+
+            - `notification`, when the round could not be placed ("its branch is
+              unavailable locally"). Only a *degradation* earns a reason here: a
+              notification the caller never requested — the default on every surface —
+              and one the round already has are ordinary outcomes and carry none.
+            - `body_marker`, when the round's comment URL is unknown, so no correct
+              marker can be derived ("round comment URL unknown, marker left as it
+              is").
+
+            Present only when status is skipped *and* such a reason exists, exactly as
+            `error` is present only on failed; both are genuinely absent otherwise,
+            which is why neither is `required`.
 
     ImpactedIssueItem:
       type: object
@@ -1779,7 +2216,14 @@ components:
 
     StartRoundResponse:
       type: object
-      required: [round, round_name, round_comment_url, anchor, reopened, body_marker, notification, needs_repair, impacted_issues]
+      description: |
+        Every key is always present. `divergence` is nullable but present, emitted
+        as an explicit `null`; `branch` and `comparison_base` are non-nullable —
+        a round cannot be opened without resolving both.
+      required:
+        [round, round_name, round_comment_url, anchor, branch, comparison_base,
+         divergence, reopened, body_marker, notification, needs_repair,
+         impacted_issues]
       properties:
         round:
           type: integer
@@ -1792,6 +2236,32 @@ components:
         anchor:
           type: string
           description: The commit the round opened at (HEAD at open time)
+        branch:
+          type: string
+          description: |
+            The branch the round was opened on — whatever was checked out — recorded in
+            its round comment.
+        comparison_base:
+          type: string
+          description: |
+            What the notification diff compared against: the previous approval, unless
+            it was unreachable from `branch`, in which case the merge-base.
+        divergence:
+          nullable: true
+          description: |
+            How the previous approval relates to the anchor, when it was not an
+            ancestor: `diverged` carries the merge-base the diff fell back to,
+            `unrelated` means no comparison was meaningful. Null when there was no
+            divergence.
+
+            Deliberately **not** a `$ref` to `GapContinuity`: `null` already means
+            linear on this field, so `{"kind": "linear"}` is never emitted here and
+            a generated client must not be forced to handle it. The shared
+            `GapContinuity` schema, which does include `linear`, is used only for a
+            Gap segment's `continuity`.
+          oneOf:
+            - $ref: '#/components/schemas/GapContinuityDiverged'
+            - $ref: '#/components/schemas/GapContinuityUnrelated'
         reopened:
           $ref: '#/components/schemas/StepOutcome'
         body_marker:
@@ -1806,8 +2276,20 @@ components:
 
     RoundSeedResponse:
       type: object
-      required: [next_round, next_round_name, checklist_options, can_start]
+      description: |
+        Every key is always present. `file`, `next_round`, `next_round_name`,
+        `checklist_options` and `can_start` are non-nullable; the remaining eight
+        are nullable but still emitted, as an explicit `null`.
+      required:
+        [file, next_round, next_round_name, checklist_content, checklist_name,
+         checklist_options, default_round, anchor, previous_approval, branch,
+         comparison_base, divergence, can_start, blocked_reason]
       properties:
+        file:
+          type: string
+          description: >
+            Repo-relative path of the QC'd file, so a caller can diff it without
+            inferring the path from the issue title.
         next_round:
           type: integer
         next_round_name:
@@ -1840,11 +2322,41 @@ components:
         anchor:
           type: string
           nullable: true
-          description: HEAD of the issue's branch; null when it could not be resolved
+          description: >
+            HEAD of the branch the round would open on (the checked-out one, not
+            necessarily the issue's); null when it could not be resolved.
         previous_approval:
           type: string
           nullable: true
           description: The approval the new round would build on; null when the last round is still open
+        branch:
+          type: string
+          nullable: true
+          description: >
+            The branch the round would open on: whatever is currently checked out,
+            which need not be the branch the issue was created on. Null when it could
+            not be determined.
+        comparison_base:
+          type: string
+          nullable: true
+          description: >
+            What the round's diff would actually compare against — previous_approval
+            normally, or the merge-base when that approval is not an ancestor of anchor.
+        divergence:
+          nullable: true
+          description: |
+            Set only when the previous approval is unreachable from `branch`:
+            `diverged` carries the merge-base the diff would fall back to,
+            `unrelated` means no comparison is meaningful. Null otherwise.
+
+            Deliberately **not** a `$ref` to `GapContinuity`: `null` already means
+            linear on this field, so `{"kind": "linear"}` is never emitted here and
+            a generated client must not be forced to handle it. The shared
+            `GapContinuity` schema, which does include `linear`, is used only for a
+            Gap segment's `continuity`.
+          oneOf:
+            - $ref: '#/components/schemas/GapContinuityDiverged'
+            - $ref: '#/components/schemas/GapContinuityUnrelated'
         can_start:
           type: boolean
         blocked_reason:
@@ -1854,7 +2366,10 @@ components:
 
     RoundChecklistOption:
       type: object
-      required: [round, round_name, content]
+      description: |
+        One selectable checklist source for a new round. All four keys are always
+        present; `checklist_name` is nullable and emitted as an explicit `null`.
+      required: [round, round_name, checklist_name, content]
       properties:
         round:
           type: integer
@@ -1899,6 +2414,8 @@ components:
 
     RepairRoundRequest:
       type: object
+      # Nothing is required: both fields carry #[serde(default)] on the Rust side, so an
+      # empty body `{}` is a valid request — and is what every default caller sends.
       properties:
         notification:
           type: string

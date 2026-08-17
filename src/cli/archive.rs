@@ -102,14 +102,18 @@ pub async fn prompt_archive(
         if approved_issues_only {
             issue_threads = issue_threads
                 .into_iter()
-                .filter(|i| i.approved_commit().is_some())
+                .filter(|i| i.last_approved_commit().is_some())
                 .collect()
         };
 
-        if !issue_threads
-            .iter()
-            .any(|i| git_info.branch().map(|b| b == i.branch).unwrap_or(true))
-        {
+        // A render-time comparison against the checkout, not a derivation: it only
+        // warns that additional files picked here may have no commits in common.
+        if !issue_threads.iter().any(|i| {
+            git_info
+                .branch()
+                .map(|b| b == i.active_branch())
+                .unwrap_or(true)
+        }) {
             println!(
                 "⚠️ No issues in selected milestones match local branch. Selecting additional files may not have commits of interested"
             );

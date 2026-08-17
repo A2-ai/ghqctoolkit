@@ -1,12 +1,14 @@
-name: "POST /api/issues/{number}/rounds/repair - body marker only"
-description: "The issue is open and notified, but its `## QC Round` marker still names Initial QC: only the marker is rewritten"
+name: "POST /api/issues/{number}/rounds/repair - an unplaceable round is not blamed for an unrequested notification"
+description: "The same grayed round 2 as post_repair_round_unplaceable_round, repaired with the default request body: the notification is skipped because nobody asked for one, so no skipped_reason is emitted — placement is only reported when it is actually what stopped the step"
 
 fixtures:
   issues:
     - type: mock
       number: 1
       title: "src/test.rs"
-      state: "open"
+      # Closed while round 2 is open, and the marker still names Initial QC: both of the
+      # steps that do not read placement are incomplete.
+      state: "closed"
       body: |
         Quality check issue for src/test.rs
 
@@ -45,35 +47,33 @@ fixtures:
 
         # Code Review Checklist
         - [ ] Reviewed the logic
-    - issue: 1
-      author: author
-      body: |
-        # QC Notification
-
-        ## Metadata
-        current commit: abc1234567890abcdef1234567890abcdef12340
 
 git_state:
-  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
-  # Round 2 anchors on HEAD, so HEAD must be on the walk or the round is
-  # unplaceable — which would skip the notification step, not the repair.
-  commits:
-    - "abc1234567890abcdef1234567890abcdef12340"
-    - "456def789abc012345678901234567890123cdef"
+  # Round 2's anchor is on no walk the mock reports, so the fold grays round 2 exactly as
+  # in post_repair_round_unplaceable_round. The *only* difference here is the request.
+  commits: []
 
 request:
   method: POST
   path: "/api/issues/1/rounds/repair"
+  # The default body every surface sends: `notification` carries #[serde(default)], so an
+  # absent key means `none`. This is why the schema must not mark it required.
   body: {}
 
 response:
   status: 200
+  # Exact, not partial: the point of this case is a key that must be **absent**, and a
+  # partial match cannot express absence. Skipping a step the caller never asked for is
+  # not a degradation, so it carries no reason — reporting the placement here would blame
+  # an unfetched branch for a notification nobody requested.
   body:
-    match_type: partial
+    match_type: exact
     fields:
       round: 2
+      round_name: "Round 2"
+      round_comment_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
       reopened:
-        status: "skipped"
+        status: "done"
       body_marker:
         status: "done"
       notification:
@@ -81,11 +81,9 @@ response:
       repaired: true
       needs_repair: false
 
-# The body update is the only write.
+# The two placement-free steps still ran; nothing was posted.
 assert_write_calls:
+  - type: OpenIssue
+    issue_number: 1
   - type: UpdateIssue
     issue_number: 1
-    position: 0
-  - type: UpdateIssue
-    issue_number: 1
-    position: last

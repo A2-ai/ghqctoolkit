@@ -3,12 +3,12 @@
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
 use crate::api::types::{
-    RepairRoundApiRequest, RepairRoundResponse, RoundChecklistOption, RoundSeedResponse,
-    StartRoundApiRequest, StartRoundResponse,
+    GapContinuityInfo, RepairRoundApiRequest, RepairRoundResponse, RoundChecklistOption,
+    RoundSeedResponse, StartRoundApiRequest, StartRoundResponse,
 };
 use crate::{
-    GitProvider, IssueThread, RepairRoundRequest, RoundState, StartRoundRequest,
-    available_checklists, get_issue_comments, repair_round, start_round,
+    GitProvider, IssueThread, RepairRoundRequest, StartRoundRequest, available_checklists,
+    get_issue_comments, repair_round, start_round,
 };
 use axum::{
     Json,
@@ -93,40 +93,45 @@ pub async fn get_round_seed<G: GitProvider + 'static>(
     let thread =
         IssueThread::from_issue_comments(&issue, &comments, state.git_info(), state.disk_cache())?;
 
-    let last = thread.rounds.last().ok_or_else(|| {
+    let last = thread.rounds().next_back().ok_or_else(|| {
         ApiError::Internal(
             "No QC rounds could be derived for this issue (its commit history may be unreachable)"
                 .to_string(),
         )
     })?;
 
-    // A still-open round is the one thing that makes the action illegal; report it
-    // rather than failing, since this endpoint is what the UI asks *before* acting.
-    let (previous_approval, blocked_reason) = match &last.state {
-        RoundState::Closed { commit, .. } => (Some(commit.to_string()), None),
-        RoundState::Open => (
-            None,
-            Some(format!(
-                "{} is still open. Approve it first — a `# QC Round` comment posted now would \
-                 extend that round instead of opening a new one.",
-                last.name()
-            )),
-        ),
-    };
-
-    // The anchor is HEAD of the issue's branch, exactly as `start_round` reads it.
-    let anchor = state
-        .git_info()
-        .branch_tip(&Some(thread.branch.clone()))
-        .inspect_err(|error| {
-            log::debug!(
-                "could not resolve HEAD of branch '{}' for issue #{number}: {error}",
-                thread.branch
-            );
-        })
-        .ok()
-        .map(|anchor| anchor.to_string());
-
+    // Branch, anchor and comparison base come from the same helper `start_round` uses,
+    // so the form previews exactly what the action will do. A still-open round makes
+    // the action illegal rather than failing: this endpoint is what the UI asks
+    // *before* acting, so it reports the reason instead of erroring.
+    let basis = crate::round_basis(&thread, state.git_info());
+    let (anchor, previous_approval, branch, comparison_base, divergence, blocked_reason) =
+        match &basis {
+            Ok(basis) => (
+                Some(basis.anchor.to_string()),
+                Some(basis.previous_approval.to_string()),
+                Some(basis.branch.clone()),
+                Some(basis.comparison_base.to_string()),
+                GapContinuityInfo::divergence(&basis.continuity),
+                None,
+            ),
+            // Reported as a reason rather than a 500: this endpoint is what the UI
+            // asks before acting, so "you cannot" is an answer, not a failure. The
+            // still-open case drops the error's "Cannot start a new round:" prefix —
+            // the field is already the reason a start is blocked.
+            Err(crate::StartRoundError::RoundStillOpen { round_name, .. }) => (
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(format!(
+                    "{round_name} is still open. Approve it first — a `# QC Round` comment \
+                     posted now would extend that round instead of opening a new one."
+                )),
+            ),
+            Err(error) => (None, None, None, None, None, Some(error.to_string())),
+        };
     // Every round's checklist, so the form can offer a choice rather than assuming
     // the next round follows the last one. The most recent recoverable checklist is
     // the pre-selected default, which is what the form used to get unconditionally.
@@ -139,14 +144,6 @@ pub async fn get_round_seed<G: GitProvider + 'static>(
         options.iter().map(RoundChecklistOption::from).collect();
 
     let next_round = last.index.saturating_add(1);
-    let blocked_reason = blocked_reason.or_else(|| {
-        anchor.is_none().then(|| {
-            format!(
-                "Could not resolve HEAD of branch '{}' — fetch or check out the branch locally.",
-                thread.branch
-            )
-        })
-    });
 
     Ok(Json(RoundSeedResponse {
         file: thread.file.to_string_lossy().to_string(),
@@ -158,6 +155,9 @@ pub async fn get_round_seed<G: GitProvider + 'static>(
         default_round,
         anchor,
         previous_approval,
+        branch,
+        comparison_base,
+        divergence,
         can_start: blocked_reason.is_none(),
         blocked_reason,
     }))
@@ -171,9 +171,11 @@ mod tests {
     use crate::api::tests::helpers::MockGitInfo;
     use crate::api::types::RepairRoundApiRequest;
     use crate::api::types::{
-        NotificationModeRequest, RoundStateEnum, StepOutcomeResponse, StepStatusEnum,
+        NotificationModeRequest, RoundOpenKind, RoundStateEnum, SegmentInfo, StepOutcomeResponse,
+        StepStatusEnum,
     };
     use crate::test_utils::create_test_issue;
+    use std::str::FromStr;
 
     const COMMIT: &str = "456def789abc012345678901234567890123cdef";
     const HEAD: &str = "abc1234567890abcdef1234567890abcdef12340";
@@ -193,6 +195,18 @@ mod tests {
             html_url: Some("https://github.com/o/r/issues/1#issuecomment-7".to_string()),
             html: None,
         }
+    }
+
+    /// The walk a round-2 fixture needs: round 2 anchors on `HEAD`, so `HEAD` has to be
+    /// on it or the round is `AnchorUnreachable` and every action on it refuses.
+    fn walk() -> Vec<crate::GitCommit> {
+        [HEAD, COMMIT]
+            .iter()
+            .map(|hash| crate::GitCommit {
+                commit: gix::ObjectId::from_str(hash).expect("a 40 hex digit sha"),
+                message: format!("commit {hash}"),
+            })
+            .collect()
     }
 
     fn state(mock: MockGitInfo) -> AppState<MockGitInfo> {
@@ -278,17 +292,24 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         let response = &body.results[0];
-        assert_eq!(response.rounds.len(), 1);
-        let round = &response.rounds[0];
+        // An open round is the last segment, so there is no trailing gap to project.
+        assert_eq!(response.segments.len(), 1);
+        let SegmentInfo::Round(round) = &response.segments[0] else {
+            panic!("segments[0] is always Initial QC");
+        };
         assert_eq!(round.index, 1);
         assert_eq!(round.name, "Initial QC");
         assert_eq!(round.state, RoundStateEnum::Open);
-        assert_eq!(round.opened_at, COMMIT);
-        assert_eq!(round.previous_approval, None);
+        assert_eq!(round.opened_at.as_deref(), Some(COMMIT));
+        assert_eq!(round.branch, "main");
+        // The status was computed on the active segment's branch, which is the only
+        // "the issue's branch" there is.
+        assert_eq!(response.active_branch, "main");
+        assert_eq!(round.opened.kind, RoundOpenKind::IssueCreated);
         assert_eq!(round.closing_commit, None);
-        assert_eq!(round.event_count, 0);
-        assert_eq!(round.retraction_count, 0);
-        assert_eq!(round.extension_count, 0);
+        assert!(round.events.is_empty());
+        assert!(round.retractions.is_empty());
+        assert!(round.extensions.is_empty());
         assert_eq!(
             round.checklist_source.kind,
             crate::api::types::ChecklistSourceKind::IssueBody
@@ -297,10 +318,14 @@ mod tests {
             round.checklist_name.as_deref(),
             Some("Code Review Checklist")
         );
-        // The one round is open, and with nothing notified yet the comparison base
-        // is the initial commit.
-        assert_eq!(response.open_round_index, Some(1));
-        assert_eq!(response.next_notification_from, COMMIT);
+        // A round is open exactly when the last segment is one, which is what replaced
+        // `open_round_index`. With nothing notified yet the comparison base is the
+        // initial commit.
+        assert!(matches!(
+            response.segments.last(),
+            Some(SegmentInfo::Round(_))
+        ));
+        assert_eq!(response.next_notification_from.as_deref(), Some(COMMIT));
     }
 
     // ── Repairing an open round ──────────────────────────────────────────────
@@ -317,7 +342,7 @@ mod tests {
     fn new_round_comment() -> GitComment {
         GitComment {
             body: format!(
-                "# QC Round\n\n## Metadata\n* round: 2\n* initial qc round commit: {HEAD}\n* previous approved commit: {COMMIT}\n\n# Code Review Checklist\n- [ ] Reviewed the logic\n"
+                "# QC Round\n\n## Metadata\n* round: 2\n* initial qc round commit: {HEAD}\n* previous approved commit: {COMMIT}\n* git branch: main\n\n# Code Review Checklist\n- [ ] Reviewed the logic\n"
             ),
             author_login: "author".to_string(),
             created_at: chrono::Utc::now(),
@@ -361,6 +386,7 @@ mod tests {
                     notification_comment(),
                 ],
             )
+            .with_commits(walk())
             .with_branch_tip(Some(HEAD.to_string()))
             .with_open_issue_failure()
             .build();
@@ -443,6 +469,7 @@ mod tests {
         let mock = MockGitInfo::builder()
             .with_issue(1, issue)
             .with_comments(1, vec![approval_comment(), new_round_comment()])
+            .with_commits(walk())
             .with_branch_tip(Some(HEAD.to_string()))
             .build();
 
@@ -486,6 +513,7 @@ mod tests {
         let mock = MockGitInfo::builder()
             .with_issue(1, issue)
             .with_comments(1, vec![approval_comment(), new_round_comment()])
+            .with_commits(walk())
             .with_branch_tip(Some(HEAD.to_string()))
             .build();
 
@@ -528,7 +556,10 @@ mod tests {
         .await
         .expect("status must be derivable");
 
-        assert_eq!(body.results[0].open_round_index, Some(1));
+        assert!(matches!(
+            body.results[0].segments.last(),
+            Some(SegmentInfo::Round(_))
+        ));
         assert!(body.results[0].round_repair.is_none());
     }
 

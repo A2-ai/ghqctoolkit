@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt, path::PathBuf, str::FromStr, sync::LazyLock};
+use std::{fmt, path::PathBuf, str::FromStr, sync::LazyLock};
 
 use gix::ObjectId;
 use octocrab::models::{IssueState, issues::Issue};
@@ -11,7 +11,10 @@ use crate::{
         GitComment, GitCommitOps, GitFileOpsError, GitHubApiError, GitHubReader,
         find_or_cache_file_changes, get_commits_robust,
     },
-    round::{Round, RoundAnomaly, RoundEvent, fold_rounds_from_comments, resolve_rounds},
+    round::{
+        BranchWalk, BranchWalks, Round, RoundAnomaly, Segment, UnplaceableReason,
+        fold_rounds_from_comments, resolve_segments, round_branches,
+    },
 };
 
 static MARKDOWN_LINK_REGEX: LazyLock<Regex> =
@@ -26,26 +29,6 @@ static BLOCKING_QC_LINK_REGEX: LazyLock<Regex> =
 pub(crate) static HTML_LINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([^<]*)</a>"#).unwrap()
 });
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CommitStatus {
-    Initial,
-    Notification,
-    Approved,
-    Reviewed,
-}
-
-impl fmt::Display for CommitStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let self_str = match self {
-            Self::Initial => "initial",
-            Self::Notification => "notification",
-            Self::Approved => "approved",
-            Self::Reviewed => "reviewed",
-        };
-        write!(f, "{self_str}")
-    }
-}
 
 /// Relationship type for blocking QC issues
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -80,31 +63,38 @@ pub struct BlockingQC {
     pub relationship: BlockingRelationship,
 }
 
+/// A commit owned by one [`Segment`].
+///
+/// Deliberately carries no statuses: what the comments said about a commit is the
+/// owning segment's events and state, parsed once, and a status set derived from two
+/// independent parses of the same thread is exactly how those two views came to
+/// disagree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IssueCommit {
     pub hash: ObjectId,
     pub message: String,
-    pub statuses: HashSet<CommitStatus>,
     pub file_changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IssueThread {
     pub file: PathBuf,
-    pub branch: String,
-    pub(crate) open: bool,
-    pub commits: Vec<IssueCommit>,
+    /// GitHub's issue state.
+    pub open: bool,
     pub milestone: String,
     /// Blocking QC issues parsed from issue body
     /// Includes both Gating QC and Previous QC sections
     pub blocking_qcs: Vec<BlockingQC>,
-    /// QC rounds derived from the comment thread, oldest first.
-    /// Round 1 is "Initial QC"; a thread with no round headings has
-    /// exactly one round. Purely derived and additive: no existing accessor
-    /// consults this.
-    pub rounds: Vec<Round>,
-    /// Problems found while folding rounds. Folding never fails.
-    pub round_anomalies: Vec<RoundAnomaly>,
+    /// The issue's history as a strict alternation of rounds and the drift between
+    /// them, oldest first. `segments[0]` is always Initial QC, and the last segment is
+    /// always an open round or a gap.
+    ///
+    /// There is deliberately no `branch` and no thread-wide `commits`: every round
+    /// carries the branch it was reviewed on, so "the issue's branch" is not a concept,
+    /// and every commit is owned by the segment that covers it.
+    pub segments: Vec<Segment>,
+    /// Problems found while folding segments. Folding never fails.
+    pub anomalies: Vec<RoundAnomaly>,
 }
 
 impl IssueThread {
@@ -123,148 +113,24 @@ impl IssueThread {
             return Err(IssueError::MilestoneNotFound);
         };
 
-        // 1. Parse the branch from the issue body first
-        let branch = issue
+        // 1. The issue body's branch is Initial QC's branch — nothing more. Later
+        //    rounds each declare their own.
+        let body_branch = issue
             .body
             .as_ref()
             .and_then(|body| parse_branch_from_body(body))
-            .ok_or_else(|| IssueError::BranchNotFound)?;
+            .ok_or(IssueError::BranchNotFound)?;
 
-        // 2. Parse the commit string from the issue body
+        // 2. Initial QC's anchor.
         let initial_commit_str = issue
             .body
             .as_ref()
             .and_then(|body| parse_commit_from_pattern(body, "initial qc commit: "))
-            .ok_or_else(|| IssueError::InitialCommitNotFound)?;
+            .ok_or(IssueError::InitialCommitNotFound)?;
 
-        // 3. Parse notification and approval commit strings from comments
-        let mut issue_thread_commits = parse_commits_from_comments(comments);
-
-        // 4. Include the initial commit in the map and ensure only one Initial exists
-        // First, remove Initial status from any existing commits (shouldn't happen, but safety check)
-        for statuses in issue_thread_commits.values_mut() {
-            statuses.remove(&CommitStatus::Initial);
-        }
-
-        // Now add Initial status to the correct commit
-        let initial_statuses = issue_thread_commits
-            .entry(initial_commit_str)
-            .or_insert_with(HashSet::new);
-        initial_statuses.insert(CommitStatus::Initial);
-
-        // 5. Find first parseable ObjectId for robust commit retrieval
-        let mut reference_commit = None;
-        for commit_str in issue_thread_commits.keys() {
-            if let Ok(object_id) = ObjectId::from_str(commit_str) {
-                reference_commit = Some(object_id);
-                log::debug!(
-                    "Using commit {} as reference for robust retrieval",
-                    commit_str
-                );
-                break;
-            }
-        }
-
-        // 6. Get all file commits using robust method or fallback.
-        // Use the initial commit as a stop point so the walk terminates early on large repos.
-        let stop_at = ObjectId::from_str(&initial_commit_str).ok();
-
-        let all_commits = get_commits_robust(
-            git_info,
-            &Some(branch.clone()),
-            reference_commit.as_ref(),
-            stop_at,
-            disk_cache,
-        )?;
-
-        // Pre-compute which commits touch this issue's file (one subprocess call).
-        let commit_hashes: Vec<String> = all_commits.iter().map(|c| c.commit.to_string()).collect();
-        let mut file_touching = find_or_cache_file_changes(
-            &commit_hashes,
-            git_info,
-            Some(branch.clone()),
-            &file,
-            disk_cache,
-        )?;
-
-        // Also mark commits that touched any previously-known file names from ## File History.
-        // This ensures commits made against the old filename are still flagged as file-changing.
-        let old_paths: Vec<PathBuf> = issue
-            .body
-            .as_deref()
-            .map(|body| {
-                parse_file_history(body)
-                    .into_iter()
-                    .map(|e| PathBuf::from(e.old_path))
-                    .collect()
-            })
-            .unwrap_or_default();
-        for old_path in &old_paths {
-            let old_touching = find_or_cache_file_changes(
-                &commit_hashes,
-                git_info,
-                Some(branch.clone()),
-                old_path,
-                disk_cache,
-            )
-            .map_err(IssueError::GitFileOpsError)?;
-            file_touching.extend(old_touching);
-        }
-
-        let mut issue_commits = Vec::new();
-        let mut qc_notif_found = false;
-
-        // all_commits is latest commit first in the vec.
-        // We want to iter rev to "look" from the bottom for the first qc notification to kick-off recording commits.
-        // Typically the first qc notification will be initial, but flexible enough to accept any
-        for commit in all_commits.into_iter().rev() {
-            let statuses = issue_thread_commits
-                .iter()
-                .find_map(|(issue_commit_str, statuses)| {
-                    let full_sha = commit.commit.to_string();
-                    // Handle both exact matches and short SHA matches
-                    if **issue_commit_str == full_sha
-                        || (issue_commit_str.len() >= 7 && full_sha.starts_with(issue_commit_str))
-                    {
-                        qc_notif_found = true;
-                        Some(statuses.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(HashSet::new);
-            let file_changed = file_touching.contains(&commit.commit.to_string());
-
-            if qc_notif_found {
-                // insert a idx 0 instead of push to re-reverse the order
-                issue_commits.insert(
-                    0,
-                    IssueCommit {
-                        hash: commit.commit,
-                        message: commit.message,
-                        statuses,
-                        file_changed,
-                    },
-                );
-            }
-        }
-
-        // Ensure we have at least one commit before creating IssueThread
-        if issue_commits.is_empty() {
-            return Err(IssueError::CommitNotFound(file));
-        }
-
-        // 7. Parse blocking QCs from issue body
-        let blocking_qcs = issue
-            .body
-            .as_ref()
-            .map(|body| parse_blocking_qcs(body))
-            .unwrap_or_default();
-
-        // 8. Fold the comment thread into QC rounds (derived, additive).
-        //    Stage 1 is pure over comments; stage 2 resolves SHAs against issue_commits.
-        // Initial QC's checklist template name lives in the issue body, not in any
-        // comment, so it is supplied to the (otherwise comment-only) fold here.
+        // 3. Fold stage 1 — pure over comment text — *before* any walk. The walk needs
+        //    each round's branch, and stage 2 needs the walk to resolve that round's
+        //    anchor, so this is the only order that works.
         let initial_checklist_name = issue
             .body
             .as_deref()
@@ -275,23 +141,74 @@ impl IssueThread {
             initial_checklist_name.as_deref(),
             comments,
         );
-        let (rounds, round_anomalies) = resolve_rounds(raw_rounds, raw_anomalies, &issue_commits);
+        let branches = round_branches(&raw_rounds, &body_branch);
+
+        // 4. Any previously-known file names from `## File History`: commits made
+        //    against the old name still count as changing this issue's file.
+        let old_paths: Vec<PathBuf> = issue
+            .body
+            .as_deref()
+            .map(|body| {
+                parse_file_history(body)
+                    .into_iter()
+                    .map(|e| PathBuf::from(e.old_path))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // 5. One walk per *distinct* branch, so a single-branch issue does exactly one
+        //    walk — which is why existing issues cannot regress. Each walk is fed that
+        //    segment's own anchor as its reference commit, a better input for
+        //    `get_commits_robust` than one arbitrary thread-wide commit.
+        let stop_at = ObjectId::from_str(initial_commit_str).ok();
+        let mut walks: BranchWalks = std::collections::HashMap::new();
+        for (position, branch) in branches.iter().enumerate() {
+            let Some(branch) = branch else {
+                continue;
+            };
+            if walks.contains_key(branch) {
+                continue;
+            }
+            let anchor = ObjectId::from_str(raw_rounds[position].opened_at).ok();
+            let walk = walk_branch(
+                git_info,
+                branch,
+                anchor.as_ref(),
+                stop_at,
+                &file,
+                &old_paths,
+                disk_cache,
+            );
+            if let Err(reason) = &walk {
+                log::debug!("branch '{branch}' could not be walked: {reason:?}");
+            }
+            walks.insert(branch.clone(), walk);
+        }
+
+        // 6. Fold stage 2: place every commit in exactly one segment.
+        let merge_base = |a: &ObjectId, b: &ObjectId| git_info.merge_base(a, b).ok().flatten();
+        let (segments, anomalies) =
+            resolve_segments(raw_rounds, &branches, &walks, &merge_base, raw_anomalies);
         log::debug!(
-            "derived {} QC round(s) with {} anomal(ies) for {}",
-            rounds.len(),
-            round_anomalies.len(),
+            "derived {} segment(s) with {} anomal(ies) for {}",
+            segments.len(),
+            anomalies.len(),
             file.display()
         );
 
+        let blocking_qcs = issue
+            .body
+            .as_ref()
+            .map(|body| parse_blocking_qcs(body))
+            .unwrap_or_default();
+
         Ok(IssueThread {
             file,
-            branch,
             open: issue_is_open,
-            commits: issue_commits,
             milestone,
             blocking_qcs,
-            rounds,
-            round_anomalies,
+            segments,
+            anomalies,
         })
     }
 
@@ -305,255 +222,172 @@ impl IssueThread {
         Self::from_issue_comments(issue, &comments, git_info, disk_cache)
     }
 
-    pub fn latest_commit(&self) -> &IssueCommit {
-        // Find the latest commit with the highest priority status
-        // Priority: Approved > (Notification | Initial | Reviewed) - with tie-break to most recent
-        let mut latest_commentable = None; // Notification, Initial, or Reviewed
+    // ── Segment accessors ───────────────────────────────────────────────────
+    //
+    // Everything a consumer needs about round scope is answered here, positionally.
+    // Nothing re-derives which commits a round covers.
 
-        // An open round supersedes an earlier round's approval, so that approval must
-        // not outrank the open round's own notifications and reviews — otherwise a
-        // round under review reports the *previous* round's approved commit as its
-        // latest, which is what a status card shows as "Latest".
-        //
-        // No-op for legacy threads: a `# QC Un-Approval` strips the `Approved` status
-        // from its commit, so a single-round thread whose round is open has no
-        // approved commit for this tier to rank in the first place.
-        let approval_outranks = self.open_round().is_none();
+    /// The segment the issue is currently in: always the last one, which by
+    /// construction is an open round or a gap.
+    pub fn active_segment(&self) -> &Segment {
+        self.segments
+            .last()
+            .expect("an IssueThread always has at least Initial QC")
+    }
 
-        // Iterate in forward order (newest first) to find most recent commits first
-        for commit in &self.commits {
-            // Return immediately on first approved commit (highest priority)
-            if approval_outranks && commit.statuses.contains(&CommitStatus::Approved) {
-                return &commit;
-            }
+    /// The branch the issue is currently being QC'd on — the active segment's.
+    ///
+    /// This is the only "the issue's branch" there is. It is deliberately not compared
+    /// against the viewer's checkout here: status must not depend on who is looking.
+    pub fn active_branch(&self) -> &str {
+        self.active_segment().branch()
+    }
 
-            // Track first significant commit we find as fallback
-            if latest_commentable.is_none() {
-                if commit.statuses.contains(&CommitStatus::Notification)
-                    || commit.statuses.contains(&CommitStatus::Initial)
-                    || commit.statuses.contains(&CommitStatus::Reviewed)
-                {
-                    latest_commentable = Some(commit);
-                }
-            }
+    /// Rounds only, oldest first.
+    pub fn rounds(&self) -> impl DoubleEndedIterator<Item = &Round> {
+        self.segments.iter().filter_map(Segment::as_round)
+    }
+
+    /// The approval the **round** at `position` builds on: the closing commit of the
+    /// round two positions back, since exactly one gap always sits between two rounds.
+    ///
+    /// Positions alternate `0 = Round, 1 = Gap, 2 = Round, …`, so this offset is only
+    /// meaningful for an even `position`. A gap's own bounding rounds are its immediate
+    /// neighbours at `position - 1` and `position + 1`.
+    pub fn previous_approval_of(&self, position: usize) -> Option<&ObjectId> {
+        self.segments
+            .get(position.checked_sub(2)?)?
+            .as_round()?
+            .closing_commit()
+    }
+
+    /// The approval that currently stands, if any.
+    ///
+    /// `None` while a round is open: a round under review supersedes the approval it
+    /// was opened on top of, so there is nothing standing to report. With a gap active
+    /// it is the closing commit of the round bounding that gap's older end — its
+    /// immediate neighbour, one position back.
+    pub fn standing_approval(&self) -> Option<&ObjectId> {
+        match self.active_segment() {
+            Segment::Gap(_) => self
+                .segments
+                .get(self.segments.len().checked_sub(2)?)?
+                .as_round()?
+                .closing_commit(),
+            Segment::Round(_) => None,
         }
-
-        latest_commentable.expect("IssueThread must have at least one commit with Initial status")
     }
 
-    pub fn approved_commit(&self) -> Option<&IssueCommit> {
-        self.commits
-            .iter()
-            .find(|commit| commit.statuses.contains(&CommitStatus::Approved))
+    /// The newest closing commit across all rounds, ungated by whether a round is
+    /// open. Distinct from [`Self::standing_approval`] on purpose: this one answers
+    /// "what was last approved, ever".
+    pub fn last_approved_commit(&self) -> Option<&ObjectId> {
+        self.rounds().rev().find_map(Round::closing_commit)
     }
 
+    /// The newest commit of the active segment. `None` when it owns none — an empty
+    /// gap, or a segment that could not be placed.
+    pub fn latest_commit(&self) -> Option<&IssueCommit> {
+        self.active_segment().commits().first()
+    }
+
+    /// Initial QC's anchor: the `initial qc commit` from the issue body.
+    ///
+    /// `None` when Initial QC is unplaceable — an anchor we could not resolve carries a
+    /// null-OID placeholder, which is not a commit anyone may address.
+    pub fn initial_commit(&self) -> Option<&ObjectId> {
+        self.segments
+            .first()
+            .and_then(Segment::as_round)
+            .filter(|round| round.is_placed())
+            .map(|round| &round.opened_at)
+    }
+
+    /// Every commit that touched this issue's file, across all segments, newest-first.
     pub fn file_commits(&self) -> Vec<&ObjectId> {
-        self.commits
+        self.segments
             .iter()
+            .flat_map(|segment| segment.commits())
             .filter(|commit| commit.file_changed)
             .map(|commit| &commit.hash)
             .collect()
     }
 
-    pub fn initial_commit(&self) -> &ObjectId {
-        &self
-            .commits
-            .iter()
-            .find(|commit| commit.statuses.contains(&CommitStatus::Initial))
-            .expect("IssueThread must have exactly one commit with Initial status")
-            .hash
-    }
-
-    // ── Round-derived accessors (additive; nothing else calls these yet) ─────
-
-    /// Position of a commit in [`Self::commits`], which is ordered newest-first.
-    /// A smaller index means a more recent commit.
-    fn commit_recency(&self, hash: &ObjectId) -> Option<usize> {
-        self.commits.iter().position(|commit| commit.hash == *hash)
-    }
-
-    /// The round currently being reviewed: the last round, if it is `Open`.
-    pub fn open_round(&self) -> Option<&Round> {
-        self.rounds.last().filter(|round| round.is_open())
-    }
-
-    /// The closing commit of the most recent round still in `Closed` state.
-    ///
-    /// Retracted approvals do not count: a `# QC Un-Approval` reopens its round, so
-    /// that round stops contributing a standing approval.
-    pub fn latest_standing_approval(&self) -> Option<&ObjectId> {
-        self.rounds
-            .iter()
-            .rev()
-            .find_map(|round| round.closing_commit())
-    }
-
-    /// The newest commit that has been notified, across all rounds.
-    /// "Newest" is by position in [`Self::commits`] (newest-first).
-    pub fn latest_notified_commit(&self) -> Option<&ObjectId> {
-        self.newest_event_commit(|event| matches!(event, RoundEvent::Notification { .. }))
-    }
-
-    /// The newest commit that has been reviewed, across all rounds.
-    /// "Newest" is by position in [`Self::commits`] (newest-first).
-    pub fn latest_reviewed_commit(&self) -> Option<&ObjectId> {
-        self.newest_event_commit(|event| matches!(event, RoundEvent::Review { .. }))
-    }
-
-    fn newest_event_commit(&self, want: impl Fn(&RoundEvent) -> bool) -> Option<&ObjectId> {
-        self.rounds
-            .iter()
-            .flat_map(|round| round.events.iter())
-            .filter(|event| want(event))
-            .filter_map(|event| self.commit_recency(event.commit()))
-            .min()
-            .map(|index| &self.commits[index].hash)
-    }
-
     /// The commit a new notification should diff against.
     ///
-    /// This is a deliberately **flat maximum** by commit recency over four
-    /// candidates: [`Self::latest_standing_approval`], [`Self::latest_notified_commit`],
-    /// [`Self::latest_reviewed_commit`] and [`Self::initial_commit`]. It is *not* the
-    /// tiered priority used by [`Self::latest_commit`], which ranks Approved above
-    /// everything else; `latest_commit` is intentionally left alone in this phase.
+    /// An open round diffs against what it has already notified, or — before it has
+    /// notified anything — against its own anchor, which is the commit it opened at. A
+    /// trailing gap has no round to notify, so the standing approval is the only
+    /// sensible base.
     ///
-    /// Note that a round's anchor (`opened_at`) is deliberately not a candidate, so
-    /// an open round N > 1 with no notification yet diffs against round N-1's
-    /// approval rather than against its own anchor.
-    pub fn next_notification_from(&self) -> ObjectId {
-        let initial = self.initial_commit();
-        [
-            self.latest_standing_approval(),
-            self.latest_notified_commit(),
-            self.latest_reviewed_commit(),
-            Some(initial),
-        ]
-        .into_iter()
-        .flatten()
-        .filter_map(|hash| self.commit_recency(hash).map(|index| (index, hash)))
-        .min_by_key(|(index, _)| *index)
-        .map(|(_, hash)| *hash)
-        .unwrap_or(*initial)
-    }
-
-    /// Commits belonging to the round at `position` in [`Self::rounds`], newest-first.
-    ///
-    /// `position` is a 0-based position in [`Self::rounds`] (which is oldest-first),
-    /// **not** a [`Round::index`]. Because `Round::index` is always derived it is in
-    /// practice unique and monotonic, so `index - 1` and `position` coincide; the
-    /// positional API is kept as the more robust one.
-    ///
-    /// Membership is the commits after the round's `opened_at` (exclusive) through
-    /// its closing commit if `Closed`, else through the newest known commit.
-    /// Draft-gap commits — those between one round's approval and the next round's
-    /// anchor — belong to no round and are excluded.
-    pub fn round_membership(&self, position: usize) -> Vec<&IssueCommit> {
-        let Some(round) = self.rounds.get(position) else {
-            return Vec::new();
-        };
-        let Some(anchor) = self.commit_recency(&round.opened_at) else {
-            return Vec::new();
-        };
-        let start = match round.closing_commit() {
-            Some(commit) => match self.commit_recency(commit) {
-                Some(index) => index,
-                None => return Vec::new(),
-            },
-            None => 0,
-        };
-        if start >= anchor {
-            return Vec::new();
+    /// `None` when the active segment could not be placed: its anchor and closing commit
+    /// may be null-OID placeholders, and a diff against those is not a diff.
+    pub fn next_notification_from(&self) -> Option<ObjectId> {
+        if !self.active_segment().is_placed() {
+            return None;
         }
-        self.commits[start..anchor].iter().collect()
-    }
-
-    /// Commits strictly between the previous round's closing commit and the
-    /// `opened_at` of the round at `position` in [`Self::rounds`], newest-first.
-    /// These belong to no round. Always empty for Initial QC.
-    ///
-    /// As with [`Self::round_membership`], `position` is a 0-based position in
-    /// [`Self::rounds`], not a [`Round::index`].
-    pub fn draft_gap(&self, position: usize) -> Vec<&IssueCommit> {
-        let Some(round) = self.rounds.get(position) else {
-            return Vec::new();
-        };
-        let Some(previous_approval) = &round.previous_approval else {
-            return Vec::new();
-        };
-        let (Some(anchor), Some(base)) = (
-            self.commit_recency(&round.opened_at),
-            self.commit_recency(previous_approval),
-        ) else {
-            return Vec::new();
-        };
-        if base <= anchor + 1 {
-            return Vec::new();
+        match self.active_segment() {
+            Segment::Round(round) => Some(
+                round
+                    .newest_event_commit()
+                    .copied()
+                    .unwrap_or(round.opened_at),
+            ),
+            Segment::Gap(_) => self.standing_approval().copied(),
         }
-        self.commits[anchor + 1..base].iter().collect()
     }
 }
 
-/// Parse notification and approval commits from comment bodies
-/// Returns a HashMap of commit strings to their accumulated status sets
-/// Uses accumulative approach - commits can hold multiple statuses simultaneously
-fn parse_commits_from_comments<'a>(
-    comments: &'a [GitComment],
-) -> std::collections::HashMap<&'a str, HashSet<CommitStatus>> {
-    let mut commit_statuses = std::collections::HashMap::new();
-    let mut approved_commit = None;
-    let mut approval_comment_index = None;
-
-    // Parse all comments in order
-    for (index, comment) in comments.iter().enumerate() {
-        // Check for notification commit: "current commit: {hash}"
-        if let Some(commit) = parse_commit_from_pattern(&comment.body, "current commit: ") {
-            // Add notification status (accumulative approach)
-            let statuses = commit_statuses.entry(commit).or_insert_with(HashSet::new);
-            statuses.insert(CommitStatus::Notification);
+/// Walk `branch` and flag which of its commits touch `file` (or any name it used to
+/// have).
+///
+/// Any git failure degrades the whole branch to [`UnplaceableReason`] rather than
+/// failing the issue: a round on a branch that was never fetched is grayed, not fatal.
+fn walk_branch(
+    git_info: &impl GitCommitOps,
+    branch: &str,
+    anchor: Option<&ObjectId>,
+    stop_at: Option<ObjectId>,
+    file: &std::path::Path,
+    old_paths: &[PathBuf],
+    disk_cache: Option<&DiskCache>,
+) -> BranchWalk {
+    let branch_opt = Some(branch.to_string());
+    let commits = match get_commits_robust(git_info, &branch_opt, anchor, stop_at, disk_cache) {
+        Ok(commits) => commits,
+        Err(GitFileOpsError::LocalBranchNotFound(_)) => {
+            return Err(UnplaceableReason::BranchUnavailable);
         }
-
-        // Check for approval commit: "approved qc commit: {hash}"
-        if let Some(commit) = parse_commit_from_pattern(&comment.body, "approved qc commit: ") {
-            // Remove Approved status from all other commits (only one approval allowed)
-            for statuses in commit_statuses.values_mut() {
-                statuses.remove(&CommitStatus::Approved);
-            }
-
-            // Add approved status to this commit
-            let statuses = commit_statuses.entry(commit).or_insert_with(HashSet::new);
-            statuses.insert(CommitStatus::Approved);
-            approved_commit = Some(commit);
-            approval_comment_index = Some(index);
+        Err(error) => {
+            log::warn!("failed to walk branch '{branch}': {error}");
+            return Err(UnplaceableReason::BranchUnavailable);
         }
+    };
 
-        // Check for review commit: "comparing commit: {hash}" in "# QC Review" comments
-        if comment.body.contains("# QC Review") {
-            if let Some(commit) = parse_commit_from_pattern(&comment.body, "comparing commit: ") {
-                // Add reviewed status (accumulative approach)
-                let statuses = commit_statuses.entry(commit).or_insert_with(HashSet::new);
-                statuses.insert(CommitStatus::Reviewed);
-            }
-        }
-
-        // Check for unapproval: "# QC Un-Approval"
-        if comment.body.contains("# QC Un-Approval") {
-            // If this unapproval comes after an approval, remove the approval status
-            if let Some(approval_index) = approval_comment_index {
-                if index > approval_index {
-                    if let Some(commit) = approved_commit {
-                        if let Some(statuses) = commit_statuses.get_mut(commit) {
-                            statuses.remove(&CommitStatus::Approved);
-                        }
-                    }
-                    approved_commit = None;
-                    approval_comment_index = None;
-                }
-            }
+    // One subprocess call per (branch, file) pair, cached.
+    let hashes: Vec<String> = commits.iter().map(|c| c.commit.to_string()).collect();
+    let mut touching =
+        find_or_cache_file_changes(&hashes, git_info, branch_opt.clone(), file, disk_cache)
+            .map_err(|error| {
+                log::warn!("failed to find file changes on '{branch}': {error}");
+                UnplaceableReason::BranchUnavailable
+            })?;
+    for old_path in old_paths {
+        if let Ok(old_touching) =
+            find_or_cache_file_changes(&hashes, git_info, branch_opt.clone(), old_path, disk_cache)
+        {
+            touching.extend(old_touching);
         }
     }
 
-    commit_statuses
+    Ok(commits
+        .into_iter()
+        .map(|commit| IssueCommit {
+            file_changed: touching.contains(&commit.commit.to_string()),
+            hash: commit.commit,
+            message: commit.message,
+        })
+        .collect())
 }
 
 /// Parse a commit from a body using the given pattern
@@ -972,6 +806,15 @@ mod tests {
     }
 
     impl GitCommitOps for SimpleMockGitInfo {
+        fn merge_base(
+            &self,
+            _a: &ObjectId,
+            _b: &ObjectId,
+        ) -> Result<Option<ObjectId>, GitFileOpsError> {
+            // Single-branch fixtures: every gap's bounds sit on the one walk, so no
+            // gap ever needs a merge-base.
+            Ok(None)
+        }
         fn commits(
             &self,
             _branch: &Option<String>,
@@ -1098,19 +941,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_from_issue_open_with_notifications() {
-        // Comment sequence:
-        // 1. Initial commit: abc123def456789012345678901234567890abcd (from issue body)
-        // 2. Notification: current commit: def456789abc012345678901234567890123abcd
-        // 3. Notification: current commit: 123abcd (short SHA)
-        // No approval commits in this test
-
-        let issue = load_issue("open_issue_with_notifications.json");
-        let comments = load_comments("open_issue_notifications.json");
-
-        // Convert JSON comments to GitComment objects
-        let git_comments: Vec<GitComment> = comments
+    /// Load a fixture thread's issue and comments.
+    fn fixture(issue_file: &str, comments_file: &str) -> (Issue, Vec<GitComment>) {
+        let issue = load_issue(issue_file);
+        let comments = load_comments(comments_file)
             .into_iter()
             .map(|comment| {
                 test_comment(
@@ -1122,42 +956,67 @@ mod tests {
                 )
             })
             .collect();
+        (issue, comments)
+    }
+
+    /// The commits every event of the round at `position` names, in comment order.
+    fn event_commits(thread: &IssueThread, position: usize) -> Vec<ObjectId> {
+        thread.segments[position]
+            .as_round()
+            .expect("expected a Round")
+            .events
+            .iter()
+            .map(|event| *event.commit())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_from_issue_open_with_notifications() {
+        // Comment sequence:
+        // 1. Initial commit: abc123def456789012345678901234567890abcd (from issue body)
+        // 2. Notification: current commit: def456789abc012345678901234567890123abcd
+        // 3. Notification: current commit: 123abcd (short SHA)
+        // No approval commits in this test
+        let (issue, comments) = fixture(
+            "open_issue_with_notifications.json",
+            "open_issue_notifications.json",
+        );
 
         let git_info = SimpleMockGitInfo::new()
             .with_commits(create_test_commits())
-            .with_comments(git_comments);
+            .with_comments(comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 
-        // Verify initial commit parsing
         assert_eq!(
-            *result.initial_commit(),
-            ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap()
+            result.initial_commit(),
+            Some(&ObjectId::from_str("abc123def456789012345678901234567890abcd").unwrap())
         );
 
-        // Verify notification commits (both full and short SHAs should be parsed)
-        let notification_commits: Vec<&ObjectId> = result
-            .commits
-            .iter()
-            .filter(|c| c.statuses.contains(&CommitStatus::Notification))
-            .map(|c| &c.hash)
-            .collect();
-        assert_eq!(notification_commits.len(), 2);
+        // What the comments said is the round's events — the only record of it. Both
+        // full and short SHAs resolve.
         assert_eq!(
-            *notification_commits[0],
-            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap()
-        );
-        assert_eq!(
-            *notification_commits[1],
-            ObjectId::from_str("123abcdef456789012345678901234567890abcd").unwrap() // 123abcd matches this commit
+            event_commits(&result, 0),
+            vec![
+                ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap(),
+                // 123abcd matches this commit
+                ObjectId::from_str("123abcdef456789012345678901234567890abcd").unwrap(),
+            ]
         );
 
-        // Open issue should have no approved commit
-        assert_eq!(result.approved_commit(), None);
+        // An open round is the active segment, so nothing stands approved.
+        assert_eq!(result.standing_approval(), None);
+        assert_eq!(result.last_approved_commit(), None);
         assert_eq!(result.file, PathBuf::from("src/main.rs"));
-        assert_eq!(result.branch, "feature/new-feature");
+        assert_eq!(result.active_branch(), "feature/new-feature");
+        assert_eq!(
+            crate::round::segment_invariants(&result.segments, None),
+            Ok(()),
+            "{:?}",
+            result.segments
+        );
     }
 
     #[tokio::test]
@@ -1167,62 +1026,44 @@ mod tests {
         // 2. Notification: current commit: 456def789abc012345678901234567890123cdef
         // 3. Approval: approved qc commit: 456def789abc012345678901234567890123cdef
         // No unapproval - approval remains valid
-
-        let issue = load_issue("closed_approved_issue.json");
-        let comments = load_comments("closed_approved_comments.json");
-
-        // Convert JSON comments to GitComment objects
-        let git_comments: Vec<GitComment> = comments
-            .into_iter()
-            .map(|comment| {
-                test_comment(
-                    comment["body"].as_str().unwrap().to_string(),
-                    comment["user"]["login"]
-                        .as_str()
-                        .unwrap_or("test-user")
-                        .to_string(),
-                )
-            })
-            .collect();
+        let (issue, comments) = fixture(
+            "closed_approved_issue.json",
+            "closed_approved_comments.json",
+        );
 
         let git_info = SimpleMockGitInfo::new()
             .with_commits(create_test_commits())
-            .with_comments(git_comments);
+            .with_comments(comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 
-        // Verify initial commit
+        let approved = ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap();
         assert_eq!(
-            *result.initial_commit(),
-            ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap()
+            result.initial_commit(),
+            Some(&ObjectId::from_str("def456789abc012345678901234567890123abcd").unwrap())
         );
 
-        // Should have one commit that is both a notification and approval
-        let notification_and_approval_commits: Vec<&ObjectId> = result
-            .commits
-            .iter()
-            .filter(|c| {
-                c.statuses.contains(&CommitStatus::Notification)
-                    && c.statuses.contains(&CommitStatus::Approved)
-            })
-            .map(|c| &c.hash)
-            .collect();
-        assert_eq!(notification_and_approval_commits.len(), 1);
+        // One commit both notified and approved: the notification is the round's event,
+        // the approval is the state that closed it.
+        assert_eq!(event_commits(&result, 0), vec![approved]);
         assert_eq!(
-            *notification_and_approval_commits[0],
-            ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap()
+            result.segments[0].as_round().unwrap().closing_commit(),
+            Some(&approved)
         );
 
-        // Closed issue with approval should have approved commit
-        assert_eq!(
-            result.approved_commit().map(|c| c.hash),
-            Some(ObjectId::from_str("456def789abc012345678901234567890123cdef").unwrap())
-        );
+        // A closed round is never last: the drift since its approval is its own segment.
+        assert!(result.segments.last().unwrap().as_gap().is_some());
+        assert_eq!(result.standing_approval(), Some(&approved));
+        assert_eq!(result.last_approved_commit(), Some(&approved));
 
         assert_eq!(result.file, PathBuf::from("src/lib.rs"));
-        assert_eq!(result.branch, "bugfix/memory-leak");
+        assert_eq!(result.active_branch(), "bugfix/memory-leak");
+        assert_eq!(
+            crate::round::segment_invariants(&result.segments, None),
+            Ok(())
+        );
     }
 
     #[tokio::test]
@@ -1233,63 +1074,40 @@ mod tests {
         // 3. Approval: approved qc commit: 890cdef123abc456789012345678901234567890
         // 4. Notification: current commit: abc1234 (short SHA)
         // 5. Unapproval: # QC Un-Approval (invalidates the approval from step 3)
-
-        let issue = load_issue("unapproved_issue.json");
-        let comments = load_comments("unapproved_comments.json");
-
-        // Convert JSON comments to GitComment objects
-        let git_comments: Vec<GitComment> = comments
-            .into_iter()
-            .map(|comment| {
-                test_comment(
-                    comment["body"].as_str().unwrap().to_string(),
-                    comment["user"]["login"]
-                        .as_str()
-                        .unwrap_or("test-user")
-                        .to_string(),
-                )
-            })
-            .collect();
-
-        let test_commits = create_test_commits();
+        let (issue, comments) = fixture("unapproved_issue.json", "unapproved_comments.json");
 
         let git_info = SimpleMockGitInfo::new()
-            .with_commits(test_commits.clone())
-            .with_comments(git_comments);
+            .with_commits(create_test_commits())
+            .with_comments(comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 
-        // Verify initial commit
+        let retracted = ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap();
         assert_eq!(
-            *result.initial_commit(),
-            ObjectId::from_str("789abc12def345678901234567890123456789ef").unwrap()
+            result.initial_commit(),
+            Some(&ObjectId::from_str("789abc12def345678901234567890123456789ef").unwrap())
+        );
+        assert_eq!(
+            event_commits(&result, 0),
+            vec![
+                retracted,
+                ObjectId::from_str("abc123456789012345678901234567890123abcd").unwrap(),
+            ]
         );
 
-        // Should have notification commits from the comments
-        // "890cdef..." was notification → approved → unapproved (reverted to notification)
-        // "abc1234" was notification
-        let notification_commits: Vec<&ObjectId> = result
-            .commits
-            .iter()
-            .filter(|c| c.statuses.contains(&CommitStatus::Notification))
-            .map(|c| &c.hash)
-            .collect();
-        assert_eq!(notification_commits.len(), 2);
+        // The un-approval reopened the round, so it is the only segment and nothing
+        // stands approved — not even as a past approval, since it was taken back.
+        assert_eq!(result.segments.len(), 1);
         assert_eq!(
-            *notification_commits[0],
-            ObjectId::from_str("890cdef123abc456789012345678901234567890").unwrap()
+            result.segments[0].as_round().unwrap().retractions[0].retracted_commit,
+            retracted
         );
-        assert_eq!(
-            *notification_commits[1],
-            ObjectId::from_str("abc123456789012345678901234567890123abcd").unwrap()
-        );
-
-        // Should have no approved commit due to unapproval
-        assert_eq!(result.approved_commit(), None);
+        assert_eq!(result.standing_approval(), None);
+        assert_eq!(result.last_approved_commit(), None);
         assert_eq!(result.file, PathBuf::from("src/utils.rs"));
-        assert_eq!(result.branch, "feature/utils-refactor");
+        assert_eq!(result.active_branch(), "feature/utils-refactor");
     }
 
     #[tokio::test]
@@ -1300,23 +1118,10 @@ mod tests {
         // 3. Approval: approved qc commit: 222abc123456789012345678901234567890def
         // 4. Notification: current commit: 333cdef78 (short SHA)
         // Issue is open but approval remains valid (no unapproval)
-
-        let issue = load_issue("open_issue_with_approval_and_notification.json");
-        let comments = load_comments("open_issue_approval_and_notification.json");
-
-        // Convert JSON comments to GitComment objects
-        let git_comments: Vec<GitComment> = comments
-            .into_iter()
-            .map(|comment| {
-                test_comment(
-                    comment["body"].as_str().unwrap().to_string(),
-                    comment["user"]["login"]
-                        .as_str()
-                        .unwrap_or("test-user")
-                        .to_string(),
-                )
-            })
-            .collect();
+        let (issue, comments) = fixture(
+            "open_issue_with_approval_and_notification.json",
+            "open_issue_approval_and_notification.json",
+        );
 
         let test_commits = vec![
             (
@@ -1334,120 +1139,165 @@ mod tests {
         ];
 
         let git_info = SimpleMockGitInfo::new()
-            .with_commits(test_commits.clone())
-            .with_comments(git_comments);
+            .with_commits(test_commits)
+            .with_comments(comments);
 
         let result = IssueThread::from_issue(&issue, None, &git_info)
             .await
             .unwrap();
 
-        // Verify initial commit
+        let approved = ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap();
         assert_eq!(
-            *result.initial_commit(),
-            ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap()
+            result.initial_commit(),
+            Some(&ObjectId::from_str("111def456789012345678901234567890123abcd").unwrap())
         );
 
-        // Should have 2 notification commits: 333cdef... (notification only) and 222abc... (notification + approved)
-        let notification_commits: Vec<&ObjectId> = result
-            .commits
-            .iter()
-            .filter(|c| c.statuses.contains(&CommitStatus::Notification))
-            .map(|c| &c.hash)
-            .collect();
-        assert_eq!(notification_commits.len(), 2);
-
-        // The first should be 222abc (notification + approved)
-        assert!(
-            notification_commits.contains(
-                &&ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap()
-            )
-        );
-
-        // The second should be 333cdef (notification only)
-        assert!(
-            notification_commits.contains(
-                &&ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap()
-            )
-        );
-
-        // Should have approved commit (remains valid despite issue being open)
+        // Both notifications are events of round 1; the second arrived after the
+        // approval, which is recorded rather than dropped.
         assert_eq!(
-            result.approved_commit().map(|c| c.hash),
-            Some(ObjectId::from_str("222abc123456789012345678901234567890def0").unwrap())
+            event_commits(&result, 0),
+            vec![
+                approved,
+                ObjectId::from_str("333cdef789012345678901234567890123456789").unwrap(),
+            ]
         );
+        assert!(
+            result
+                .anomalies
+                .contains(&crate::round::RoundAnomaly::EventAfterClose { comment_index: 2 }),
+            "anomalies: {:?}",
+            result.anomalies
+        );
+
+        // The approval still stands despite the issue being open.
+        assert_eq!(result.last_approved_commit(), Some(&approved));
+        assert_eq!(result.standing_approval(), Some(&approved));
 
         assert_eq!(result.file, PathBuf::from("src/test.rs"));
-        assert_eq!(result.branch, "feature/test-branch");
-        assert_eq!(result.open, true);
+        assert_eq!(result.active_branch(), "feature/test-branch");
+        assert!(result.open);
+        assert_eq!(
+            crate::round::segment_invariants(&result.segments, None),
+            Ok(())
+        );
     }
 
-    /// Every existing fixture thread predates the `# QC Round` marker, so each
-    /// one must fold to exactly one round: "Initial QC", anchored at the issue
-    /// body's initial commit.
+    /// Initial QC anchored at a commit no walk knows: the round is unplaceable and its
+    /// `opened_at` is the null-OID placeholder, so every accessor below must refuse it.
+    async fn thread_with_unplaceable_initial_qc() -> IssueThread {
+        let (issue, comments) = fixture(
+            "open_issue_with_notifications.json",
+            "open_issue_notifications.json",
+        );
+
+        // A branch we can walk, but on which nothing the comments name exists.
+        let git_info = SimpleMockGitInfo::new()
+            .with_commits(vec![(
+                ObjectId::from_str("9999999999999999999999999999999999999999").unwrap(),
+                "unrelated".to_string(),
+            )])
+            .with_comments(comments);
+
+        let thread = IssueThread::from_issue(&issue, None, &git_info)
+            .await
+            .unwrap();
+
+        let initial = thread.segments[0].as_round().expect("expected a Round");
+        assert!(!initial.is_placed(), "placement: {:?}", initial.placement);
+        assert_eq!(initial.opened_at, ObjectId::null(gix::hash::Kind::Sha1));
+        thread
+    }
+
+    /// A grayed round has no commit to offer: the placeholder is not an address.
+    #[tokio::test]
+    async fn an_unplaceable_initial_qc_has_no_initial_commit() {
+        let thread = thread_with_unplaceable_initial_qc().await;
+        assert_eq!(thread.initial_commit(), None);
+    }
+
+    /// The notification diff base is a write-path input, so a null OID here would post a
+    /// comment diffing against nothing at all.
+    #[tokio::test]
+    async fn an_unplaceable_active_round_has_no_notification_base() {
+        let thread = thread_with_unplaceable_initial_qc().await;
+        assert_eq!(thread.next_notification_from(), None);
+    }
+
+    /// Every existing fixture thread predates the `# QC Round` marker, so each one must
+    /// fold to exactly one round: "Initial QC", anchored at the issue body's initial
+    /// commit and walked on the issue body's branch.
     #[tokio::test]
     async fn test_existing_fixtures_fold_to_initial_qc_only() {
         let fixtures = [
             (
                 "open_issue_with_notifications.json",
                 "open_issue_notifications.json",
+                "feature/new-feature",
             ),
             (
                 "closed_approved_issue.json",
                 "closed_approved_comments.json",
+                "bugfix/memory-leak",
             ),
-            ("unapproved_issue.json", "unapproved_comments.json"),
+            (
+                "unapproved_issue.json",
+                "unapproved_comments.json",
+                "feature/utils-refactor",
+            ),
             (
                 "open_issue_with_approval_and_notification.json",
                 "open_issue_approval_and_notification.json",
+                "feature/test-branch",
             ),
         ];
 
-        for (issue_file, comments_file) in fixtures {
-            let issue = load_issue(issue_file);
-            let git_comments: Vec<GitComment> = load_comments(comments_file)
-                .into_iter()
-                .map(|comment| {
-                    test_comment(
-                        comment["body"].as_str().unwrap().to_string(),
-                        comment["user"]["login"]
-                            .as_str()
-                            .unwrap_or("test-user")
-                            .to_string(),
-                    )
-                })
-                .collect();
-
+        for (issue_file, comments_file, branch) in fixtures {
+            let (issue, comments) = fixture(issue_file, comments_file);
             let git_info = SimpleMockGitInfo::new()
                 .with_commits(create_test_commits())
-                .with_comments(git_comments);
+                .with_comments(comments);
 
             let thread = IssueThread::from_issue(&issue, None, &git_info)
                 .await
                 .unwrap();
 
-            assert_eq!(thread.rounds.len(), 1, "{issue_file} should have one round");
-            assert_eq!(thread.rounds[0].index, 1, "{issue_file}");
-            assert_eq!(thread.rounds[0].name(), "Initial QC", "{issue_file}");
             assert_eq!(
-                thread.rounds[0].opened_at,
-                *thread.initial_commit(),
+                thread.rounds().count(),
+                1,
+                "{issue_file} should have one round"
+            );
+            let round = thread.segments[0].as_round().expect("{issue_file}");
+            assert_eq!(round.index, 1, "{issue_file}");
+            assert_eq!(round.name(), "Initial QC", "{issue_file}");
+            assert_eq!(
+                Some(&round.opened_at),
+                thread.initial_commit(),
                 "{issue_file}"
             );
-            assert_eq!(thread.rounds[0].previous_approval, None, "{issue_file}");
+            // A single-branch thread is walked exactly as it always was.
+            assert_eq!(round.branch, branch, "{issue_file}");
+            assert!(round.is_placed(), "{issue_file}: {:?}", round.placement);
+            assert_eq!(thread.previous_approval_of(0), None, "{issue_file}");
             // The only anomaly these fixtures legitimately produce is a notification
             // posted after an approval and before the matching un-approval.
             assert!(
-                thread.round_anomalies.iter().all(|anomaly| matches!(
+                thread.anomalies.iter().all(|anomaly| matches!(
                     anomaly,
                     crate::round::RoundAnomaly::EventAfterClose { .. }
                 )),
                 "{issue_file} anomalies: {:?}",
-                thread.round_anomalies
+                thread.anomalies
             );
-            // The round-derived standing approval must agree with the legacy accessor.
+            // A closed round is followed by a gap, and that gap's older bound is the
+            // approval that stands.
             assert_eq!(
-                thread.latest_standing_approval().copied(),
-                thread.approved_commit().map(|c| c.hash),
+                thread.standing_approval(),
+                round.closing_commit(),
+                "{issue_file}"
+            );
+            assert_eq!(
+                crate::round::segment_invariants(&thread.segments, None),
+                Ok(()),
                 "{issue_file}"
             );
         }
@@ -1491,185 +1341,6 @@ mod tests {
 
         let result = parse_commit_from_pattern(body, "current commit: ");
         assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_commits_from_comments_with_approval() {
-        let comments = vec![
-            test_comment(
-                "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                "test-user".to_string(),
-            ),
-            test_comment(
-                "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
-                "test-user".to_string(),
-            ),
-        ];
-
-        let commit_statuses = parse_commits_from_comments(&comments);
-
-        // Should have notification + approval
-        assert_eq!(commit_statuses.len(), 2);
-
-        let abc_statuses = commit_statuses
-            .get("abc123def456789012345678901234567890abcd")
-            .unwrap();
-        assert!(abc_statuses.contains(&CommitStatus::Notification));
-        assert!(!abc_statuses.contains(&CommitStatus::Approved));
-
-        let def_statuses = commit_statuses
-            .get("def456789abc012345678901234567890123abcd")
-            .unwrap();
-        assert!(def_statuses.contains(&CommitStatus::Approved));
-        assert!(!def_statuses.contains(&CommitStatus::Notification));
-    }
-
-    #[test]
-    fn test_parse_commits_from_comments_notifications_only() {
-        let comments = vec![
-            test_comment(
-                "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                "test-user".to_string(),
-            ),
-            test_comment(
-                "current commit: def456789abc012345678901234567890123abcd".to_string(),
-                "test-user".to_string(),
-            ),
-        ];
-
-        let commit_statuses = parse_commits_from_comments(&comments);
-
-        // Only notifications, no approval
-        assert_eq!(commit_statuses.len(), 2);
-
-        let abc_statuses = commit_statuses
-            .get("abc123def456789012345678901234567890abcd")
-            .unwrap();
-        assert!(abc_statuses.contains(&CommitStatus::Notification));
-        assert!(!abc_statuses.contains(&CommitStatus::Approved));
-
-        let def_statuses = commit_statuses
-            .get("def456789abc012345678901234567890123abcd")
-            .unwrap();
-        assert!(def_statuses.contains(&CommitStatus::Notification));
-        assert!(!def_statuses.contains(&CommitStatus::Approved));
-    }
-
-    #[test]
-    fn test_parse_commits_from_comments_with_unapproval() {
-        let comments = vec![
-            test_comment(
-                "current commit: abc123def456789012345678901234567890abcd".to_string(),
-                "test-user".to_string(),
-            ),
-            test_comment(
-                "approved qc commit: def456789abc012345678901234567890123abcd".to_string(),
-                "test-user".to_string(),
-            ),
-            test_comment(
-                "# QC Un-Approval\nWithdrawing approval".to_string(),
-                "test-user".to_string(),
-            ),
-        ];
-
-        let commit_statuses = parse_commits_from_comments(&comments);
-
-        // Unapproval should invalidate approval and remove approved status
-        assert_eq!(commit_statuses.len(), 2);
-
-        let abc_statuses = commit_statuses
-            .get("abc123def456789012345678901234567890abcd")
-            .unwrap();
-        assert!(abc_statuses.contains(&CommitStatus::Notification));
-        assert!(!abc_statuses.contains(&CommitStatus::Approved));
-
-        let def_statuses = commit_statuses
-            .get("def456789abc012345678901234567890123abcd")
-            .unwrap();
-        assert!(!def_statuses.contains(&CommitStatus::Approved)); // Approval removed by unapproval
-        assert!(!def_statuses.contains(&CommitStatus::Notification)); // No notification status for this commit
-    }
-
-    #[test]
-    fn test_parse_commits_from_comments_with_review() {
-        let comments = vec![
-            test_comment("current commit: abc123def456789012345678901234567890abcd".to_string(), "test-user".to_string()),
-            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: def456789abc012345678901234567890123abcd\n[file at commit](url)".to_string(), "reviewer".to_string()),
-        ];
-
-        let commit_statuses = parse_commits_from_comments(&comments);
-
-        // Should have notification + review
-        assert_eq!(commit_statuses.len(), 2);
-
-        let abc_statuses = commit_statuses
-            .get("abc123def456789012345678901234567890abcd")
-            .unwrap();
-        assert!(abc_statuses.contains(&CommitStatus::Notification));
-        assert!(!abc_statuses.contains(&CommitStatus::Reviewed));
-
-        let def_statuses = commit_statuses
-            .get("def456789abc012345678901234567890123abcd")
-            .unwrap();
-        assert!(def_statuses.contains(&CommitStatus::Reviewed)); // Review sets reviewed status
-        assert!(!def_statuses.contains(&CommitStatus::Notification)); // No notification for this commit
-    }
-
-    #[test]
-    fn test_parse_commits_from_comments_notification_then_review() {
-        let comments = vec![
-            test_comment("current commit: abc123def456789012345678901234567890abcd".to_string(), "test-user".to_string()),
-            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer".to_string()),
-        ];
-
-        let commit_statuses = parse_commits_from_comments(&comments);
-
-        // Same commit has notification then review - should have both statuses
-        assert_eq!(commit_statuses.len(), 1);
-
-        let abc_statuses = commit_statuses
-            .get("abc123def456789012345678901234567890abcd")
-            .unwrap();
-        assert!(abc_statuses.contains(&CommitStatus::Notification)); // Notification status preserved
-        assert!(abc_statuses.contains(&CommitStatus::Reviewed)); // Reviewed status added
-    }
-
-    #[test]
-    fn test_parse_commits_from_comments_review_then_approval() {
-        let comments = vec![
-            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer".to_string()),
-            test_comment("approved qc commit: abc123def456789012345678901234567890abcd".to_string(), "test-user".to_string()),
-        ];
-
-        let commit_statuses = parse_commits_from_comments(&comments);
-
-        // Review then approval - should be approved with reviewed status preserved
-        assert_eq!(commit_statuses.len(), 1);
-
-        let abc_statuses = commit_statuses
-            .get("abc123def456789012345678901234567890abcd")
-            .unwrap();
-        assert!(abc_statuses.contains(&CommitStatus::Approved)); // Approved status added
-        assert!(abc_statuses.contains(&CommitStatus::Reviewed)); // Reviewed status preserved
-    }
-
-    #[test]
-    fn test_parse_commits_from_comments_multiple_reviews_same_commit() {
-        let comments = vec![
-            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer1".to_string()),
-            test_comment("# QC Review\n@user\n\n## Metadata\ncomparing commit: abc123def456789012345678901234567890abcd\n[file at commit](url)".to_string(), "reviewer2".to_string()),
-        ];
-
-        let commit_statuses = parse_commits_from_comments(&comments);
-
-        // Multiple reviews on same commit - reviewed status is set
-        assert_eq!(commit_statuses.len(), 1);
-
-        let abc_statuses = commit_statuses
-            .get("abc123def456789012345678901234567890abcd")
-            .unwrap();
-        assert!(abc_statuses.contains(&CommitStatus::Reviewed)); // Review status set
-        assert!(!abc_statuses.contains(&CommitStatus::Notification)); // No notification for this commit
     }
 
     #[test]

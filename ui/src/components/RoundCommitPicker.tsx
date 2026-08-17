@@ -1,17 +1,29 @@
-// Round-aware commit picker, shared by the Notify (two handles), Review and
+// Segment-aware commit picker, shared by the Notify (two handles), Review and
 // Approve (one handle) panels of IssueDetailModal.
 //
-// `useRoundPicker` owns everything derived — the visible commit window, the
-// draft-gap markers, handle snapping and the resolved from/to selection — and
-// `RoundCommitPickerTrack` renders it. The panels keep owning the raw state
+// U1: the track is rendered segment by segment from `segments`. Nothing in here
+// computes round windows, coverage or gap runs — the API already owns which commit
+// belongs to which segment (D7), so scoping is a read of `segIdx`, the collapsible
+// gaps *are* the Gap segments, and a Gap whose bounds are not ancestrally connected
+// puts a visible break in the track instead of letting a continuous slider imply a
+// linear path that does not exist.
+//
+// `useRoundPicker` owns everything derived from that — the visible commit window,
+// the gap markers, the breaks, handle snapping and the resolved from/to selection —
+// and `RoundCommitPickerTrack` renders it. The panels keep owning the raw state
 // (which index each handle is on, whether "Show all commits" is checked) so that
 // their existing reset-on-issue-change effects keep working unchanged.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Checkbox, ScrollArea, Slider, Text, UnstyledButton } from '@mantine/core'
-import type { RoundInfo } from '~/api/rounds'
+import type { RoundSegment, Segment, UnplaceableReason } from '~/api/rounds'
 import { CommitSlider } from '~/components/CommitSlider'
-import { draftGapRuns, openRoundWindow, type OrderedCommit, type RoundWindow } from '~/utils/rounds'
+import {
+  activeRound,
+  activeRoundPos,
+  unplaceableReasonText,
+  type OrderedCommit,
+} from '~/utils/rounds'
 
 // Commit status dot colors (rendered oldest→newest, lowest→highest)
 export const STATUS_DOT_COLORS: Record<string, string> = {
@@ -35,16 +47,39 @@ interface GapMarker {
   expanded: boolean
 }
 
+/**
+ * A discontinuity in the track: the two ends of a Gap segment are not ancestrally
+ * connected, so the commits either side of it are not on one path.
+ */
+interface TrackBreak {
+  /** Position in `segments` of the Gap that is not continuous. */
+  segIdx: number
+  /** Visible-slot index this break sits in front of. */
+  beforeSlot: number
+  continuity: 'diverged' | 'unrelated'
+  /** The commit the two histories share; null when they share none. */
+  mergeBase: string | null
+}
+
 export interface RoundPicker {
   /** Commits offered on the track, oldest-first. */
   visibleCommits: PickerCommit[]
-  /** Collapsed draft-gap runs, only ever non-empty in full-history mode. */
+  /** Collapsed Gap segments, only ever non-empty in full-history mode. */
   gapMarkers: GapMarker[]
   toggleGap: (key: string) => void
-  /** The open round's span, when one could be resolved. */
-  window: RoundWindow | null
+  /** Breaks the track must draw, oldest-first. Empty when every Gap is linear. */
+  breaks: TrackBreak[]
+  /** The round the track is narrowed to, when one is open and narrowing it does anything. */
+  scopeRound: RoundSegment | null
   /** True when the track is narrowed to the open round rather than full history. */
   scoped: boolean
+  /**
+   * Why the open round could not be scoped to (D4/S4). An `Unplaceable` round owns no
+   * commits, so narrowing to it would leave a track of forced defaults labelled with
+   * that round's name — commits from *other* segments presented as if they were its
+   * own. Non-null means the track fell back to full history and must say why.
+   */
+  scopeUnplaceableReason: UnplaceableReason | null
   /** Slider positions (indices into `visibleCommits`). */
   snapA: number
   snapB: number
@@ -53,6 +88,12 @@ export interface RoundPicker {
   toCommit: PickerCommit | undefined
   /** Alias of `toCommit`, for the single-handle panels. */
   selectedCommit: PickerCommit | undefined
+  /**
+   * U1: the selection spans a break, so `fromCommit` is *not* connected to
+   * `toCommit`. Surfaces render the from-handle detached rather than as a point on
+   * a continuous track.
+   */
+  detached: boolean
   /** Number of commits spanned by the selection (0 when from === to). */
   spannedCount: number
   /** Horizontal-scroll viewport ref, so the track opens scrolled to the newest commit. */
@@ -63,10 +104,10 @@ export interface RoundPicker {
 }
 
 export interface UseRoundPickerOptions {
-  /** Oldest-first commit list. */
+  /** Oldest-first commit list, from `flattenSegmentCommits(segments)`. */
   orderedCommits: OrderedCommit[]
-  rounds: RoundInfo[]
-  openRoundIndex: number | null
+  /** The thread's segments, oldest-first, exactly as the API returned them. */
+  segments: Segment[]
   mode: 'single' | 'range'
   /** Single mode: the selected origIdx. Range mode: handle A's origIdx. */
   a: number
@@ -75,22 +116,35 @@ export interface UseRoundPickerOptions {
   b?: number
   setB?: (origIdx: number) => void
   /**
-   * Extra origIdxs pinned visible regardless of the round window or the
-   * file_changed / statuses emphasis filter — the panels' existing
-   * `exceptionIdx`, plus anything the defaults resolved to outside the window
-   * (e.g. the previous round's approval as a notify from-commit).
+   * Extra origIdxs pinned visible regardless of the open round's scope or the
+   * file_changed / statuses emphasis filter — the panels' existing `exceptionIdx`,
+   * plus anything the defaults resolved to outside the open round (e.g. the previous
+   * round's approval as a notify from-commit).
    */
   forcedIdxs?: number[]
   showAll: boolean
 }
 
 export function useRoundPicker(opts: UseRoundPickerOptions): RoundPicker {
-  const { orderedCommits, rounds, openRoundIndex, mode, a, setA, b, setB, showAll } = opts
+  const { orderedCommits, segments, mode, a, setA, b, setB, showAll } = opts
 
-  const window_ = useMemo(
-    () => openRoundWindow(orderedCommits, rounds, openRoundIndex),
-    [orderedCommits, rounds, openRoundIndex],
-  )
+  // Scope is the open round's own commit ownership — no window arithmetic. The
+  // round's `commits` already include its `opened_at` (W2), which is the commit its
+  // work is measured against, so the anchor stays on the track exactly as before.
+  const scopeRound = useMemo(() => activeRound(segments), [segments])
+  const openRoundPos = useMemo(() => activeRoundPos(segments), [segments])
+
+  // S4/D4: an unplaceable round owns no commits, so its scope is empty. Narrowing to
+  // it collapses the track to whatever the defaults forced visible — for a round 2
+  // whose branch is gone, a round 1 commit under the label "scoped to Round 2". The
+  // rail already explains the placement failure; the picker must not quietly present
+  // another segment's history as this round's, so scoping is dropped and the reason
+  // said out loud.
+  const scopeUnplaceableReason =
+    scopeRound !== null && scopeRound.placement.kind === 'unplaceable'
+      ? scopeRound.placement.reason
+      : null
+  const scopeSegIdx = scopeUnplaceableReason !== null ? null : openRoundPos
 
   const forced = useMemo(() => {
     const s = new Set<number>((opts.forcedIdxs ?? []).filter((i) => i >= 0))
@@ -99,18 +153,31 @@ export function useRoundPicker(opts: UseRoundPickerOptions): RoundPicker {
     return s
   }, [opts.forcedIdxs, a, b, mode])
 
-  // Scoping only narrows anything when the window is smaller than the history.
-  // For a legacy single `Initial QC` round the window is the whole history, so
-  // this is a no-op and those issues behave exactly as before.
+  // Scoping only narrows anything when the open round does not own every commit.
+  // A single-round issue's Initial QC owns all of them, so this is a no-op there and
+  // those issues behave exactly as they did before rounds existed.
   const scoped =
     !showAll &&
-    window_ !== null &&
-    (window_.anchorIdx > 0 || window_.endIdx < orderedCommits.length - 1)
+    scopeSegIdx !== null &&
+    orderedCommits.some((c) => c.segIdx !== scopeSegIdx)
 
-  const gapRuns = useMemo(
-    () => (showAll ? draftGapRuns(orderedCommits, rounds) : []),
-    [showAll, orderedCommits, rounds],
-  )
+  // Interior Gap segments — the "draft gap" a user creates by editing after an
+  // approval and before opening the next round. Only gaps *between* two rounds are
+  // collapsible: a trailing gap is the newest work on the track and hiding it behind
+  // a marker would be surprising rather than helpful.
+  const gapRuns = useMemo(() => {
+    if (!showAll) return []
+    return segments
+      .map((segment, segIdx) => ({ segment, segIdx }))
+      .filter(
+        ({ segment, segIdx }) =>
+          segment.kind === 'gap' &&
+          segIdx < segments.length - 1 &&
+          segment.commits.length > 0,
+      )
+      .map(({ segIdx }) => orderedCommits.flatMap((c, i) => (c.segIdx === segIdx ? [i] : [])))
+      .filter((run) => run.length > 0)
+  }, [showAll, segments, orderedCommits])
 
   const [expandedGaps, setExpandedGaps] = useState<Set<string>>(new Set())
   const gapKey = (run: number[]) => `gap-${run[0]}-${run[run.length - 1]}`
@@ -122,7 +189,7 @@ export function useRoundPicker(opts: UseRoundPickerOptions): RoundPicker {
       return next
     })
 
-  // Indices hidden behind a collapsed draft-gap marker.
+  // Indices hidden behind a collapsed gap marker.
   const collapsedIdxs = useMemo(() => {
     const s = new Set<number>()
     for (const run of gapRuns) {
@@ -136,14 +203,14 @@ export function useRoundPicker(opts: UseRoundPickerOptions): RoundPicker {
     () =>
       orderedCommits
         .map((c, i) => ({ ...c, origIdx: i }))
-        .filter(({ file_changed, statuses, origIdx }) => {
+        .filter(({ file_changed, statuses, origIdx, segIdx }) => {
           if (forced.has(origIdx)) return true
           if (collapsedIdxs.has(origIdx)) return false
           if (showAll) return true
-          if (window_ && (origIdx < window_.anchorIdx || origIdx > window_.endIdx)) return false
+          if (scopeSegIdx !== null && segIdx !== scopeSegIdx) return false
           return file_changed || statuses.length > 0
         }),
-    [orderedCommits, forced, collapsedIdxs, showAll, window_],
+    [orderedCommits, forced, collapsedIdxs, showAll, scopeSegIdx],
   )
 
   const gapMarkers = useMemo<GapMarker[]>(
@@ -158,6 +225,42 @@ export function useRoundPicker(opts: UseRoundPickerOptions): RoundPicker {
         // A run made entirely of forced (pinned) commits has nothing to collapse.
         .filter((m) => m.indices.some((i) => !opts.forcedIdxs?.includes(i))),
     [gapRuns, expandedGaps, visibleCommits, opts.forcedIdxs],
+  )
+
+  /**
+   * U1/W5: divergence is a Gap property. A Gap at position `k` whose `continuity`
+   * is not `linear` says its two bounds are not ancestrally connected, and the
+   * older of those bounds is the previous round's closing commit — which lives in
+   * the segment at `k - 1`. So the discontinuity falls between `segIdx <= k - 1`
+   * and `segIdx >= k`, and that is where the break is drawn.
+   */
+  const brokenGapSegIdxs = useMemo(
+    () =>
+      segments.flatMap((segment, segIdx) =>
+        segment.kind === 'gap' && segment.continuity.kind !== 'linear'
+          ? [
+              {
+                segIdx,
+                continuity: segment.continuity.kind,
+                mergeBase:
+                  segment.continuity.kind === 'diverged' ? segment.continuity.merge_base : null,
+              },
+            ]
+          : [],
+      ),
+    [segments],
+  )
+
+  const breaks = useMemo<TrackBreak[]>(
+    () =>
+      brokenGapSegIdxs.flatMap((g) => {
+        const beforeSlot = visibleCommits.findIndex((c) => c.segIdx >= g.segIdx)
+        // Nothing on one side of the break is on the track, so there is no boundary
+        // between visible commits to mark.
+        if (beforeSlot <= 0) return []
+        return [{ ...g, beforeSlot }]
+      }),
+    [brokenGapSegIdxs, visibleCommits],
   )
 
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -195,15 +298,25 @@ export function useRoundPicker(opts: UseRoundPickerOptions): RoundPicker {
     toCommit = visibleCommits[Math.max(snapA, snapB)]
   } else {
     toCommit = visibleCommits[snapA]
-    // The comparison baseline for a single-handle picker is the round anchor
-    // (what the round's work is measured against), falling back to the oldest
-    // commit on the track.
-    const baseIdx = window_ ? window_.anchorIdx : (visibleCommits[0]?.origIdx ?? 0)
+    // The comparison baseline for a single-handle picker is the open round's anchor
+    // (what the round's work is measured against), falling back to the oldest commit
+    // on the track.
+    const baseIdx =
+      scopeRound !== null
+        ? (visibleCommits.find((c) => c.hash === scopeRound.opened_at)?.origIdx ??
+          visibleCommits[0]?.origIdx ??
+          0)
+        : (visibleCommits[0]?.origIdx ?? 0)
     fromCommit =
       visibleCommits.find((c) => c.origIdx === baseIdx) ??
       visibleCommits.filter((c) => c.origIdx <= (toCommit?.origIdx ?? 0))[0] ??
       visibleCommits[0]
   }
+
+  const detached =
+    fromCommit !== undefined &&
+    toCommit !== undefined &&
+    brokenGapSegIdxs.some((g) => fromCommit!.segIdx < g.segIdx && toCommit!.segIdx >= g.segIdx)
 
   const spannedCount =
     fromCommit && toCommit ? Math.max(0, toCommit.origIdx - fromCommit.origIdx) : 0
@@ -212,13 +325,16 @@ export function useRoundPicker(opts: UseRoundPickerOptions): RoundPicker {
     visibleCommits,
     gapMarkers,
     toggleGap,
-    window: window_,
+    breaks,
+    scopeRound,
     scoped,
+    scopeUnplaceableReason,
     snapA,
     snapB,
     fromCommit,
     toCommit,
     selectedCommit: mode === 'single' ? toCommit : undefined,
+    detached,
     spannedCount,
     viewportRef,
     mode,
@@ -259,7 +375,7 @@ export function RoundCommitPickerTrack({
   banner,
   testId,
 }: TrackProps) {
-  const { visibleCommits, gapMarkers, toggleGap, viewportRef } = picker
+  const { visibleCommits, gapMarkers, toggleGap, breaks, viewportRef } = picker
   const n = visibleCommits.length
 
   return (
@@ -267,9 +383,9 @@ export function RoundCommitPickerTrack({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
           <Text size="sm" fw={700}>{title}</Text>
-          {picker.scoped && picker.window && (
+          {picker.scoped && picker.scopeRound && (
             <Text size="xs" c="dimmed" data-testid="picker-scope">
-              scoped to {picker.window.round.name}
+              scoped to {picker.scopeRound.name}
             </Text>
           )}
         </div>
@@ -279,6 +395,20 @@ export function RoundCommitPickerTrack({
           onChange={(e) => onShowAllChange(e.currentTarget.checked)}
         />
       </div>
+
+      {/*
+        The scope the track could not honour, named where the track is (D4: the reason
+        is surfaced, never an error). Full history is showing instead — which is what
+        the absent "scoped to …" note above already implies, said explicitly because a
+        picker that silently widens is indistinguishable from one that misleads.
+      */}
+      {picker.scopeUnplaceableReason && picker.scopeRound && (
+        <Text size="xs" c="orange" ta="center" data-testid="picker-scope-unplaceable">
+          {picker.scopeRound.name}'s commits could not be placed —{' '}
+          {unplaceableReasonText(picker.scopeUnplaceableReason)}. Showing the full history
+          instead.
+        </Text>
+      )}
 
       {banner}
 
@@ -362,6 +492,31 @@ export function RoundCommitPickerTrack({
           </div>
 
           <div style={{ position: 'relative' }}>
+            {/*
+              U1: the history is not one path here, so the track says so where the
+              join actually fails rather than letting the slider imply continuity.
+            */}
+            {breaks.map((brk) => (
+              <div
+                key={brk.segIdx}
+                data-testid={`picker-break-${brk.segIdx}`}
+                data-continuity={brk.continuity}
+                title={
+                  brk.continuity === 'diverged'
+                    ? `History diverges here — the two sides meet at ${brk.mergeBase?.slice(0, 7)}, so they are not one path`
+                    : 'These commits share no history — no diff across this point is meaningful'
+                }
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  left: slotBoundaryLeft(brk.beforeSlot, n),
+                  width: 0,
+                  borderLeft: '2px dashed var(--mantine-color-orange-6)',
+                  zIndex: 4,
+                }}
+              />
+            ))}
             <CommitSlider
               commits={visibleCommits}
               value={picker.snapA}
@@ -421,25 +576,30 @@ export function RoundCommitPickerTrack({
  *
  * The commit count is derived from the ordered commit list. There is no backend
  * endpoint exposing per-range line stats, so no `+x/−y` is shown.
+ *
+ * U1: when the two ends are separated by a non-linear Gap the arrow is broken and
+ * the count is withheld — "N commits" across histories that do not connect would be
+ * a number about nothing.
  */
 export function ComparisonReceipt({ picker }: { picker: RoundPicker }) {
-  const { fromCommit, toCommit, spannedCount } = picker
+  const { fromCommit, toCommit, spannedCount, detached } = picker
   if (!toCommit) return null
   const from = fromCommit?.hash.slice(0, 7) ?? '—'
   const to = toCommit.hash.slice(0, 7)
   return (
     <Text
       size="xs"
-      c="dimmed"
+      c={detached ? 'orange' : 'dimmed'}
       ta="center"
       data-testid="comparison-receipt"
+      data-detached={detached ? 'true' : undefined}
       style={{ fontVariantNumeric: 'tabular-nums' }}
     >
       <span style={{ fontFamily: 'monospace' }}>{from}</span>
-      {' → '}
+      {detached ? ' ⇢ ' : ' → '}
       <span style={{ fontFamily: 'monospace' }}>{to}</span>
       {' · '}
-      {spannedCount} commit{spannedCount === 1 ? '' : 's'}
+      {detached ? 'histories not connected' : `${spannedCount} commit${spannedCount === 1 ? '' : 's'}`}
     </Text>
   )
 }

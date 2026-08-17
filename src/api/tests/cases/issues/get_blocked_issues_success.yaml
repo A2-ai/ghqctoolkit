@@ -55,3 +55,18 @@ response:
       item_fields:
         - issue
         - qc_status
+      # The blocked issue's status, with every sha the segment model exposes. All six
+      # are nullable: `approved_commit` is gone, split into `standing_approval` (null
+      # while a round is open) and `last_approved_commit` (null when nothing was ever
+      # approved). `last_reviewed_commit`/`last_notified_commit` are scoped to the
+      # active round, so they stay null until it posts.
+      first_item:
+        qc_status:
+          status: "awaiting_review"
+          status_detail: "Awaiting review"
+          standing_approval: null
+          last_approved_commit: null
+          initial_commit: "456def789abc012345678901234567890123cdef"
+          latest_commit: "456def789abc012345678901234567890123cdef"
+          last_reviewed_commit: null
+          last_notified_commit: null

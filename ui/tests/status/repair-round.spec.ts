@@ -17,7 +17,9 @@ import {
   multiRoundStatus,
   nothingToRepairError,
   quietRoundStatus,
+  repairRoundMarkerSkipped,
   repairRoundNothingDone,
+  repairRoundNotificationSkipped,
   repairRoundStillFailing,
   repairRoundSuccess,
   roundSeedBlocked,
@@ -175,6 +177,46 @@ test('a repair that found nothing to do reads as a success', async ({ page }) =>
   await expect(page.getByTestId('repair-error')).toHaveCount(0)
   // Skipped on the repair path means "already correct", not "deliberately not run".
   await expect(page.getByTestId('repair-step-reopened')).toContainText('Already correct')
+})
+
+// A skip the server explained must win over the static "nothing to do" hint: the step
+// could not be *attempted*, so "Already correct, or not requested" would be wrong.
+test("a skipped step renders the server's reason instead of the static hint", async ({ page }) => {
+  await openRepairModal(page, { repairRoundResponse: repairRoundNotificationSkipped })
+
+  await page.getByTestId('repair-round-submit').click()
+
+  const step = page.getByTestId('repair-step-notification')
+  await expect(step).toContainText('its branch is unavailable locally')
+  // The static hint must not also appear — one degradation, one explanation.
+  await expect(step).not.toContainText('Already correct, or not requested')
+  // A reasoned skip is still a 200, not an error.
+  await expect(page.getByTestId('repair-error')).toHaveCount(0)
+  await expect(page.getByTestId('nothing-to-repair')).toHaveCount(0)
+})
+
+// The body marker is the *second* step that can carry a reason, and it reaches the wire
+// through the same field.
+test("a skipped body marker renders its own reason", async ({ page }) => {
+  await openRepairModal(page, { repairRoundResponse: repairRoundMarkerSkipped })
+
+  await page.getByTestId('repair-round-submit').click()
+
+  await expect(page.getByTestId('repair-step-body_marker')).toContainText(
+    'round comment URL unknown, marker left as it is'
+  )
+})
+
+// A skip with *no* reason keeps the static hint: absence of `skipped_reason` is itself
+// the fact that there was simply nothing to do.
+test('a skipped step with no reason keeps the static hint', async ({ page }) => {
+  await openRepairModal(page, { repairRoundResponse: repairRoundNothingDone })
+
+  await page.getByTestId('repair-round-submit').click()
+
+  await expect(page.getByTestId('repair-step-body_marker')).toContainText(
+    'Already correct, or not requested'
+  )
 })
 
 test('a 409 renders the nothing-to-repair precondition, not a generic failure', async ({ page }) => {

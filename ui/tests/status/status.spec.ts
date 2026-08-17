@@ -30,10 +30,21 @@ import {
   approvedRoundStatus,
   ROUND1_CLOSED,
   ROUND1_OPENED,
+  ROUND2_OPENED,
   DRAFT_GAP_COMMIT,
-  roundFields,
+  commit,
+  crossBranchIssue,
+  crossBranchStatus,
+  gapSegment,
+  segmentFields,
   closeRound,
   initialQcRound,
+  vanishedApprovalIssue,
+  vanishedApprovalStatus,
+  changeRequestedDriftStatus,
+  changesToCommentDriftStatus,
+  driftedRoundIssue,
+  ROUND2_DRIFT,
 } from '../fixtures/index'
 import type { IssueStatusResponse } from '../../src/api/issues'
 
@@ -62,18 +73,21 @@ test('issues placed in correct swimlanes', async ({ page }) => {
   await page.goto('/')
   await selectMilestone(page, 'Sprint 1')
 
-  // Locate each lane by its heading, then assert the card link is inside it
-  const readyLane = page.locator('*').filter({ has: page.getByRole('heading', { name: 'Ready for Review' }) })
-  await expect(readyLane.getByRole('link', { name: /src\/awaiting\.rs/ })).toBeVisible()
-
-  const findingsLane = page.locator('*').filter({ has: page.getByRole('heading', { name: 'Findings to Address' }) })
-  await expect(findingsLane.getByRole('link', { name: /src\/change\.rs/ })).toBeVisible()
-
-  const changesLane = page.locator('*').filter({ has: page.getByRole('heading', { name: 'Changes to Notify' }) })
-  await expect(changesLane.getByRole('link', { name: /src\/inprogress\.rs/ })).toBeVisible()
-
-  const approvedLane = page.locator('*').filter({ has: page.getByRole('heading', { name: 'Approved' }) })
-  await expect(approvedLane.getByRole('link', { name: /src\/approved\.rs/ })).toBeVisible()
+  // Each lane by its own container, not by "an element containing the lane heading":
+  // the latter matches <html> and <body>, which contain every lane heading and every
+  // card, so it finds the link wherever the card actually is.
+  await expect(
+    page.getByTestId('lane-ready-for-review').getByRole('link', { name: /src\/awaiting\.rs/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByTestId('lane-findings-to-address').getByRole('link', { name: /src\/change\.rs/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByTestId('lane-changes-to-notify').getByRole('link', { name: /src\/inprogress\.rs/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByTestId('lane-approved').getByRole('link', { name: /src\/approved\.rs/ }),
+  ).toBeVisible()
 })
 
 test('clicking the issue title link opens github without opening the issue modal', async ({ page }) => {
@@ -295,7 +309,7 @@ test('an open round suppresses the changed-since-approval warning on the card', 
   // The row that is shown reports the open round's own commit, not the earlier
   // round's approval — the approval-priority tier must not win here.
   await expect(card).toContainText('Latest')
-  await expect(card).toContainText(multiRoundStatus.qc_status.latest_commit.slice(0, 7))
+  await expect(card).toContainText(ROUND2_OPENED.slice(0, 7))
   await expect(card).not.toContainText(ROUND1_CLOSED.slice(0, 7))
 
   await card.hover()
@@ -311,17 +325,31 @@ const driftedIssue = { ...approvedRoundIssue, state: 'open' as const, closed_at:
 const driftedAfterApproval: IssueStatusResponse = {
   ...approvedRoundStatus,
   issue: driftedIssue,
-  commits: [
-    { hash: DRAFT_GAP_COMMIT, message: 'edit after approval', statuses: [], file_changed: true },
-    { hash: ROUND1_CLOSED, message: 'address review', statuses: ['approved'], file_changed: true },
-    { hash: ROUND1_OPENED, message: 'initial commit', statuses: ['initial'], file_changed: true },
-  ],
   qc_status: {
     ...approvedRoundStatus.qc_status,
     status: 'changes_after_approval',
     status_detail: 'Approved; subsequent file changes',
+    // S1/S5: the trailing gap is non-empty, and its newest commit is `latest_commit`.
+    latest_commit: DRAFT_GAP_COMMIT,
+    // ... and its newest *file-changing* commit is what the warning reads.
+    changed_commit: DRAFT_GAP_COMMIT,
   },
-  ...roundFields([closeRound(initialQcRound(ROUND1_OPENED), ROUND1_CLOSED)]),
+  ...segmentFields([
+    closeRound(
+      initialQcRound(ROUND1_OPENED, {
+        commits: [
+          commit(ROUND1_CLOSED, { message: 'address review' }),
+          commit(ROUND1_OPENED, { message: 'initial commit', statuses: ['initial'] }),
+        ],
+      }),
+      ROUND1_CLOSED,
+    ),
+    gapSegment({
+      commits: [commit(DRAFT_GAP_COMMIT, { message: 'edit after approval' })],
+      lower_bound: ROUND1_CLOSED,
+      upper_bound: DRAFT_GAP_COMMIT,
+    }),
+  ]),
 }
 
 test('with no round open, a change after approval still warns', async ({ page }) => {
@@ -341,4 +369,215 @@ test('with no round open, a change after approval still warns', async ({ page })
 
   await card.hover()
   await expect(page.getByText('File has changed since approval')).toBeVisible()
+})
+
+/**
+ * A trailing gap whose **newest** commit never touched the file.
+ *
+ * `changed_commit` and `latest_commit` are different commits here, which is the whole
+ * reason the field exists: S1 selects the newest *file-changing* commit of the gap, so
+ * the "Changed" row must name that one. Rendering `latest_commit` instead would name a
+ * commit that never touched the file — and that is what the card used to do.
+ */
+const UNTOUCHED_DRIFT = 'aaaa0000000000000000000000000000000000ff'
+const TOUCHED_DRIFT = 'bbbb0000000000000000000000000000000000ff'
+
+const driftedWhoseNewestChangedNothing: IssueStatusResponse = {
+  ...approvedRoundStatus,
+  issue: driftedIssue,
+  qc_status: {
+    ...approvedRoundStatus.qc_status,
+    status: 'changes_after_approval',
+    status_detail: 'Approved; subsequent file changes',
+    // The gap's newest commit — it did not touch the file.
+    latest_commit: UNTOUCHED_DRIFT,
+    // The gap's newest *file-changing* commit, which is older.
+    changed_commit: TOUCHED_DRIFT,
+  },
+  ...segmentFields([
+    closeRound(initialQcRound(ROUND1_OPENED), ROUND1_CLOSED),
+    gapSegment({
+      commits: [
+        commit(UNTOUCHED_DRIFT, { message: 'unrelated churn', file_changed: false }),
+        commit(TOUCHED_DRIFT, { message: 'edit after approval' }),
+      ],
+      lower_bound: ROUND1_CLOSED,
+      upper_bound: UNTOUCHED_DRIFT,
+    }),
+  ]),
+}
+
+test('the Changed row names the file-changing commit, not the gap\'s newest', async ({ page }) => {
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [driftedIssue] },
+    issueStatuses: { results: [driftedWhoseNewestChangedNothing], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const card = page.getByTestId(`issue-card-${driftedIssue.number}`)
+  await expect(card).toContainText('Changed')
+  await expect(card).toContainText(TOUCHED_DRIFT.slice(0, 7))
+  await expect(card).not.toContainText(UNTOUCHED_DRIFT.slice(0, 7))
+})
+
+// ---------------------------------------------------------------------------
+// U3 / A2: the card grays on `active_branch`, never on the issue body's branch
+// ---------------------------------------------------------------------------
+
+/** The card body's opacity when grayed. */
+const GRAYED_OPACITY = '0.45'
+
+/**
+ * The exact bug the segment model deletes.
+ *
+ * #114's Round 2 was opened on `feature/reanalysis`; the issue body still says `main`,
+ * and `issue.branch` — still on the response — still reports `main`. The user is checked
+ * out on `feature/reanalysis`, which is where the status was computed, so the card must
+ * read normally. Reading `issue.branch` here would gray the very issue being QC'd.
+ */
+test('U3: a card whose active branch is the checkout is not grayed, even when the issue body disagrees', async ({ page }) => {
+  // Pins the premise: the wrong field is still sitting on the response.
+  expect(crossBranchStatus.issue.branch).toBe('main')
+  expect(crossBranchStatus.active_branch).toBe('feature/reanalysis')
+
+  await setupRoutes(page, {
+    repo: { ...defaultRepoInfo, branch: 'feature/reanalysis' },
+    milestoneIssues: { 1: [crossBranchIssue] },
+    issueStatuses: { results: [crossBranchStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const body = page.getByTestId(`issue-card-body-${crossBranchIssue.number}`)
+  await expect(body).toHaveCSS('opacity', '1')
+  await expect(body).toContainText('feature/reanalysis')
+  await expect(body).not.toContainText('different branch')
+})
+
+/** The converse, so the graying is not simply switched off. */
+test('U3: a card whose active branch is not the checkout is grayed', async ({ page }) => {
+  await setupRoutes(page, {
+    repo: { ...defaultRepoInfo, branch: 'main' },
+    milestoneIssues: { 1: [crossBranchIssue] },
+    issueStatuses: { results: [crossBranchStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const body = page.getByTestId(`issue-card-body-${crossBranchIssue.number}`)
+  await expect(body).toHaveCSS('opacity', GRAYED_OPACITY)
+  await expect(body).toContainText('different branch')
+})
+
+/**
+ * D15 clause 2: the active segment could not be placed, so the record cannot be read at
+ * face value even though S1 still says `Approved`. Both facts hold at once — that is the
+ * intended combination, not a contradiction — and the reason is named, because its remedy
+ * (restore the missing history) is not the remedy for a checkout mismatch.
+ *
+ * A trailing gap's continuity is always `linear`, so a vanished approval degrades through
+ * `unplaceable` (clause 2) rather than through `unrelated` (clause 3, unreachable).
+ *
+ * The status is `unknown`, **not** `approved`. An earlier version of this test asserted
+ * "it still reads as approved"; D15's second addendum showed that state is not
+ * producible, because S4 short-circuits on an unplaceable gap before S1 can return
+ * `Approved`. What is pinned here is that the card grays and *names why* — and that it
+ * does not claim a workflow state it cannot support.
+ */
+test('D15: an unplaceable active segment grays the card, names why, and reports no status', async ({ page }) => {
+  await setupRoutes(page, {
+    repo: { ...defaultRepoInfo, branch: 'main' },
+    milestoneIssues: { 1: [vanishedApprovalIssue] },
+    issueStatuses: { results: [vanishedApprovalStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+  // Closed issue: the toggle is what puts it on screen at all.
+  await page.getByRole('switch', { name: 'Include closed issues' }).click()
+
+  const body = page.getByTestId(`issue-card-body-${vanishedApprovalIssue.number}`)
+  await expect(body).toBeVisible()
+
+  // Grayed, and not because of the branch — the checkout matches.
+  await expect(body).toContainText('main')
+  await expect(body).not.toContainText('different branch')
+  await expect(body).toHaveCSS('opacity', GRAYED_OPACITY)
+
+  // The reason is named, distinguishably from a branch mismatch.
+  await expect(page.getByTestId(`gray-reason-${vanishedApprovalIssue.number}`)).toContainText(
+    'the round bounding it could not be placed',
+  )
+
+  // It does NOT sit in the Approved lane — `unknown` asserts nothing, so claiming the
+  // approved state would be exactly the lie D15's second addendum removed. Scoped to the
+  // lane's own container: scoping to "an element containing the Approved heading" would
+  // match <body> and pass from any lane at all.
+  await expect(
+    page.getByTestId('lane-approved').getByRole('link', { name: /src\/vanished-approval\.rs/ }),
+  ).toHaveCount(0)
+  // The premise for that negative — the card really is on screen, in another lane — so
+  // the assertion above cannot pass merely because nothing rendered.
+  await expect(
+    page.getByRole('link', { name: /src\/vanished-approval\.rs/ }),
+  ).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// D12: the Reviewed and Last Posted rows read event-named commits, not the tip
+// ---------------------------------------------------------------------------
+
+/**
+ * `latest_commit` used to mean "a commit a comment named"; M8 redefined it as the
+ * newest commit of the active segment. Both fixtures below have a drift commit as that
+ * newest commit, so a card still reading `latest_commit` here would label unreviewed
+ * drift as reviewed — which is the failure D12 exists to prevent.
+ */
+test('D12: the Reviewed row names the reviewed commit, not the branch tip', async ({ page }) => {
+  // The premise: the two facts genuinely differ on this response.
+  expect(changeRequestedDriftStatus.qc_status.latest_commit).toBe(ROUND2_DRIFT)
+  expect(changeRequestedDriftStatus.qc_status.last_reviewed_commit).toBe(ROUND2_OPENED)
+  // And the response is one the backend could emit: `change_requested` requires the
+  // newest *file-changing* commit to be covered by the review, so the drift — newer
+  // than the review, and the reason `latest_commit` differs — must not touch the file.
+  // Otherwise `Round::status()` would read `changes_to_comment` and this fixture would
+  // pin a state that never occurs.
+  const round2 = changeRequestedDriftStatus.segments[2]
+  expect(round2.commits[0]).toMatchObject({ hash: ROUND2_DRIFT, file_changed: false })
+  expect(round2.commits[1].file_changed).toBe(true)
+
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [driftedRoundIssue] },
+    issueStatuses: { results: [changeRequestedDriftStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const body = page.getByTestId(`issue-card-body-${driftedRoundIssue.number}`)
+  await expect(body).toContainText('Reviewed')
+  await expect(body).toContainText(ROUND2_OPENED.slice(0, 7))
+  await expect(body).not.toContainText(ROUND2_DRIFT.slice(0, 7))
+})
+
+test('D12: the Last Posted row names the notified commit, not the branch tip', async ({ page }) => {
+  expect(changesToCommentDriftStatus.qc_status.latest_commit).toBe(ROUND2_DRIFT)
+  expect(changesToCommentDriftStatus.qc_status.last_notified_commit).toBe(ROUND2_OPENED)
+  // Producible, again: `last_reviewed_commit: null` means nothing was reviewed, so the
+  // round carries no review event for the API's projection to derive one from — and
+  // `changes_to_comment` needs the drift to be an uncovered *file* change.
+  const round2 = changesToCommentDriftStatus.segments[2]
+  expect(round2.kind === 'round' && round2.events.map((e) => e.kind)).toEqual(['notification'])
+  expect(round2.commits[0]).toMatchObject({ hash: ROUND2_DRIFT, file_changed: true })
+
+  await setupRoutes(page, {
+    milestoneIssues: { 1: [driftedRoundIssue] },
+    issueStatuses: { results: [changesToCommentDriftStatus], errors: [] },
+  })
+  await page.goto('/')
+  await selectMilestone(page, 'Sprint 1')
+
+  const body = page.getByTestId(`issue-card-body-${driftedRoundIssue.number}`)
+  await expect(body).toContainText('Last Posted')
+  await expect(body).toContainText(ROUND2_OPENED.slice(0, 7))
+  await expect(body).not.toContainText(ROUND2_DRIFT.slice(0, 7))
 })

@@ -39,6 +39,7 @@ import { ResizableSidebar } from './ResizableSidebar'
 import { type FileResolution, FileResolveModal } from './FileResolveModal'
 import { RelevantFilesList } from './RelevantFilesList'
 import { extractIssueNumber } from '~/utils'
+import { shortHash } from '~/utils/rounds'
 import { ToggleField } from './ToggleField'
 import { useUiSession } from '~/state/uiSession'
 import { buildFileRawUrl, fetchFileContent, getFileExtensionLabel, getFilePreviewKind } from '~/api/preview'
@@ -51,6 +52,40 @@ const CARD_HEIGHT = 185
 
 function isApprovedStatus(s: IssueStatusResponse): boolean {
   return s.qc_status.status === 'approved' || s.qc_status.status === 'changes_after_approval'
+}
+
+/**
+ * The commit this file is archived at.
+ *
+ * `last_approved_commit` is the newest closing commit across all rounds, ungated —
+ * exactly what the removed `approved_commit` field held on the wire — so this
+ * expression is the mechanical replacement for it (contract §3). Whether the archive
+ * should instead *offer* the user a choice between the last approval and the current
+ * latest is A3's deferred UX question and is deliberately not decided here.
+ *
+ * Both are nullable, and both are null together only when nothing was ever approved
+ * *and* the active segment owns no commits — i.e. an unplaceable segment (S4/I5). D4
+ * says such a thing is greyed, not errored: the card renders a dash and the file is
+ * left out of the request, because there is no commit to archive it at.
+ */
+function archiveCommitOf(s: IssueStatusResponse): string | null {
+  return s.qc_status.last_approved_commit ?? s.qc_status.latest_commit
+}
+
+/**
+ * The commit a manually added file is archived at.
+ *
+ * The status-derived commit when the backing issue has one, falling back to the
+ * resolution's own `commit` — which is a non-nullable string the user already chose.
+ * The fallback matters: a status that yields null (an unplaceable segment) is not a
+ * reason to throw away a commit that is sitting right here, and dropping the file was
+ * a silent regression on the pre-segment behaviour, which always produced a request.
+ */
+function addedFileCommitOf(
+  resolution: FileResolution,
+  status: IssueStatusResponse | undefined,
+): string {
+  return (status ? archiveCommitOf(status) : null) ?? resolution.commit
 }
 
 function basename(path: string): string {
@@ -289,6 +324,15 @@ export function ArchiveTab() {
     [addedFileConflicts],
   )
 
+  // Files on screen that the request will not carry: nothing resolved to a commit to
+  // archive them at (an unplaceable segment — D4 greys, it does not error). Counted
+  // here so the omission is stated before the archive is written rather than
+  // discovered in the tarball afterwards.
+  const excludedStatuses = useMemo(
+    () => statuses.filter(s => isStatusVisible(s) && archiveCommitOf(s) === null),
+    [statuses, isStatusVisible],
+  )
+
   // ─── Relevant file selection handlers ──────────────────────────────────
 
   function handleSelectRelevantFile(rf: RelevantFileInfo) {
@@ -369,28 +413,30 @@ export function ArchiveTab() {
     try {
       const milestoneIssueFiles: ArchiveFileRequest[] = statuses
         .filter(s => isStatusVisible(s))
-        .map(s => ({
-          repository_file: s.issue.title,
-          commit: s.qc_status.approved_commit ?? s.qc_status.latest_commit,
-          milestone: s.issue.milestone ?? undefined,
-          approved: isApprovedStatus(s),
-        }))
+        .flatMap(s => {
+          const commit = archiveCommitOf(s)
+          if (commit === null) return []
+          return [{
+            repository_file: s.issue.title,
+            commit,
+            milestone: s.issue.milestone ?? undefined,
+            approved: isApprovedStatus(s),
+          }]
+        })
 
       const addedFilesRequests: ArchiveFileRequest[] = Array.from(archive.addedFiles.values())
         .filter(r => !addedFileConflicts.has(r.file_name))
-        .map(r => {
+        .flatMap(r => {
           // For QC files added via relevant files, prefer the status-derived commit
           const statusCommit = r.source_issue_number != null
             ? addedFileStatusMap.get(r.source_issue_number)
             : undefined
-          const commit = statusCommit
-            ? (statusCommit.qc_status.approved_commit ?? statusCommit.qc_status.latest_commit)
-            : r.commit
-          return {
+          const commit = addedFileCommitOf(r, statusCommit)
+          return [{
             repository_file: r.file_name,
             commit,
             approved: false,
-          }
+          }]
         })
 
       const files = [...milestoneIssueFiles, ...addedFilesRequests]
@@ -541,6 +587,12 @@ export function ArchiveTab() {
                   />
                 </div>
               </Tooltip>
+              {excludedStatuses.length > 0 && (
+                <Text size="xs" c="orange.7" data-testid="archive-exclusion-summary">
+                  {excludedStatuses.length} file{excludedStatuses.length === 1 ? '' : 's'} will be
+                  left out — no commit could be resolved.
+                </Text>
+              )}
               <Button
                 fullWidth
                 size="sm"
@@ -681,8 +733,8 @@ export function ArchiveTab() {
 
               if (issueStatus) {
                 const approved = isApprovedStatus(issueStatus)
-                const commit = issueStatus.qc_status.approved_commit ?? issueStatus.qc_status.latest_commit
-                const shortCommit = commit.slice(0, 7)
+                const commit = addedFileCommitOf(res, issueStatus)
+                const shortCommit = shortHash(commit)
                 const statusLabel = issueStatus.qc_status.status.replace(/_/g, ' ')
 
                 return (
@@ -750,7 +802,8 @@ export function ArchiveTab() {
                         size="compact-xs"
                         variant="light"
                         leftSection={<IconEye size={12} />}
-                        onClick={e => { e.stopPropagation(); void handlePreviewFile(fileName, commit) }}
+                        disabled={!commit}
+                        onClick={e => { e.stopPropagation(); if (commit) void handlePreviewFile(fileName, commit) }}
                       >
                         Preview
                       </Button>
@@ -805,8 +858,8 @@ export function ArchiveTab() {
             {/* ── Milestone issue cards ──────────────────────────────────── */}
             {statuses.filter(s => isStatusVisible(s)).map((s) => {
               const approved = isApprovedStatus(s)
-              const commit = s.qc_status.approved_commit ?? s.qc_status.latest_commit
-              const shortCommit = commit.slice(0, 7)
+              const commit = archiveCommitOf(s)
+              const shortCommit = shortHash(commit)
               const statusLabel = s.qc_status.status.replace(/_/g, ' ')
 
               return (
@@ -848,6 +901,16 @@ export function ArchiveTab() {
                     )}
                     <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
                     <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
+                    {/*
+                      A silent omission is the wrong default for an audit tool: the
+                      dash above and a dead Preview button only *imply* that this file
+                      is not in the archive. Say it.
+                    */}
+                    {commit === null && (
+                      <Text size="xs" c="orange.7" data-testid={`archive-excluded-${s.issue.number}`}>
+                        Left out of the archive — no commit could be resolved for this file.
+                      </Text>
+                    )}
                     <RelevantFilesList
                       relevantFiles={s.issue.relevant_files ?? []}
                       claimedFiles={claimedFiles}
@@ -861,7 +924,8 @@ export function ArchiveTab() {
                       size="compact-xs"
                       variant="light"
                       leftSection={<IconEye size={12} />}
-                      onClick={() => void handlePreviewFile(s.issue.title, commit)}
+                      disabled={commit === null}
+                      onClick={() => { if (commit !== null) void handlePreviewFile(s.issue.title, commit) }}
                     >
                       Preview
                     </Button>

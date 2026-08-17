@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { API_BASE } from '../config'
-import type { RoundInfo, RoundRepairStatus } from './rounds'
+import type { RoundRepairStatus, Segment } from './rounds'
 
 export type RelevantFileKind = 'blocking_qc' | 'previous_qc' | 'relevant_qc' | 'file'
 
@@ -34,10 +34,17 @@ export interface Issue {
   file_history: FileRenameEvent[]
 }
 
+export type CommitStatus = 'initial' | 'notification' | 'approved' | 'reviewed'
+
 export interface IssueCommit {
   hash: string
   message: string
-  statuses: ('initial' | 'notification' | 'approved' | 'reviewed')[]
+  /**
+   * API-computed projection of the owning segment's events and state — not a
+   * stored parse. Wire shape unchanged. Emitted in the fixed order
+   * initial, notification, approved, reviewed; may be empty.
+   */
+  statuses: CommitStatus[]
   file_changed: boolean
 }
 
@@ -56,10 +63,60 @@ export interface QCStatus {
     | 'in_progress'
     | 'approval_required'
     | 'changes_to_comment'
+    /**
+     * No status could be determined: the active segment is `unplaceable` (S4).
+     * Distinct from `in_progress`, which asserts the round is open and understood —
+     * this asserts nothing. Render it as an absence, not an activity, and read
+     * `segments.at(-1).placement.reason` for the cause.
+     */
+    | 'unknown'
   status_detail: string
-  approved_commit: string | null
-  initial_commit: string
-  latest_commit: string
+  /**
+   * The approval currently standing: the previous round's closing commit when the
+   * last segment is a Gap. null while a round is open — i.e. null exactly when the
+   * issue is back under review.
+   */
+  standing_approval: string | null
+  /** Newest closing commit across all rounds, ungated. null when nothing was ever approved. */
+  last_approved_commit: string | null
+  /**
+   * Round 1's anchor. null when Round 1 is unplaceable — an unplaceable segment
+   * owns no commits, so its anchor cannot be resolved to a sha.
+   */
+  initial_commit: string | null
+  /**
+   * Newest commit of the active segment. null whenever that segment owns no
+   * commits: the steady approved state is `[…, Round(closed), Gap(empty)]` and an
+   * empty trailing Gap has no newest commit; an unplaceable active segment owns
+   * none either.
+   */
+  latest_commit: string | null
+  /**
+   * **The newest file-changing commit of the trailing Gap** — the commit
+   * `changes_after_approval` is reported *about*. null in every other state,
+   * including `approved`: a trailing Gap whose commits never touched the file is
+   * approved, not changed.
+   *
+   * Distinct from `latest_commit`, deliberately. S1 picks the newest commit of the
+   * Gap that *touched the file*, so for a Gap `[X(file_changed: false),
+   * Y(file_changed: true)]` this names `Y` while `latest_commit` is `X`. Rendering
+   * "changed at" from `latest_commit` would name a commit that never touched it.
+   */
+  changed_commit: string | null
+  /**
+   * The newest commit the **active round** reviewed. null when the active segment is
+   * a Gap, or when that round has posted no review.
+   *
+   * Round-scoped deliberately: `latest_commit` now means the newest commit of the
+   * active segment (≈ the branch tip), so rendering it under a *Reviewed* label
+   * would report unreviewed drift as reviewed.
+   */
+  last_reviewed_commit: string | null
+  /**
+   * The newest commit the **active round** notified, on the same terms as
+   * `last_reviewed_commit` — the card's *Last Posted* row.
+   */
+  last_notified_commit: string | null
 }
 
 export interface BlockingQCItem {
@@ -96,17 +153,32 @@ export interface IssueStatusResponse {
   issue: Issue
   qc_status: QCStatus
   dirty: boolean
-  branch: string
-  commits: IssueCommit[]
+  /**
+   * The branch of the active (last) segment — what the status was computed on.
+   * Replaces the old `branch`, which was the issue body's branch. Compare it
+   * against `/api/repo`'s branch at render time to decide whether to gray a card.
+   */
+  active_branch: string
   checklist_summary: ChecklistSummary
-  blocking_qc_status?: BlockingQCStatus
-  /** Derived QC rounds, oldest first. A legacy issue yields exactly one `Initial QC`. */
-  rounds: RoundInfo[]
-  /** `index` of the currently open round; null when the last round is closed
-   *  (i.e. a new round may be started). */
-  open_round_index: number | null
-  /** The commit a new notification would diff against — the default comparison base. */
-  next_notification_from: string
+  /**
+   * Always present: the Rust field is a plain (non-`Option`) struct with no
+   * `skip_serializing_if`, so the key is emitted on every response.
+   */
+  blocking_qc_status: BlockingQCStatus
+  /**
+   * The thread as a strictly alternating segment list, oldest first. Replaces both
+   * `rounds` and the top-level `commits`: every known commit is owned by exactly one
+   * segment. `segments[0]` is always the Initial QC round; the last segment is an
+   * open Round or a Gap. A round is open iff `segments.at(-1).kind === 'round'`.
+   */
+  segments: Segment[]
+  /**
+   * The commit a new notification would diff against — the default comparison
+   * base. null when the active segment cannot supply one: an unplaceable active
+   * segment owns no commits, so there is no newest event commit and no standing
+   * approval to fall back to.
+   */
+  next_notification_from: string | null
   /**
    * Which of the open round's follow-up steps are incomplete, so a surface can
    * offer a repair without a second request. null when no round is open, or when

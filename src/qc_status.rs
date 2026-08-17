@@ -10,6 +10,7 @@ use crate::GitCommitOps;
 use crate::cache::DiskCache;
 use crate::git::{GitHubApiError, GitHubReader};
 use crate::issue::{BlockingQC, IssueError, IssueThread};
+use crate::round::{Round, RoundEvent, RoundOpen, Segment};
 
 static CHECKLIST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^\s*-\s*\[([xX\s])\]").expect("Failed to compile checklist regex")
@@ -44,116 +45,130 @@ impl std::fmt::Display for QCStatus {
     }
 }
 
-impl QCStatus {
-    pub fn determine_status(issue_thread: &IssueThread) -> Self {
-        let commits = &issue_thread.commits;
-
-        // An open round supersedes any earlier round's approval. Once a new QC pass
-        // has been started the issue is not "approved with subsequent changes" — it
-        // is awaiting review of the round now in progress, and reporting it as
-        // approved would hide live QC work behind a stale approval.
+impl Round {
+    /// This round's status, from its **own** commits and events only.
+    ///
+    /// `None` when the round could not be placed: there is nothing to report, and the
+    /// UI grays it rather than showing a status derived from no commits.
+    ///
+    /// A commit is *covered* when the round announced it — an event naming a commit at
+    /// the same or a newer position in this round's commits, or, for Initial QC only,
+    /// its anchor: the issue body *is* the announcement of its `initial qc commit`.
+    /// A round comment is not one, so round >= 2's anchor covers nothing.
+    pub fn status(&self) -> Option<QCStatus> {
+        if !self.is_placed() {
+            return None;
+        }
+        // **Unreachable from the fold, kept as a total guard.** A `Placed` round always
+        // owns at least one commit — its own `opened_at` (W2 walks a round inclusive of
+        // its anchor), so a placed round with no commits at all is a shape only a
+        // hand-built fixture can produce.
         //
-        // This is a no-op for legacy threads: a `# QC Un-Approval` strips the
-        // `Approved` status from its commit (see `IssueThread::from_issue_comments`),
-        // so on a single-round thread an open round always coincides with
-        // `approved_commit() == None` and the branch below is unchanged.
-        let open_round = issue_thread.open_round();
-        let standing_approval = match open_round {
-            Some(_) => None,
-            None => issue_thread.approved_commit(),
+        // Do **not** read that as "`InProgress` is dead" and delete the variant: the
+        // `(None, None)` arm below is a *different* condition and is genuinely
+        // reachable — a round that owns commits, none of which touched the QC'd file,
+        // and that announced nothing (`NotificationMode::None`). See the comment there.
+        if self.commits.is_empty() && self.events.is_empty() {
+            return Some(QCStatus::InProgress);
+        }
+
+        // "Newest" is by file change: drift that never touched this file is not
+        // something a reviewer is asked to comment on.
+        let newest_file_change = self.commits.iter().position(|commit| commit.file_changed);
+
+        // The newest thing this round announced, and whether it was a review.
+        //
+        // The anchor seeds this for Initial QC only: creating the issue announces its
+        // initial commit, so a brand-new issue awaits review rather than asking its
+        // author to comment the very commit the issue names. A *round* comment is not a
+        // notification — a round may open with none at all
+        // ([`crate::NotificationMode::None`]) — so round >= 2 reports its anchor as
+        // still needing one.
+        let mut covering: Option<(usize, bool)> = match self.opened {
+            RoundOpen::IssueCreated => self
+                .commit_position(&self.opened_at)
+                .map(|position| (position, false)),
+            RoundOpen::NewRound { .. } => None,
         };
-
-        let status = if let Some(approved) = standing_approval {
-            // Find the approved commit index in the chronological sequence
-            let approved_index = commits
-                .iter()
-                .position(|commit| commit.hash == approved.hash)
-                .expect("Approved commit must be in commits");
-
-            // Check if there are any commits after the approved commit that touch the file
-            // (commits are ordered chronologically, newer commits have lower indices)
-            let commits_after_approval = &commits[..approved_index];
-            let file_changes_after_approval = commits_after_approval
-                .iter()
-                .find(|commit| commit.file_changed);
-
-            if let Some(latest_file_change) = file_changes_after_approval {
-                Self::ChangesAfterApproval(latest_file_change.hash)
-            } else {
-                Self::Approved
+        for event in &self.events {
+            let Some(position) = self.commit_position(event.commit()) else {
+                continue;
+            };
+            let is_review = matches!(event, RoundEvent::Review { .. });
+            match covering {
+                // A review and a notification on the same commit means changes were
+                // requested against it.
+                Some((newest, was_review)) if position == newest => {
+                    covering = Some((newest, was_review || is_review));
+                }
+                Some((newest, _)) if position > newest => {}
+                _ => covering = Some((position, is_review)),
             }
-        } else {
-            // if not approved and closed
-            if !issue_thread.open {
-                Self::ApprovalRequired
-            } else {
-                // When a later round is open, only that round's window is relevant:
-                // its anchor and everything newer. Looking further back would read
-                // this round's status off a previous round's notification or
-                // approval. Initial QC keeps the full history, since it owns it —
-                // which is also what makes this identical for legacy threads.
-                let search: &[crate::issue::IssueCommit] = match open_round {
-                    Some(round) if round.previous_approval.is_some() => {
-                        match commits.iter().position(|c| c.hash == round.opened_at) {
-                            Some(anchor) => &commits[..=anchor],
-                            None => &commits[..],
-                        }
-                    }
-                    _ => &commits[..],
-                };
+        }
 
-                // Find the newest (lowest index) file-changing commit.
-                // Commits are stored newest-first, so lower index = more recent.
-                let latest_file_entry = search.iter().enumerate().find(|(_, c)| c.file_changed);
-
-                match latest_file_entry {
-                    Some((file_idx, latest_fc)) => {
-                        // Find the newest commit that carries any status.
-                        // A status commit "covers" the file change if it is at the same
-                        // position or newer (index ≤ file_idx).
-                        let latest_status_entry = search
-                            .iter()
-                            .enumerate()
-                            .find(|(_, c)| !c.statuses.is_empty());
-
-                        let covered = latest_status_entry
-                            .map(|(si, _)| si <= file_idx)
-                            .unwrap_or(false);
-
-                        if covered {
-                            let status_commit = latest_status_entry.unwrap().1;
-                            if status_commit
-                                .statuses
-                                .contains(&crate::issue::CommitStatus::Reviewed)
-                            {
-                                Self::ChangeRequested
-                            } else {
-                                Self::AwaitingReview
-                            }
-                        } else {
-                            Self::ChangesToComment(latest_fc.hash)
-                        }
-                    }
-                    None => {
-                        // No file-changing commit found, but the issue has been posted
-                        // (an Initial/Notification commit exists). Treat like a covered
-                        // status commit: awaiting review unless already reviewed.
-                        let latest_status_entry = search.iter().find(|c| !c.statuses.is_empty());
-                        match latest_status_entry {
-                            Some(sc)
-                                if sc.statuses.contains(&crate::issue::CommitStatus::Reviewed) =>
-                            {
-                                Self::ChangeRequested
-                            }
-                            Some(_) => Self::AwaitingReview,
-                            None => Self::InProgress,
-                        }
-                    }
+        let status = match (newest_file_change, covering) {
+            // Nothing announced yet, but the file has changed: those changes are what
+            // the next notification is for.
+            (Some(file_change), None) => QCStatus::ChangesToComment(self.commits[file_change].hash),
+            (Some(file_change), Some((announced, _))) if announced > file_change => {
+                QCStatus::ChangesToComment(self.commits[file_change].hash)
+            }
+            (_, Some((_, true))) => QCStatus::ChangeRequested,
+            (_, Some((_, false))) => QCStatus::AwaitingReview,
+            // No file change and nothing announced inside this round: an event may
+            // still name a commit the round does not own, which is enough to say the
+            // round has been posted.
+            (None, None) => {
+                if self.events.is_empty() {
+                    // **The reachable `InProgress`** (S2, last row). The round owns
+                    // commits — none of which touched the QC'd file — and announced
+                    // nothing at all, which a round opened with
+                    // `NotificationMode::None` legitimately does. `AwaitingReview`
+                    // would claim something was announced and `ChangesToComment` would
+                    // claim a file change to comment on; neither exists. The round is
+                    // simply open and in progress.
+                    QCStatus::InProgress
+                } else if self
+                    .events
+                    .iter()
+                    .next_back()
+                    .is_some_and(|event| matches!(event, RoundEvent::Review { .. }))
+                {
+                    QCStatus::ChangeRequested
+                } else {
+                    QCStatus::AwaitingReview
                 }
             }
         };
+        Some(status)
+    }
+}
 
-        status
+impl QCStatus {
+    /// The issue's status: a function of the active segment alone.
+    ///
+    /// `None` when the active segment could not be placed — the one degradation path,
+    /// which the UI renders grayed.
+    pub fn determine_status(issue_thread: &IssueThread) -> Option<Self> {
+        // A closed issue with no standing approval was closed without being approved,
+        // whatever its segments say.
+        if !issue_thread.open && issue_thread.standing_approval().is_none() {
+            return Some(Self::ApprovalRequired);
+        }
+
+        match issue_thread.active_segment() {
+            // "Approved; subsequent file changes" is not an eighth status concept: it
+            // is simply a non-empty trailing gap, which is also why starting a new
+            // round is its natural resolution.
+            Segment::Gap(gap) if gap.is_placed() => {
+                match gap.commits.iter().find(|commit| commit.file_changed) {
+                    Some(changed) => Some(Self::ChangesAfterApproval(changed.hash)),
+                    None => Some(Self::Approved),
+                }
+            }
+            Segment::Gap(_) => None,
+            Segment::Round(round) => round.status(),
+        }
     }
 
     /// Returns true if this status represents an approved issue
@@ -162,15 +177,16 @@ impl QCStatus {
         matches!(self, QCStatus::Approved | QCStatus::ChangesAfterApproval(_))
     }
 
+    /// The status of a blocking QC. `None` when its active segment could not be
+    /// placed, which is a fact about the repository rather than an error.
     pub async fn from_blocking_qc(
         blocking_qc: &BlockingQC,
         cache: Option<&DiskCache>,
         git_info: &(impl GitHubReader + GitCommitOps),
-    ) -> Result<Self, QCStatusError> {
+    ) -> Result<Option<Self>, QCStatusError> {
         let issue = git_info.get_issue(blocking_qc.issue_number).await?;
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let status = QCStatus::determine_status(&issue_thread);
-        Ok(status)
+        Ok(QCStatus::determine_status(&issue_thread))
     }
 }
 
@@ -480,7 +496,15 @@ pub async fn get_blocking_qc_status(
         );
         let result = QCStatus::from_blocking_qc(qc, cache, git_info).await;
         match result {
-            Ok(s) => {
+            // An unplaceable active segment has no status to compare, so it is reported
+            // as a problem rather than silently counted as unapproved.
+            Ok(None) => {
+                status.errors.insert(
+                    qc.issue_number,
+                    "status unavailable: the active segment could not be placed".to_string(),
+                );
+            }
+            Ok(Some(s)) => {
                 if s.is_approved() {
                     status
                         .approved
@@ -511,6 +535,10 @@ pub enum QCStatusError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::issue::IssueCommit;
+    use crate::round::{
+        ChecklistSource, Gap, GapContinuity, Placement, RoundOpen, RoundState, UnplaceableReason,
+    };
     use std::str::FromStr;
 
     #[test]
@@ -520,204 +548,637 @@ mod tests {
         insta::assert_debug_snapshot!(result);
     }
 
+    // ── Status fixtures ──────────────────────────────────────────────────────
+
+    fn oid(n: u8) -> ObjectId {
+        ObjectId::from_str(&format!("{:040x}", n)).unwrap()
+    }
+
+    fn epoch() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(0, 0).unwrap()
+    }
+
+    /// A commit, named by the low byte of its hash.
+    fn commit(n: u8, file_changed: bool) -> IssueCommit {
+        IssueCommit {
+            hash: oid(n),
+            message: format!("commit {n}"),
+            file_changed,
+        }
+    }
+
+    /// The commits a segment owns, newest-first, from an oldest-first list of
+    /// `(name, file_changed)` pairs — the order the scenarios read in.
+    fn owned(commits: &[(u8, bool)]) -> Vec<IssueCommit> {
+        commits
+            .iter()
+            .rev()
+            .map(|(n, file_changed)| commit(*n, *file_changed))
+            .collect()
+    }
+
+    fn notification(n: u8) -> RoundEvent {
+        RoundEvent::Notification {
+            commit: oid(n),
+            by: "author".to_string(),
+            at: epoch(),
+            comment_index: 0,
+            comment_id: None,
+            comment_url: None,
+        }
+    }
+
+    fn review(n: u8) -> RoundEvent {
+        RoundEvent::Review {
+            commit: oid(n),
+            by: "reviewer".to_string(),
+            at: epoch(),
+            comment_index: 0,
+            comment_id: None,
+            comment_url: None,
+        }
+    }
+
+    fn closed_at(n: u8) -> RoundState {
+        RoundState::Closed {
+            commit: oid(n),
+            by: "reviewer".to_string(),
+            at: epoch(),
+            comment_index: 1,
+            comment_id: None,
+            comment_url: None,
+        }
+    }
+
+    fn round(
+        index: u32,
+        anchor: u8,
+        state: RoundState,
+        commits: &[(u8, bool)],
+        events: Vec<RoundEvent>,
+    ) -> Round {
+        Round {
+            index,
+            opened_at: oid(anchor),
+            branch: "main".to_string(),
+            opened: if index == 1 {
+                RoundOpen::IssueCreated
+            } else {
+                RoundOpen::NewRound {
+                    comment_index: 2,
+                    comment_id: None,
+                    comment_url: None,
+                    author: "author".to_string(),
+                    at: epoch(),
+                    note: None,
+                    branch: Some("main".to_string()),
+                }
+            },
+            checklist: ChecklistSource::IssueBody,
+            checklist_name: None,
+            state,
+            events,
+            retractions: vec![],
+            extensions: vec![],
+            commits: owned(commits),
+            placement: Placement::Placed,
+        }
+    }
+
+    fn gap(commits: &[(u8, bool)]) -> Gap {
+        Gap {
+            branch: "main".to_string(),
+            commits: owned(commits),
+            continuity: GapContinuity::Linear,
+            placement: Placement::Placed,
+        }
+    }
+
+    fn thread(open: bool, segments: Vec<Segment>) -> IssueThread {
+        assert_eq!(
+            crate::round::segment_invariants(&segments, None),
+            Ok(()),
+            "a status fixture must be a legal segment list"
+        );
+        IssueThread {
+            file: PathBuf::from("scripts/file_b.R"),
+            open,
+            milestone: "milestone".to_string(),
+            blocking_qcs: vec![],
+            segments,
+            anomalies: vec![],
+        }
+    }
+
+    fn name_of(status: Option<&QCStatus>) -> &'static str {
+        match status {
+            Some(QCStatus::Approved) => "Approved",
+            Some(QCStatus::ChangesAfterApproval(_)) => "ChangesAfterApproval",
+            Some(QCStatus::AwaitingReview) => "AwaitingReview",
+            Some(QCStatus::ChangeRequested) => "ChangeRequested",
+            Some(QCStatus::InProgress) => "InProgress",
+            Some(QCStatus::ApprovalRequired) => "ApprovalRequired",
+            Some(QCStatus::ChangesToComment(_)) => "ChangesToComment",
+            None => "no status",
+        }
+    }
+
+    /// Every status a single round can report, driven by its own commits and events.
+    ///
+    /// `I` is the round's anchor, `C` a notification, `R` a review and `A` the approval
+    /// that closes it — the same scenarios the flat model was pinned to, expressed as
+    /// segments.
     #[test]
     fn test_change_requested_status_matrix() {
-        use crate::issue::{CommitStatus, IssueCommit, IssueThread};
-        use gix::ObjectId;
-        use std::path::PathBuf;
-        use std::str::FromStr;
-
-        fn make_statuses(statuses: &[CommitStatus]) -> std::collections::HashSet<CommitStatus> {
-            statuses.iter().cloned().collect()
-        }
-
-        let test_cases = vec![
-            // (scenario_name, commits: [(state, file_changed, reviewed)], issue_open, expected_status)
+        let cases: Vec<(&str, bool, Vec<Segment>, &str)> = vec![
             (
                 "I/R -> C: AwaitingReview",
-                vec![
-                    (
-                        make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                    (make_statuses(&[CommitStatus::Notification]), true),
-                ],
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, true)],
+                    vec![review(1), notification(2)],
+                ))],
                 "AwaitingReview",
             ),
             (
                 "I/R -> C/R: ChangeRequested",
-                vec![
-                    (
-                        make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                    (
-                        make_statuses(&[CommitStatus::Notification, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                ],
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, true)],
+                    vec![review(1), notification(2), review(2)],
+                ))],
                 "ChangeRequested",
             ),
             (
                 "I/R -> R: ChangeRequested",
-                vec![
-                    (
-                        make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                    (make_statuses(&[CommitStatus::Reviewed]), true),
-                ],
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, true)],
+                    vec![review(1), review(2)],
+                ))],
                 "ChangeRequested",
             ),
             (
                 "I/R -> R -> C: AwaitingReview",
-                vec![
-                    (
-                        make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                    (make_statuses(&[CommitStatus::Reviewed]), false), // reviewed but no file change
-                    (make_statuses(&[CommitStatus::Notification]), true), // new notification with file change
-                ],
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    // reviewed commit 2 touched nothing; commit 3 is a new notification
+                    &[(1, true), (2, false), (3, true)],
+                    vec![review(1), review(2), notification(3)],
+                ))],
                 "AwaitingReview",
             ),
             (
                 "I/R -> A/R: Approved",
-                vec![
-                    (
-                        make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                    (
-                        make_statuses(&[CommitStatus::Approved, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                ],
                 true,
+                vec![
+                    Segment::Round(round(
+                        1,
+                        1,
+                        closed_at(2),
+                        &[(1, true), (2, true)],
+                        vec![review(1), review(2)],
+                    )),
+                    Segment::Gap(gap(&[])),
+                ],
                 "Approved",
             ),
             (
-                "I/R -> A -> R: ChangesAfterApproval",
-                vec![
-                    (
-                        make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                    (make_statuses(&[CommitStatus::Approved]), true),
-                    (make_statuses(&[CommitStatus::Initial]), true), // file change after approval (use Initial for uncommitted files)
-                ],
+                "I/R -> A -> file change: ChangesAfterApproval",
                 true,
+                vec![
+                    Segment::Round(round(
+                        1,
+                        1,
+                        closed_at(2),
+                        &[(1, true), (2, true)],
+                        vec![review(1)],
+                    )),
+                    Segment::Gap(gap(&[(3, true)])),
+                ],
                 "ChangesAfterApproval",
             ),
             (
-                "I/R -> C -> N: ChangesToComment",
-                vec![
-                    (
-                        make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                    (make_statuses(&[CommitStatus::Notification]), true), // latest comment
-                    (make_statuses(&[]), true), // new file changes, not commented or reviewed
-                ],
+                "I/R -> C -> uncommented change: ChangesToComment",
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, true), (3, true)],
+                    vec![review(1), notification(2)],
+                ))],
                 "ChangesToComment",
             ),
             (
-                "I -> C_nofile: AwaitingReview (notification on non-file-changing commit after last file change)",
-                vec![
-                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change with initial
-                    (make_statuses(&[CommitStatus::Notification]), false), // newest: notification, no file change
-                ],
+                "I -> C_nofile: AwaitingReview (notification on a non-file-changing commit)",
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, false)],
+                    vec![notification(2)],
+                ))],
                 "AwaitingReview",
             ),
             (
-                "I -> R_nofile: ChangeRequested (review on non-file-changing commit after last file change)",
-                vec![
-                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change
-                    (make_statuses(&[CommitStatus::Reviewed]), false), // newest: reviewed, no file change
-                ],
+                "I -> R_nofile: ChangeRequested (review on a non-file-changing commit)",
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, false)],
+                    vec![review(2)],
+                ))],
                 "ChangeRequested",
             ),
             (
-                "I -> C_nofile -> nofile_nostatuses: ChangesToComment (uncommitted changes after notification-on-non-file-commit)",
-                vec![
-                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change
-                    (make_statuses(&[CommitStatus::Notification]), false), // middle: notification, no file change
-                    (make_statuses(&[]), true), // newest: new file change, no status
-                ],
+                "I -> C_nofile -> file change: ChangesToComment",
                 true,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, false), (3, true)],
+                    vec![notification(2)],
+                ))],
                 "ChangesToComment",
             ),
             (
                 "Closed without approval: ApprovalRequired",
-                vec![
-                    (make_statuses(&[CommitStatus::Initial]), true),
-                    (
-                        make_statuses(&[CommitStatus::Notification, CommitStatus::Reviewed]),
-                        true,
-                    ),
-                ],
-                false, // issue closed
+                false,
+                vec![Segment::Round(round(
+                    1,
+                    1,
+                    RoundState::Open,
+                    &[(1, true), (2, true)],
+                    vec![notification(2), review(2)],
+                ))],
                 "ApprovalRequired",
             ),
             (
                 "I/A: Approved",
-                vec![(
-                    make_statuses(&[CommitStatus::Initial, CommitStatus::Approved]),
-                    false,
-                )],
                 false,
+                vec![
+                    Segment::Round(round(1, 1, closed_at(1), &[(1, false)], vec![])),
+                    Segment::Gap(gap(&[])),
+                ],
                 "Approved",
+            ),
+            (
+                // The reachable `InProgress`: round 2 opened with no notification
+                // (`NotificationMode::None`) on a commit that did not touch the QC'd
+                // file. It owns a commit, so this is *not* the unreachable
+                // "placed round with no commits" arm — that shape cannot come out of
+                // the fold, because a placed round always owns its own anchor.
+                "Round 2 owns only a non-file-changing commit and announced nothing: InProgress",
+                true,
+                vec![
+                    Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                    Segment::Gap(gap(&[])),
+                    Segment::Round(round(2, 3, RoundState::Open, &[(3, false)], vec![])),
+                ],
+                "InProgress",
             ),
         ];
 
-        for (scenario, commit_data, issue_open, expected_status) in test_cases {
-            let commits: Vec<IssueCommit> = commit_data
-                .into_iter()
-                .enumerate()
-                .map(|(i, (statuses, file_changed))| IssueCommit {
-                    hash: ObjectId::from_str(&format!("{:040x}", i + 1)).unwrap(),
-                    message: format!("Commit {}", i + 1),
-                    statuses,
-                    file_changed,
-                })
-                .rev() // Reverse to match real implementation: newest commits first
-                .collect();
-
-            let issue_thread = IssueThread {
-                file: PathBuf::from("test.rs"),
-                branch: "main".to_string(),
-                open: issue_open,
-                commits,
-                milestone: "milestone".to_string(),
-                blocking_qcs: vec![],
-                rounds: vec![],
-                round_anomalies: vec![],
-            };
-
+        for (scenario, issue_open, segments, expected) in cases {
+            let issue_thread = thread(issue_open, segments);
             let status = QCStatus::determine_status(&issue_thread);
-            let actual_status = match status {
-                QCStatus::Approved => "Approved",
-                QCStatus::ChangesAfterApproval(_) => "ChangesAfterApproval",
-                QCStatus::AwaitingReview => "AwaitingReview",
-                QCStatus::ChangeRequested => "ChangeRequested",
-                QCStatus::InProgress => "InProgress",
-                QCStatus::ApprovalRequired => "ApprovalRequired",
-                QCStatus::ChangesToComment(_) => "ChangesToComment",
-            };
-
             assert_eq!(
-                actual_status, expected_status,
-                "Failed for scenario: {}. Expected {}, got {}",
-                scenario, expected_status, actual_status
+                name_of(status.as_ref()),
+                expected,
+                "Failed for scenario: {scenario}"
             );
         }
+    }
+
+    /// Before a new round exists, a file change after the approval is exactly
+    /// `ChangesAfterApproval` — which is now simply "the trailing gap is not empty".
+    #[test]
+    fn changes_after_approval_is_a_non_empty_trailing_gap() {
+        let thread = thread(
+            true,
+            vec![
+                Segment::Round(round(
+                    1,
+                    1,
+                    closed_at(2),
+                    &[(1, true), (2, true)],
+                    vec![notification(2)],
+                )),
+                Segment::Gap(gap(&[(3, true)])),
+            ],
+        );
+
+        let status = QCStatus::determine_status(&thread);
+        assert!(
+            matches!(status, Some(QCStatus::ChangesAfterApproval(hash)) if hash == oid(3)),
+            "expected ChangesAfterApproval, got {status:?}"
+        );
+        assert_eq!(thread.standing_approval(), Some(&oid(2)));
+        assert_eq!(thread.latest_commit().map(|c| c.hash), Some(oid(3)));
+    }
+
+    /// Drift that never touched this file is not something a reviewer is asked to
+    /// comment on, so the issue is still simply approved.
+    #[test]
+    fn a_trailing_gap_of_unrelated_commits_is_still_approved() {
+        let thread = thread(
+            true,
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(gap(&[(3, false), (4, false)])),
+            ],
+        );
+        assert!(matches!(
+            QCStatus::determine_status(&thread),
+            Some(QCStatus::Approved)
+        ));
+    }
+
+    /// Once round 2 is open the issue is under review again, so it must not be reported
+    /// as approved-with-changes: approve, commit, start a new round, and the card used
+    /// to still read "Approved".
+    #[test]
+    fn an_open_round_supersedes_the_previous_rounds_approval() {
+        let thread = thread(
+            true,
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(gap(&[])),
+                Segment::Round(round(
+                    2,
+                    3,
+                    RoundState::Open,
+                    &[(3, true)],
+                    vec![notification(3)],
+                )),
+            ],
+        );
+
+        let status = QCStatus::determine_status(&thread);
+        assert!(
+            !status.as_ref().is_some_and(QCStatus::is_approved),
+            "an open round must not report as approved, got {status:?}"
+        );
+        assert!(
+            matches!(status, Some(QCStatus::AwaitingReview)),
+            "expected AwaitingReview for a notified open round, got {status:?}"
+        );
+
+        // Nothing stands approved while a round is open, but the archive still needs to
+        // be able to ask what was last approved.
+        assert_eq!(thread.standing_approval(), None);
+        assert_eq!(thread.last_approved_commit(), Some(&oid(2)));
+        // The card's "Latest" row reads this: the open round's own newest commit, never
+        // the previous round's approval.
+        assert_eq!(thread.latest_commit().map(|c| c.hash), Some(oid(3)));
+    }
+
+    /// A brand-new issue, before anybody has commented: opening it announced its initial
+    /// commit, so it awaits review rather than asking the author to comment the very
+    /// commit the issue names. This is the case the anchor-as-covering rule exists for.
+    #[test]
+    fn a_fresh_initial_qc_awaits_review_of_its_own_initial_commit() {
+        let thread = thread(
+            true,
+            vec![Segment::Round(round(
+                1,
+                1,
+                RoundState::Open,
+                &[(1, true)],
+                vec![],
+            ))],
+        );
+        let status = QCStatus::determine_status(&thread);
+        assert!(
+            matches!(status, Some(QCStatus::AwaitingReview)),
+            "expected AwaitingReview for a fresh Initial QC, got {status:?}"
+        );
+    }
+
+    /// An open round two whose anchor is the newest commit has announced *nothing*: the
+    /// round comment that opened it is not a notification, and a round can legitimately
+    /// open with none at all, so the anchor is what the next notification is for.
+    #[test]
+    fn a_fresh_round_two_reports_changes_to_comment_because_a_round_comment_is_not_a_notification()
+    {
+        let thread = thread(
+            true,
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(gap(&[])),
+                Segment::Round(round(2, 3, RoundState::Open, &[(3, true)], vec![])),
+            ],
+        );
+        let status = QCStatus::determine_status(&thread);
+        assert!(
+            matches!(status, Some(QCStatus::ChangesToComment(hash)) if hash == oid(3)),
+            "expected ChangesToComment(3) for an unannounced round-two anchor, got {status:?}"
+        );
+    }
+
+    /// The whole of the anchor-as-covering rule, as one pair: the same round shape, and
+    /// only *how it was opened* differs. Creating the issue announces its initial commit;
+    /// posting a round comment does not.
+    #[test]
+    fn only_an_issue_created_rounds_anchor_counts_as_an_announcement() {
+        let announced = round(1, 1, RoundState::Open, &[(1, true)], vec![]);
+        let mut unannounced = announced.clone();
+        unannounced.opened = RoundOpen::NewRound {
+            comment_index: 2,
+            comment_id: None,
+            comment_url: None,
+            author: "author".to_string(),
+            at: epoch(),
+            note: None,
+            branch: Some("main".to_string()),
+        };
+
+        let by_issue = QCStatus::determine_status(&thread(true, vec![Segment::Round(announced)]));
+        assert!(
+            matches!(by_issue, Some(QCStatus::AwaitingReview)),
+            "an issue-created round's anchor is announced, got {by_issue:?}"
+        );
+
+        let by_comment =
+            QCStatus::determine_status(&thread(true, vec![Segment::Round(unannounced)]));
+        assert!(
+            matches!(by_comment, Some(QCStatus::ChangesToComment(hash)) if hash == oid(1)),
+            "a round-comment-opened round's anchor is not announced, got {by_comment:?}"
+        );
+    }
+
+    /// Drift arriving after a round opened, before it has notified: those commits are
+    /// what the next notification is for.
+    #[test]
+    fn drift_after_an_open_rounds_anchor_is_changes_to_comment() {
+        let thread = thread(
+            true,
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(gap(&[])),
+                Segment::Round(round(
+                    2,
+                    3,
+                    RoundState::Open,
+                    &[(3, true), (4, true)],
+                    vec![],
+                )),
+            ],
+        );
+        let status = QCStatus::determine_status(&thread);
+        assert!(
+            matches!(status, Some(QCStatus::ChangesToComment(hash)) if hash == oid(4)),
+            "expected ChangesToComment(4), got {status:?}"
+        );
+        assert_eq!(thread.next_notification_from(), Some(oid(3)));
+    }
+
+    /// With every round closed, the approval is what the issue reports — the
+    /// long-standing behaviour for approved issues.
+    #[test]
+    fn a_closed_round_reports_its_approval_as_what_stands() {
+        let thread = thread(
+            true,
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(gap(&[])),
+            ],
+        );
+        assert_eq!(thread.standing_approval(), Some(&oid(2)));
+        assert_eq!(thread.last_approved_commit(), Some(&oid(2)));
+        assert_eq!(thread.next_notification_from(), Some(oid(2)));
+        assert!(matches!(
+            QCStatus::determine_status(&thread),
+            Some(QCStatus::Approved)
+        ));
+    }
+
+    /// A closed issue that *was* approved is approved, not "approval required".
+    #[test]
+    fn a_closed_issue_with_a_standing_approval_is_approved() {
+        let thread = thread(
+            false,
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(gap(&[])),
+            ],
+        );
+        assert!(matches!(
+            QCStatus::determine_status(&thread),
+            Some(QCStatus::Approved)
+        ));
+    }
+
+    /// S2's last row, and the whole reason `InProgress` survives: a round that owns
+    /// commits — none of which touched the QC'd file — and announced nothing.
+    ///
+    /// Reachable exactly as written: initial QC approved, round 2 opened on a declared
+    /// branch with `NotificationMode::None`, and its anchor changed some other file.
+    /// `AwaitingReview` would claim an announcement that never happened and
+    /// `ChangesToComment` a file change that does not exist, so `InProgress` is the only
+    /// honest answer — and it is emphatically **not** the unplaceable case: this round
+    /// is placed, and what it is missing is a *file change*, not its history.
+    #[test]
+    fn a_placed_round_with_no_file_change_and_no_events_is_in_progress_not_unknown() {
+        let mut open_round = round(2, 3, RoundState::Open, &[(3, false)], vec![]);
+        let segments = |round2: Round| {
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(gap(&[])),
+                Segment::Round(round2),
+            ]
+        };
+
+        // The premise, spelled out: placed, owns a commit, no events, nothing touched
+        // the file. Remove any one of those and this is a different row of S2.
+        assert!(open_round.is_placed());
+        assert_eq!(open_round.commits.len(), 1);
+        assert!(open_round.events.is_empty());
+        assert!(!open_round.commits.iter().any(|c| c.file_changed));
+
+        let placed = thread(true, segments(open_round.clone()));
+        let status = QCStatus::determine_status(&placed);
+        assert!(
+            matches!(status, Some(QCStatus::InProgress)),
+            "a placed round with a non-file-changing commit and no events is in progress, got {status:?}"
+        );
+
+        // The discrimination that matters: the *same* round, unplaceable, has no status
+        // at all. These two must never collapse into one another — `Unknown` claims
+        // nothing can be asserted, which is false of the round above.
+        // I5: an unplaceable segment owns nothing, so the commits go with the placement.
+        // Leaving them behind builds a segment list the fold cannot emit, and `thread`'s
+        // invariant check rejects it.
+        open_round.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        open_round.commits.clear();
+        let unplaceable = thread(true, segments(open_round));
+        assert!(
+            QCStatus::determine_status(&unplaceable).is_none(),
+            "an unplaceable round yields no status, never InProgress"
+        );
+    }
+
+    // ── Degradation: an unplaceable active segment has no status ─────────────
+
+    #[test]
+    fn an_unplaceable_active_round_has_no_status() {
+        let mut unplaceable = round(1, 1, RoundState::Open, &[], vec![]);
+        unplaceable.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let thread = thread(true, vec![Segment::Round(unplaceable)]);
+
+        assert!(
+            QCStatus::determine_status(&thread).is_none(),
+            "a grayed segment must not be given a status"
+        );
+        assert_eq!(thread.latest_commit(), None);
+    }
+
+    #[test]
+    fn an_unplaceable_active_gap_has_no_status() {
+        let mut unplaceable = gap(&[]);
+        unplaceable.placement = Placement::Unplaceable(UnplaceableReason::NeighbourUnplaceable);
+        let thread = thread(
+            true,
+            vec![
+                Segment::Round(round(1, 1, closed_at(2), &[(1, true), (2, true)], vec![])),
+                Segment::Gap(unplaceable),
+            ],
+        );
+
+        // An empty gap would read as `Approved`, which is precisely the wrong answer
+        // when the reason it is empty is that nothing could be walked.
+        assert!(QCStatus::determine_status(&thread).is_none());
+    }
+
+    /// A closed issue reports `ApprovalRequired` before the active segment is even
+    /// consulted, so an unplaceable segment cannot hide that it was never approved.
+    #[test]
+    fn a_closed_issue_without_an_approval_is_approval_required_even_when_grayed() {
+        let mut unplaceable = round(1, 1, RoundState::Open, &[], vec![]);
+        unplaceable.placement = Placement::Unplaceable(UnplaceableReason::AnchorUnreachable);
+        let thread = thread(false, vec![Segment::Round(unplaceable)]);
+
+        assert!(matches!(
+            QCStatus::determine_status(&thread),
+            Some(QCStatus::ApprovalRequired)
+        ));
     }
 
     // Tests for BlockingQCStatus
@@ -814,157 +1275,5 @@ mod tests {
             )
             .is_approved()
         );
-    }
-
-    // ── An open round supersedes the previous round's approval ───────────────
-
-    use crate::issue::{CommitStatus, IssueCommit};
-    use std::collections::HashSet;
-
-    fn oid(n: u8) -> ObjectId {
-        ObjectId::from_str(&format!("{:040x}", n)).unwrap()
-    }
-
-    fn statuses(items: &[CommitStatus]) -> HashSet<CommitStatus> {
-        items.iter().cloned().collect()
-    }
-
-    fn epoch() -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::from_timestamp(0, 0).unwrap()
-    }
-
-    /// Approve at 2, change the file at 3, then open round 2 anchored at 3.
-    /// Commits are newest-first, so `[3, 2, 1]`.
-    fn thread_with_rounds(rounds: Vec<crate::round::Round>) -> IssueThread {
-        let commits = vec![
-            IssueCommit {
-                hash: oid(3),
-                message: "update file b".to_string(),
-                statuses: statuses(&[CommitStatus::Notification]),
-                file_changed: true,
-            },
-            IssueCommit {
-                hash: oid(2),
-                message: "approved commit".to_string(),
-                statuses: statuses(&[CommitStatus::Approved]),
-                file_changed: true,
-            },
-            IssueCommit {
-                hash: oid(1),
-                message: "initial".to_string(),
-                statuses: statuses(&[CommitStatus::Initial]),
-                file_changed: true,
-            },
-        ];
-        IssueThread {
-            file: PathBuf::from("scripts/file_b.R"),
-            branch: "main".to_string(),
-            open: true,
-            commits,
-            milestone: "milestone".to_string(),
-            blocking_qcs: vec![],
-            rounds,
-            round_anomalies: vec![],
-        }
-    }
-
-    fn initial_round_closed_at_2() -> crate::round::Round {
-        crate::round::Round {
-            index: 1,
-            opened_at: oid(1),
-            previous_approval: None,
-            opened: crate::round::RoundOpen::IssueCreated,
-            checklist: crate::round::ChecklistSource::IssueBody,
-            checklist_name: None,
-            state: crate::round::RoundState::Closed {
-                commit: oid(2),
-                by: "reviewer".to_string(),
-                at: epoch(),
-                comment_index: 1,
-                comment_id: None,
-                comment_url: None,
-            },
-            events: vec![],
-            retractions: vec![],
-            extensions: vec![],
-        }
-    }
-
-    /// Before the new round exists, a file change after the approval is exactly
-    /// `ChangesAfterApproval` — the behaviour the fix must leave alone.
-    #[test]
-    fn changes_after_approval_when_no_round_is_open() {
-        let thread = thread_with_rounds(vec![initial_round_closed_at_2()]);
-        let status = QCStatus::determine_status(&thread);
-        assert!(
-            matches!(status, QCStatus::ChangesAfterApproval(hash) if hash == oid(3)),
-            "expected ChangesAfterApproval, got {status:?}"
-        );
-    }
-
-    /// Once round 2 is open the issue is under review again, so it must not be
-    /// reported as approved-with-changes. This is the bug that motivated the fix:
-    /// approve, commit, start a new round, and the card still read "Approved".
-    #[test]
-    fn open_round_supersedes_previous_round_approval() {
-        let round2 = crate::round::Round {
-            index: 2,
-            opened_at: oid(3),
-            previous_approval: Some(oid(2)),
-            opened: crate::round::RoundOpen::NewRound {
-                comment_index: 2,
-                comment_id: None,
-                comment_url: None,
-                author: "author".to_string(),
-                at: epoch(),
-                note: None,
-            },
-            checklist: crate::round::ChecklistSource::Comment {
-                comment_index: 2,
-                comment_id: None,
-                comment_url: None,
-            },
-            checklist_name: None,
-            state: crate::round::RoundState::Open,
-            events: vec![crate::round::RoundEvent::Notification {
-                commit: oid(3),
-                by: "author".to_string(),
-                at: epoch(),
-                comment_index: 3,
-                comment_id: None,
-                comment_url: None,
-            }],
-            retractions: vec![],
-            extensions: vec![],
-        };
-
-        let thread = thread_with_rounds(vec![initial_round_closed_at_2(), round2]);
-        let status = QCStatus::determine_status(&thread);
-
-        assert!(
-            !status.is_approved(),
-            "an open round must not report as approved, got {status:?}"
-        );
-        assert!(
-            matches!(status, QCStatus::AwaitingReview),
-            "expected AwaitingReview for a notified open round, got {status:?}"
-        );
-
-        // The card's "Latest" row reads this. The approval-priority tier must not
-        // hand back round 1's approved commit while round 2 is under review.
-        assert_eq!(
-            thread.latest_commit().hash,
-            oid(3),
-            "latest_commit must be the open round's notified commit, not the \
-             previous round's approval"
-        );
-    }
-
-    /// The counterpart: with every round closed, the approval still outranks
-    /// everything, which is the long-standing behaviour for approved issues.
-    #[test]
-    fn a_closed_round_still_reports_its_approval_as_latest() {
-        let thread = thread_with_rounds(vec![initial_round_closed_at_2()]);
-        assert_eq!(thread.latest_commit().hash, oid(2));
     }
 }

@@ -1,12 +1,14 @@
-name: "POST /api/issues/{number}/rounds/repair - a missing notification is never implicit"
-description: "The same round with no QC Notification, repaired with the default request: nothing is written and nobody is pinged"
+name: "POST /api/issues/{number}/rounds/repair - an unplaceable round skips only its notification"
+description: "Round 2's anchor is not on the walk, so the model grays it: the reopen and the body marker still run, and only the notification is skipped — with its reason, not a 409"
 
 fixtures:
   issues:
     - type: mock
       number: 1
       title: "src/test.rs"
-      state: "open"
+      # Closed while round 2 is open, and the marker still names Initial QC: both of the
+      # steps that do not read placement are incomplete.
+      state: "closed"
       body: |
         Quality check issue for src/test.rs
 
@@ -16,8 +18,8 @@ fixtures:
         author: The Octocat <octocat@example.com>
 
         ## QC Round
-        * current round: 2
-        * round comment: https://github.com/test-owner/test-repo/issues/1#issuecomment-456
+        * current round: 1
+        * round comment: https://github.com/test-owner/test-repo/issues/1#issuecomment-1
 
         # Code Review Checklist
         - [ ] Reviewed the logic
@@ -47,31 +49,37 @@ fixtures:
         - [ ] Reviewed the logic
 
 git_state:
-  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
-  # Round 2 anchors on HEAD, so HEAD must be on the walk or the round is
-  # unplaceable — which would skip the notification step, not the repair.
-  commits:
-    - "abc1234567890abcdef1234567890abcdef12340"
-    - "456def789abc012345678901234567890123cdef"
+  # Round 2's anchor is on no walk the mock reports, so the fold grays round 2 and gives
+  # it the null-OID anchor placeholder — the ordinary degradation this endpoint used to
+  # answer with a 409.
+  commits: []
 
 request:
   method: POST
   path: "/api/issues/1/rounds/repair"
-  body: {}
+  # A notification is asked for, and round 2 has none: only the placement stops it.
+  body:
+    notification: "full"
 
 response:
   status: 200
   body:
     match_type: partial
     fields:
+      round: 2
       reopened:
-        status: "skipped"
+        status: "done"
       body_marker:
-        status: "skipped"
+        status: "done"
       notification:
         status: "skipped"
-      repaired: false
+        skipped_reason: "its commits are not on that branch"
+      repaired: true
       needs_repair: false
 
-# Nothing at all was written: `notification: none` is a decision, not a defect.
-assert_write_calls: []
+# The two placement-free steps ran; nothing was posted against a commit nobody can locate.
+assert_write_calls:
+  - type: OpenIssue
+    issue_number: 1
+  - type: UpdateIssue
+    issue_number: 1

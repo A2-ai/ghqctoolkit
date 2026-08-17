@@ -247,6 +247,13 @@ mod tests {
     }
 
     impl GitCommitOps for MockGitInfo {
+        fn merge_base(
+            &self,
+            _a: &ObjectId,
+            _b: &ObjectId,
+        ) -> Result<Option<ObjectId>, GitFileOpsError> {
+            unimplemented!("merge-base is only needed when starting a round")
+        }
         fn commits(
             &self,
             _branch: &Option<String>,

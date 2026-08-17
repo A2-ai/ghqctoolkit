@@ -35,13 +35,15 @@ function makeStatus(issue: Issue, status: QCStatus['status']): IssueStatusRespon
     qc_status: {
       status,
       status_detail: '',
-      approved_commit: status === 'approved' ? 'aaa1111' : null,
+      standing_approval: status === 'approved' ? 'aaa1111' : null,
+      last_approved_commit: status === 'approved' ? 'aaa1111' : null,
       initial_commit: 'bbb2222',
-      latest_commit: 'ccc3333',
+      // Approved leaves an empty trailing gap, so the active segment owns no commit.
+      latest_commit: status === 'approved' ? null : 'ccc3333',
+      last_reviewed_commit: null,
+      last_notified_commit: status === 'approved' ? null : 'ccc3333',
     },
     dirty: false,
-    branch: 'main',
-    commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
     checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
     blocking_qc_status: { total: 0, approved_count: 0, summary: '0/0', approved: [], not_approved: [], errors: [] },
     ...(status === 'approved'

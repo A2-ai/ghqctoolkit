@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { API_BASE } from '../config'
 import { ApiRequestError, useInvalidateBlockingDependents } from './issues'
+import type { IssueCommit } from './issues'
 
 // ---------------------------------------------------------------------------
 // Types — mirror src/api/types/{responses,requests}.rs
@@ -20,17 +21,108 @@ export interface RoundChecklistSource {
   comment_url: string | null
 }
 
-/** A single derived QC round. `index` is 1-based; 1 is Initial QC. */
-export interface RoundInfo {
+// ---------------------------------------------------------------------------
+// Segment model (design/segment-model.md §2, §7; contract:
+// design/segment-api-contract.md). A thread is a strictly alternating list of
+// segments: Round, Gap, Round, Gap … `segments[0]` is always the Initial QC
+// round, and the last segment is either an open Round or a Gap.
+// ---------------------------------------------------------------------------
+
+/** Why a segment could not be placed on a branch. Its `commits` is then empty. */
+export type UnplaceableReason =
+  | 'branch_not_declared'
+  | 'branch_unavailable'
+  | 'anchor_unreachable'
+  | 'merge_base_unreachable'
+  | 'neighbour_unplaceable'
+
+/** Whether a segment's commits could be resolved. Internally tagged on `kind`. */
+export type Placement =
+  | { kind: 'placed' }
+  | { kind: 'unplaceable'; reason: UnplaceableReason }
+
+/**
+ * How a Gap's two bounding commits relate. Replaces the old `BranchDivergence`:
+ * same fact, one type. Internally tagged on `kind`; only `diverged` carries data.
+ */
+export type GapContinuity =
+  | { kind: 'linear' }
+  | { kind: 'diverged'; merge_base: string }
+  | { kind: 'unrelated' }
+
+/** Whether a round was opened by creating the issue, or by a `# QC Round` comment. */
+export type RoundOpenKind = 'issue_created' | 'new_round'
+
+/** What opened a round. `kind === 'issue_created'` carries no comment metadata. */
+export interface RoundOpenInfo {
+  kind: RoundOpenKind
+  /** null for `issue_created`, and for cache-loaded comments. */
+  comment_id: number | null
+  /** null for the same reasons as `comment_id`. */
+  comment_url: string | null
+  /** null for `issue_created`. */
+  author: string | null
+  /** RFC 3339; null for `issue_created`. */
+  at: string | null
+  /** The `note:` on the round comment, when written. */
+  note: string | null
+}
+
+/** A notification or review posted inside a round. */
+export interface RoundEventInfo {
+  kind: 'notification' | 'review'
+  /** The commit the event names. */
+  commit: string
+  by: string
+  /** RFC 3339. */
+  at: string
+  comment_id: number | null
+  comment_url: string | null
+}
+
+/** A `# QC Un-Approval` comment that took back a round's approval. */
+export interface RetractionInfo {
+  retracted_commit: string
+  by: string
+  /** RFC 3339. */
+  at: string
+  comment_id: number | null
+  comment_url: string | null
+}
+
+/** A round comment that extended an open round instead of opening a new one. */
+export interface ExtensionInfo {
+  by: string
+  /** RFC 3339. */
+  at: string
+  /** The written `round commit:`, when present and resolvable. */
+  at_commit: string | null
+  note: string | null
+  comment_id: number | null
+  comment_url: string | null
+}
+
+/** A Round segment. `index` is 1-based; 1 is Initial QC. */
+export interface RoundSegment {
+  kind: 'round'
   index: number
   /** `"Initial QC"` or `"Round N"`. */
   name: string
-  /** The commit this round opened at (its anchor). */
-  opened_at: string
-  /** The approval this round builds on; null for Initial QC. */
-  previous_approval: string | null
-  checklist_name: string | null
+  /**
+   * The commit this round opened at (its anchor). Owned by the round, not the Gap
+   * before it.
+   *
+   * null when the round could not be placed: the fold leaves an unresolved anchor as
+   * the all-zero OID, which is not a commit anyone can address, so the API nulls it
+   * rather than putting a fake sha on the wire.
+   */
+  opened_at: string | null
+  /** Always resolved — every round declares a branch (D5). */
+  branch: string
+  opened: RoundOpenInfo
+  /** Where this round's checklist lives. Projects the model's `checklist` field. */
   checklist_source: RoundChecklistSource
+  checklist_name: string | null
   state: RoundState
   /** Set only when `state === 'closed'`: the approved commit. */
   closing_commit: string | null
@@ -38,13 +130,36 @@ export interface RoundInfo {
   closed_by: string | null
   /** Set only when `state === 'closed'`: RFC 3339 timestamp. */
   closed_at: string | null
-  /** Notifications and reviews inside this round. */
-  event_count: number
-  /** `# QC Un-Approval` comments that took back this round's approval. */
-  retraction_count: number
-  /** `# QC Round` comments that extended this round instead of opening one. */
-  extension_count: number
+  /** Notifications and reviews inside this round, oldest first. */
+  events: RoundEventInfo[]
+  retractions: RetractionInfo[]
+  extensions: ExtensionInfo[]
+  /** Commits this round owns, newest first. Empty when `placement.kind === 'unplaceable'`. */
+  commits: IssueCommit[]
+  placement: Placement
 }
+
+/**
+ * A Gap segment: the commits between two rounds, or after the last round.
+ * Gaps are unnamed and positional — they carry no index and no stable id.
+ * Empty Gaps are legal and expected.
+ */
+export interface GapSegment {
+  kind: 'gap'
+  /** The branch this gap was walked on: the bounding newer round's, else the older round's. */
+  branch: string
+  /** Commits this gap owns, newest first. Empty when placement is unplaceable, or genuinely empty. */
+  commits: IssueCommit[]
+  continuity: GapContinuity
+  /** Older bound: the previous round's closing commit (exclusive). null when unknown. */
+  lower_bound: string | null
+  /** Newer bound: the next round's `opened_at` (exclusive), or the branch tip for a trailing gap. null when unknown. */
+  upper_bound: string | null
+  placement: Placement
+}
+
+/** One segment of a thread. Discriminated on `kind`. */
+export type Segment = RoundSegment | GapSegment
 
 /** How much of a notification comment to post when a round opens. */
 export type NotificationMode = 'full' | 'metadata_only' | 'none'
@@ -56,6 +171,14 @@ export interface StepOutcome {
   status: StepStatus
   /** Present only when `status === 'failed'`. */
   error?: string
+  /**
+   * Why the step was skipped, when the reason is not simply that there was nothing
+   * to do — today only a repair's notification, skipped because the round could not
+   * be placed ("its branch is unavailable locally"). Present only when
+   * `status === 'skipped'` and such a reason exists, exactly as `error` is present
+   * only on `'failed'`.
+   */
+  skipped_reason?: string
 }
 
 /** A downstream issue a new round may have invalidated. Display only. */
@@ -92,7 +215,8 @@ export interface StartRoundRequest {
    * different things.
    */
   notification_note?: string | null
-  notification: NotificationMode
+  /** Optional: the server defaults it (`#[serde(default)]`). */
+  notification?: NotificationMode
 }
 
 /**
@@ -111,6 +235,15 @@ export interface StartRoundResponse {
   round_comment_url: string
   /** The commit the round opened at (HEAD at open time). */
   anchor: string
+  /** The branch the round was opened on, recorded in its round comment. */
+  branch: string
+  /** What the notification diff compared against. */
+  comparison_base: string
+  /**
+   * How the previous approval relates to the anchor. null when there was no
+   * divergence to report; never `{ kind: 'linear' }`.
+   */
+  divergence: GapContinuity | null
   /** Step 2: reopening the issue. */
   reopened: StepOutcome
   /** Step 3: refreshing the `## QC Round` block in the issue body. */
@@ -157,7 +290,11 @@ export interface RoundRepairStatus {
  * asked, because a round opened without notifying is in the state its author chose.
  */
 export interface RepairRoundRequest {
-  notification: NotificationMode
+  /**
+   * Optional: the server defaults it to `'none'` (`#[serde(default)]`), so `{}` is a
+   * valid body — and is what every default caller sends.
+   */
+  notification?: NotificationMode
   /**
    * Context for the reviewer on the notification this repair may post. A
    * notification-only message lives nowhere but that comment, so when its post is
@@ -184,7 +321,11 @@ export interface RepairRoundResponse {
   reopened: StepOutcome
   /** Refreshing the `## QC Round` block in the issue body. */
   body_marker: StepOutcome
-  /** The QC Notification comment; `skipped` unless requested and missing. */
+  /**
+   * The QC Notification comment; `skipped` unless requested and missing — and
+   * `skipped` with a `skipped_reason` when the round could not be placed, which is
+   * the one step placement blocks: the reopen and the body marker still run.
+   */
   notification: StepOutcome
   /** Whether anything was actually written. */
   repaired: boolean
@@ -223,10 +364,29 @@ export interface RoundSeedResponse {
   checklist_options: RoundChecklistOption[]
   /** `round` of the pre-selected option; null when there are none. */
   default_round: number | null
-  /** HEAD of the issue's branch; null when it could not be resolved. */
+  /**
+   * HEAD of the branch the round would open on — the checked-out one, not necessarily
+   * the issue's. `null` when it could not be resolved.
+   */
   anchor: string | null
   /** The last round's closing commit; null while that round is still open. */
   previous_approval: string | null
+  /**
+   * The branch the round would open on: whatever is currently checked out, which need
+   * not be the branch the issue was created on.
+   */
+  branch: string | null
+  /**
+   * What the diff actually compares against — `previous_approval` normally, or the
+   * merge-base when that approval is not an ancestor of `anchor`.
+   */
+  comparison_base: string | null
+  /**
+   * Set only when the previous approval is unreachable from `branch`: `diverged`
+   * carries the merge-base, `unrelated` means no comparison is meaningful. null
+   * when the approval is an ancestor; never `{ kind: 'linear' }`.
+   */
+  divergence: GapContinuity | null
   can_start: boolean
   /** Why not, when `can_start` is false. */
   blocked_reason: string | null

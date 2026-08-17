@@ -115,6 +115,13 @@ pub trait GitCommitOps {
         &self,
         target_commit: &ObjectId,
     ) -> Result<Option<String>, GitFileOpsError>;
+
+    /// The best common ancestor of two commits, or `None` when they share none.
+    ///
+    /// Doubles as the ancestry test the round model needs: `a` is an ancestor of `b`
+    /// exactly when `merge_base(a, b) == Some(a)`. That is why there is no separate
+    /// `is_ancestor` — one primitive answers both, and the two can never disagree.
+    fn merge_base(&self, a: &ObjectId, b: &ObjectId) -> Result<Option<ObjectId>, GitFileOpsError>;
 }
 
 impl GitCommitOps for GitInfo {
@@ -231,6 +238,22 @@ impl GitCommitOps for GitInfo {
         Ok(branches)
     }
 
+    fn merge_base(&self, a: &ObjectId, b: &ObjectId) -> Result<Option<ObjectId>, GitFileOpsError> {
+        let repo_str = self.repository_path.to_string_lossy().to_string();
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                &repo_str,
+                "merge-base",
+                &a.to_string(),
+                &b.to_string(),
+            ])
+            .output()
+            .map_err(|e| GitFileOpsError::BranchLookupFailed(e.to_string()))?;
+
+        merge_base_from_output(&output)
+    }
+
     fn find_merged_into_branch(
         &self,
         target_commit: &ObjectId,
@@ -304,6 +327,28 @@ impl GitCommitOps for GitInfo {
             .collect();
 
         Ok(branches.into_iter().next())
+    }
+}
+
+/// Classify what `git merge-base` reported.
+///
+/// Exit 1 — and *only* exit 1 — means "no common ancestor", which is a real answer
+/// about unrelated histories rather than a failure. Every other non-zero status is a
+/// failure: exit 128 is a bad or garbage-collected object, or a repository git could
+/// not read. Those must not become `Ok(None)`, because `Ok(None)` is the stronger
+/// claim: callers turn it into [`crate::round::GapContinuity::Unrelated`] and tell the
+/// user the histories share nothing, while an `Err` degrades safely to `Linear`.
+fn merge_base_from_output(
+    output: &std::process::Output,
+) -> Result<Option<ObjectId>, GitFileOpsError> {
+    match output.status.code() {
+        Some(0) => Ok(ObjectId::from_str(String::from_utf8_lossy(&output.stdout).trim()).ok()),
+        Some(1) => Ok(None),
+        _ => Err(GitFileOpsError::BranchLookupFailed(format!(
+            "git merge-base failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
     }
 }
 
@@ -829,6 +874,13 @@ mod tests {
     }
 
     impl GitCommitOps for RobustMockGitInfo {
+        fn merge_base(
+            &self,
+            _a: &ObjectId,
+            _b: &ObjectId,
+        ) -> Result<Option<ObjectId>, GitFileOpsError> {
+            unimplemented!("merge-base is only needed when starting a round")
+        }
         fn commits(
             &self,
             branch: &Option<String>,
@@ -1071,5 +1123,58 @@ mod integration_tests {
         assert_eq!(hashes[0], sha3.as_str());
         assert_eq!(hashes[1], sha2.as_str());
         assert_eq!(hashes[2], sha1.as_str());
+    }
+
+    /// `git merge-base` reports two very different things with two exit codes, and only
+    /// one of them is an answer. Exercised against real git so the codes are git's, not
+    /// this test's assumption about them.
+    #[test]
+    fn merge_base_distinguishes_no_ancestor_from_a_failed_lookup() {
+        use super::merge_base_from_output;
+        use crate::git::GitFileOpsError;
+
+        let dir = setup_repo();
+        let p = dir.path();
+
+        let first = commit_file(p, "a.txt", "a", "First");
+        let second = commit_file(p, "b.txt", "b", "Second");
+
+        let merge_base = |a: &str, b: &str| {
+            let output = Command::new("git")
+                .args(["-C", &p.to_string_lossy(), "merge-base", a, b])
+                .output()
+                .unwrap();
+            merge_base_from_output(&output)
+        };
+
+        // Exit 0: a real ancestor.
+        assert_eq!(
+            merge_base(&first, &second).unwrap().map(|o| o.to_string()),
+            Some(first.clone()),
+        );
+
+        // Exit 1: genuinely unrelated histories. An orphan branch shares no commit.
+        Command::new("git")
+            .args(["checkout", "--orphan", "orphan"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        let orphan = commit_file(p, "c.txt", "c", "Orphan root");
+        assert_eq!(
+            merge_base(&second, &orphan).unwrap(),
+            None,
+            "no common ancestor is an answer, not a failure"
+        );
+
+        // Exit 128: the object does not exist. This must not masquerade as "unrelated
+        // histories" — that would make the tool assert something false about history it
+        // never managed to read.
+        let missing = "0".repeat(40);
+        let error = merge_base(&second, &missing)
+            .expect_err("a missing object is a failed lookup, not an answer");
+        assert!(
+            matches!(error, GitFileOpsError::BranchLookupFailed(_)),
+            "unexpected error: {error:?}"
+        );
     }
 }

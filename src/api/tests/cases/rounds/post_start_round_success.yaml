@@ -46,6 +46,9 @@ response:
   body:
     match_type: exact
     value:
+      branch: main
+      comparison_base: "456def789abc012345678901234567890123cdef"
+      divergence: null
       round: 2
       round_name: "Round 2"
       round_comment_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-123"

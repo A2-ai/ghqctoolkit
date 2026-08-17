@@ -284,11 +284,29 @@ pub async fn preview_previous_qc_diff<G: GitProvider + 'static>(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to load previous QC issue thread: {e}")))?;
 
+    // The approval first, the active segment's newest commit only as a fallback — the
+    // same order `create.rs` uses when it posts this comment for real, and the same
+    // order `archive.rs` and `record` use. A Previous QC is almost always an approved,
+    // closed issue; reading the active segment first would diff against un-reviewed
+    // drift here while the created issue diffs against the approval, so the preview
+    // would show a comment that is not the one posted. Both can be absent only when
+    // nothing about that issue could be placed.
+    let prev_commit = thread
+        .last_approved_commit()
+        .copied()
+        .or_else(|| thread.latest_commit().map(|commit| commit.hash))
+        .ok_or_else(|| {
+            ApiError::Internal(format!(
+                "Previous QC issue #{} has no commit to diff against",
+                request.previous_issue_number
+            ))
+        })?;
+
     let diff_comment = PreviousQCDiffComment {
         issue: prev_issue,
         prev_file: PathBuf::from(&request.previous_file),
         current_file: PathBuf::from(&request.current_file),
-        prev_commit: thread.latest_commit().hash,
+        prev_commit,
         current_commit,
         prev_issue_number: request.previous_issue_number,
     };
@@ -297,4 +315,88 @@ pub async fn preview_previous_qc_diff<G: GitProvider + 'static>(
     let html = markdown_to_html(&markdown);
 
     Ok(Html(html))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::tests::helpers::MockGitInfo;
+    use crate::test_utils::create_test_issue;
+    use crate::{Configuration, GitComment};
+    use axum::extract::State;
+
+    /// Initial QC's anchor, the commit it was approved at, and the drift since.
+    const ANCHOR: &str = "1111111111111111111111111111111111111111";
+    const APPROVAL: &str = "2222222222222222222222222222222222222222";
+    const DRIFT: &str = "3333333333333333333333333333333333333333";
+
+    fn walk() -> Vec<crate::GitCommit> {
+        [DRIFT, APPROVAL, ANCHOR]
+            .iter()
+            .map(|hash| crate::GitCommit {
+                commit: ObjectId::from_str(hash).expect("a 40 hex digit sha"),
+                message: format!("commit {hash}"),
+            })
+            .collect()
+    }
+
+    /// A Previous QC that was approved and has drifted since: its trailing gap owns
+    /// `DRIFT`, which is what makes the two candidate bases differ.
+    fn approved_then_drifted() -> MockGitInfo {
+        let body = format!(
+            "Quality check issue for src/prev.rs\n\n## Metadata\ninitial qc commit: {ANCHOR}\ngit branch: main\nauthor: The Octocat <octocat@example.com>\n\n# Code Review Checklist\n- [x] Reviewed the logic\n"
+        );
+        let issue = create_test_issue("o", "r", 2, "src/prev.rs", &body, Some(1), "closed");
+        MockGitInfo::builder()
+            .with_issue(2, issue)
+            .with_comments(
+                2,
+                vec![GitComment {
+                    body: format!("# QC Approval\n\n## Metadata\napproved qc commit: {APPROVAL}\n"),
+                    author_login: "reviewer".to_string(),
+                    created_at: chrono::Utc::now(),
+                    id: Some(7),
+                    html_url: None,
+                    html: None,
+                }],
+            )
+            .with_commits(walk())
+            .with_branch_tip(Some(DRIFT.to_string()))
+            .build()
+    }
+
+    /// The diff a Previous QC comment shows is "what changed since that QC was
+    /// approved", so the base is the approval — un-reviewed drift since is not a base
+    /// anyone reviewed. `create.rs` builds the very same comment in that order, and a
+    /// preview that disagreed with the artifact would be a preview of nothing.
+    #[tokio::test]
+    async fn the_previous_qc_diff_preview_bases_on_the_approval_not_the_drift_since() {
+        let state = AppState::new(
+            approved_then_drifted(),
+            Configuration::default(),
+            None,
+            None,
+        );
+
+        let Html(html) = preview_previous_qc_diff(
+            State(state),
+            Json(PreviousQCDiffPreviewRequest {
+                current_file: "src/current.rs".to_string(),
+                previous_file: "src/prev.rs".to_string(),
+                previous_issue_number: 2,
+                current_commit: ANCHOR.to_string(),
+            }),
+        )
+        .await
+        .expect("an approved previous QC has a base to diff against");
+
+        assert!(
+            html.contains(APPROVAL),
+            "the approval must be the diff base: {html}"
+        );
+        assert!(
+            !html.contains(DRIFT),
+            "un-reviewed drift is not a base the created issue would use: {html}"
+        );
+    }
 }

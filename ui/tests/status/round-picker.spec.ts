@@ -1,6 +1,6 @@
-// P3 / S1-S3, S5, S7: the round rail, the membership-scoped commit picker,
-// draft-gap collapse, the `next_notification_from` default and the comparison
-// receipt — all inside IssueDetailModal.
+// P3 / S1-S3, S5, S7 and U1/U2: the round rail, the segment-scoped commit picker,
+// gap collapse, the `next_notification_from` default and the comparison receipt —
+// all inside IssueDetailModal.
 
 import { test, expect, type Page } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
@@ -10,10 +10,20 @@ import {
   legacyRoundStatus,
   multiRoundIssue,
   multiRoundStatus,
+  approvedRoundIssue,
+  approvedRoundStatus,
   ROUND1_OPENED,
   ROUND1_CLOSED,
   DRAFT_GAP_COMMIT,
   ROUND2_OPENED,
+  commit,
+  crossBranchIssue,
+  crossBranchSegments,
+  crossBranchStatus,
+  multiRoundSegments,
+  segmentFields,
+  unplaceableIssue,
+  unplaceableStatus,
 } from '../fixtures/index'
 import type { Issue, IssueStatusResponse } from '../../src/api/issues'
 
@@ -50,23 +60,25 @@ async function openNotify(page: Page, issue: Issue, status: IssueStatusResponse)
  */
 const roundTwoNoNotification: IssueStatusResponse = {
   ...multiRoundStatus,
-  commits: multiRoundStatus.commits.map((c) =>
-    c.hash === ROUND2_OPENED ? { ...c, statuses: [] } : c,
+  ...segmentFields(
+    multiRoundSegments({
+      round2: {
+        events: [],
+        commits: [commit(ROUND2_OPENED, { message: 'round 2 changes' })],
+      },
+    }),
+    ROUND1_CLOSED,
   ),
-  rounds: [multiRoundStatus.rounds[0], { ...multiRoundStatus.rounds[1], event_count: 0 }],
-  next_notification_from: ROUND1_CLOSED,
 }
 
 /** A comment-sourced round whose comment URL is absent (cache-loaded comment). */
 const roundTwoNoCommentUrl: IssueStatusResponse = {
   ...multiRoundStatus,
-  rounds: [
-    multiRoundStatus.rounds[0],
-    {
-      ...multiRoundStatus.rounds[1],
-      checklist_source: { kind: 'comment', comment_id: null, comment_url: null },
-    },
-  ],
+  ...segmentFields(
+    multiRoundSegments({
+      round2: { checklist_source: { kind: 'comment', comment_id: null, comment_url: null } },
+    }),
+  ),
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +120,112 @@ test('S1: both rounds appear in the rail, newest expanded', async ({ page }) => 
   await expect(rail.getByTestId('round-detail-2')).toContainText(SHORT(ROUND2_OPENED))
   await expect(rail.getByTestId('round-detail-2')).toContainText(SHORT(ROUND1_CLOSED))
   await expect(rail.getByTestId('round-counts-2')).toContainText('1 event')
+})
+
+/**
+ * U2: the rail draws a branch line where a segment's branch *differs* from the
+ * previous segment's. Every round declares a branch unconditionally now (D5), so
+ * printing it on all of them would repeat one name down the whole rail — the fact
+ * worth stating is the move.
+ */
+test('U2: the rail marks the branch a round moved to', async ({ page }) => {
+  const panel = await openNotify(page, crossBranchIssue, crossBranchStatus)
+  const rail = panel.getByTestId('round-rail')
+
+  // Round 2 sits at position 2, and the gap before it at position 1, both on the
+  // new branch — so the move is announced once, at the gap where it happened.
+  await expect(rail.getByTestId('segment-branch-1')).toContainText('feature/reanalysis')
+  await expect(rail.getByTestId('segment-branch-2')).toHaveCount(0)
+})
+
+test('U2: a rail whose every segment shares one branch shows no branch line', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
+  const rail = panel.getByTestId('round-rail')
+
+  await expect(rail.getByTestId('round-section-2')).toBeVisible()
+  // Positions 1 and 2 only: position 0 has no previous segment, so `BranchLine`
+  // returns null there for every input and asserting its absence proves nothing.
+  for (const pos of [1, 2]) {
+    await expect(rail.getByTestId(`segment-branch-${pos}`)).toHaveCount(0)
+  }
+})
+
+/** Q10: gaps are unnamed — a count and the two rounds they sit between. */
+test('U2: the gap between two rounds is described by its size, not a name', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
+  const gap = panel.getByTestId('round-rail').getByTestId('gap-line-1')
+
+  await expect(gap).toContainText('1 commit between Initial QC and Round 2')
+  // No index, no name, no id.
+  await expect(gap).not.toContainText('Gap')
+})
+
+/**
+ * D6: the empty trailing gap of a fully-approved issue is not an event.
+ *
+ * The fixture must actually *have* that gap, or the assertion passes for the wrong
+ * reason — a single-round open issue has no segment at position 1 at all.
+ */
+const approvedOpenIssue: Issue = { ...approvedRoundIssue, state: 'open', closed_at: null }
+
+test('U2: an empty gap renders nothing', async ({ page }) => {
+  // The premise: position 1 is a real, placed, empty gap.
+  const gap = approvedRoundStatus.segments[1]
+  expect(gap.kind).toBe('gap')
+  expect(gap.commits).toHaveLength(0)
+  expect(gap.placement.kind).toBe('placed')
+
+  const panel = await openNotify(page, approvedOpenIssue, {
+    ...approvedRoundStatus,
+    issue: approvedOpenIssue,
+  })
+  await expect(panel.getByTestId('round-rail')).toBeVisible()
+  // The round it follows is rendered, so the rail is not simply absent.
+  await expect(panel.getByTestId('round-line-1')).toBeVisible()
+  await expect(panel.getByTestId('gap-line-1')).toHaveCount(0)
+})
+
+/** D4/U2: an unresolvable segment is greyed with its reason, never an error. */
+test('U2: an unplaceable segment states why it could not be placed', async ({ page }) => {
+  const panel = await openNotify(page, unplaceableIssue, unplaceableStatus)
+  const rail = panel.getByTestId('round-rail')
+
+  await expect(rail.getByTestId('segment-unplaceable-2')).toContainText(
+    'its branch is unavailable locally',
+  )
+  await expect(rail.getByTestId('segment-unplaceable-1')).toContainText(
+    'the round bounding it could not be placed',
+  )
+  // Placed segments say nothing of the sort.
+  await expect(rail.getByTestId('segment-unplaceable-0')).toHaveCount(0)
+})
+
+/**
+ * S4/D4: the *picker* must not be quieter than the rail about the same failure.
+ *
+ * The open round owns no commits, so scoping to it offers only whatever the defaults
+ * forced visible — for #115 a single Initial QC commit, which would sit under the label
+ * "scoped to Round 2". That is another segment's history presented as this round's, so
+ * the scope is dropped, the full history shown, and the reason named.
+ */
+test('U1: an unplaceable open round is named in the picker, which falls back to full history', async ({ page }) => {
+  // The premise: the active segment is the open round, and it could not be placed.
+  const active = unplaceableStatus.segments[unplaceableStatus.segments.length - 1]
+  expect(active.kind).toBe('round')
+  expect(active.placement).toMatchObject({ kind: 'unplaceable', reason: 'branch_unavailable' })
+
+  const panel = await openNotify(page, unplaceableIssue, unplaceableStatus)
+  const track = panel.getByTestId('notify-picker')
+
+  const note = panel.getByTestId('picker-scope-unplaceable')
+  await expect(note).toContainText('Round 2')
+  await expect(note).toContainText('its branch is unavailable locally')
+  // Not claiming a scope it cannot honour.
+  await expect(panel.getByTestId('picker-scope')).toHaveCount(0)
+
+  // Full history: both of Initial QC's commits are offered, not just the forced default.
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toBeVisible()
+  await expect(track.getByText(SHORT(ROUND1_CLOSED))).toBeVisible()
 })
 
 test('S1: expanding the older round reveals its approval receipt', async ({ page }) => {
@@ -297,4 +415,80 @@ test('S7: the single-handle Review picker gets a receipt against the round ancho
   const panel = page.getByRole('tabpanel', { name: 'Review' })
 
   await expect(panel.getByTestId('comparison-receipt')).toContainText(SHORT(ROUND2_OPENED))
+})
+
+// ---------------------------------------------------------------------------
+// U1: a non-linear Gap detaches the previous-approval handle
+// ---------------------------------------------------------------------------
+
+/**
+ * #114 with the notify default reaching back past the divergent gap, so the selection
+ * spans it.
+ */
+const crossBranchFromApproval: IssueStatusResponse = {
+  ...crossBranchStatus,
+  next_notification_from: ROUND1_CLOSED,
+}
+
+/**
+ * The negative for the pair below, built as a *single-variable mutation* of the
+ * positive: same response, same segments, same track — only the gap's `continuity`
+ * flips to `linear`. Written this way rather than as a separate fixture object so the
+ * two cannot drift apart into a comparison of two different things, which is the way
+ * a positive/negative pair silently stops testing what it claims to.
+ */
+const crossBranchLinearGap: IssueStatusResponse = {
+  ...crossBranchFromApproval,
+  segments: crossBranchSegments.map((segment) =>
+    segment.kind === 'gap' ? { ...segment, continuity: { kind: 'linear' as const } } : segment,
+  ),
+}
+
+test('U1: a diverged gap breaks the track and detaches the previous-approval handle', async ({ page }) => {
+  const panel = await openNotify(page, crossBranchIssue, crossBranchFromApproval)
+
+  // From reaches back across the gap; To is Round 2's own commit.
+  await expect(panel.locator('text=From:').locator('..').getByText(SHORT(ROUND1_CLOSED))).toBeVisible()
+  await expect(panel.locator('text=To:').locator('..').getByText(SHORT(ROUND2_OPENED))).toBeVisible()
+
+  // The break is drawn at the divergent gap's position (1), and says which kind it is.
+  const brk = panel.getByTestId('picker-break-1')
+  await expect(brk).toBeVisible()
+  await expect(brk).toHaveAttribute('data-continuity', 'diverged')
+
+  // The handle reads as detached rather than as one end of a continuous span.
+  await expect(panel.getByTestId('detached-previous-approval')).toBeVisible()
+  await expect(panel.locator('text=From:').locator('..')).toHaveAttribute('data-detached', 'true')
+
+  // And the receipt refuses to report a commit count across histories that do not join.
+  const receipt = panel.getByTestId('comparison-receipt')
+  await expect(receipt).toHaveAttribute('data-detached', 'true')
+  await expect(receipt).toContainText('histories not connected')
+})
+
+test('U1: the same track over a linear gap is not broken and not detached', async ({ page }) => {
+  // The premise: exactly one field differs from the positive above.
+  expect(crossBranchLinearGap.segments[1]).toMatchObject({ continuity: { kind: 'linear' } })
+  expect(crossBranchFromApproval.segments[1]).toMatchObject({ continuity: { kind: 'diverged' } })
+
+  const panel = await openNotify(page, crossBranchIssue, crossBranchLinearGap)
+
+  // Same two ends as the diverged case above.
+  await expect(panel.locator('text=From:').locator('..').getByText(SHORT(ROUND1_CLOSED))).toBeVisible()
+  await expect(panel.locator('text=To:').locator('..').getByText(SHORT(ROUND2_OPENED))).toBeVisible()
+
+  await expect(panel.getByTestId('picker-break-1')).toHaveCount(0)
+  await expect(panel.getByTestId('detached-previous-approval')).toHaveCount(0)
+  const receipt = panel.getByTestId('comparison-receipt')
+  await expect(receipt).not.toHaveAttribute('data-detached', 'true')
+  await expect(receipt).toContainText('commits')
+})
+
+/** U2: the rail states the divergence too, where it happened. */
+test('U2: the rail reports a diverged gap and the commit the two ends share', async ({ page }) => {
+  const panel = await openNotify(page, crossBranchIssue, crossBranchStatus)
+  const note = panel.getByTestId('round-rail').getByTestId('gap-continuity-1')
+
+  await expect(note).toContainText('History diverges here')
+  await expect(note).toContainText(SHORT(ROUND1_OPENED))
 })

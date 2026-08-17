@@ -864,7 +864,7 @@ async fn main() -> Result<()> {
                                 single_issue_status(
                                     &issue_thread,
                                     &git_status.state,
-                                    &qc_status,
+                                    qc_status.as_ref(),
                                     &git_status.dirty,
                                     &file_commits,
                                     &checklist_summaries,
@@ -1141,7 +1141,7 @@ async fn main() -> Result<()> {
                             )
                             .await?
                             .into_iter()
-                            .filter(|i| include_unapproved || i.approved_commit().is_some())
+                            .filter(|i| include_unapproved || i.last_approved_commit().is_some())
                             .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
                             .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
 
@@ -1167,7 +1167,7 @@ async fn main() -> Result<()> {
                             )
                             .await?
                             .into_iter()
-                            .filter(|i| include_unapproved || i.approved_commit().is_some())
+                            .filter(|i| include_unapproved || i.last_approved_commit().is_some())
                             .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
                             .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
 
@@ -1198,7 +1198,7 @@ async fn main() -> Result<()> {
                             )
                             .await?
                             .into_iter()
-                            .filter(|i| include_unapproved || i.approved_commit().is_some())
+                            .filter(|i| include_unapproved || i.last_approved_commit().is_some())
                             .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
                             .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
 

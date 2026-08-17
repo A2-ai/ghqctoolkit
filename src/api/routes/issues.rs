@@ -509,3 +509,128 @@ pub async fn rename_issue<G: GitProvider + 'static>(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::tests::helpers::MockGitInfo;
+    use crate::test_utils::create_test_issue;
+    use crate::{Configuration, GitComment};
+    use chrono::TimeZone;
+    use std::str::FromStr;
+
+    /// Initial QC's anchor, its approval, the drift between the rounds, round 2's
+    /// anchor, and the drift since — one commit per interesting position.
+    const ANCHOR: &str = "1111111111111111111111111111111111111111";
+    const APPROVAL: &str = "2222222222222222222222222222222222222222";
+    const GAP_DRIFT: &str = "3333333333333333333333333333333333333333";
+    const ROUND_TWO_ANCHOR: &str = "4444444444444444444444444444444444444444";
+    const TIP: &str = "5555555555555555555555555555555555555555";
+
+    /// Fixed so the snapshot has nothing to redact: every other timestamp in the
+    /// response already comes from a static issue fixture.
+    fn at(minute: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc
+            .with_ymd_and_hms(2026, 8, 1, 10, minute, 0)
+            .single()
+            .expect("a real instant")
+    }
+
+    fn comment(body: String, minute: u32, id: Option<u64>) -> GitComment {
+        GitComment {
+            html_url: id.map(|id| format!("https://github.com/o/r/issues/1#issuecomment-{id}")),
+            body,
+            author_login: "reviewer".to_string(),
+            created_at: at(minute),
+            id,
+            html: None,
+        }
+    }
+
+    /// A thread with every segment kind in it: Initial QC closed by an approval, the
+    /// drift after it, and an open round 2 that has notified its own anchor but not the
+    /// tip. Built through the real fold, so the snapshot pins what the endpoint emits.
+    fn multi_segment_thread() -> MockGitInfo {
+        let body = format!(
+            "Quality check issue for src/test.rs\n\n## Metadata\ninitial qc commit: {ANCHOR}\ngit branch: main\nauthor: The Octocat <octocat@example.com>\n\n# Code Review Checklist\n- [x] Reviewed the logic\n- [ ] Checked the tests\n"
+        );
+        let walk = [TIP, ROUND_TWO_ANCHOR, GAP_DRIFT, APPROVAL, ANCHOR]
+            .iter()
+            .map(|hash| crate::GitCommit {
+                commit: gix::ObjectId::from_str(hash).expect("a 40 hex digit sha"),
+                message: format!("commit {}", &hash[..7]),
+            })
+            .collect();
+
+        MockGitInfo::builder()
+            .with_issue(
+                1,
+                create_test_issue("o", "r", 1, "src/test.rs", &body, Some(1), "open"),
+            )
+            .with_comments(
+                1,
+                vec![
+                    comment(
+                        format!("# QC Notification\n\n## Metadata\ncurrent commit: {ANCHOR}\n"),
+                        1,
+                        Some(101),
+                    ),
+                    comment(
+                        format!("# QC Review\n\n## Metadata\ncomparing commit: {ANCHOR}\n"),
+                        2,
+                        Some(102),
+                    ),
+                    comment(
+                        format!("# QC Approval\n\n## Metadata\napproved qc commit: {APPROVAL}\n"),
+                        3,
+                        Some(103),
+                    ),
+                    comment(
+                        format!(
+                            "# QC Round\n\n## Metadata\n* round: 2\n* initial qc round commit: {ROUND_TWO_ANCHOR}\n* previous approved commit: {APPROVAL}\n* git branch: main\n* note: Second pass after the refactor.\n\n## Checklist\n- [ ] Reviewed the logic\n"
+                        ),
+                        4,
+                        Some(104),
+                    ),
+                    comment(
+                        format!(
+                            "# QC Notification\n\n## Metadata\ncurrent commit: {ROUND_TWO_ANCHOR}\n"
+                        ),
+                        5,
+                        Some(105),
+                    ),
+                ],
+            )
+            .with_commits(walk)
+            .with_branch_tip(Some(TIP.to_string()))
+            .build()
+    }
+
+    /// The declarative YAML harness cannot assert *into* `segments`: its `first_item`
+    /// rule only fires for array bodies, and the batch endpoint's body is the
+    /// `{results, errors}` envelope. So every field of the segment projection —
+    /// `kind`, the bounds, `continuity`, `placement`, the per-commit `statuses` — would
+    /// survive a rename, a reshape or a deletion untested. This snapshot is the only
+    /// end-to-end pin on that JSON.
+    #[tokio::test]
+    async fn the_batch_status_json_is_pinned_for_a_multi_segment_thread() {
+        let state = AppState::new(multi_segment_thread(), Configuration::default(), None, None);
+
+        let (status, Json(body)) = batch_get_issue_status(
+            State(state),
+            Query(IssueStatusQuery {
+                issues: "1".to_string(),
+            }),
+        )
+        .await
+        .expect("status must be derivable");
+
+        assert_eq!(status, StatusCode::OK);
+        // Serialized here rather than via `assert_json_snapshot!`, which needs insta's
+        // `json` feature; the assertion is the same bytes either way.
+        let json = serde_json::to_string_pretty(&body).expect("the envelope serializes");
+        insta::with_settings!({snapshot_path => "../../snapshots"}, {
+            insta::assert_snapshot!(json);
+        });
+    }
+}

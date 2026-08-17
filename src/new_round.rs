@@ -28,9 +28,9 @@ use std::sync::LazyLock;
 use crate::comment_system::CommentBody;
 use crate::git::{GitFileOps, GitHelpers};
 use crate::round::{
-    ChecklistSource, INITIAL_ROUND_COMMIT_KEY, NOTE_KEY, PREVIOUS_APPROVED_COMMIT_KEY,
-    ROUND_HEADING, ROUND_KEY, UNNAMED_CHECKLIST_HEADING, checklist_name_from_body,
-    find_checklist_heading,
+    ChecklistSource, GIT_BRANCH_KEY, INITIAL_ROUND_COMMIT_KEY, NOTE_KEY,
+    PREVIOUS_APPROVED_COMMIT_KEY, ROUND_HEADING, ROUND_KEY, UNNAMED_CHECKLIST_HEADING,
+    checklist_name_from_body, find_checklist_heading,
 };
 
 /// Heading of the denormalised round cache block in an issue body.
@@ -58,6 +58,12 @@ pub struct QCNewRound {
     /// and the name cannot be derived from the checklist content.
     pub checklist_name: Option<String>,
     pub note: Option<String>,
+    /// The branch this round is being QC'd on.
+    ///
+    /// Recorded per round rather than by rewriting the issue body: a round can live on
+    /// a different branch than the issue was created on, and each round should keep the
+    /// branch it was actually reviewed on.
+    pub branch: String,
     /// Checklist markdown, already seeded and reset (see [`seed_checklist`]).
     pub checklist_content: String,
 }
@@ -85,6 +91,7 @@ impl CommentBody for QCNewRound {
                 "{PREVIOUS_APPROVED_COMMIT_KEY}{}",
                 self.previous_approved_commit
             ),
+            format!("{GIT_BRANCH_KEY}{}", self.branch),
         ];
         if let Some(note) = &self.note {
             // The fold reads a note as the remainder of a single metadata line,
@@ -314,8 +321,7 @@ pub fn available_checklists(
     issue_body: Option<&str>,
 ) -> Vec<ChecklistOption> {
     thread
-        .rounds
-        .iter()
+        .rounds()
         .filter_map(|round| {
             let (content, checklist_name) = match &round.checklist {
                 ChecklistSource::IssueBody => {
@@ -349,7 +355,7 @@ pub fn prior_round_comment_body<'a>(
     thread: &crate::IssueThread,
     comments: &'a [crate::GitComment],
 ) -> Option<&'a str> {
-    match &thread.rounds.last()?.checklist {
+    match &thread.rounds().next_back()?.checklist {
         ChecklistSource::IssueBody => None,
         ChecklistSource::Comment { comment_index, .. } => comments
             .get(*comment_index)
@@ -523,6 +529,7 @@ mod tests {
 
     fn new_round(note: Option<&str>) -> QCNewRound {
         QCNewRound {
+            branch: "main".to_string(),
             issue: load_issue("main_file_issue"),
             round: 2,
             round_commit: ObjectId::from_str(C).unwrap(),
@@ -663,6 +670,88 @@ mod tests {
         assert_eq!(
             checklist_from_round_comment(&body).as_deref(),
             Some("- [ ] item one\n- [ ] item two")
+        );
+    }
+
+    /// The branch is written as metadata and read back by the fold, so the round keeps
+    /// the branch it was actually reviewed on. `round_branches` then answers it per
+    /// round from stage-1 output alone, which is what lets each segment's walk pick its
+    /// branch before any SHA has been resolved.
+    #[test]
+    fn branch_round_trips_writer_to_fold_and_drives_the_walk() {
+        let comment = |body: &str| GitComment {
+            body: body.to_string(),
+            author_login: "tester".to_string(),
+            created_at: chrono::Utc::now(),
+            id: None,
+            html_url: None,
+            html: None,
+        };
+
+        let mut round = new_round(None);
+        round.branch = "feature/reanalysis".to_string();
+        let body = round.generate_body(&MockGitHelpers);
+        assert!(body.contains("* git branch: feature/reanalysis"));
+
+        let comments = vec![
+            comment(&format!(
+                "# QC Approval\n\n## Metadata\napproved qc commit: {B}\n"
+            )),
+            comment(&body),
+        ];
+        let (rounds, anomalies) = fold_rounds_from_comments(A, None, &comments);
+        assert!(anomalies.is_empty(), "unexpected anomalies: {anomalies:?}");
+        assert!(matches!(
+            &rounds[1].opened,
+            RawRoundOpen::NewRound {
+                branch: Some("feature/reanalysis"),
+                ..
+            }
+        ));
+        // Every round answers for itself: Initial QC records no branch of its own, so
+        // the issue body's is its branch, and round 2's is the one it wrote.
+        assert_eq!(
+            crate::round::round_branches(&rounds, "main"),
+            vec![
+                Some("main".to_string()),
+                Some("feature/reanalysis".to_string())
+            ]
+        );
+
+        let (initial_only, _) = fold_rounds_from_comments(A, None, &[]);
+        assert_eq!(
+            crate::round::round_branches(&initial_only, "main"),
+            vec![Some("main".to_string())]
+        );
+    }
+
+    /// A round comment with no `git branch` is malformed input, not a legacy thread.
+    /// It still folds, and must not drag the walk onto a branch nobody named: the round
+    /// declares nothing, which is what leaves it unplaceable in stage 2.
+    #[test]
+    fn a_round_comment_without_a_branch_folds_with_none() {
+        let comment = |body: String| GitComment {
+            body,
+            author_login: "tester".to_string(),
+            created_at: chrono::Utc::now(),
+            id: None,
+            html_url: None,
+            html: None,
+        };
+        let comments = vec![
+            // Without a standing approval the round comment would only *extend*
+            // Initial QC, and there would be no second round to declare anything.
+            comment(format!(
+                "# QC Approval\n\n## Metadata\napproved qc commit: {B}\n"
+            )),
+            comment(format!(
+                "# QC Round 2\n\n## Metadata\n* round: 2\n* initial qc round commit: {C}\n"
+            )),
+        ];
+        let (rounds, _) = fold_rounds_from_comments(A, None, &comments);
+        assert_eq!(
+            crate::round::round_branches(&rounds, "main"),
+            vec![Some("main".to_string()), None]
         );
     }
 

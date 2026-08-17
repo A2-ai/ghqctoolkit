@@ -109,9 +109,9 @@ impl From<crate::StartRoundError> for ApiError {
             // Unprocessable domain state. This crate has no 422 variant: every
             // other domain error (IssueError, QCStatusError, ...) maps to
             // Internal, so these follow that convention rather than adding one.
-            crate::StartRoundError::NoRounds | crate::StartRoundError::AnchorUnresolved { .. } => {
-                ApiError::Internal(err.to_string())
-            }
+            crate::StartRoundError::NoRounds
+            | crate::StartRoundError::AnchorUnresolved { .. }
+            | crate::StartRoundError::BranchUnresolved(_) => ApiError::Internal(err.to_string()),
         }
     }
 }
