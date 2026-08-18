@@ -98,8 +98,12 @@ export function roundSegment(
     events: [],
     retractions: [],
     extensions: [],
-    // W2: a round owns its anchor.
-    commits: [commit(overrides.opened_at, { statuses: overrides.index === 1 ? ['initial'] : [] })],
+    // W2: a round owns its anchor, and D10 gives the anchor to the round rather than the
+    // preceding gap — so **every** round's `opened_at` carries `initial`, not just Initial
+    // QC's. The round comment names it `initial qc round commit`. This mirrors
+    // `IssueCommit::project`; it previously read `index === 1 ? ['initial'] : []`, which
+    // left rounds from 2 on with an unmarked start.
+    commits: [commit(overrides.opened_at, { statuses: ['initial'] })],
     placement: { kind: 'placed' },
     ...overrides,
   }
@@ -371,7 +375,7 @@ export function multiRoundSegments(overrides: { round2?: Partial<RoundSegment> }
       upper_bound: ROUND2_OPENED,
     }),
     laterRound(2, ROUND2_OPENED, {
-      commits: [commit(ROUND2_OPENED, { message: 'round 2 changes', statuses: ['notification'] })],
+      commits: [commit(ROUND2_OPENED, { message: 'round 2 changes', statuses: ['initial', 'notification'] })],
       events: [notificationEvent(ROUND2_OPENED)],
       ...overrides.round2,
     }),
@@ -458,7 +462,7 @@ export const crossBranchSegments: Segment[] = [
   }),
   laterRound(2, ROUND2_OPENED, {
     branch: 'feature/reanalysis',
-    commits: [commit(ROUND2_OPENED, { message: 'round 2 changes', statuses: ['notification'] })],
+    commits: [commit(ROUND2_OPENED, { message: 'round 2 changes', statuses: ['initial', 'notification'] })],
     events: [notificationEvent(ROUND2_OPENED)],
   }),
 ]

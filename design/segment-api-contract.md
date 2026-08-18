@@ -487,10 +487,22 @@ implement:
 
 | Status | Emitted when |
 |---|---|
-| `initial` | the commit is `segments[0].opened_at` (round 1's anchor) |
+| `initial` | the commit is **the owning round's own `opened_at`** — every round's anchor, not only round 1's |
 | `notification` | some `RoundEvent::Notification` in the owning round names it |
 | `reviewed` | some `RoundEvent::Review` in the owning round names it |
 | `approved` | it is the owning round's `RoundState::Closed.commit` |
+
+> **`initial` was widened after review.** It previously read *"the commit is
+> `segments[0].opened_at`"*, so only Initial QC's anchor was marked and every round from
+> 2 on began with a bare slot in the picker. A round comment names its anchor
+> `initial qc round commit`, and **D10** gives that anchor to the round rather than to the
+> preceding gap, so "the initial commit **of the owning round**" is the reading that
+> matches both the metadata and the model. Two consequences worth knowing:
+> a **D1** shared boundary commit now reads `["approved"]` in the round it closed and
+> `["initial"]` in the round it anchors — each copy states its own frame's meaning instead
+> of one being blank — and the check now lives inside the round branch of the projection,
+> so a Gap commit can never carry `initial` at all (previously reachable in principle,
+> never in practice).
 
 **[implementer's choice — a tightening]** the array is emitted in the fixed order
 `initial, notification, approved, reviewed`, deduplicated. The old field came from
@@ -741,10 +753,10 @@ drawing R1 and without it when drawing R2.
 > and rendering the hash twice corrupts positional defaults, which was a real CLI bug.
 > A per-segment renderer such as the rail never flattens, so it keeps the asymmetry.
 
-**Corollary, spec-consistent but worth writing down:** a Gap has no events and no
-state, so by the §5 mapping a Gap's commits can **never** receive `notification`,
-`reviewed`, or `approved` — only `initial` is reachable, and only for
-`segments[0].opened_at`, which is a Round's. Consequently a `RoundEvent` naming a
+**Corollary, spec-consistent but worth writing down:** a Gap has no events, no state and
+no anchor, so by the §5 mapping a Gap's commits can **never** receive any status at all —
+`initial` included, since widening it to the owning round's anchor also moved the check
+inside the round branch of the projection. Consequently a `RoundEvent` naming a
 commit that falls **outside its own Round's walked range** silently loses its status
 dot: no Gap will pick it up. **S3** does scope coverage to "within this Round's
 `commits`", so this follows the spec rather than contradicting it — but it means the

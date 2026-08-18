@@ -477,6 +477,7 @@ export function RoundCommitPickerTrack({
                     <span
                       key={s}
                       title={s}
+                      data-testid={`commit-dot-${c.hash.slice(0, 7)}-${s}`}
                       style={{
                         display: 'inline-block',
                         width: 7,

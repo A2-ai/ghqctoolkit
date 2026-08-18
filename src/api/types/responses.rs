@@ -380,18 +380,23 @@ impl IssueCommit {
     /// on both `b` and `d`. Arguably a fix — each round's approval belongs in its own
     /// frame, which is the same reasoning as D14 — but neither the spec, the wire
     /// contract nor the old code says so, so it is recorded here rather than assumed.
-    fn project(
-        commit: &crate::IssueCommit,
-        segment: &crate::Segment,
-        initial_anchor: Option<&ObjectId>,
-    ) -> Self {
+    fn project(commit: &crate::IssueCommit, segment: &crate::Segment) -> Self {
         // Fixed order, deduplicated: the old field came from a `HashSet` and so had
         // non-deterministic order, which every consumer had to re-sort.
         let mut statuses = Vec::new();
-        if initial_anchor == Some(&commit.hash) {
-            statuses.push(CommitStatusEnum::Initial);
-        }
         if let Some(round) = segment.as_round() {
+            // `Initial` marks **the owning round's own anchor**, not just Initial QC's.
+            // The round comment names it `initial qc round commit`, and D10 gives it to
+            // the round rather than the preceding gap, so every round has one and the
+            // picker should show it. Previously only `segments[0].opened_at` qualified,
+            // which left every round from 2 on with an unmarked start.
+            //
+            // Being inside `as_round()` also makes a Gap commit structurally incapable
+            // of carrying `Initial` — see D14's corollary. It was already unreachable in
+            // practice, since Round 1 owns its own anchor.
+            if round.opened_at == commit.hash {
+                statuses.push(CommitStatusEnum::Initial);
+            }
             let names = |want_review: bool| {
                 round.events.iter().any(|event| {
                     *event.commit() == commit.hash
@@ -853,15 +858,11 @@ impl SegmentInfo {
     /// The whole list is passed because a gap's bounds are positional facts about its
     /// neighbours, and `initial` statuses are a fact about `segments[0]`.
     fn project(segments: &[crate::Segment], position: usize) -> Self {
-        let initial_anchor = segments
-            .first()
-            .and_then(crate::Segment::as_round)
-            .map(|round| &round.opened_at);
         let segment = &segments[position];
         let commits = segment
             .commits()
             .iter()
-            .map(|commit| IssueCommit::project(commit, segment, initial_anchor))
+            .map(|commit| IssueCommit::project(commit, segment))
             .collect();
 
         match segment {
@@ -1980,10 +1981,12 @@ mod tests {
     }
 
     /// D14: a boundary commit is projected per owning segment, so the same hash carries
-    /// `approved` in the round it closed and nothing in the round it anchors. The
-    /// asymmetry is correct — in round 2's frame that commit is not round 2's approval.
+    /// `approved` in the round it closed and `initial` in the round it anchors. The
+    /// asymmetry is the point — in round 2's frame that commit is not an approval, it is
+    /// where round 2 starts — and each copy now states its own frame's meaning rather
+    /// than one of them being blank.
     #[test]
-    fn a_shared_boundary_commit_is_approved_in_one_round_and_bare_in_the_next() {
+    fn a_shared_boundary_commit_is_approved_in_one_round_and_the_anchor_of_the_next() {
         let (older, boundary, newer) = (oid('a'), oid('b'), oid('c'));
         let segments = vec![
             Segment::Round(closed_at(
@@ -2003,12 +2006,48 @@ mod tests {
         assert_eq!(projected[2]["commits"][1]["hash"], boundary.to_string());
         assert_eq!(
             projected[2]["commits"][1]["statuses"],
+            serde_json::json!(["initial"])
+        );
+    }
+
+    /// Every round's anchor is marked, not just Initial QC's. Round 2's `opened_at` is
+    /// its `initial qc round commit`, so the picker draws the same blue dot at the start
+    /// of every round; before this, rounds from 2 on began unmarked.
+    #[test]
+    fn every_rounds_anchor_carries_initial_not_only_initial_qcs() {
+        let (first, drift, second) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(round(1, first, vec![commit(first)]), first)),
+            Segment::Gap(gap(vec![commit(drift)])),
+            Segment::Round(round(2, second, vec![commit(second)])),
+        ];
+        let projected = project(&segments);
+
+        // Round 1's anchor, as before.
+        assert_eq!(projected[0]["commits"][0]["hash"], first.to_string());
+        assert!(
+            projected[0]["commits"][0]["statuses"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("initial"))
+        );
+        // Round 2's anchor — this is the commit that used to carry nothing.
+        assert_eq!(projected[2]["commits"][0]["hash"], second.to_string());
+        assert_eq!(
+            projected[2]["commits"][0]["statuses"],
+            serde_json::json!(["initial"])
+        );
+        // The drift between them is a gap commit and is still bare, so this is not a
+        // blanket "mark everything" change.
+        assert_eq!(
+            projected[1]["commits"][0]["statuses"],
             serde_json::json!([])
         );
     }
 
-    /// D14's corollary: a gap has no events and no state, so its commits can only ever
-    /// carry `initial` — and that belongs to a round's anchor.
+    /// D14's corollary: a gap has no events, no state and no anchor, so its commits can
+    /// never carry a status at all — `initial` included, since that check now lives
+    /// inside the round branch of the projection.
     #[test]
     fn a_gaps_commits_carry_no_round_statuses() {
         let (anchor, drift) = (oid('a'), oid('c'));

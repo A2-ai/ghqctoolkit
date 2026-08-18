@@ -22,6 +22,10 @@ import {
   crossBranchStatus,
   multiRoundSegments,
   segmentFields,
+  closeRound,
+  initialQcRound,
+  laterRound,
+  gapSegment,
   unplaceableIssue,
   unplaceableStatus,
 } from '../fixtures/index'
@@ -67,6 +71,38 @@ const roundTwoNoNotification: IssueStatusResponse = {
         commits: [commit(ROUND2_OPENED, { message: 'round 2 changes' })],
       },
     }),
+    ROUND1_CLOSED,
+  ),
+}
+
+/**
+ * D1: Round 2 anchored on Round 1's *closing* commit — a re-QC with no drift in between
+ * (HEAD had not moved, e.g. reviewing the same code against a stricter checklist).
+ *
+ * One hash is then legitimately owned by two adjacent segments (I4 exempts it), and the
+ * intervening gap is necessarily empty. The API projects the two copies differently by
+ * design (D14): `["approved"]` in the round it closed, `["initial"]` in the round it
+ * anchors.
+ */
+const reQcOnTheApproval: IssueStatusResponse = {
+  ...multiRoundStatus,
+  ...segmentFields(
+    [
+      closeRound(
+        initialQcRound(ROUND1_OPENED, {
+          commits: [
+            commit(ROUND1_CLOSED, { message: 'address review' }),
+            commit(ROUND1_OPENED, { message: 'initial commit', statuses: ['initial'] }),
+          ],
+        }),
+        ROUND1_CLOSED,
+      ),
+      gapSegment({ lower_bound: ROUND1_CLOSED, upper_bound: ROUND1_CLOSED }),
+      // Anchored on the boundary, so its own commits are just that commit.
+      laterRound(2, ROUND1_CLOSED, {
+        commits: [commit(ROUND1_CLOSED, { message: 'address review', statuses: ['initial'] })],
+      }),
+    ],
     ROUND1_CLOSED,
   ),
 }
@@ -482,6 +518,72 @@ test('U1: the same track over a linear gap is not broken and not detached', asyn
   const receipt = panel.getByTestId('comparison-receipt')
   await expect(receipt).not.toHaveAttribute('data-detached', 'true')
   await expect(receipt).toContainText('commits')
+})
+
+/**
+ * Every round starts with a blue `initial` dot, not just Initial QC.
+ *
+ * A round's `opened_at` is its `initial qc round commit`, and D10 gives the anchor to the
+ * round rather than the preceding gap — so the picker marks the start of every round.
+ * Before this, `IssueCommit::project` set `initial` only for `segments[0].opened_at`, so
+ * Round 2 and later began with a bare slot.
+ */
+test('every round anchor carries the blue initial dot, not only Initial QC', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
+
+  // The track is scoped to the open Round 2.
+  await expect(panel.getByTestId('picker-scope')).toBeVisible()
+
+  // Round 2's anchor carries the dot. Keyed by hash, so this does not depend on where
+  // the anchor lands among the visible slots.
+  await expect(panel.getByTestId(`commit-dot-${SHORT(ROUND2_OPENED)}-initial`)).toBeVisible()
+
+  // The premise, so this cannot pass on a fixture that happens to be Round 1: the
+  // scoped round really is round 2, and its anchor really is the marked commit.
+  const round2 = multiRoundStatus.segments.at(-1)
+  expect(round2).toMatchObject({ kind: 'round', index: 2 })
+  // `initial` alongside `notification`, in the projection's fixed order: this commit is
+  // both round 2's anchor and the commit its notification named.
+  expect(round2 && 'commits' in round2 && round2.commits.at(-1)).toMatchObject({
+    hash: ROUND2_OPENED,
+    statuses: ['initial', 'notification'],
+  })
+
+  // And the gap's drift between the rounds stays bare — this is not "mark everything".
+  await expect(panel.getByTestId(`commit-dot-${SHORT(DRAFT_GAP_COMMIT)}-initial`)).toHaveCount(0)
+})
+
+/**
+ * D1 + D14: a commit that is both Round 1's approval and Round 2's anchor shows **both**
+ * dots — green for the approval, blue for the anchor — on one slot.
+ *
+ * The two copies the API sends are deliberately different, but the picker draws a flat
+ * track, and one slot cannot carry two frames. So `flattenSegmentCommits` dedupes by hash
+ * and **unions** the statuses: without the union a dot would appear or vanish depending on
+ * which side of the boundary was being drawn, which is worse than showing both facts.
+ * Order comes from the projection's fixed order, so blue precedes green.
+ */
+test('D1: a commit that is one round\'s approval and the next round\'s anchor shows both dots', async ({ page }) => {
+  // The premise: the API really does send the same hash twice, annotated differently.
+  const [r1, , r2] = reQcOnTheApproval.segments
+  expect(r1 && 'commits' in r1 && r1.commits[0]).toMatchObject({
+    hash: ROUND1_CLOSED,
+    statuses: ['approved'],
+  })
+  expect(r2 && 'commits' in r2 && r2.commits[0]).toMatchObject({
+    hash: ROUND1_CLOSED,
+    statuses: ['initial'],
+  })
+
+  const panel = await openNotify(page, multiRoundIssue, reQcOnTheApproval)
+
+  // One slot, both dots.
+  await expect(panel.getByTestId(`commit-dot-${SHORT(ROUND1_CLOSED)}-approved`)).toBeVisible()
+  await expect(panel.getByTestId(`commit-dot-${SHORT(ROUND1_CLOSED)}-initial`)).toBeVisible()
+
+  // And it is genuinely one slot, not the same hash drawn twice — a duplicate row would
+  // break the picker's positional defaults.
+  await expect(panel.getByTestId(`commit-dot-${SHORT(ROUND1_CLOSED)}-initial`)).toHaveCount(1)
 })
 
 /** U2: the rail states the divergence too, where it happened. */

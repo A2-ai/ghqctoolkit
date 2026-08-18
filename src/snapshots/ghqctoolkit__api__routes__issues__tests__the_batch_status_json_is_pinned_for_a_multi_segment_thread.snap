@@ -184,6 +184,7 @@ expression: json
               "hash": "4444444444444444444444444444444444444444",
               "message": "commit 4444444",
               "statuses": [
+                "initial",
                 "notification"
               ],
               "file_changed": true
