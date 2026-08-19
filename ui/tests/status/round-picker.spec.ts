@@ -2,7 +2,7 @@
 // gap collapse, the `next_notification_from` default and the comparison receipt —
 // all inside IssueDetailModal.
 
-import { test, expect, type Page } from 'playwright/test'
+import { test, expect, type Locator, type Page } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
 import {
   openMilestone,
@@ -16,6 +16,7 @@ import {
   ROUND1_CLOSED,
   DRAFT_GAP_COMMIT,
   ROUND2_OPENED,
+  ROUND2_DRIFT,
   commit,
   crossBranchIssue,
   crossBranchSegments,
@@ -27,9 +28,24 @@ import {
   laterRound,
   gapSegment,
   unplaceableIssue,
+  unrelatedHistoryStatus,
   unplaceableStatus,
 } from '../fixtures/index'
 import type { Issue, IssueStatusResponse } from '../../src/api/issues'
+
+/**
+ * Open a picker's `History ▾` menu and return the dropdown.
+ *
+ * The popover is portalled, so its rows are not inside the tab panel — `page`, not
+ * `panel`, is the right root for anything inside it. Only one can be open at a time,
+ * so the testid is unambiguous even with three pickers on screen.
+ */
+async function openHistory(page: Page, panel: Locator): Promise<Locator> {
+  await panel.getByTestId('history-menu-trigger').click()
+  const menu = page.getByTestId('history-menu')
+  await expect(menu).toBeVisible()
+  return menu
+}
 
 const SHORT = (hash: string) => hash.slice(0, 7)
 
@@ -107,6 +123,54 @@ const reQcOnTheApproval: IssueStatusResponse = {
   ),
 }
 
+/** A commit inside the scoped round that is neither file-changing nor comment-named. */
+const QUIET_IN_ROUND = 'f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6'
+
+/**
+ * Round 2 with a quiet commit: in scope, but hidden by the pertinence filter. Exercises
+ * the density axis on its own — showing it must not widen the reach.
+ */
+const roundTwoWithQuietCommit: IssueStatusResponse = {
+  ...multiRoundStatus,
+  ...segmentFields(
+    multiRoundSegments({
+      round2: {
+        // Newest-first, and the quiet commit sits in the *middle* deliberately: as the
+        // newest it would be the default `to` handle, and forced handle positions are
+        // always visible, so the pertinence filter would never get to hide it.
+        commits: [
+          commit(ROUND2_DRIFT, { message: 'real change' }),
+          commit(QUIET_IN_ROUND, { message: 'whitespace', file_changed: false }),
+          commit(ROUND2_OPENED, { message: 'round 2 changes', statuses: ['initial', 'notification'] }),
+        ],
+      },
+    }),
+  ),
+}
+
+/**
+ * U5: a *multi-round* thread whose Round 2 has been approved, so the last segment is a
+ * trailing Gap and there is no open round.
+ *
+ * `approvedRoundStatus` cannot pin U5: it has one round, which owns every commit, so
+ * scoping is legitimately a no-op there and the note is absent either way. This fixture
+ * has segments outside the scope, so the note's presence is meaningful.
+ */
+const approvedMultiRound: IssueStatusResponse = {
+  ...multiRoundStatus,
+  qc_status: { ...multiRoundStatus.qc_status, status: 'approved', status_detail: 'Approved' },
+  ...segmentFields([
+    ...multiRoundSegments().slice(0, 2),
+    closeRound(
+      laterRound(2, ROUND2_OPENED, {
+        commits: [commit(ROUND2_OPENED, { message: 'round 2 changes', statuses: ['initial'] })],
+      }),
+      ROUND2_OPENED,
+    ),
+    gapSegment({ lower_bound: ROUND2_OPENED, upper_bound: ROUND2_OPENED }),
+  ]),
+}
+
 /** A comment-sourced round whose comment URL is absent (cache-loaded comment). */
 const roundTwoNoCommentUrl: IssueStatusResponse = {
   ...multiRoundStatus,
@@ -127,11 +191,11 @@ test('S1: a single Initial QC round renders as one quiet line, with no extra chr
 
   await expect(rail.getByTestId('round-line-1')).toBeVisible()
   await expect(rail).toContainText('Initial QC')
-  // No accordion sections, no scope note, no draft-gap row: nothing that a
+  // No accordion sections, no scope note, no History menu: nothing that a
   // pre-rounds legacy issue did not already have.
   await expect(panel.getByTestId('round-section-1')).toHaveCount(0)
   await expect(panel.getByTestId('picker-scope')).toHaveCount(0)
-  await expect(panel.getByTestId('draft-gap-row')).toHaveCount(0)
+  await expect(panel.getByTestId('history-menu-trigger')).toHaveCount(0)
   // No start-round action: this issue's only round is still open, and a new round
   // builds on an approval. It is offered once the round closes — see start-round.spec.
   await expect(panel.getByTestId('round-rail-start')).toHaveCount(0)
@@ -305,15 +369,27 @@ test('S2: with Round 2 open, only its membership is offered by default', async (
   await expect(track.getByText(SHORT(ROUND1_OPENED))).toHaveCount(0)
 })
 
-test('S2: Show all commits widens the track to the full history', async ({ page }) => {
+/**
+ * D16: the density checkbox no longer widens the reach. This test previously asserted the
+ * opposite — that "Show all commits" produced the full history and dropped the scope note
+ * — which is exactly the conflation D16 removed: seeing one more commit inside the round
+ * should not require leaving it. Reach lives on the rail instead.
+ */
+test('D16: the density checkbox does not widen the track to the full history', async ({ page }) => {
   const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
   const track = panel.getByTestId('notify-picker')
 
-  await panel.getByLabel('Show all commits').check()
+  await panel.getByLabel('Show every commit on the track').check()
 
+  // Still scoped, and Initial QC is still off the track.
+  await expect(panel.getByTestId('picker-scope')).toContainText('scoped to Round 2')
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toHaveCount(0)
+  const menu = await openHistory(page, panel)
+  await expect(menu.getByTestId('rail-round-0')).toHaveAttribute('data-on-track', 'false')
+
+  // Ticking it in the History menu is what brings Initial QC onto the track.
+  await menu.getByTestId('rail-round-0').click()
   await expect(track.getByText(SHORT(ROUND1_OPENED))).toBeVisible()
-  await expect(track.getByText(SHORT(ROUND1_CLOSED))).toBeVisible()
-  await expect(panel.getByTestId('picker-scope')).toHaveCount(0)
 })
 
 test('S2: the Review and Approve pickers are scoped to the open round too', async ({ page }) => {
@@ -338,36 +414,182 @@ test('S2: a legacy single-round picker is not scoped and still offers every comm
 })
 
 // ---------------------------------------------------------------------------
-// S3: draft-gap collapse
+// D16 / U5–U8: the segment rail
 // ---------------------------------------------------------------------------
 
-test('S3: the draft-gap run collapses to a marker in full-history mode and expands on click', async ({ page }) => {
+test('D16: the gap between rounds is a menu row that puts its commits on the track', async ({ page }) => {
   const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
   const track = panel.getByTestId('notify-picker')
 
-  // No marker while scoped — the gap is outside the window entirely.
-  await expect(panel.getByTestId('draft-gap-row')).toHaveCount(0)
+  // The menu is available *while scoped* — that is the point of D16. Previously the
+  // reach affordance only existed once you had already asked for the whole history,
+  // i.e. exactly where it was least useful.
+  const menu = await openHistory(page, panel)
+  const gap = menu.getByTestId('rail-gap-1')
+  await expect(gap).toBeVisible()
+  await expect(gap).toHaveAttribute('data-continuity', 'linear')
+  // Spelled out, not compressed to `·1` — the whole reason for the vertical form.
+  await expect(gap).toContainText('1 commit between rounds')
 
-  await panel.getByLabel('Show all commits').check()
-
-  const marker = panel.getByTestId('draft-gap-2')
-  await expect(marker).toBeVisible()
-  await expect(marker).toContainText('1 commit')
-  // Collapsed: the gap commit is not on the track yet.
+  // Off the track to begin with.
+  await expect(gap).toHaveAttribute('data-on-track', 'false')
   await expect(track.getByText(SHORT(DRAFT_GAP_COMMIT))).toHaveCount(0)
 
-  await marker.click()
+  await gap.click()
+  await expect(gap).toHaveAttribute('data-on-track', 'true')
   await expect(track.getByText(SHORT(DRAFT_GAP_COMMIT))).toBeVisible()
 
-  // And it collapses back.
-  await marker.click()
+  // And back off again.
+  await gap.click()
   await expect(track.getByText(SHORT(DRAFT_GAP_COMMIT))).toHaveCount(0)
 })
 
-test('S3: a single-round issue has no draft-gap markers even in full-history mode', async ({ page }) => {
+test('D16: an earlier round is a named menu row that puts its commits on the track', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
+  const track = panel.getByTestId('notify-picker')
+
+  // Round 1 is outside the scope, so it is reachable but not on the track by default.
+  const menu = await openHistory(page, panel)
+  const chip = menu.getByTestId('rail-round-0')
+  await expect(chip).toBeVisible()
+  await expect(chip).toContainText('Initial QC')
+  await expect(chip).toContainText('2 commits')
+  await expect(chip).toHaveAttribute('data-selectable', 'true')
+  await expect(chip).toHaveAttribute('data-on-track', 'false')
+
+  // ROUND1_OPENED is Initial QC's own anchor, and is not forced visible by any default.
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toHaveCount(0)
+  await chip.click()
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toBeVisible()
+})
+
+/**
+ * The scoped round is on the track unconditionally: the round being worked in is the
+ * whole point of the picker, so its chip is not a toggle that could take it away.
+ */
+test('D16: the scoped round is listed as current and cannot be taken off', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
+  const menu = await openHistory(page, panel)
+  const chip = menu.getByTestId('rail-round-2')
+
+  await expect(chip).toContainText('Round 2')
+  // Said in words rather than implied by a filled pill.
+  await expect(chip).toContainText('current round')
+  await expect(chip).toContainText('always shown')
+  await expect(chip).toHaveAttribute('data-in-scope', 'true')
+  await expect(chip).toHaveAttribute('data-on-track', 'true')
+  await expect(chip).toHaveAttribute('data-selectable', 'false')
+  // Not wrapped in a button, so there is nothing to click.
+  await expect(menu.locator('button [data-testid="rail-round-2"]')).toHaveCount(0)
+})
+
+test('D16: the menu lists segments newest-first with the gap between them', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, multiRoundStatus)
+  const menu = await openHistory(page, panel)
+
+  // Newest-first for reading, matching `git log`: the segment you are working in is the
+  // one under the cursor. `pos` still indexes the oldest-first model, so the displayed
+  // order is the reverse of the model's.
+  const ids = await menu
+    .locator('[data-testid^="rail-"]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
+  expect(ids).toEqual(['rail-round-2', 'rail-gap-1', 'rail-round-0'])
+})
+
+/**
+ * The case the on-track markers got exactly backwards. When the scope round is
+ * `Unplaceable` the scope is empty, and the old design derived its markers *from* the
+ * scope — so every reach affordance vanished at the one moment the structure most
+ * needed explaining, and the full history silently appeared instead.
+ */
+test('D16: an unplaceable round is still listed, with its reason spelled out', async ({ page }) => {
+  const panel = await openNotify(page, unplaceableIssue, unplaceableStatus)
+
+  // Premise: this is the empty-scope fallback, not a normal scoped track.
+  await expect(panel.getByTestId('picker-scope-unplaceable')).toBeVisible()
+
+  const menu = await openHistory(page, panel)
+  const chip = menu.getByTestId('rail-round-2')
+  await expect(chip).toContainText('Round 2')
+  await expect(chip).toHaveAttribute('data-unplaceable', 'branch_unavailable')
+  // It owns no commits (I5), so there is nothing to put on the track.
+  await expect(chip).toHaveAttribute('data-selectable', 'false')
+  // The reason is *readable text on the row*, not a tooltip and not a strikethrough that
+  // leaves the reader to guess. This is what the vertical form buys.
+  await expect(chip).toContainText('could not be placed')
+  await expect(chip).toContainText('its branch is unavailable locally')
+})
+
+test('D16: a diverged gap says so, and names the commit the two sides meet at', async ({ page }) => {
+  const panel = await openNotify(page, crossBranchIssue, crossBranchStatus)
+
+  const menu = await openHistory(page, panel)
+  const gap = menu.getByTestId('rail-gap-1')
+  await expect(gap).toHaveAttribute('data-continuity', 'diverged')
+  await expect(menu.getByTestId('history-continuity-1')).toContainText(
+    `histories diverge — they meet at ${SHORT(ROUND1_OPENED)}`,
+  )
+  // Still reachable: the UI never blocks reach, it only refuses to claim a diff.
+  await expect(gap).toHaveAttribute('data-selectable', 'true')
+})
+
+/**
+ * `unrelated` reads as severed rather than merely diverged, because "these rounds are on
+ * branches that meet nowhere" is a different fact from "they diverged and meet
+ * upstream". In the vertical form that is a sentence, not a dash nobody can read.
+ */
+test('D16: an unrelated gap says there is no shared history, and is still reachable', async ({ page }) => {
+  const panel = await openNotify(page, crossBranchIssue, unrelatedHistoryStatus)
+
+  const menu = await openHistory(page, panel)
+  const gap = menu.getByTestId('rail-gap-1')
+  await expect(gap).toHaveAttribute('data-continuity', 'unrelated')
+  await expect(menu.getByTestId('history-continuity-1')).toContainText('no shared history')
+
+  // Reach across it is offered, per the decision that the UI never blocks reach.
+  const chip = menu.getByTestId('rail-round-0')
+  await expect(chip).toHaveAttribute('data-selectable', 'true')
+  await chip.click()
+  await expect(panel.getByTestId('notify-picker').getByText(SHORT(ROUND1_OPENED))).toBeVisible()
+})
+
+test('D16: the density checkbox widens within the round without leaving it', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, roundTwoWithQuietCommit)
+  const track = panel.getByTestId('notify-picker')
+
+  // The quiet commit is in the scoped round but is neither file-changing nor named by a
+  // comment, so the pertinence filter hides it.
+  await expect(track.getByText(SHORT(QUIET_IN_ROUND))).toHaveCount(0)
+
+  await panel.getByLabel('Show every commit on the track').check()
+  await expect(track.getByText(SHORT(QUIET_IN_ROUND))).toBeVisible()
+
+  // ...and the reach did not widen: Round 1 stays off the track. This is the axis
+  // split — the old single toggle would have shown everything here.
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toHaveCount(0)
+  const menu = await openHistory(page, panel)
+  await expect(menu.getByTestId('rail-round-0')).toHaveAttribute('data-on-track', 'false')
+})
+
+test('S3: a single-round issue has no rail — there is no structure to navigate', async ({ page }) => {
   const panel = await openNotify(page, legacyRoundIssue, legacyRoundStatus)
-  await panel.getByLabel('Show all commits').check()
-  await expect(panel.getByTestId('draft-gap-row')).toHaveCount(0)
+  await panel.getByLabel('Show every commit on the track').check()
+  await expect(panel.getByTestId('history-menu-trigger')).toHaveCount(0)
+})
+
+test('U5: approving does not widen the track to the whole history', async ({ page }) => {
+  // The premise: this thread's last segment is a Gap, so there is no *open* round — the
+  // state the old `activeRoundPos` scope returned null for, silently showing everything.
+  expect(approvedMultiRound.segments.at(-1)?.kind).toBe('gap')
+  // ...and it has segments outside the scope, so a scope note is meaningful at all.
+  expect(approvedMultiRound.segments.length).toBeGreaterThan(2)
+
+  // Opened with `multiRoundIssue` because the fixture spreads `multiRoundStatus`, so
+  // that is the issue its status belongs to — and it is open, so no include-closed
+  // toggle is needed to see the card.
+  const panel = await openNotify(page, multiRoundIssue, approvedMultiRound)
+  // Still scoped, and to the round that just closed rather than to nothing.
+  await expect(panel.getByTestId('picker-scope')).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -584,6 +806,122 @@ test('D1: a commit that is one round\'s approval and the next round\'s anchor sh
   // And it is genuinely one slot, not the same hash drawn twice — a duplicate row would
   // break the picker's positional defaults.
   await expect(panel.getByTestId(`commit-dot-${SHORT(ROUND1_CLOSED)}-initial`)).toHaveCount(1)
+})
+
+/**
+ * The track is horizontally centred in its panel.
+ *
+ * It was not: the container carried `paddingLeft: 16, paddingRight: 40`, parking the
+ * whole slider 24px left of centre. Asserted as *symmetry of the end insets* rather
+ * than against literal pixel values, so it pins the property the eye actually notices
+ * and does not have to be rewritten when the padding changes.
+ */
+test('the track sits centred in its panel, not offset to one side', async ({ page }) => {
+  // Two visible commits, so there is a real leftmost and rightmost dot to measure.
+  const panel = await openNotify(page, multiRoundIssue, roundTwoNoNotification)
+  const track = panel.getByTestId('notify-picker')
+  const slots = track.locator('[data-end-allowed]')
+
+  // Premise: one dot cannot be off-centre, it is drawn mid-track by construction.
+  expect(await slots.count()).toBeGreaterThan(1)
+
+  const trackBox = await track.boundingBox()
+  const firstBox = await slots.first().boundingBox()
+  const lastBox = await slots.last().boundingBox()
+  expect(trackBox).not.toBeNull()
+  expect(firstBox).not.toBeNull()
+  expect(lastBox).not.toBeNull()
+  if (trackBox === null || firstBox === null || lastBox === null) return
+
+  // Dot *centres*, not outer edges: an end slot renders one dot per status, so the first
+  // and last groups differ in width and comparing their outer edges leaks half that
+  // difference into the measurement (3.5px on a correctly centred track).
+  const firstCentre = firstBox.x + firstBox.width / 2
+  const lastCentre = lastBox.x + lastBox.width / 2
+  const leftInset = firstCentre - trackBox.x
+  const rightInset = trackBox.x + trackBox.width - lastCentre
+  expect(
+    Math.abs(leftInset - rightInset),
+    `track is off-centre: ${leftInset}px on the left, ${rightInset}px on the right`,
+  ).toBeLessThanOrEqual(2)
+})
+
+// ---------------------------------------------------------------------------
+// U6/U7: what each action may select
+// ---------------------------------------------------------------------------
+
+/**
+ * U6: Approve may only land on a commit in the scoped round, so an expanded earlier
+ * round's commits are dimmed — the constraint is visible before you drag into it.
+ *
+ * Approval closes a round **at** a commit, so the commit must belong to that round.
+ */
+test('U6: Approve dims commits outside the scoped round', async ({ page }) => {
+  await openModal(page, multiRoundIssue, multiRoundStatus)
+  await page.getByRole('tab', { name: 'Approve', exact: true }).click()
+  const panel = page.getByRole('tabpanel', { name: 'Approve' })
+  await expect(panel).toBeVisible()
+
+  // Reach into Initial QC, then check its commits cannot be the approval point.
+  // Ticked in the History menu, which is then dismissed by its own trigger. (Escape
+  // would close the whole issue modal — see the note in `HistoryMenu`.)
+  await (await openHistory(page, panel)).getByTestId('rail-round-0').click()
+  await panel.getByTestId('history-menu-trigger').click()
+  await expect(page.getByTestId('history-menu')).toHaveCount(0)
+  const track = panel.getByTestId('approve-picker')
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toBeVisible()
+
+  // Some slots are now blocked, and some are still allowed — asserting only the first
+  // would pass on a track where *everything* got dimmed.
+  await expect(track.locator('[data-end-allowed="false"]').first()).toBeVisible()
+  await expect(track.locator('[data-end-allowed="true"]').first()).toBeVisible()
+})
+
+/**
+ * U6: Review has no such constraint — a review records what the reviewer *read*, and
+ * reading an older round's commit is legitimate. So nothing is dimmed.
+ */
+test('U6: Review allows a commit from an earlier round', async ({ page }) => {
+  await openModal(page, multiRoundIssue, multiRoundStatus)
+  await page.getByRole('tab', { name: 'Review', exact: true }).click()
+  const panel = page.getByRole('tabpanel', { name: 'Review' })
+  await expect(panel).toBeVisible()
+
+  // Ticked in the History menu, which is then dismissed by its own trigger. (Escape
+  // would close the whole issue modal — see the note in `HistoryMenu`.)
+  await (await openHistory(page, panel)).getByTestId('rail-round-0').click()
+  await panel.getByTestId('history-menu-trigger').click()
+  await expect(page.getByTestId('history-menu')).toHaveCount(0)
+  const track = panel.getByTestId('review-picker')
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toBeVisible()
+
+  // Every slot is selectable, unlike Approve above.
+  await expect(track.locator('[data-end-allowed="false"]')).toHaveCount(0)
+  await expect(track.locator('[data-end-allowed="true"]').first()).toBeVisible()
+})
+
+/**
+ * U6/U7: Notify's `to` may not sit in a closed round, but the constraint is keyed on
+ * position rather than segment kind — so the *trailing* gap, being newer than the scope,
+ * stays selectable. A rule written as "another segment ⇒ from-only" would have blocked
+ * exactly the drift U5 exists to surface.
+ */
+test('U7: Notify blocks an earlier round as the to-end but allows the newer trailing gap', async ({ page }) => {
+  const panel = await openNotify(page, multiRoundIssue, approvedMultiRound)
+  const track = panel.getByTestId('notify-picker')
+
+  // Ticked in the History menu, which is then dismissed by its own trigger. (Escape
+  // would close the whole issue modal — see the note in `HistoryMenu`.)
+  await (await openHistory(page, panel)).getByTestId('rail-round-0').click()
+  await panel.getByTestId('history-menu-trigger').click()
+  await expect(page.getByTestId('history-menu')).toHaveCount(0)
+  await expect(track.getByText(SHORT(ROUND1_OPENED))).toBeVisible()
+  // Initial QC is older than the scope, so it cannot be the to-end.
+  await expect(track.locator('[data-end-allowed="false"]').first()).toBeVisible()
+
+  // The premise for the other half: the trailing gap is in scope, so nothing about it is
+  // dimmed — it is newer than the round, not older.
+  expect(approvedMultiRound.segments.at(-1)?.kind).toBe('gap')
 })
 
 /** U2: the rail states the divergence too, where it happened. */

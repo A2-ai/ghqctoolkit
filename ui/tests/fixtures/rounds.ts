@@ -473,6 +473,21 @@ export const crossBranchStatus: IssueStatusResponse = {
 }
 
 /**
+ * The same two rounds, but on branches that share no history at all — the gap between
+ * them is `unrelated`, so no diff across it is meaningful and there is no merge base to
+ * name. The rail draws this severed rather than dashed; reach across it is still offered
+ * and the receipt is what declines to claim a diff.
+ */
+export const unrelatedHistoryStatus: IssueStatusResponse = {
+  ...crossBranchStatus,
+  ...segmentFields([
+    crossBranchSegments[0],
+    { ...(crossBranchSegments[1] as GapSegment), continuity: { kind: 'unrelated' } },
+    crossBranchSegments[2],
+  ]),
+}
+
+/**
  * A segment that could not be placed: Round 2's branch is unavailable locally, so
  * it owns no commits and the gap before it is unplaceable by neighbour (W6).
  */

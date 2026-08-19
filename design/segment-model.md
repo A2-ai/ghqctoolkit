@@ -687,3 +687,164 @@ Note this is **not** a licence to let W5 override W2. **W2** already fixes an in
 Gap's older bound at *the previous Round's closing commit, exclusive*; **W5**'s merge-base
 is a refinement that applies when the merge-base is *newer* than that bound. The clamp
 restores W2's precedence rather than inventing a new rule.
+
+---
+
+## §15 Picker reach and density (D16, U5–U8)
+
+Added after use. The picker's single `showAll` boolean did **three** jobs at once
+(`RoundCommitPicker.tsx`): dropped the pertinence filter, left the round scope, and
+enabled the collapsible-gap markers. The three are orthogonal, and welding them together
+produced the complaint that motivated this section — *the whole history is too busy*, yet
+the only way to see one extra commit inside the current round was to show everything.
+
+**D16 — reach and density are separate axes, and reach is expanded per segment, in place.**
+
+- **Density** (a checkbox, scoped): show every commit in the scoped round, not only the
+  file-changing or comment-named ones. Never leaves the scope.
+- **Reach** (no mode, no dropdown): every segment outside the scope renders as a collapsed
+  marker on the track — `Round 1 ·4`, `gap ·3` — and clicking one expands it **in place**.
+  This generalises the interior-gap markers that already existed, which were previously
+  available *only* in the noisy mode, exactly backwards.
+
+  > **Corrected after use — twice. See §16.** The on-track markers were wrong, and so was
+  > the horizontal rail that replaced them. The axis split above is the only part of D16
+  > that survived; everything about *where* and *how* reach is exposed is superseded by
+  > **D17**.
+
+**U5 — scope survives approval.** Scope was `activeRoundPos`, which is null unless the
+last segment is a Round. Approving closes the round, **I3** appends a trailing Gap, and the
+picker therefore silently fell back to the entire history — the jump a user sees the moment
+they approve. Scope is now the newest Round **plus the trailing Gap when one is last**, so
+approving does not change what is on screen, and drift landing after the approval appears
+without touching a control.
+
+**U6 — what may be selected depends on what the action does.** Not one rule: the
+constraint follows from whether an action mutates round state, records an observation, or
+asks a question.
+
+| Tab | Handles | `from` | `to` |
+|---|---|---|---|
+| **Notify** | range | anything visible | the scoped round **and newer** (so trailing-gap drift qualifies) |
+| **Review** | single | — | **anything visible**, including an earlier round |
+| **Approve** | single | — | **the scoped round only** |
+
+*Notify* asks someone to read a range, so `to` bounds the question — it means "the newest
+state I claim to have addressed", which cannot sit in a round that already closed. *Review*
+merely records what the reviewer read, and reading an older round's commit is legitimate.
+*Approve* closes a round **at** a commit, so that commit must belong to that round —
+including excluding the trailing gap, since approving drift no round covers would bypass
+the model (**S5** makes *start a new round* the resolution for `changes_after_approval`).
+
+**U7 — the constraint is keyed on position, not on segment identity.** "A different round
+is from-only" is nearly right and fails for the trailing Gap, whose commits are *newer* than
+the scope and are precisely what **U5** exists to surface. The rule is therefore
+older-than-scope ⇒ from-only; scope-or-newer ⇒ eligible as `to`. Deriving it from what the
+handle means rather than from a segment-kind check is what keeps it correct when a new
+segment shape appears.
+
+**U8 — the UI is stricter than the CLI, deliberately.** `QCApprove::from_interactive`
+(`src/cli/context.rs`) offers the flat all-segments list, commented *"an approval may name
+an older one"*. The UI blocks that; the CLI remains the escape hatch. This is a differing
+**guardrail**, not a differing model — a flat list has no scope to be strict about — but it
+is a real CLI/UI divergence and is recorded here rather than left to be rediscovered,
+because `§0` exists precisely because such divergences went unrecorded.
+
+
+## §16 Reach as a vertical timeline (D17)
+
+Added after use, and it **supersedes D16's placement of reach** (§15). The axis split
+itself — density is a checkbox, reach is not — was right and stands. Putting reach *on the
+track* was not, and neither was putting it in a horizontal strip beside it.
+
+### Two failed designs, one failure
+
+**Attempt 1 — chips pinned to a track boundary.** Every out-of-scope segment is older than
+the scope, so the boundary they attached to was always slot 0. The chips never moved, so
+their position meant nothing; a third round piled four of them into the corner; and because
+they were derived *from* the scope, an `Unplaceable` scope round (**D4/S4**) emptied the
+scope and erased every one of them — no structure shown at the one moment the structure is
+confusing. The track was also 24px left of centre (`paddingLeft: 16, paddingRight: 40`),
+since fixed and pinned by a symmetry assertion rather than pixel literals.
+
+**Attempt 2 — a horizontal rail of round chips joined by gap connectors.** This fixed the
+scope-erasure and the pile-up, and it was still wrong. At that size a connector is a few
+pixels of dashes, so the continuity distinction it existed to carry was illegible; and pills
+reading `Round 2 ·2` beside `Initial QC ·5` look like a **tab bar**, so the implied action
+was *switch to that round* when the actual action is *add it alongside*. An affordance that
+misstates its own action is worse than no affordance.
+
+Both are the same failure: **1D leaves room for glyphs but not for words.** `·5` is correct,
+compact and unreadable — the whole problem in miniature.
+
+### D17 — reach is a vertical timeline behind a `History ▾` button
+
+Vertically there is room to simply say `2 commits`, `no shared history`, `its branch is
+unavailable locally`. Nothing is a glyph to decode, and a spine drawn as a `border-left` on
+each row's gutter joins up **by construction** — consecutive rows meet where the rows meet,
+so there is no position arithmetic to get wrong. That is the structural reason the vertical
+form works where two horizontal ones did not.
+
+Ordered **newest-first**, matching `git log` rather than the track's left-to-right age
+order: the segment being worked in is the one that should be under the cursor. `pos` still
+indexes the oldest-first model, so the displayed order is the model's reversed.
+
+The load-bearing distinction survives from attempt 2 intact, because it was never the part
+that was wrong:
+
+- **Order is round order**, and the model always knows it. `segments` is strictly
+  alternating and oldest-first (**I1/I3**), derived from *comment order in the issue* — not
+  from git ancestry. So a row's position is honest even for rounds whose branches meet
+  nowhere. This is what makes the design safe for the cross-branch case, which is the
+  question that produced it: *how does this work if Round 2 and Round 3 are not on the same
+  branch and a consistent history does not exist?*
+- **Connection is a claim about commits**, and belongs to the **gaps alone**. A gap is not a
+  station on the timeline; it is the join between two rounds, so it is drawn *as the spine*
+  and its `continuity` is the spine's line style:
+
+  | Gap state | Spine through that row | Says |
+  |---|---|---|
+  | `linear` | solid grey | the commit count, when non-empty |
+  | `diverged { merge_base }` | dashed orange | `histories diverge — they meet at <sha>` |
+  | `unrelated` | **severed** — no spine, an orange bar across | `no shared history — no diff across this point is meaningful` |
+  | `Unplaceable` | no spine | `commits between these rounds could not be listed` |
+
+  `unrelated` is severed rather than dashed deliberately: *"these rounds are on branches
+  that meet nowhere"* is a different fact from *"they diverged and meet upstream"*, and a
+  dashed line reads as the second. An `Unplaceable` gap gets no spine either — its commits
+  are *unknown*, not absent, and a plain spine would assert a continuity nothing
+  established.
+
+Consequences:
+
+- **An `Unplaceable` round stays on the timeline**, its dot hollow orange, unselectable,
+  reading `could not be placed · <reason>` as ordinary text. It owns no commits (**I5**), so
+  there is nothing to put on the track. This inverts attempt 1's worst failure.
+- **The scoped round is not a toggle** — it reads `always shown`. The round being worked in
+  is the point of the picker.
+- **In the fallback there is no round being worked in.** When the scope fell back, an older
+  round must not be described as *just closed* merely because it was the newest *placeable*
+  segment; the rows then say only what is true of the round itself. This was a live
+  misstatement, caught by looking at the rendered output rather than at the tests.
+- **No menu for a single-round thread**, which has no structure to navigate. Those threads
+  behave exactly as before rounds existed.
+
+**Reach is never blocked, including across a severed gap.** You may put an `unrelated`
+neighbour's commits on the track and select one; the receipt then refuses to claim a result
+— `⇢` instead of `→`, commit count withheld, *"histories not connected"*. One rule instead
+of a special case, and the same principle as **U8**: the guardrail that matters is
+per-action (**U6** — Approve remains `scope-round-only`), not a blanket ban on looking.
+
+**The density checkbox is relabelled** from *"Show every commit in this round"* to *"Show
+every commit on the track"*. The menu can put more than the round on the track, so the old
+label had become false — and *"in this round"* was itself a correction of *"Show all
+commits"*, whose ambiguity between the two axes is what §15 removed.
+
+### Known rough edge
+
+**Escape closes the whole issue modal, not just the menu.** Mantine's `Modal` implements
+`closeOnEscape` with a `window` listener, which neither a React `stopPropagation` on the
+dropdown nor a capture-phase `window` listener registered by the menu preempts — verified,
+not assumed. Scoping it properly means plumbing `closeOnEscape` down through
+`IssueDetailModal`, which is a change to the modal rather than to the picker, so it is
+recorded here rather than done silently. The menu is dismissed by clicking `History` again.

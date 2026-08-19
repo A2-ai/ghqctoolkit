@@ -121,15 +121,18 @@ test('multi-commit: default From/To are set correctly', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 7. Show all commits toggle reveals the hidden commit (ccccccc)
+// 7. The density toggle reveals the hidden commit (ccccccc)
 // ---------------------------------------------------------------------------
-test('show all commits toggle reveals hidden commits', async ({ page }) => {
+// D16: this is the *density* axis, unchanged in behaviour — only the label moved, from
+// "Show all commits" to "Show every commit on the track", because the control no longer
+// also widens the reach.
+test('the density toggle reveals commits the pertinence filter hid', async ({ page }) => {
   await setupAndOpenModal(page, multiCommitIssue, multiCommitStatus)
 
   // ccccccc is hidden initially (no file change, no statuses, not the exception index)
   await expect(page.getByText('ccccccc')).not.toBeVisible()
 
-  await page.getByRole('checkbox', { name: 'Show all commits' }).click()
+  await page.getByRole('checkbox', { name: 'Show every commit on the track' }).click()
 
   await expect(page.getByText('ccccccc')).toBeVisible()
 })

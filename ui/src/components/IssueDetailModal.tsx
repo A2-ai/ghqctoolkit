@@ -242,6 +242,10 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setB: setSliderBOrigIdx,
     forcedIdxs,
     showAll,
+    // U6: Notify asks someone to read a range, so `to` bounds the question — it means
+    // "the newest state I claim to have addressed", which cannot sit in a round that
+    // already closed. Keyed on position (U7), so trailing-gap drift still qualifies.
+    endReach: 'scope-and-newer',
   })
 
   const { visibleCommits, fromCommit, toCommit } = picker
@@ -645,6 +649,9 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setA: setCommitOrigIdx,
     forcedIdxs,
     showAll,
+    // U6: a review records what the reviewer *read*, and reading an older round's commit
+    // is legitimate — so no constraint here.
+    endReach: 'any',
   })
   const { visibleCommits, selectedCommit } = picker
 
@@ -884,6 +891,10 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     setA: setCommitOrigIdx,
     forcedIdxs,
     showAll,
+    // U6: approval closes a round **at** a commit, so the commit must belong to that
+    // round. The trailing gap is excluded too: approving drift no round covers would
+    // bypass the model (S5 resolves `changes_after_approval` by starting a new round).
+    endReach: 'scope-round-only',
   })
   const { visibleCommits, selectedCommit } = picker
 
