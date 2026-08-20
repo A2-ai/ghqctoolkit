@@ -83,13 +83,13 @@ The API spec is available at `openapi/openapi.yml` in the repository.
 |---|---|---|
 | `-p, --port` (`ghqc ui`) | random | Port to listen on; omit to let the OS choose an available port |
 | `-p, --port` (`ghqc serve`) | `3103` | Port to listen on |
-| `--bind` (env `GHQC_BIND`) | `127.0.0.1` | IP address to bind the listener to |
+| `--bind` (env `GHQC_BIND_ADDR`) | `127.0.0.1` | IP address to bind the listener to |
 | `-d, --directory` | `.` | Git project directory to serve |
 | `--config-dir` | (auto-resolved) | Configuration directory path |
 
 ### Bind Address
 
-`--bind` (env var `GHQC_BIND`) takes any IP address, and that address is bound exactly as given — there is no probing and no fallback to another address, so a bind failure is reported as an error instead of being silently retried elsewhere. The default, `127.0.0.1`, listens on IPv4 loopback only, so the server is reachable only from processes on the same host. That matters because the API has no authentication and permissive CORS; a wildcard bind exposes it on every interface of the host, which is a real problem on shared or multi-tenant cluster nodes.
+`--bind` (env var `GHQC_BIND_ADDR`) takes any IP address, and that address is bound exactly as given — there is no probing and no fallback to another address, so a bind failure is reported as an error instead of being silently retried elsewhere. The default, `127.0.0.1`, listens on IPv4 loopback only, so the server is reachable only from processes on the same host. That matters because the API has no authentication and permissive CORS; a wildcard bind exposes it on every interface of the host, which is a real problem on shared or multi-tenant cluster nodes.
 
 | Value | Reachable from |
 |---|---|

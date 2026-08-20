@@ -117,7 +117,7 @@ enum Commands {
         port: u16,
 
         /// Address to bind. Defaults to IPv4 loopback; use `::1` for IPv6 loopback, `::` for a dual-stack wildcard, or `0.0.0.0` for all IPv4 interfaces. Bracketed IPv6 (`[::1]`) is also accepted
-        #[arg(long, default_value = "127.0.0.1", env = "GHQC_BIND", value_parser = parse_bind_addr)]
+        #[arg(long, default_value = "127.0.0.1", env = "GHQC_BIND_ADDR", value_parser = parse_bind_addr)]
         bind: std::net::IpAddr,
     },
     #[cfg(feature = "ui")]
@@ -133,7 +133,7 @@ enum Commands {
         #[arg(long)]
         no_open: bool,
         /// Address to bind. Defaults to IPv4 loopback; use `::1` for IPv6 loopback, `::` for a dual-stack wildcard, or `0.0.0.0` for all IPv4 interfaces. Bracketed IPv6 (`[::1]`) is also accepted
-        #[arg(long, default_value = "127.0.0.1", env = "GHQC_BIND", value_parser = parse_bind_addr)]
+        #[arg(long, default_value = "127.0.0.1", env = "GHQC_BIND_ADDR", value_parser = parse_bind_addr)]
         bind: std::net::IpAddr,
     },
 }
