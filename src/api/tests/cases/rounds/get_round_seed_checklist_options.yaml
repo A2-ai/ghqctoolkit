@@ -1,0 +1,108 @@
+name: "GET /api/issues/{number}/rounds/seed - every round's checklist is offered"
+description: >
+  Starting round 3, both Initial QC's checklist and round 2's are selectable, so an
+  author whose round 2 was a trimmed pass can go back to the original. Round 2's
+  checklist carries its own `## ` section titles, which must survive extraction
+  whole rather than being truncated at the first one.
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      state: "closed"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        ## QC Round
+        * current round: 2
+        * round comment: https://github.com/test-owner/test-repo/issues/1#issuecomment-456
+
+        # Code Review Checklist
+        - [x] Reviewed the logic
+        - [ ] Checked the tests
+      milestone: 1
+  comments:
+    # Closes Initial QC.
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+    # Opens round 2 with a trimmed checklist that has its own `## ` headings.
+    - issue: 1
+      author: author
+      id: 456
+      html_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
+      body: |
+        # QC Round
+
+        ## Metadata
+        * round: 2
+        * initial qc round commit: 456def789abc012345678901234567890123cdef
+        * previous approved commit: 456def789abc012345678901234567890123cdef
+        * git branch: main
+
+        # Focused Re-review
+
+        **Clockify code**: [INSERT]
+
+        ## Technical Review
+
+        ### General
+
+        - [x] Script renders free of error
+    # Closes round 2, so a third round is legal.
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+
+request:
+  method: GET
+  path: "/api/issues/1/rounds/seed"
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      file: "src/test.rs"
+      next_round: 3
+      next_round_name: "Round 3"
+      # Defaults to the most recent round's checklist, unchanged behaviour.
+      checklist_content: "**Clockify code**: [INSERT]\n\n## Technical Review\n\n### General\n\n- [ ] Script renders free of error"
+      checklist_name: "Focused Re-review"
+      checklist_options:
+        - round: 1
+          round_name: "Initial QC"
+          checklist_name: "Code Review Checklist"
+          content: "- [ ] Reviewed the logic\n- [ ] Checked the tests"
+        - round: 2
+          round_name: "Round 2"
+          checklist_name: "Focused Re-review"
+          content: "**Clockify code**: [INSERT]\n\n## Technical Review\n\n### General\n\n- [ ] Script renders free of error"
+      default_round: 2
+      anchor: "abc1234567890abcdef1234567890abcdef12340"
+      branch: main
+      comparison_base: "456def789abc012345678901234567890123cdef"
+      divergence: null
+      previous_approval: "456def789abc012345678901234567890123cdef"
+      can_start: true
+      blocked_reason: null
+
+# A seed must never write.
+assert_write_calls: []

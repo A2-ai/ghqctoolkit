@@ -11,8 +11,13 @@ use std::{fmt, fs};
 
 use crate::GitHubWriter;
 use crate::{
-    Configuration, ContextPosition, QCContext, configuration::Checklist,
-    create::normalize_collaborator_entry, git::RepoUser, issue::IssueThread,
+    Configuration, ContextPosition, QCContext,
+    configuration::Checklist,
+    create::normalize_collaborator_entry,
+    git::RepoUser,
+    issue::IssueCommit,
+    issue::IssueThread,
+    round::{RoundEvent, Segment},
 };
 
 /// Enum representing the type of relevant file class for interactive selection
@@ -559,13 +564,79 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
     }
 }
 
-/// Helper function to format commit options for display
-fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<String> {
+/// Every commit the issue's segments own, newest first, paired with the position of
+/// the segment that owns it.
+///
+/// Segments are oldest-first and each owns its commits newest-first, so walking them
+/// in reverse yields one newest-first list. The owning segment travels with the commit
+/// because what a commit *is* — a round's anchor, its approval, drift after one — is a
+/// fact of that segment and of nothing wider.
+///
+/// A boundary commit shared by two adjacent segments (**D1**: a round may open at the
+/// previous round's closing commit) appears once, credited to the newer-owning segment.
+/// The UI's per-segment picker renders both copies deliberately (**D14**) because each
+/// row sits under its own segment heading; a single flat list is not that, and a commit
+/// listed twice makes two picker indices name the same commit — which is how "compare
+/// the latest two file changes" came to mean comparing a commit against itself.
+pub fn thread_commits(issue_thread: &IssueThread) -> Vec<(usize, &IssueCommit)> {
+    let mut seen = std::collections::HashSet::new();
     issue_thread
-        .commits
+        .segments
         .iter()
         .enumerate()
-        .map(|(i, commit)| {
+        .rev()
+        .flat_map(|(position, segment)| {
+            segment
+                .commits()
+                .iter()
+                .map(move |commit| (position, commit))
+        })
+        .filter(|(_, commit)| seen.insert(commit.hash))
+        .collect()
+}
+
+/// What to call the segment at `position` in a picker row.
+fn segment_label(issue_thread: &IssueThread, position: usize) -> String {
+    match &issue_thread.segments[position] {
+        Segment::Round(round) => round.name(),
+        // A gap is bounded by the round one position back — never two, which is the
+        // round-to-round offset.
+        Segment::Gap(_) => match position
+            .checked_sub(1)
+            .and_then(|previous| issue_thread.segments.get(previous))
+            .and_then(Segment::as_round)
+        {
+            Some(previous) => format!("since {}'s approval", previous.name()),
+            None => "outside any round".to_string(),
+        },
+    }
+}
+
+/// The legend the pickers print above their rows.
+const COMMIT_LEGEND: &str =
+    "   🌱 Round anchor  💬 Notified  👀 Reviewed  ✅ Approved  📍 Latest  📝 File changed";
+
+/// Every mark `format_commit_options` may put in front of a row's hash. Listed once so
+/// the readers below cannot fall out of step with the writer above.
+const COMMIT_MARKS: [char; 6] = ['🌱', '💬', '👀', '✅', '📍', '📝'];
+
+/// The short hash out of a row `format_commit_options` produced.
+fn selected_short_hash(row: &str) -> &str {
+    row.trim_start_matches("✓ ")
+        .trim_start_matches(|c: char| c.is_whitespace() || COMMIT_MARKS.contains(&c))
+        .split(" - ")
+        .next()
+        .unwrap_or("")
+        .trim()
+}
+
+/// Helper function to format commit options for display
+fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<String> {
+    let latest = issue_thread.latest_commit().map(|commit| commit.hash);
+    thread_commits(issue_thread)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (position, commit))| {
             let short_hash = commit.hash.to_string()[..8].to_string();
             let short_message = if commit.message.is_empty() {
                 "No message".to_string()
@@ -579,72 +650,70 @@ fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<
                 }
             };
 
-            // Determine commit status with priority display system
-            // Priority: Show Initial+Approved both, hide Notification when others present
-            let status_indicator = if commit
-                .statuses
-                .contains(&crate::issue::CommitStatus::Approved)
-            {
-                if commit
-                    .statuses
-                    .contains(&crate::issue::CommitStatus::Initial)
-                {
-                    "🌱✅" // Initial + Approved
-                } else {
-                    "✅" // Approved only
+            // What the owning round says about this commit. Read straight off that
+            // round's own events and state — nothing here re-derives round scope.
+            let status_indicator = match &issue_thread.segments[position] {
+                Segment::Round(round) => {
+                    let approved = round.closing_commit() == Some(&commit.hash);
+                    let anchor = round.opened_at == commit.hash;
+                    // Notified and reviewed are different events with different
+                    // meanings, so they get different marks: the legend says 💬
+                    // Notified, and a review drawn as 💬 would misname itself.
+                    let event = round
+                        .events
+                        .iter()
+                        .rev()
+                        .find(|event| *event.commit() == commit.hash);
+                    match (approved, anchor, event) {
+                        (true, true, _) => "🌱✅",
+                        (true, false, _) => "✅",
+                        (false, true, _) => "🌱",
+                        (false, false, Some(RoundEvent::Review { .. })) => "👀",
+                        (false, false, Some(RoundEvent::Notification { .. })) => "💬",
+                        _ if latest == Some(commit.hash) => "📍",
+                        _ => "  ",
+                    }
                 }
-            } else if commit
-                .statuses
-                .contains(&crate::issue::CommitStatus::Initial)
-            {
-                "🌱" // Initial commit
-            } else if commit
-                .statuses
-                .contains(&crate::issue::CommitStatus::Notification)
-            {
-                "💬" // Has comments
-            } else if commit.hash == issue_thread.latest_commit().hash {
-                "📍" // Latest commit
-            } else {
-                "  " // Regular commit
+                // Drift between rounds: nothing announced it, by definition.
+                Segment::Gap(_) if latest == Some(commit.hash) => "📍",
+                Segment::Gap(_) => "  ",
             };
 
             // Add file change indicator
             let file_indicator = if commit.file_changed { "📝" } else { "  " };
 
-            let selection_indicator = if selected.contains(&i) {
+            let label = segment_label(issue_thread, position);
+            if selected.contains(&i) {
                 format!(
-                    "✓ {}{} {} - {} (already selected)",
-                    status_indicator, file_indicator, short_hash, short_message
+                    "✓ {}{} {} - {} [{}] (already selected)",
+                    status_indicator, file_indicator, short_hash, short_message, label
                 )
             } else {
                 format!(
-                    "  {}{} {} - {}",
-                    status_indicator, file_indicator, short_hash, short_message
+                    "  {}{} {} - {} [{}]",
+                    status_indicator, file_indicator, short_hash, short_message, label
                 )
-            };
-
-            selection_indicator
+            }
         })
         .collect()
 }
 
 /// Select commits for comparison - returns (current, previous) in chronological order
 pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<ObjectId>)> {
-    if issue_thread.commits.is_empty() {
+    let commits = thread_commits(issue_thread);
+    if commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
 
-    if issue_thread.commits.len() == 1 {
-        return Ok((issue_thread.commits[0].hash, None));
+    if commits.len() == 1 {
+        return Ok((commits[0].1.hash, None));
     }
 
     // Get commits that actually changed the file for smart defaults
-    let file_changing_commits: Vec<_> = issue_thread
-        .commits
+    let file_changing_commits: Vec<_> = commits
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.file_changed)
+        .filter(|(_, (_, commit))| commit.file_changed)
         .collect();
 
     // Determine default cursor position (prefer file-changing commits)
@@ -655,7 +724,7 @@ pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<Ob
     };
 
     println!("📋 Commit Status Legend:");
-    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed");
+    println!("{COMMIT_LEGEND}");
     println!();
 
     let mut selected_commits: Vec<usize> = Vec::new();
@@ -668,25 +737,12 @@ pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<Ob
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
-    // Extract short hash from selection (remove prefixes and status indicators)
-    let cleaned_selection = first_selection
-        .trim_start_matches("✓ ")
-        .trim_start_matches("  ")
-        .chars()
-        .skip_while(|c| c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍')
-        .collect::<String>();
-    let first_short_hash = cleaned_selection
-        .trim()
-        .split(" - ")
-        .next()
-        .unwrap_or("")
-        .trim();
+    let first_short_hash = selected_short_hash(&first_selection);
 
     // Find the commit index
-    let first_index = issue_thread
-        .commits
+    let first_index = commits
         .iter()
-        .position(|commit| commit.hash.to_string().starts_with(first_short_hash))
+        .position(|(_, commit)| commit.hash.to_string().starts_with(first_short_hash))
         .unwrap_or(0);
 
     selected_commits.push(first_index);
@@ -714,37 +770,17 @@ pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<Ob
     let second_commit = if second_selection.contains("⏭️") {
         None
     } else {
-        // Extract short hash from selection
-        let cleaned_second_selection = second_selection
-            .trim_start_matches("✓ ")
-            .trim_start_matches("  ")
-            .chars()
-            .skip_while(|c| {
-                c.is_whitespace()
-                    || *c == '🌱'
-                    || *c == '💬'
-                    || *c == '✅'
-                    || *c == '📍'
-                    || *c == '📝'
-            })
-            .collect::<String>();
-        let second_short_hash = cleaned_second_selection
-            .trim()
-            .split(" - ")
-            .next()
-            .unwrap_or("")
-            .trim();
+        let second_short_hash = selected_short_hash(&second_selection);
 
-        let second_index = issue_thread
-            .commits
+        let second_index = commits
             .iter()
-            .position(|commit| commit.hash.to_string().starts_with(second_short_hash))
+            .position(|(_, commit)| commit.hash.to_string().starts_with(second_short_hash))
             .unwrap_or(0);
 
-        Some(issue_thread.commits[second_index].hash)
+        Some(commits[second_index].1.hash)
     };
 
-    Ok((issue_thread.commits[first_index].hash, second_commit))
+    Ok((commits[first_index].1.hash, second_commit))
 }
 
 /// Select a single commit from file commits - returns the selected commit
@@ -753,17 +789,18 @@ pub fn prompt_single_commit(
     prompt_text: &str,
     default_position: usize,
 ) -> Result<ObjectId> {
-    if issue_thread.commits.is_empty() {
+    let commits = thread_commits(issue_thread);
+    if commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
 
-    if issue_thread.commits.len() == 1 {
+    if commits.len() == 1 {
         log::info!("Only one commit found for this file. Selecting the commit...");
-        return Ok(issue_thread.commits[0].hash);
+        return Ok(commits[0].1.hash);
     }
 
     println!("📋 Commit Status Legend:");
-    println!("   🌱 Initial commit  💬 Has comments  ✅ Approved  📍 Latest  📝 File changed");
+    println!("{COMMIT_LEGEND}");
     println!();
 
     // Create commit options with status indicators
@@ -771,32 +808,18 @@ pub fn prompt_single_commit(
 
     println!("{}", prompt_text);
     let commit_selection = Select::new("Pick commit:", commit_options)
-        .with_starting_cursor(default_position.min(issue_thread.commits.len() - 1)) // Use provided default position, clamped to valid range
+        .with_starting_cursor(default_position.min(commits.len() - 1)) // Use provided default position, clamped to valid range
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
-    // Extract short hash from selection
-    let cleaned_commit_selection = commit_selection
-        .trim_start_matches("  ")
-        .chars()
-        .skip_while(|c| {
-            c.is_whitespace() || *c == '🌱' || *c == '💬' || *c == '✅' || *c == '📍' || *c == '📝'
-        })
-        .collect::<String>();
-    let commit_short_hash = cleaned_commit_selection
-        .trim()
-        .split(" - ")
-        .next()
-        .unwrap_or("")
-        .trim();
+    let commit_short_hash = selected_short_hash(&commit_selection);
 
-    let commit_index = issue_thread
-        .commits
+    let commit_index = commits
         .iter()
-        .position(|commit| commit.hash.to_string().starts_with(commit_short_hash))
+        .position(|(_, commit)| commit.hash.to_string().starts_with(commit_short_hash))
         .unwrap_or(0);
 
-    Ok(issue_thread.commits[commit_index].hash)
+    Ok(commits[commit_index].1.hash)
 }
 
 /// Prompt for optional note for a comment
@@ -1442,6 +1465,201 @@ pub fn prompt_add_another_relevant_file() -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::round::{
+        ChecklistSource, Gap, GapContinuity, Placement, Round, RoundOpen, RoundState,
+    };
+    use std::str::FromStr;
+
+    const A: &str = "aaaaaaa000000000000000000000000000000001";
+    const B: &str = "bbbbbbb000000000000000000000000000000002";
+    const C: &str = "ccccccc000000000000000000000000000000003";
+    const D: &str = "ddddddd000000000000000000000000000000004";
+
+    fn oid(sha: &str) -> ObjectId {
+        ObjectId::from_str(sha).unwrap()
+    }
+
+    /// `shas` oldest-first for readability, reversed into the newest-first order every
+    /// segment stores its commits in.
+    fn commits(shas: &[&str]) -> Vec<IssueCommit> {
+        shas.iter()
+            .rev()
+            .map(|sha| IssueCommit {
+                hash: oid(sha),
+                message: format!("commit {sha}"),
+                file_changed: true,
+            })
+            .collect()
+    }
+
+    fn round(index: u32, opened_at: &str, closed_at: Option<&str>, own: &[&str]) -> Segment {
+        Segment::Round(Round {
+            index,
+            opened_at: oid(opened_at),
+            branch: "main".to_string(),
+            opened: RoundOpen::IssueCreated,
+            checklist: ChecklistSource::IssueBody,
+            checklist_name: None,
+            state: match closed_at {
+                Some(commit) => RoundState::Closed {
+                    commit: oid(commit),
+                    by: "reviewer".to_string(),
+                    at: chrono::Utc::now(),
+                    comment_index: 0,
+                    comment_id: None,
+                    comment_url: None,
+                },
+                None => RoundState::Open,
+            },
+            events: Vec::new(),
+            retractions: Vec::new(),
+            extensions: Vec::new(),
+            commits: commits(own),
+            placement: Placement::Placed,
+        })
+    }
+
+    fn gap(own: &[&str]) -> Segment {
+        Segment::Gap(Gap {
+            branch: "main".to_string(),
+            commits: commits(own),
+            continuity: GapContinuity::Linear,
+            placement: Placement::Placed,
+        })
+    }
+
+    fn thread(segments: Vec<Segment>) -> IssueThread {
+        IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            milestone: "m1".to_string(),
+            open: true,
+            blocking_qcs: Vec::new(),
+            segments,
+            anomalies: Vec::new(),
+        }
+    }
+
+    /// Segments are oldest-first and each owns its commits newest-first; the flat list
+    /// every picker indexes into must be one newest-first run, with each commit credited
+    /// to the segment that owns it.
+    #[test]
+    fn thread_commits_is_newest_first_across_segments() {
+        // [Initial QC(A..B, closed at B), Gap(C), Round 2(D, open)]
+        let thread = thread(vec![
+            round(1, A, Some(B), &[A, B]),
+            gap(&[C]),
+            round(2, D, None, &[D]),
+        ]);
+
+        let flat: Vec<(usize, String)> = thread_commits(&thread)
+            .into_iter()
+            .map(|(position, commit)| (position, commit.hash.to_string()))
+            .collect();
+        assert_eq!(
+            flat,
+            vec![
+                (2, D.to_string()),
+                (1, C.to_string()),
+                (0, B.to_string()),
+                (0, A.to_string()),
+            ]
+        );
+    }
+
+    /// D1: a round may open at the previous round's closing commit, so both own it and
+    /// the gap between them is empty. Listed twice, indices 0 and 1 of a flat picker
+    /// name the *same* commit — pressing Enter twice then compares it against itself,
+    /// which renders an `X...X` link with no diff. The newer-owning copy wins.
+    #[test]
+    fn thread_commits_lists_a_shared_boundary_commit_once() {
+        // Initial QC closed at B; round 2 re-QCs the very same commit.
+        let thread = thread(vec![
+            round(1, A, Some(B), &[A, B]),
+            gap(&[]),
+            round(2, B, None, &[B]),
+        ]);
+
+        let flat: Vec<(usize, String)> = thread_commits(&thread)
+            .into_iter()
+            .map(|(position, commit)| (position, commit.hash.to_string()))
+            .collect();
+        assert_eq!(
+            flat,
+            vec![(2, B.to_string()), (0, A.to_string())],
+            "B is one commit, credited to the round that owns it now"
+        );
+    }
+
+    /// A gap is bounded by the round one position back. Two back is the round-to-round
+    /// offset and would name the wrong round — Initial QC where Round 2 belongs.
+    #[test]
+    fn segment_label_names_the_round_bounding_a_gaps_older_end() {
+        let thread = thread(vec![
+            round(1, A, Some(B), &[A, B]),
+            gap(&[C]),
+            round(2, C, Some(D), &[C, D]),
+            gap(&[]),
+        ]);
+
+        assert_eq!(segment_label(&thread, 0), "Initial QC");
+        assert_eq!(segment_label(&thread, 1), "since Initial QC's approval");
+        assert_eq!(segment_label(&thread, 2), "Round 2");
+        assert_eq!(segment_label(&thread, 3), "since Round 2's approval");
+    }
+
+    /// Notified and reviewed are different events; the legend names both, so the rows
+    /// must draw both. A review drawn as 💬 labels itself wrongly.
+    #[test]
+    fn format_commit_options_distinguishes_notified_from_reviewed() {
+        let mut segments = vec![round(1, A, None, &[A, B, C])];
+        if let Segment::Round(round) = &mut segments[0] {
+            round.events.push(RoundEvent::Notification {
+                commit: oid(B),
+                by: "author".to_string(),
+                at: chrono::Utc::now(),
+                comment_index: 0,
+                comment_id: None,
+                comment_url: None,
+            });
+            round.events.push(RoundEvent::Review {
+                commit: oid(C),
+                by: "reviewer".to_string(),
+                at: chrono::Utc::now(),
+                comment_index: 1,
+                comment_id: None,
+                comment_url: None,
+            });
+        }
+        let thread = thread(segments);
+
+        let rows = format_commit_options(&thread, &[]);
+        assert!(rows[0].contains("👀"), "the reviewed commit: {}", rows[0]);
+        assert!(!rows[0].contains('💬'), "not notified: {}", rows[0]);
+        assert!(rows[1].contains("💬"), "the notified commit: {}", rows[1]);
+        assert!(!rows[1].contains('👀'), "not reviewed: {}", rows[1]);
+        assert!(COMMIT_LEGEND.contains("💬 Notified"));
+        assert!(COMMIT_LEGEND.contains("👀 Reviewed"));
+    }
+
+    /// Every mark the rows may carry has to come back off again, or the hash a
+    /// selection names cannot be found and the picker silently falls back to index 0.
+    #[test]
+    fn every_row_yields_back_its_own_short_hash() {
+        let thread = thread(vec![
+            round(1, A, Some(B), &[A, B]),
+            gap(&[C]),
+            round(2, D, None, &[D]),
+        ]);
+
+        let flat = thread_commits(&thread);
+        for (index, row) in format_commit_options(&thread, &[0]).iter().enumerate() {
+            let hash = selected_short_hash(row);
+            assert!(
+                !hash.is_empty() && flat[index].1.hash.to_string().starts_with(hash),
+                "row {index} ({row}) did not yield its own hash, got {hash:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_prompt_checklist() {

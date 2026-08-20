@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::api::tests::harness::types::UserSource;
-use crate::git::RepoUser;
+use crate::git::{GitComment, RepoUser};
 use crate::test_utils::{create_test_issue, create_test_milestone};
 
 use super::types::{BlockingRelationship, Fixtures, IssueSource, MilestoneSource};
@@ -27,6 +27,8 @@ pub struct LoadedFixtures {
     pub users: Vec<RepoUser>,
     /// Blocking relationships from YAML
     pub blocking: Vec<BlockingRelationship>,
+    /// Issue comments keyed by issue number, in YAML order
+    pub comments: HashMap<u64, Vec<GitComment>>,
 }
 
 impl FixtureLoader {
@@ -105,11 +107,25 @@ impl FixtureLoader {
             };
         }
 
+        // Create comments, preserving YAML order per issue
+        let mut comments: HashMap<u64, Vec<GitComment>> = HashMap::new();
+        for comment in &fixtures.comments {
+            comments.entry(comment.issue).or_default().push(GitComment {
+                body: comment.body.clone(),
+                author_login: comment.author.clone(),
+                created_at: chrono::Utc::now(),
+                id: comment.id,
+                html_url: comment.html_url.clone(),
+                html: None,
+            });
+        }
+
         Ok(LoadedFixtures {
             issues,
             milestones,
             users,
             blocking: fixtures.blocking.clone(),
+            comments,
         })
     }
 

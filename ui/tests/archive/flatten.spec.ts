@@ -1,9 +1,18 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
-import { closedMilestone, defaultRepoInfo } from '../fixtures/index'
+import {
+  approvedRoundFields,
+  closedMilestone,
+  defaultRepoInfo,
+  initialQcRound,
+  legacyRoundFields,
+  ROUND1_OPENED,
+  segmentFields,
+} from '../fixtures/index'
 import type { Issue, IssueStatusResponse, BatchIssueStatusResponse, QCStatus } from '../../src/api/issues'
 import type { Milestone } from '../../src/api/milestones'
 import type { FileTreeResponse } from '../../src/api/files'
+import type { ArchiveGenerateRequest } from '../../src/api/archive'
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -31,14 +40,19 @@ function makeStatus(issue: Issue, status: QCStatus['status'] = 'approved'): Issu
     qc_status: {
       status,
       status_detail: '',
-      approved_commit: status === 'approved' ? 'aaa1111' : null,
+      standing_approval: status === 'approved' ? 'aaa1111' : null,
+      last_approved_commit: status === 'approved' ? 'aaa1111' : null,
       initial_commit: 'bbb2222',
-      latest_commit: 'ccc3333',
+      // Approved leaves an empty trailing gap, so the active segment owns no commit.
+      latest_commit: status === 'approved' ? null : 'ccc3333',
+      last_reviewed_commit: null,
+      last_notified_commit: status === 'approved' ? null : 'ccc3333',
     },
     dirty: false,
-    branch: 'main',
-    commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
     checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
+    ...(status === 'approved'
+      ? approvedRoundFields('bbb2222', 'aaa1111')
+      : legacyRoundFields('bbb2222', 'ccc3333')),
   }
 }
 
@@ -90,6 +104,51 @@ const issueC2 = makeIssue({ number: 301, title: 'tests/other.R', milestone: 'Mil
 
 const statusC1 = makeStatus(issueC1)
 const statusC2 = makeStatus(issueC2, 'awaiting_review')
+
+/**
+ * A status that resolves to no commit at all: nothing was ever approved, and the only
+ * round could not be placed, so it owns no commits either (`last_approved_commit` and
+ * `latest_commit` both null).
+ *
+ * Producible: S1 returns `ApprovalRequired` for a closed issue with no standing
+ * approval *before* S4 can suppress the status of an unplaceable segment, so this is
+ * the reachable shape — not an `approved` card with an unplaceable segment, which the
+ * model's second D15 addendum rules out.
+ */
+function unresolvableStatus(issue: Issue): IssueStatusResponse {
+  return {
+    issue,
+    qc_status: {
+      status: 'approval_required',
+      status_detail: 'Issue was closed without approval',
+      standing_approval: null,
+      last_approved_commit: null,
+      initial_commit: null,
+      latest_commit: null,
+      last_reviewed_commit: null,
+      last_notified_commit: null,
+    },
+    dirty: false,
+    checklist_summary: { completed: 0, total: 5, percentage: 0 },
+    ...segmentFields([
+      initialQcRound(ROUND1_OPENED, {
+        commits: [],
+        placement: { kind: 'unplaceable', reason: 'branch_unavailable' },
+      }),
+    ]),
+  }
+}
+
+/** The bodies POSTed to /api/archive/generate. */
+function captureArchiveRequests(page: import('playwright/test').Page): ArchiveGenerateRequest[] {
+  const bodies: ArchiveGenerateRequest[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/api\/archive\/generate/.test(request.url())) {
+      bodies.push(request.postDataJSON() as ArchiveGenerateRequest)
+    }
+  })
+  return bodies
+}
 
 // File tree for "Add file" modal
 const archiveRootTree: FileTreeResponse = {
@@ -541,4 +600,168 @@ test('archive tab preserves state across route changes until refresh', async ({ 
   await page.reload()
   await page.goto('/archive')
   await expect(outputPath(page)).toHaveValue('')
+})
+
+// ── Files whose selected round cannot be archived ─────────────────────────────
+
+/**
+ * An audit tool must not omit a file silently — and a note at the bottom of the sidebar
+ * saying only *how many* files were dropped is close enough to silent that U8 replaced it.
+ * The block is now explicit, names the file and carries the reason, and generation waits
+ * for the user to say they want the archive without it (§11.1).
+ */
+test('a file whose selected round cannot be archived blocks generation and names the reason', async ({ page }) => {
+  const goneIssue = makeIssue({ number: 103, title: 'src/gone.R', milestone: 'Milestone A' })
+  const goneStatus = unresolvableStatus(goneIssue)
+  // The premise: the one round this thread has could not be placed.
+  expect(goneStatus.segments[0].placement).toEqual({
+    kind: 'unplaceable',
+    reason: 'branch_unavailable',
+  })
+
+  const bodies = captureArchiveRequests(page)
+  await setupRoutes(page, {
+    milestones: [milestoneA],
+    milestoneIssues: { 10: [issueA1, goneIssue] },
+    issueStatuses: { results: [statusA1, goneStatus], errors: [] },
+  })
+  await goToArchive(page)
+  await selectMilestone(page, 'Milestone A')
+  await waitForStatusLoaded(page)
+
+  // No round ever closed on this thread, so S4 keeps it out until the milestone says
+  // otherwise — which is the whole of what "include non-approved" now means.
+  await page.getByRole('switch', { name: 'Include non-approved' }).click()
+
+  await expect(page.getByTestId('archive-blocked-note-103')).toContainText(
+    'Initial QC cannot be archived — its branch is unavailable locally',
+  )
+  // Not blanket: the file that does resolve carries no such note.
+  await expect(page.getByTestId('archive-blocked-note-100')).toHaveCount(0)
+
+  const callout = main(page).getByTestId('archive-unplaceable-callout')
+  await expect(callout).toContainText('1 file cannot be archived')
+  await expect(callout).toContainText('src/gone.R (#103, Initial QC): its branch is unavailable locally')
+  await expect(main(page).getByRole('button', { name: 'Generate Archive' })).toBeDisabled()
+
+  await callout.getByTestId('archive-unplaceable-acknowledge').click()
+  await main(page).getByRole('button', { name: 'Generate Archive' }).click()
+  await expect(page.getByText(/Archive written to/)).toBeVisible()
+  expect(bodies).toHaveLength(1)
+  // A1: mode-1 entries carry the issue number and the round, and no path at all.
+  expect(bodies[0].files).toEqual([{ mode: 'issue', issue_number: 100, round: null }])
+})
+
+/**
+ * An added file resolved *via its QC issue* is a mode-1 entry: it has a thread, so the
+ * round addresses it and the server derives the commit (A1/D6). It used to be sent as a
+ * path plus a commit the tab derived with `archiveCommitOf`, falling back to the
+ * resolution's own commit — which for a file added from the relevant-files list is the
+ * empty string. With that predicate deleted there is nothing to fall back *to*, and
+ * nothing to fall back *from*: an unplaceable selected round blocks like any other (U8),
+ * and a user who knows the commit adds the file with it directly (D4).
+ */
+test('an added file whose backing round cannot be placed blocks, and is left out when acknowledged', async ({ page }) => {
+  const depIssue = makeIssue({
+    number: 500,
+    title: 'src/dep.R',
+    milestone: 'Milestone B',
+    state: 'closed',
+  })
+  const withRelevant = makeIssue({
+    number: 100,
+    title: 'src/utils.R',
+    milestone: 'Milestone A',
+    relevant_files: [
+      { file_name: 'src/dep.R', kind: 'previous_qc', issue_url: depIssue.html_url },
+    ],
+  })
+
+  const bodies = captureArchiveRequests(page)
+  await setupRoutes(page, {
+    milestones: [milestoneA],
+    milestoneIssues: { 10: [withRelevant] },
+    issueStatuses: {
+      results: [makeStatus(withRelevant), unresolvableStatus(depIssue)],
+      errors: [],
+    },
+  })
+  await goToArchive(page)
+  await selectMilestone(page, 'Milestone A')
+  await waitForStatusLoaded(page)
+
+  await page.getByRole('button', { name: 'Add src/dep.R' }).click()
+  await expect(page.getByRole('link', { name: 'src/dep.R' })).toBeVisible()
+  await expect(page.getByTestId('archive-blocked-note-500')).toContainText(
+    'Initial QC cannot be archived',
+  )
+
+  await main(page).getByTestId('archive-unplaceable-acknowledge').click()
+  await main(page).getByRole('button', { name: 'Generate Archive' }).click()
+  await expect(page.getByText(/Archive written to/)).toBeVisible()
+
+  expect(bodies).toHaveLength(1)
+  expect(bodies[0].files).toEqual([{ mode: 'issue', issue_number: 100, round: null }])
+})
+
+// ── "Multiple QC issues use different commits" ────────────────────────────────
+
+/** Three issues reference one bare file; the third resolves to no commit at all. */
+function sharedFileSetup(thirdStatus: IssueStatusResponse) {
+  const shared = { file_name: 'src/shared.R', kind: 'file' as const, issue_url: null }
+  // `file_history` is required by the wire type and read unguarded by the resolve
+  // modal's issue matcher, so these three carry it — the rest of this file's issues
+  // never reach that modal.
+  const one = makeIssue({ number: 100, title: 'src/utils.R', relevant_files: [shared], file_history: [] })
+  const two = makeIssue({ number: 101, title: 'src/analysis.R', relevant_files: [shared], file_history: [] })
+  const three = makeIssue({ number: 102, title: 'src/helpers.R', relevant_files: [shared], file_history: [] })
+  return {
+    milestones: [milestoneA],
+    milestoneIssues: { 10: [one, two, three] },
+    issueStatuses: {
+      results: [makeStatus(one), makeStatus(two), { ...thirdStatus, issue: three }],
+      errors: [],
+    },
+  }
+}
+
+const MULTIPLE_COMMITS = 'Multiple QC issues use different commits'
+
+test('a referencer that resolves to no commit is not counted as a differing commit', async ({ page }) => {
+  // Two referencers on aaa1111 plus one that resolves to nothing: no disagreement.
+  await setupRoutes(page, sharedFileSetup(unresolvableStatus(issueA3)))
+  await goToArchive(page)
+  await selectMilestone(page, 'Milestone A')
+  await waitForStatusLoaded(page)
+
+  await page.getByRole('button', { name: 'Add src/shared.R' }).first().click()
+  const modal = page.getByRole('dialog')
+  await expect(modal).toBeVisible()
+  await expect(modal.getByText(/Use commit/)).toBeVisible()
+
+  await expect(modal.getByText(MULTIPLE_COMMITS)).toHaveCount(0)
+})
+
+test('referencers that really do disagree still say so', async ({ page }) => {
+  /*
+   * The disagreement now lives in the **segments**, because that is where the commit comes
+   * from: this referencer's Initial QC closed on `ddd4444`, so the archive would take that
+   * for it and `aaa1111` for the other two. Overriding `qc_status.last_approved_commit`
+   * alone — as this fixture used to — no longer produces a disagreement, which is exactly
+   * the point of deleting that predicate.
+   */
+  const differing: IssueStatusResponse = {
+    ...makeStatus(issueA3),
+    ...approvedRoundFields('bbb2222', 'ddd4444'),
+  }
+  await setupRoutes(page, sharedFileSetup(differing))
+  await goToArchive(page)
+  await selectMilestone(page, 'Milestone A')
+  await waitForStatusLoaded(page)
+
+  await page.getByRole('button', { name: 'Add src/shared.R' }).first().click()
+  const modal = page.getByRole('dialog')
+  await expect(modal.getByText(/Use commit/)).toBeVisible()
+
+  await expect(modal.getByText(MULTIPLE_COMMITS)).toBeVisible()
 })

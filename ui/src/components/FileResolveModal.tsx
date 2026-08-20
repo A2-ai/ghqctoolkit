@@ -37,7 +37,26 @@ import { StatusErrorDisplay } from './StatusErrorDisplay'
 import { useMilestones } from '~/api/milestones'
 import { type BranchCommit, fetchBranchCommits } from '~/api/commits'
 import { CommitSlider } from './CommitSlider'
+import { shortHash } from '~/utils/rounds'
+import { archiveSelectionOf } from '~/utils/archiveSelection'
+
 import { FileTreeBrowser } from './FileTreeBrowser'
+
+/**
+ * The commit a file resolves to for a given QC issue: **the commit the archive would take
+ * for it**, which is the selected round's own — its `closing_commit` while closed, its
+ * `latest_actioned_commit` while open (S1).
+ *
+ * It used to be `last_approved_commit ?? latest_commit`, the ungated newest closing commit
+ * across all rounds. That is the expression U7 deleted from `ArchiveTab`, and leaving a
+ * copy here would have kept the modal offering a commit the archive no longer takes: for
+ * an approved-then-reopened file the two disagree, which is the §0 defect with the sign
+ * flipped. Null only when the round could not be placed, and then the row is not
+ * selectable.
+ */
+function resolvedCommitOf(s: IssueStatusResponse): string | null {
+  return archiveSelectionOf(s).commit
+}
 
 export interface FileResolution {
   file_name: string
@@ -181,17 +200,22 @@ function CommitIssueStep({
   const pinHash = useMemo(() => {
     if (referencingStatuses.length === 0) return undefined
     return (
-      referencingStatuses[0].qc_status.approved_commit ??
-      referencingStatuses[0].qc_status.latest_commit
+      resolvedCommitOf(referencingStatuses[0]) ?? undefined
     )
   }, [referencingStatuses])
 
+  // Only *commits* count towards "these issues disagree". A referencer that resolves
+  // to no commit at all (an unplaceable segment, S4/I5) is an absence, not a second
+  // opinion — counting the null made two referencers on the same commit plus one
+  // unresolvable one read as a disagreement and warned about nothing.
   const distinctRefCommits = new Set(
-    referencingStatuses.map(s => s.qc_status.approved_commit ?? s.qc_status.latest_commit),
+    referencingStatuses
+      .map(s => resolvedCommitOf(s))
+      .filter((c): c is string => c !== null),
   )
   const differentBranchesAmongReferencers =
     referencingStatuses.length > 0 &&
-    !referencingStatuses.every(s => s.branch === referencingStatuses[0].branch)
+    !referencingStatuses.every(s => s.active_branch === referencingStatuses[0].active_branch)
 
   // ── Commit tab ─────────────────────────────────────────────────────────────
 
@@ -288,6 +312,16 @@ function CommitIssueStep({
 
   const isLoadingStatuses = isLoadingIssues || matchingStatusQueries.some(q => q.isPending && q.fetchStatus !== 'idle')
 
+  /*
+   * Ordering and a badge, not an archive decision.
+   *
+   * This reads the server's `qc_status.status` to put settled issues at the top of the
+   * picker and to label each row with the state the status surface shows. It is
+   * deliberately *not* the deleted `isApprovedStatus`: nothing here decides whether a file
+   * is included, which commit it is taken at, or what the archive claims about it — those
+   * follow from the round selection and the server's derivation (U7/D6). A reopened file
+   * sorts into `other` and wears its own status, which is the honest label for it.
+   */
   const { approvedStatuses, otherStatuses, statusErrors } = useMemo(() => {
     const approved: IssueStatusResponse[] = []
     const other: IssueStatusResponse[] = []
@@ -319,10 +353,10 @@ function CommitIssueStep({
   )
 
   function handleIssueSelect(status: IssueStatusResponse) {
-    onResolve(
-      status.qc_status.approved_commit ?? status.qc_status.latest_commit,
-      status.issue.number,
-    )
+    const commit = resolvedCommitOf(status)
+    // Nothing to resolve the file to; the row is not selectable (see below).
+    if (commit === null) return
+    onResolve(commit, status.issue.number)
   }
 
   return (
@@ -468,13 +502,14 @@ function CommitIssueStep({
               const isApproved =
                 s.qc_status.status === 'approved' ||
                 s.qc_status.status === 'changes_after_approval'
-              const commit = s.qc_status.approved_commit ?? s.qc_status.latest_commit
+              const commit = resolvedCommitOf(s)
               return (
                 <div
                   key={s.issue.number}
                   onClick={() => handleIssueSelect(s)}
                   style={{
-                    cursor: 'pointer',
+                    cursor: commit === null ? 'not-allowed' : 'pointer',
+                    opacity: commit === null ? 0.55 : 1,
                     padding: '8px 12px',
                     borderRadius: 6,
                     border: '1px solid var(--mantine-color-gray-3)',
@@ -490,7 +525,7 @@ function CommitIssueStep({
                       : <Badge color="yellow" size="xs">{s.qc_status.status.replace(/_/g, ' ')}</Badge>}
                   </div>
                   {s.issue.milestone && <Text size="xs" c="dimmed">Milestone: {s.issue.milestone}</Text>}
-                  <Text size="xs" c="dimmed">Commit: {commit.slice(0, 7)}</Text>
+                  <Text size="xs" c="dimmed">Commit: {shortHash(commit)}</Text>
                 </div>
               )
             })}

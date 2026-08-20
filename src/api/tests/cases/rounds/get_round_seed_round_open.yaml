@@ -1,0 +1,36 @@
+name: "GET /api/issues/{number}/rounds/seed - blocked by an open round"
+description: "The seed endpoint reports illegality instead of failing, so the UI can explain it"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+      milestone: 1
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+
+request:
+  method: GET
+  path: "/api/issues/1/rounds/seed"
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      next_round: 2
+      can_start: false
+      previous_approval: null
+      blocked_reason: "Initial QC is still open. Approve it first — a `# QC Round` comment posted now would extend that round instead of opening a new one."

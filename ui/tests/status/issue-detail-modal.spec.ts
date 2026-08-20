@@ -121,15 +121,18 @@ test('multi-commit: default From/To are set correctly', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// 7. Show all commits toggle reveals the hidden commit (ccccccc)
+// 7. The density toggle reveals the hidden commit (ccccccc)
 // ---------------------------------------------------------------------------
-test('show all commits toggle reveals hidden commits', async ({ page }) => {
+// D16: this is the *density* axis, unchanged in behaviour — only the label moved, from
+// "Show all commits" to "Show every commit on the track", because the control no longer
+// also widens the reach.
+test('the density toggle reveals commits the pertinence filter hid', async ({ page }) => {
   await setupAndOpenModal(page, multiCommitIssue, multiCommitStatus)
 
   // ccccccc is hidden initially (no file change, no statuses, not the exception index)
   await expect(page.getByText('ccccccc')).not.toBeVisible()
 
-  await page.getByRole('checkbox', { name: 'Show all commits' }).click()
+  await page.getByRole('checkbox', { name: 'Show every commit on the track' }).click()
 
   await expect(page.getByText('ccccccc')).toBeVisible()
 })
@@ -526,7 +529,7 @@ test('unapprove preview button opens preview modal (fallback mode)', async ({ pa
 
   const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await unapprovePanel.getByRole('button', { name: 'Preview' }).click()
-  await expect(page.getByTitle('Unapprove Preview')).toBeVisible()
+  await expect(page.getByTitle('Unapproval Comment Preview')).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -537,9 +540,9 @@ test('unapprove post shows success modal', async ({ page }) => {
   const unapprovePanel = page.getByRole('tabpanel', { name: 'Unapprove' })
   await unapprovePanel.getByPlaceholder('Reason (required)').fill('Rolling back approval')
   await unapprovePanel.getByRole('button', { name: 'Unapprove' }).click()
-  await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Issue Unapproved' })).toBeVisible()
   // Result modal links by issue title, not generic "View on GitHub"
-  await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+  await expect(page.getByLabel('Issue Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ test('approved child appears in Impacted Approvals lane', async ({ page }) => {
   })
   const panel = page.getByRole('tabpanel', { name: 'Unapprove' })
 
-  await expect(panel.getByText('Impacted Approvals')).toBeVisible()
+  await expect(panel.getByText('Approvals At Risk')).toBeVisible()
   await expect(panel.getByText(approvedChildIssue.title)).toBeVisible()
   // Impacted card has expand button
   await expect(panel.getByRole('button', { name: 'Expand children', exact: true })).toBeVisible()
@@ -129,8 +129,8 @@ test('post unapprove shows result modal with issue link', async ({ page }) => {
   await panel.getByPlaceholder('Reason (required)').fill('Regression found')
   await panel.getByRole('button', { name: 'Unapprove' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
-  await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Issue Unapproved' })).toBeVisible()
+  await expect(page.getByLabel('Issue Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })
 
 test('expand children button loads grandchildren into lanes', async ({ page }) => {
@@ -159,7 +159,7 @@ test('fallback: shows simplified form instead of swim lanes', async ({ page }) =
 
   await expect(panel.getByText(/Impact analysis is unavailable/)).toBeVisible()
   // Swim lane headers should not be present
-  await expect(panel.getByText('Impacted Approvals')).not.toBeAttached()
+  await expect(panel.getByText('Approvals At Risk')).not.toBeAttached()
   await expect(panel.getByRole('textbox', { name: 'Reason (required)' })).toBeVisible()
 })
 
@@ -181,7 +181,7 @@ test('fallback: Preview button opens preview modal', async ({ page }) => {
   const panel = page.getByRole('tabpanel', { name: 'Unapprove' })
 
   await panel.getByRole('button', { name: 'Preview' }).click()
-  await expect(page.getByTitle('Unapprove Preview')).toBeVisible()
+  await expect(page.getByTitle('Unapproval Comment Preview')).toBeVisible()
 })
 
 test('fallback: post unapprove shows result modal', async ({ page }) => {
@@ -193,8 +193,8 @@ test('fallback: post unapprove shows result modal', async ({ page }) => {
   await panel.getByRole('textbox', { name: 'Reason (required)' }).fill('Regression found')
   await panel.getByRole('button', { name: 'Unapprove' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
-  await expect(page.getByLabel('Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Issue Unapproved' })).toBeVisible()
+  await expect(page.getByLabel('Issue Unapproved').getByRole('link', { name: approvedModalIssue.title })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ test('after unapproval with opened:true, previously-closed issue stays visible w
   await panel.getByPlaceholder('Reason (required)').fill('Reverting approval')
   await panel.getByRole('button', { name: 'Unapprove' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Unapproved' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Issue Unapproved' })).toBeVisible()
   // The outer issue detail modal uses withCloseButton=false, so the only
   // .mantine-Modal-close in the DOM is the inner result modal's Mantine button.
   await page.locator('.mantine-Modal-close').click()

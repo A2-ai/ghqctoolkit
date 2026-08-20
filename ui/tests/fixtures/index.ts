@@ -12,6 +12,17 @@ import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
 import type { ConfigGitRepository } from '../../src/api/configuration'
+import {
+  approvedRoundFields,
+  commit,
+  initialQcRound,
+  legacyRoundFields,
+  segmentFields,
+} from './rounds'
+
+// Round fixtures live in ./rounds and are re-exported so tests can keep
+// importing everything from '../fixtures/index'.
+export * from './rounds'
 
 export const defaultRepoInfo: RepoInfo = {
   owner: 'test-owner',
@@ -58,6 +69,7 @@ function makeIssue(overrides: Partial<Issue> & Pick<Issue, 'number' | 'title'>):
     branch: 'main',
     checklist_name: 'Code Review',
     relevant_files: [],
+    file_history: [],
     ...overrides,
   }
 }
@@ -72,21 +84,25 @@ function makeStatusResponse(
     qc_status: {
       status,
       status_detail: '',
-      approved_commit: status === 'approved' ? 'aaa1111' : null,
+      standing_approval: status === 'approved' ? 'aaa1111' : null,
+      last_approved_commit: status === 'approved' ? 'aaa1111' : null,
       initial_commit: 'bbb2222',
-      latest_commit: 'ccc3333',
+      // Approved with an empty trailing gap: the active segment owns no commit, so
+      // `latest_commit` is null — the steady approved state, not an edge case.
+      latest_commit: status === 'approved' ? null : 'ccc3333',
+      // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+      // *file-changing* commit), which is not the same field as `latest_commit`.
+      changed_commit: null,
+      // D12: the commits a comment actually named, round-scoped — distinct from
+      // `latest_commit`, which is the active segment's newest commit.
+      last_reviewed_commit: status === 'change_requested' ? 'ccc3333' : null,
+      last_notified_commit: status === 'approved' ? null : 'ccc3333',
     },
     dirty: false,
-    branch: 'main',
-    commits: [
-      {
-        hash: 'ccc3333',
-        message: 'latest commit',
-        statuses: ['notification'],
-        file_changed: false,
-      },
-    ],
     checklist_summary: { completed: 0, total: 0, percentage: 0 },
+    ...(status === 'approved'
+      ? approvedRoundFields('bbb2222', 'aaa1111')
+      : legacyRoundFields('bbb2222', 'ccc3333')),
     ...overrides,
   }
 }
@@ -141,14 +157,11 @@ const emptyBlockingQCStatus = {
 export const singleCommitIssue = makeIssue({ number: 70, title: 'src/single.rs', branch: 'feature-branch', assignees: ['alice'] })
 export const singleCommitStatus: IssueStatusResponse = {
   issue: singleCommitIssue,
-  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review', standing_approval: null, last_approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', changed_commit: null, last_reviewed_commit: null, last_notified_commit: null },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
-  ],
   checklist_summary: { completed: 2, total: 7, percentage: 28.6 },
   blocking_qc_status: emptyBlockingQCStatus,
+  ...legacyRoundFields('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', undefined, { branch: 'feature-branch' }),
 }
 
 // Multi-commit: 4 commits, one hidden by default (ccccccc: no file change, no statuses).
@@ -160,17 +173,24 @@ export const singleCommitStatus: IssueStatusResponse = {
 export const multiCommitIssue = makeIssue({ number: 71, title: 'src/multi.rs' })
 export const multiCommitStatus: IssueStatusResponse = {
   issue: multiCommitIssue,
-  qc_status: { status: 'changes_to_comment', status_detail: 'New changes since last notification', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'ddddddddddddddddddddddddddddddddddddddd1' },
+  qc_status: { status: 'changes_to_comment', status_detail: 'New changes since last notification', standing_approval: null, last_approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'ddddddddddddddddddddddddddddddddddddddd1', changed_commit: null, last_reviewed_commit: null, last_notified_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1' },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'ddddddddddddddddddddddddddddddddddddddd1', message: 'new changes', statuses: [], file_changed: true },
-    { hash: 'ccccccccccccccccccccccccccccccccccccccc1', message: 'bump version', statuses: [], file_changed: false },
-    { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'push notification', statuses: ['notification'], file_changed: true },
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
-  ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: emptyBlockingQCStatus,
+  // One still-open Initial QC round owning all four commits.
+  ...segmentFields(
+    [
+      initialQcRound('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', {
+        commits: [
+          commit('ddddddddddddddddddddddddddddddddddddddd1', { message: 'new changes' }),
+          commit('ccccccccccccccccccccccccccccccccccccccc1', { message: 'bump version', file_changed: false }),
+          commit('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', { message: 'push notification', statuses: ['notification'] }),
+          commit('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', { message: 'initial commit', statuses: ['initial'] }),
+        ],
+      }),
+    ],
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1',
+  ),
 }
 
 // Notification landed on a non-file-changing commit after the last file change.
@@ -180,29 +200,37 @@ export const multiCommitStatus: IssueStatusResponse = {
 export const notifOnNonFileIssue = makeIssue({ number: 72, title: 'src/notif-nofile.rs' })
 export const notifOnNonFileStatus: IssueStatusResponse = {
   issue: notifOnNonFileIssue,
-  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1' },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review', standing_approval: null, last_approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', changed_commit: null, last_reviewed_commit: null, last_notified_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1' },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'notification on non-file commit', statuses: ['notification'], file_changed: false },
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
-  ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: emptyBlockingQCStatus,
+  ...segmentFields(
+    [
+      initialQcRound('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', {
+        commits: [
+          commit('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', { message: 'notification on non-file commit', statuses: ['notification'], file_changed: false }),
+          commit('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', { message: 'initial commit', statuses: ['initial'] }),
+        ],
+      }),
+    ],
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1',
+  ),
 }
 
 // Approved modal issue — used to test the unapprove tab (defaults to 'unapprove' tab)
 export const approvedModalIssue = makeIssue({ number: 74, title: 'src/approved-modal.rs', branch: 'feature-branch' })
 export const approvedModalStatus: IssueStatusResponse = {
   issue: approvedModalIssue,
-  qc_status: { status: 'approved', status_detail: 'Approved', approved_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+  qc_status: { status: 'approved', status_detail: 'Approved', standing_approval: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', last_approved_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: null, changed_commit: null, last_reviewed_commit: null, last_notified_commit: null },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
-  ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+  // D1: round 1 closed on its own anchor — HEAD had not moved since it opened.
+  ...approvedRoundFields(
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    { branch: 'feature-branch' },
+  ),
 }
 
 // Dirty modal issue — used to test the asterisk in the modal status card
@@ -227,9 +255,15 @@ export const approvedChildBlocked: BlockedIssueStatus = {
   qc_status: {
     status: 'approved',
     status_detail: 'Approved',
-    approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    standing_approval: 'cccccccccccccccccccccccccccccccccccccccc',
+    last_approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
     initial_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-    latest_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    latest_commit: null,
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
 }
 
@@ -240,9 +274,15 @@ export const notApprovedChildBlocked: BlockedIssueStatus = {
   qc_status: {
     status: 'awaiting_review',
     status_detail: 'Awaiting review',
-    approved_commit: null,
+    standing_approval: null,
+    last_approved_commit: null,
     initial_commit: 'dddddddddddddddddddddddddddddddddddddddd',
     latest_commit: 'dddddddddddddddddddddddddddddddddddddddd',
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
 }
 
@@ -253,9 +293,15 @@ export const grandchildBlocked: BlockedIssueStatus = {
   qc_status: {
     status: 'awaiting_review',
     status_detail: 'Awaiting review',
-    approved_commit: null,
+    standing_approval: null,
+    last_approved_commit: null,
     initial_commit: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
     latest_commit: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
 }
 
@@ -265,17 +311,23 @@ export const approvedChildStatus: IssueStatusResponse = {
   qc_status: {
     status: 'approved',
     status_detail: 'Approved',
-    approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    standing_approval: 'cccccccccccccccccccccccccccccccccccccccc',
+    last_approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
     initial_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-    latest_commit: 'cccccccccccccccccccccccccccccccccccccccc',
+    latest_commit: null,
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'cccccccccccccccccccccccccccccccccccccccc', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
-  ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+  ...approvedRoundFields(
+    'cccccccccccccccccccccccccccccccccccccccc',
+    'cccccccccccccccccccccccccccccccccccccccc',
+  ),
 }
 
 // Non-approved issue for tab-disabled tests (defaults to Notify tab)
@@ -285,17 +337,20 @@ export const inProgressModalStatus: IssueStatusResponse = {
   qc_status: {
     status: 'in_progress',
     status_detail: 'In progress',
-    approved_commit: null,
+    standing_approval: null,
+    last_approved_commit: null,
     initial_commit: 'ffffffffffffffffffffffffffffffffffffffff',
     latest_commit: 'ffffffffffffffffffffffffffffffffffffffff',
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'ffffffffffffffffffffffffffffffffffffffff', message: 'initial commit', statuses: ['initial'], file_changed: true },
-  ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+  ...legacyRoundFields('ffffffffffffffffffffffffffffffffffffffff', undefined, { branch: 'feature-branch' }),
 }
 
 // ── Blocking QC inverse-map / cache-invalidation fixtures ────────────────────
@@ -311,27 +366,41 @@ export const helperStatusInitial: IssueStatusResponse = {
   qc_status: {
     status: 'awaiting_review',
     status_detail: 'Awaiting first review',
-    approved_commit: null,
+    standing_approval: null,
+    last_approved_commit: null,
     initial_commit: 'aaa0000000000000000000000000000000000000',
     latest_commit:  'aaa0000000000000000000000000000000000000',
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'aaa0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
-  ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
   blocking_qc_status: emptyBlockingQCStatus,
+  ...legacyRoundFields('aaa0000000000000000000000000000000000000', undefined, { branch: 'feature-branch' }),
 }
 
 export const helperStatusApproved: IssueStatusResponse = {
   ...helperStatusInitial,
+  ...approvedRoundFields(
+    'aaa0000000000000000000000000000000000000',
+    'aaa0000000000000000000000000000000000000',
+    { branch: 'feature-branch' },
+  ),
   qc_status: {
     status: 'approved',
     status_detail: 'Approved',
-    approved_commit: 'aaa0000000000000000000000000000000000000',
+    standing_approval: 'aaa0000000000000000000000000000000000000',
+    last_approved_commit: 'aaa0000000000000000000000000000000000000',
     initial_commit:  'aaa0000000000000000000000000000000000000',
-    latest_commit:   'aaa0000000000000000000000000000000000000',
+    latest_commit:   null,
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
 }
 
@@ -340,16 +409,19 @@ export const fileAStatusBlocked: IssueStatusResponse = {
   qc_status: {
     status: 'awaiting_review',
     status_detail: 'Awaiting first review',
-    approved_commit: null,
+    standing_approval: null,
+    last_approved_commit: null,
     initial_commit: 'bbb0000000000000000000000000000000000000',
     latest_commit:  'bbb0000000000000000000000000000000000000',
+    // Non-null only for `changes_after_approval` (S1: the trailing gap's newest
+    // *file-changing* commit), which is not the same field as `latest_commit`.
+    changed_commit: null,
+    last_reviewed_commit: null,
+    last_notified_commit: null,
   },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'bbb0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
-  ],
   checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  ...legacyRoundFields('bbb0000000000000000000000000000000000000'),
   blocking_qc_status: {
     total: 1,
     approved_count: 0,

@@ -1,0 +1,91 @@
+name: "POST /api/issues/{number}/rounds/repair - body marker only"
+description: "The issue is open and notified, but its `## QC Round` marker still names Initial QC: only the marker is rewritten"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      state: "open"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        ## QC Round
+        * current round: 1
+        * round comment: https://github.com/test-owner/test-repo/issues/1#issuecomment-1
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+      milestone: 1
+  comments:
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+    - issue: 1
+      author: author
+      id: 456
+      html_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
+      body: |
+        # QC Round
+
+        ## Metadata
+        * round: 2
+        * initial qc round commit: abc1234567890abcdef1234567890abcdef12340
+        * previous approved commit: 456def789abc012345678901234567890123cdef
+        * git branch: main
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+    - issue: 1
+      author: author
+      body: |
+        # QC Notification
+
+        ## Metadata
+        current commit: abc1234567890abcdef1234567890abcdef12340
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+  # Round 2 anchors on HEAD, so HEAD must be on the walk or the round is
+  # unplaceable — which would skip the notification step, not the repair.
+  commits:
+    - "abc1234567890abcdef1234567890abcdef12340"
+    - "456def789abc012345678901234567890123cdef"
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds/repair"
+  body: {}
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      round: 2
+      reopened:
+        status: "skipped"
+      body_marker:
+        status: "done"
+      notification:
+        status: "skipped"
+      repaired: true
+      needs_repair: false
+
+# The body update is the only write.
+assert_write_calls:
+  - type: UpdateIssue
+    issue_number: 1
+    position: 0
+  - type: UpdateIssue
+    issue_number: 1
+    position: last

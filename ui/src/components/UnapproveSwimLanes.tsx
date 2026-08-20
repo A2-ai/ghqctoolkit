@@ -301,6 +301,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
       <>
         <Stack gap="md" style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
           <Stack gap="md" style={{ maxWidth: 380, margin: '0 auto', width: '100%' }}>
+            <UnapproveNote />
             <Text size="xs" c="dimmed" ta="center">
               Impact analysis is unavailable for this GitHub instance — only this issue will be unapproved.
             </Text>
@@ -327,7 +328,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
         <Modal
           opened={previewOpen}
           onClose={() => setPreviewOpen(false)}
-          title="Unapprove Preview"
+          title="Unapproval Comment Preview"
           size={800}
           centered
           withinPortal={false}
@@ -336,7 +337,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
           <iframe
             srcDoc={previewHtml ? wrapInGithubStyles(previewHtml) : ''}
             style={{ width: '100%', height: 450, border: '1px solid var(--mantine-color-gray-3)', borderRadius: 6 }}
-            title="Unapprove Preview"
+            title="Unapproval Comment Preview"
           />
         </Modal>
         <ResultModal
@@ -354,6 +355,9 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
     <>
       <DragDropContext onDragEnd={onDragEnd}>
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
+          <div style={{ paddingBottom: 12 }}>
+            <UnapproveNote />
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'start', minHeight: 200 }}>
 
             {/* Lane 1: Not Approved */}
@@ -364,7 +368,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
                   <NotApprovedCard data={rootData} parents={[]} nodeData={state.nodeData} />
                 )}
                 {notApproved.length === 0 && rootIsApproved && !isRootLoading && (
-                  <Text size="sm" c="dimmed" ta="center" py="sm">No unapproved issues</Text>
+                  <Text size="sm" c="dimmed" ta="center" py="sm">No issues awaiting approval</Text>
                 )}
                 {notApproved.map((n) => {
                   const data = state.nodeData.get(n)!
@@ -384,7 +388,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
             <Droppable droppableId="impacted-approvals">
               {(provided) => (
                 <div ref={provided.innerRef} {...provided.droppableProps} data-testid="impacted-approvals-lane">
-                  <LaneHeader color="#dcfce7" title="Impacted Approvals" count={impactedApprovals.length} />
+                  <LaneHeader color="#dcfce7" title="Approvals At Risk" count={impactedApprovals.length} />
                   <Stack gap="xs" p="xs" style={{ minHeight: 120 }}>
                     {isRootLoading && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 0' }}>
@@ -396,7 +400,7 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
                       <Text size="xs" c="red">Error: {rootError}</Text>
                     )}
                     {impactedApprovals.length === 0 && !isRootLoading && !rootError && (
-                      <Text size="sm" c="dimmed" ta="center" py="sm">No impacted approvals</Text>
+                      <Text size="sm" c="dimmed" ta="center" py="sm">No approvals at risk</Text>
                     )}
                     {impactedApprovals.map((n, idx) => {
                       const data = state.nodeData.get(n)!
@@ -507,6 +511,23 @@ export function UnapproveSwimLanes({ status, onStatusUpdate, onBlockedUnavailabl
 }
 
 // ---------------------------------------------------------------------------
+// Orientation note: unapprove vs. start a new round
+// ---------------------------------------------------------------------------
+
+/**
+ * A one-line note, deliberately not an alert. The two actions are separate places
+ * in the UI, so this only has to name the alternative — the lane layout below
+ * already shows what unapproving puts at risk.
+ */
+function UnapproveNote() {
+  return (
+    <Text size="xs" c="dimmed" data-testid="unapprove-note">
+      Unapprove this QC round. For a new QC pass, <b>start a new round</b>.
+    </Text>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Result modal (shared between swim-lane and fallback modes)
 // ---------------------------------------------------------------------------
 
@@ -524,7 +545,7 @@ function ResultModal({
     <Modal
       opened={opened}
       onClose={onClose}
-      title={allFailed ? 'Unapprove Failed' : 'Unapproved'}
+      title={allFailed ? "Unapproval Failed" : "Issue Unapproved"}
       size="sm"
       centered
       withinPortal={false}
@@ -535,7 +556,7 @@ function ResultModal({
           return (
             <Text key={r.issueNumber} size="sm">
               <Anchor href={r.url} target="_blank">{title}</Anchor>
-              {' '}{r.opened ? 'unapproved and reopened' : 'unapproved'}.
+              {" "}{r.opened ? "unapproved; the issue is open again" : "unapproved"}.
             </Text>
           )
         })}
@@ -601,7 +622,7 @@ function ToUnapproveCard({
           color="gray"
           style={{ position: 'absolute', top: 6, right: 6 }}
           onClick={onRemove}
-          aria-label="Remove from unapprove"
+          aria-label="Remove from unapproval"
         >
           <IconX size={12} />
         </ActionIcon>
@@ -714,7 +735,7 @@ function ImpactedCard({
           {statusLabel}
         </Badge>
         {parentLabels.length > 0 && (
-          <Text size="xs" c="dimmed">Impacted by: {parentLabels.join(', ')}</Text>
+          <Text size="xs" c="dimmed">Relied on: {parentLabels.join(', ')}</Text>
         )}
       </Stack>
     </div>
@@ -766,7 +787,7 @@ function NotApprovedCard({
           {statusLabel}
         </Badge>
         {parentLabels.length > 0 && (
-          <Text size="xs" c="dimmed">Impacted by: {parentLabels.join(', ')}</Text>
+          <Text size="xs" c="dimmed">Relied on: {parentLabels.join(', ')}</Text>
         )}
       </Stack>
     </div>

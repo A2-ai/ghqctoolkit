@@ -39,7 +39,7 @@ Each file under QC has a dedicated GitHub Issue. `ghqc` manages the full issue l
 | [`ghqc issue comment`](docs/issue-comment.md) | Post a comment with commit diff to document changes made (author) |
 | [`ghqc issue review`](docs/issue-review.md) | Post a review comment comparing working directory to a commit (reviewer) |
 | [`ghqc issue approve`](docs/issue-approve.md) | Approve the issue at a specific commit and close it |
-| [`ghqc issue unapprove`](docs/issue-unapprove.md) | Reopen an approved issue with a reason |
+| [`ghqc issue unapprove`](docs/issue-unapprove.md) | Unapprove an issue whose approval was wrong, with a reason |
 | [`ghqc issue status`](docs/issue-status.md) | Print the QC status, git status, and checklist progress |
 | [`ghqc issue rename`](docs/issue-rename.md) | Confirm a detected file rename and update the issue title |
 

@@ -13,6 +13,20 @@ pub struct GitComment {
     pub body: String,
     pub author_login: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// GitHub's numeric comment id, when known.
+    ///
+    /// `GitComment` is persisted verbatim in the on-disk cache (see
+    /// [`crate::cache::get_issue_comments`]), so entries written by older versions
+    /// of the tool have no `id` key at all. The field is therefore `Option` and
+    /// carries `#[serde(default)]` so those existing cache files keep
+    /// deserializing after an upgrade instead of being silently discarded and
+    /// re-fetched.
+    #[serde(default)]
+    pub id: Option<u64>,
+    /// Permalink to the comment on GitHub, when known. `Option` + `#[serde(default)]`
+    /// for the same cache-compatibility reason as [`GitComment::id`].
+    #[serde(default)]
+    pub html_url: Option<String>,
     #[serde(skip_serializing)]
     pub(crate) html: Option<String>,
 }
@@ -400,7 +414,9 @@ impl GitHubReader for GitInfo {
 
             for (idx, comment) in all_comments.into_iter().enumerate() {
                 let is_last_comment = total_comments > 0 && idx == total_comments - 1;
-                let comment_id = comment.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
+                let id = comment.get("id").and_then(|id| id.as_u64());
+                // Kept for log messages, which have always printed 0 for a missing id.
+                let comment_id = id.unwrap_or(0);
 
                 // Extract body
                 let body = match comment.get("body").and_then(|b| b.as_str()) {
@@ -447,6 +463,12 @@ impl GitHubReader for GitInfo {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|| chrono::Utc::now());
 
+                // Extract the comment permalink; a missing URL is not an error.
+                let html_url = comment
+                    .get("html_url")
+                    .and_then(|u| u.as_str())
+                    .map(|u| u.to_string());
+
                 // Extract HTML body (with JWT URLs) - only available from fresh API calls
                 let html = comment.get("body_html").and_then(|h| h.as_str()).map(|h| {
                     log::debug!("Comment HTML available: {} chars", h.len());
@@ -457,6 +479,8 @@ impl GitHubReader for GitInfo {
                     body,
                     author_login,
                     created_at,
+                    id,
+                    html_url,
                     html,
                 });
             }
@@ -659,5 +683,49 @@ impl GitHubReader for GitInfo {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitComment;
+
+    /// The on-disk cache stores `GitComment` verbatim, so entries written before
+    /// `id` / `html_url` existed must still deserialize after an upgrade —
+    /// otherwise every cached comment on a user's machine is thrown away.
+    #[test]
+    fn comment_cached_before_id_and_url_existed_still_deserializes() {
+        let old = r##"{
+            "body": "# QC Notification",
+            "author_login": "tester",
+            "created_at": "2024-01-02T03:04:05Z"
+        }"##;
+
+        let comment: GitComment = serde_json::from_str(old).expect("old cache entry must load");
+        assert_eq!(comment.body, "# QC Notification");
+        assert_eq!(comment.author_login, "tester");
+        assert_eq!(comment.id, None);
+        assert_eq!(comment.html_url, None);
+        assert_eq!(comment.html, None);
+    }
+
+    /// A freshly written cache entry round-trips its identity back out.
+    #[test]
+    fn id_and_url_round_trip_through_the_cache_representation() {
+        let comment = GitComment {
+            body: "body".to_string(),
+            author_login: "tester".to_string(),
+            created_at: chrono::Utc::now(),
+            id: Some(4242),
+            html_url: Some("https://github.com/o/r/issues/1#issuecomment-4242".to_string()),
+            html: Some("<p>body</p>".to_string()),
+        };
+
+        let json = serde_json::to_string(&comment).unwrap();
+        let loaded: GitComment = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.id, Some(4242));
+        assert_eq!(loaded.html_url, comment.html_url);
+        // `html` is deliberately never persisted.
+        assert_eq!(loaded.html, None);
     }
 }

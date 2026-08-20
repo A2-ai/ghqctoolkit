@@ -86,5 +86,6 @@ ghqc issue approve --milestone "Milestone 1" --file scripts/file_1.qmd [options]
 
 ## Notes
 
-- To reverse an approval, use [`ghqc issue unapprove`](issue-unapprove.md).
+- If the file changes again and needs another QC pass, use `ghqc issue new-round` — the approval above stays valid.
+- If the approval itself was wrong, use [`ghqc issue unapprove`](issue-unapprove.md).
 - The approved commit hash is recorded in the approval comment and drives the `QCStatus` calculation for downstream record generation.

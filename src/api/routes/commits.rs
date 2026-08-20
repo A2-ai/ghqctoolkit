@@ -7,6 +7,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use gix::ObjectId;
+use std::str::FromStr;
+
 use crate::GitProvider;
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
@@ -113,4 +116,58 @@ pub async fn get_commits<G: GitProvider + 'static>(
         page,
         page_size,
     }))
+}
+
+#[derive(Deserialize)]
+pub struct CommitDiffQuery {
+    /// Repo-relative path of the file to diff.
+    pub file: String,
+    /// Commit to diff *from* — the older side.
+    pub from: String,
+    /// Commit to diff *to* — the newer side.
+    pub to: String,
+}
+
+#[derive(Serialize)]
+pub struct CommitDiffResponse {
+    /// Markdown diff, ready to render. `None` when the two commits produce no
+    /// difference for this file, or the file could not be read at one of them —
+    /// which the caller shows as "no changes" rather than as an error, since a
+    /// round opened at the commit it compares against legitimately has none.
+    pub diff: Option<String>,
+}
+
+/// GET /api/commits/diff?file=path&from=sha&to=sha
+///
+/// The diff of one file between two commits, in the same markdown form the
+/// `## File Difference` section of a QC Notification uses — so what a reviewer
+/// previews here is what a notification would show them.
+pub async fn get_commit_diff<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Query(query): Query<CommitDiffQuery>,
+) -> Result<Json<CommitDiffResponse>, ApiError> {
+    let from = ObjectId::from_str(&query.from)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid `from` commit: {e}")))?;
+    let to = ObjectId::from_str(&query.to)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid `to` commit: {e}")))?;
+    let file = PathBuf::from(&query.file);
+
+    // A file missing at either end is not an error: it may have been added or
+    // removed between the two commits, and there is simply nothing to show.
+    let Ok(from_bytes) = state.git_info().file_bytes_at_commit(&file, &from) else {
+        log::debug!("could not read {} at {from}", file.display());
+        return Ok(Json(CommitDiffResponse { diff: None }));
+    };
+    let Ok(to_bytes) = state.git_info().file_bytes_at_commit(&file, &to) else {
+        log::debug!("could not read {} at {to}", file.display());
+        return Ok(Json(CommitDiffResponse { diff: None }));
+    };
+
+    // `file_diff` reports "no difference" as a sentinel body rather than `None`,
+    // because it is embedded straight into comment text. Here null *means* no diff,
+    // so normalise it rather than making the caller recognise prose.
+    let diff = crate::diff_utils::file_diff(from_bytes, to_bytes, &file)
+        .filter(|diff| diff.trim() != crate::diff_utils::NO_DIFFERENCE.trim());
+
+    Ok(Json(CommitDiffResponse { diff }))
 }

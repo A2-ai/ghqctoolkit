@@ -1,0 +1,670 @@
+//! CLI: start a new QC round on an issue whose previous round is approved, and
+//! repair one whose follow-up steps did not all land.
+//!
+//! A thin front end over [`crate::start_round`]. The interesting CLI-only
+//! decisions are: where the checklist comes from (seeded from the previous round,
+//! or a named template from the configuration), and what a *partial* success
+//! means for the exit code — see [`report_result`].
+//!
+//! [`repair_open_round`] is the remedy that partial success points at: it fronts
+//! [`crate::repair_round`], which completes only the steps the now-open round is
+//! actually missing. Re-running `new-round` is never the fix — it would extend the
+//! open round rather than open another one.
+
+use anyhow::{Result, anyhow, bail};
+use clap::ValueEnum;
+use gix::ObjectId;
+use inquire::{Confirm, Text};
+use octocrab::models::{Milestone, issues::Issue};
+use std::path::{Path, PathBuf};
+
+use super::config_init::edit_markdown_checklist;
+use super::interactive::{prompt_existing_milestone, prompt_issue};
+use crate::round::GapContinuity;
+use crate::{
+    Configuration, DiskCache, GitHubReader, GitInfo, IssueThread, NotificationMode,
+    RepairRoundRequest, RepairRoundResult, RoundBasis, StartRoundRequest, StartRoundResult,
+    available_checklists, get_issue_comments, prior_round_comment_body, repair_round,
+    reset_checklist, round_basis, seed_checklist, start_round,
+};
+
+/// CLI spelling of [`NotificationMode`].
+#[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[value(rename_all = "kebab-case")]
+pub enum NotificationArg {
+    /// Post a QC Notification with the inline file diff.
+    #[default]
+    Full,
+    /// Post a QC Notification with metadata only, no inline diff.
+    MetadataOnly,
+    /// Post no notification comment at all.
+    None,
+}
+
+impl From<NotificationArg> for NotificationMode {
+    fn from(arg: NotificationArg) -> Self {
+        match arg {
+            NotificationArg::Full => NotificationMode::Full,
+            NotificationArg::MetadataOnly => NotificationMode::MetadataOnly,
+            NotificationArg::None => NotificationMode::None,
+        }
+    }
+}
+
+/// Everything the `issue new-round` subcommand accepts.
+#[derive(Debug, Clone)]
+pub struct NewRoundArgs {
+    pub milestone: Option<String>,
+    pub file: Option<PathBuf>,
+    /// Use this configuration checklist instead of the previous round's.
+    pub checklist_name: Option<String>,
+    /// Base the checklist on this round's instead of the previous round's.
+    pub from_round: Option<u32>,
+    pub note: Option<String>,
+    pub notification: NotificationMode,
+    /// Message for the reviewer, on the notification comment only. `None` falls back
+    /// to `note`, so an invocation that names only `--note` reads as it always has.
+    pub notification_note: Option<String>,
+    /// Open the checklist in `$EDITOR` before posting. Implied interactively.
+    pub edit: bool,
+}
+
+/// Start a new round, printing the outcome.
+///
+/// Errors — and so exits non-zero — when nothing was written, and also when the
+/// round was recorded but a follow-up step failed (see [`report_result`]).
+pub async fn new_round(
+    args: NewRoundArgs,
+    configuration: &Configuration,
+    milestones: &[Milestone],
+    cache: Option<&DiskCache>,
+    git_info: &GitInfo,
+) -> Result<()> {
+    let (issue, interactive) = match (&args.milestone, &args.file) {
+        (Some(milestone), Some(file)) => (
+            find_issue_any_state(milestone, file, milestones, git_info).await?,
+            false,
+        ),
+        (None, None) => (prompt_round_issue(milestones, git_info).await?, true),
+        _ => bail!(
+            "Must provide both --milestone and --file arguments or neither to enter interactive mode"
+        ),
+    };
+
+    let comments = get_issue_comments(&issue, cache, git_info).await?;
+    let thread = IssueThread::from_issue_comments(&issue, &comments, git_info, cache)?;
+
+    let (content, name) = resolve_checklist(
+        args.checklist_name.as_deref(),
+        args.from_round,
+        configuration,
+        &thread,
+        &comments,
+        issue.body.as_deref(),
+    )?;
+
+    // Interactively the editor *is* the review step for the seeded checklist; with
+    // explicit arguments it is opt-in so the command stays scriptable.
+    let content = if args.edit || interactive {
+        edit_markdown_checklist(name.as_deref().unwrap_or("New round checklist"), &content)?
+            .unwrap_or(content)
+    } else {
+        content
+    };
+
+    let note = match (args.note, interactive) {
+        (Some(note), _) => Some(note),
+        (None, true) => prompt_note()?,
+        (None, false) => None,
+    };
+
+    // The round opens on the *checked-out* branch, at its HEAD — neither of which the
+    // prompts above ever mention, and the round comment is irreversible once posted. So
+    // the same basis `start_round` will use is resolved and confirmed first; with
+    // explicit arguments the command stays scriptable and reports it in the result.
+    if interactive {
+        let basis = round_basis(&thread, git_info)?;
+        if !confirm_basis(&basis)? {
+            bail!("New round cancelled — nothing was posted.");
+        }
+    }
+
+    let request = StartRoundRequest {
+        issue,
+        checklist_content: content,
+        checklist_name: name,
+        notification_note: args.notification_note.or_else(|| note.clone()),
+        note,
+        notification: args.notification,
+    };
+
+    let result = start_round(&request, &thread, git_info).await?;
+    report_result(&result)
+}
+
+/// Print `result`, then fail if any step wants a repair.
+///
+/// The action deliberately succeeds with per-step failures, so a plain `Ok(())`
+/// here would show a user a silent success after, say, the body marker failed.
+/// The successful steps are printed either way — the error only sets the exit
+/// code and names the remedy.
+pub fn report_result(result: &StartRoundResult) -> Result<()> {
+    print!("{result}");
+
+    if result.needs_repair() {
+        bail!(
+            "Round {} was recorded, but one or more follow-up steps failed (see above). \
+             Each failed step is idempotent and can be retried on its own with \
+             `ghqc issue repair-round` — do not re-run this command, which would extend the \
+             round rather than open another one.",
+            result.round
+        );
+    }
+    Ok(())
+}
+
+/// Everything the `issue repair-round` subcommand accepts.
+#[derive(Debug, Clone)]
+pub struct RepairRoundArgs {
+    pub milestone: Option<String>,
+    pub file: Option<PathBuf>,
+    /// Post a `# QC Notification` if the open round has none. Defaults to *not*
+    /// notifying: a round opened with `--notification none` is in exactly the state
+    /// its author chose, so a repair never pings a reviewer on its own.
+    pub notification: NotificationMode,
+    /// Message for the reviewer on that notification. `None` falls back to the
+    /// round's own note.
+    pub notification_note: Option<String>,
+}
+
+/// Complete the follow-up steps of an issue's open round, printing the outcome.
+///
+/// The counterpart to [`new_round`]: once a round is open the new-round action
+/// cannot be re-run (a second `# QC Round` comment would extend the round), so
+/// this is how a partially-applied round start is finished.
+pub async fn repair_open_round(
+    args: RepairRoundArgs,
+    milestones: &[Milestone],
+    cache: Option<&DiskCache>,
+    git_info: &GitInfo,
+) -> Result<()> {
+    let issue = match (&args.milestone, &args.file) {
+        (Some(milestone), Some(file)) => {
+            find_issue_any_state(milestone, file, milestones, git_info).await?
+        }
+        (None, None) => prompt_round_issue(milestones, git_info).await?,
+        _ => bail!(
+            "Must provide both --milestone and --file arguments or neither to enter interactive mode"
+        ),
+    };
+
+    let comments = get_issue_comments(&issue, cache, git_info).await?;
+    let thread = IssueThread::from_issue_comments(&issue, &comments, git_info, cache)?;
+
+    let request = RepairRoundRequest {
+        issue,
+        notification: args.notification,
+        notification_note: args.notification_note,
+    };
+
+    let result = repair_round(&request, &thread, git_info).await?;
+    report_repair(&result)
+}
+
+/// Print `result`, then fail if a step it attempted still failed.
+///
+/// A repair that found nothing to do is a success: the point of the command is to
+/// leave the round complete, and it already was.
+pub fn report_repair(result: &RepairRoundResult) -> Result<()> {
+    print!("{result}");
+
+    if result.needs_repair() {
+        bail!(
+            "{} still has follow-up steps that failed (see above). Every step is idempotent, \
+             so this command can be run again once the cause is fixed.",
+            result.round_name
+        );
+    }
+    Ok(())
+}
+
+/// Resolve the checklist for the new round, in precedence order: a named
+/// configuration template, then a specific earlier round's checklist, then the
+/// previous round's — each with boxes reset.
+fn resolve_checklist(
+    checklist_name: Option<&str>,
+    from_round: Option<u32>,
+    configuration: &Configuration,
+    thread: &IssueThread,
+    comments: &[crate::GitComment],
+    issue_body: Option<&str>,
+) -> Result<(String, Option<String>)> {
+    if let Some(round) = from_round {
+        let options = available_checklists(thread, comments, issue_body);
+        let chosen = options
+            .iter()
+            .find(|option| option.round == round)
+            .ok_or_else(|| {
+                let mut available: Vec<String> = options
+                    .iter()
+                    .map(|option| format!("{} (--from-round {})", option.round_name, option.round))
+                    .collect();
+                available.sort();
+                anyhow!(
+                    "No checklist could be recovered for round {round} of this issue. Available: {}",
+                    if available.is_empty() {
+                        "none".to_string()
+                    } else {
+                        available.join(", ")
+                    }
+                )
+            })?;
+        return Ok((chosen.content.clone(), chosen.checklist_name.clone()));
+    }
+
+    if let Some(name) = checklist_name {
+        let checklist = configuration.checklists.get(name).ok_or_else(|| {
+            let mut available: Vec<&str> = configuration
+                .checklists
+                .keys()
+                .map(String::as_str)
+                .collect();
+            available.sort();
+            anyhow!(
+                "No checklist named '{name}' in the configuration. Available: {}",
+                if available.is_empty() {
+                    "none".to_string()
+                } else {
+                    available.join(", ")
+                }
+            )
+        })?;
+        return Ok((
+            reset_checklist(&checklist.content),
+            Some(checklist.name.clone()),
+        ));
+    }
+
+    let seeded = seed_checklist(prior_round_comment_body(thread, comments), issue_body)
+        .ok_or_else(|| {
+            anyhow!(
+                "Could not seed a checklist: neither the previous round's comment nor the issue \
+                 body carries one. Pass --checklist-name to start from a configuration checklist."
+            )
+        })?;
+    Ok((seeded.content, seeded.name))
+}
+
+/// Find an issue by file name in a milestone, regardless of its state.
+///
+/// Unlike [`crate::cli::find_issue`], closed issues are eligible: a new round is
+/// normally started on an issue that was approved and therefore closed.
+async fn find_issue_any_state(
+    milestone_name: &str,
+    file: &Path,
+    milestones: &[Milestone],
+    git_info: &impl GitHubReader,
+) -> Result<Issue> {
+    let milestone = milestones
+        .iter()
+        .find(|m| m.title == milestone_name)
+        .ok_or_else(|| anyhow!("Milestone '{milestone_name}' not found"))?;
+
+    let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
+    let file_str = file.to_string_lossy();
+
+    // Same title matching as `find_issue`, so both commands accept the same paths.
+    issues
+        .into_iter()
+        .find(|issue| issue.title.contains(file_str.as_ref()))
+        .ok_or_else(|| {
+            anyhow!("No issue found for file '{file_str}' in milestone '{milestone_name}'")
+        })
+}
+
+/// Milestone → issue prompts. Every issue in the milestone is offered: whether a
+/// new round is legal depends on the *derived* round state, which the action
+/// itself checks (and rejects with a precise message).
+async fn prompt_round_issue(milestones: &[Milestone], git_info: &GitInfo) -> Result<Issue> {
+    println!("🔄 Welcome to GHQC New Round Mode!");
+
+    let milestone = prompt_existing_milestone(milestones)?;
+    let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
+    if issues.is_empty() {
+        bail!("No issues found in milestone '{}'", milestone.title);
+    }
+
+    prompt_issue(&issues)
+}
+
+/// Abbreviated commit, as everywhere else the CLI prints one.
+fn short(commit: &ObjectId) -> String {
+    commit.to_string()[..7].to_string()
+}
+
+/// What the round is about to record: the branch it opens on, the anchor it opens at,
+/// and the approval it builds on — plus how the two relate, since a round opened on a
+/// branch that diverged from the approval is the case worth seeing *before* confirming.
+fn basis_report(basis: &RoundBasis) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "Branch:            {} (currently checked out)",
+            basis.branch
+        ),
+        format!(
+            "Anchor:            {} (HEAD of '{}')",
+            short(&basis.anchor),
+            basis.branch
+        ),
+        format!(
+            "Previous approval: {} on '{}'",
+            short(&basis.previous_approval),
+            basis.previous_branch
+        ),
+    ];
+    // Same wording as `StartRoundResult`, so the confirmation and the result agree.
+    match basis.continuity {
+        GapContinuity::Linear => {}
+        GapContinuity::Diverged { merge_base } => lines.push(format!(
+            "⚠️ That approval is not an ancestor of '{}'. The notification will compare against \
+             their common ancestor {} instead.",
+            basis.branch,
+            short(&merge_base),
+        )),
+        GapContinuity::Unrelated => lines.push(format!(
+            "⚠️ That approval shares no history with '{}'. No comparison between them is \
+             meaningful.",
+            basis.branch,
+        )),
+    }
+    lines
+}
+
+/// Confirm the branch and anchor before the round comment — the irreversible step — is
+/// posted. Interactive only; nothing is written before this returns `true`.
+fn confirm_basis(basis: &RoundBasis) -> Result<bool> {
+    for line in basis_report(basis) {
+        println!("  {line}");
+    }
+    Confirm::new("🔄 Open the new round on this branch and commit?")
+        .with_default(true)
+        .prompt()
+        .map_err(|e| anyhow!("Input cancelled: {e}"))
+}
+
+/// Optional free-text reason, recorded on the round comment. Interactively it also
+/// seeds the notification, matching the CLI's `--note`-only fallback.
+fn prompt_note() -> Result<Option<String>> {
+    let note = Text::new("📝 Reason for the new round (optional):")
+        .prompt()
+        .map_err(|e| anyhow!("Input cancelled: {e}"))?;
+    let note = note.trim();
+    Ok((!note.is_empty()).then(|| note.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::configuration::Checklist;
+    use crate::{ImpactedIssues, RepairRoundResult, StepOutcome};
+    use gix::ObjectId;
+    use std::str::FromStr;
+
+    fn result(body_marker: StepOutcome) -> StartRoundResult {
+        StartRoundResult {
+            branch: "main".to_string(),
+            previous_approval: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            previous_branch: "main".to_string(),
+            comparison_base: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            continuity: crate::GapContinuity::Linear,
+            round: 2,
+            round_comment_url: "https://github.com/o/r/issues/1#issuecomment-1".to_string(),
+            anchor: ObjectId::from_str("aaaaaaa000000000000000000000000000000001").unwrap(),
+            reopened: StepOutcome::Done,
+            body_marker,
+            notification: StepOutcome::Skipped,
+            impacted_issues: ImpactedIssues::None,
+        }
+    }
+
+    #[test]
+    fn a_fully_successful_round_exits_zero() {
+        assert!(report_result(&result(StepOutcome::Done)).is_ok());
+    }
+
+    /// A partial failure must not read as success: `main` turns this `Err` into a
+    /// non-zero exit code, after the per-step report has already been printed.
+    #[test]
+    fn a_partial_failure_exits_non_zero() {
+        let error = report_result(&result(StepOutcome::Failed("boom".to_string())))
+            .expect_err("a failed step must set a non-zero exit code");
+        let message = error.to_string();
+        assert!(message.contains("Round 2 was recorded"));
+        assert!(message.contains("retried on its own"));
+    }
+
+    fn repair_result(reopened: StepOutcome) -> RepairRoundResult {
+        RepairRoundResult {
+            round: 2,
+            round_name: "Round 2".to_string(),
+            round_comment_url: Some("https://github.com/o/r/issues/1#issuecomment-1".to_string()),
+            plan: crate::RepairPlan {
+                reopen: true,
+                ..Default::default()
+            },
+            reopened,
+            body_marker: StepOutcome::Skipped,
+            notification: StepOutcome::Skipped,
+            // Nothing was requested, which is the default on every surface.
+            notification_skip: Some(crate::NotificationSkip::NotRequested),
+        }
+    }
+
+    #[test]
+    fn a_completed_repair_exits_zero() {
+        assert!(report_repair(&repair_result(StepOutcome::Done)).is_ok());
+    }
+
+    /// A repair that found nothing to do has left the round complete, which is the
+    /// point of the command: success, not a failure.
+    #[test]
+    fn a_repair_with_nothing_to_do_exits_zero() {
+        assert!(report_repair(&repair_result(StepOutcome::Skipped)).is_ok());
+    }
+
+    #[test]
+    fn a_repair_whose_step_failed_exits_non_zero() {
+        let error = report_repair(&repair_result(StepOutcome::Failed("boom".to_string())))
+            .expect_err("a failed step must set a non-zero exit code");
+        let message = error.to_string();
+        assert!(message.contains("Round 2 still has follow-up steps that failed"));
+        assert!(message.contains("run again"));
+    }
+
+    #[test]
+    fn a_named_configuration_checklist_wins_and_is_reset() {
+        let mut configuration = Configuration::default();
+        configuration.checklists.insert(
+            "Code Review".to_string(),
+            Checklist::new(
+                "Code Review".to_string(),
+                None,
+                "- [x] Reviewed\n- [ ] Tested".to_string(),
+            ),
+        );
+        let thread = thread();
+
+        let (content, name) = resolve_checklist(
+            Some("Code Review"),
+            None,
+            &configuration,
+            &thread,
+            &[],
+            Some("# Ignored\n- [x] From the body"),
+        )
+        .expect("the named checklist exists");
+
+        assert_eq!(content, "- [ ] Reviewed\n- [ ] Tested");
+        assert_eq!(name.as_deref(), Some("Code Review"));
+    }
+
+    #[test]
+    fn an_unknown_checklist_name_lists_the_available_ones() {
+        let mut configuration = Configuration::default();
+        configuration.checklists.insert(
+            "Code Review".to_string(),
+            Checklist::new(
+                "Code Review".to_string(),
+                None,
+                "- [ ] Reviewed".to_string(),
+            ),
+        );
+
+        let error = resolve_checklist(Some("Nope"), None, &configuration, &thread(), &[], None)
+            .expect_err("an unknown name must fail loudly");
+        assert!(error.to_string().contains("Available: Code Review"));
+    }
+
+    #[test]
+    fn without_a_name_the_issue_body_seeds_the_checklist() {
+        let (content, name) = resolve_checklist(
+            None,
+            None,
+            &Configuration::default(),
+            &thread(),
+            &[],
+            Some("## Metadata\nx\n\n# Code Review\n- [x] Reviewed"),
+        )
+        .expect("the body carries a checklist");
+
+        assert_eq!(content, "- [ ] Reviewed");
+        assert_eq!(name.as_deref(), Some("Code Review"));
+    }
+
+    #[test]
+    fn without_any_checklist_at_all_the_command_says_so() {
+        let error = resolve_checklist(None, None, &Configuration::default(), &thread(), &[], None)
+            .expect_err("nothing to seed from");
+        assert!(error.to_string().contains("--checklist-name"));
+    }
+
+    #[test]
+    fn from_round_picks_that_rounds_checklist() {
+        let (content, name) = resolve_checklist(
+            None,
+            Some(1),
+            &Configuration::default(),
+            &thread(),
+            &[],
+            Some("## Metadata\nx\n\n# Code Review\n- [x] Reviewed"),
+        )
+        .expect("Initial QC's checklist is recoverable");
+
+        assert_eq!(content, "- [ ] Reviewed");
+        assert_eq!(name.as_deref(), Some("Code Review"));
+    }
+
+    /// The error has to name the rounds that *do* have a checklist, since which
+    /// rounds those are is not something the user can work out from the flag.
+    #[test]
+    fn an_unknown_from_round_lists_the_rounds_that_have_one() {
+        let error = resolve_checklist(
+            None,
+            Some(7),
+            &Configuration::default(),
+            &thread(),
+            &[],
+            Some("## Metadata\nx\n\n# Code Review\n- [x] Reviewed"),
+        )
+        .expect_err("round 7 does not exist on this issue");
+        assert!(
+            error.to_string().contains("Initial QC (--from-round 1)"),
+            "unhelpful error: {error}"
+        );
+    }
+
+    fn basis(continuity: crate::GapContinuity) -> RoundBasis {
+        RoundBasis {
+            branch: "feature/x".to_string(),
+            anchor: ObjectId::from_str("aaaaaaa000000000000000000000000000000001").unwrap(),
+            previous_approval: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            previous_branch: "main".to_string(),
+            comparison_base: ObjectId::from_str("bbbbbbb000000000000000000000000000000002")
+                .unwrap(),
+            continuity,
+        }
+    }
+
+    /// The confirmation has to name the branch and the anchor: the round comment is
+    /// irreversible, and neither fact appears in any prompt before it.
+    #[test]
+    fn the_confirmation_names_the_branch_and_the_anchor() {
+        let lines = basis_report(&basis(crate::GapContinuity::Linear));
+
+        assert_eq!(
+            lines,
+            vec![
+                "Branch:            feature/x (currently checked out)".to_string(),
+                "Anchor:            aaaaaaa (HEAD of 'feature/x')".to_string(),
+                "Previous approval: bbbbbbb on 'main'".to_string(),
+            ]
+        );
+    }
+
+    /// Divergence changes what the round's diff means, so it belongs before the post,
+    /// not only in the result printed after it.
+    #[test]
+    fn the_confirmation_surfaces_divergence_from_the_previous_approval() {
+        let merge_base = ObjectId::from_str("ccccccc000000000000000000000000000000003").unwrap();
+        let diverged = basis_report(&basis(crate::GapContinuity::Diverged { merge_base }));
+        assert!(
+            diverged.last().is_some_and(|line| line.starts_with("⚠️")
+                && line.contains("not an ancestor of 'feature/x'")
+                && line.contains("ccccccc")),
+            "unexpected: {diverged:?}"
+        );
+
+        let unrelated = basis_report(&basis(crate::GapContinuity::Unrelated));
+        assert!(
+            unrelated
+                .last()
+                .is_some_and(|line| line.contains("shares no history with 'feature/x'")),
+            "unexpected: {unrelated:?}"
+        );
+    }
+
+    /// A thread whose only round is Initial QC, so seeding falls back to the body.
+    fn thread() -> IssueThread {
+        use crate::round::{ChecklistSource, Placement, Round, RoundOpen, RoundState, Segment};
+
+        let commit = ObjectId::from_str("aaaaaaa000000000000000000000000000000001").unwrap();
+        IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            open: false,
+            milestone: "m1".to_string(),
+            blocking_qcs: Vec::new(),
+            segments: vec![Segment::Round(Round {
+                index: 1,
+                opened_at: commit,
+                branch: "main".to_string(),
+                opened: RoundOpen::IssueCreated,
+                checklist: ChecklistSource::IssueBody,
+                checklist_name: None,
+                state: RoundState::Open,
+                events: Vec::new(),
+                retractions: Vec::new(),
+                extensions: Vec::new(),
+                commits: vec![crate::IssueCommit {
+                    hash: commit,
+                    message: "initial".to_string(),
+                    file_changed: true,
+                }],
+                placement: Placement::Placed,
+            })],
+            anomalies: Vec::new(),
+        }
+    }
+}

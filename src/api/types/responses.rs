@@ -133,24 +133,104 @@ impl From<octocrab::models::issues::Issue> for Issue {
 }
 
 /// QC status information.
+///
+/// Every sha here is nullable, and each null is a legitimate state rather than an
+/// edge case — see the individual fields. `approved_commit` is gone: it silently
+/// meant both `standing_approval` and `last_approved_commit`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QCStatus {
     pub status: QCStatusEnum,
     pub status_detail: String,
-    pub approved_commit: Option<String>,
-    pub initial_commit: String,
-    pub latest_commit: String,
+    /// The approval that currently stands: the previous round's closing commit while
+    /// the active segment is a gap. `None` while a round is open — i.e. exactly while
+    /// the file is back under review.
+    pub standing_approval: Option<String>,
+    /// The newest closing commit across all rounds, ungated. `None` when nothing was
+    /// ever approved.
+    pub last_approved_commit: Option<String>,
+    /// Initial QC's anchor. `None` when Initial QC could not be placed: such a
+    /// segment owns no commits, so its anchor is not a commit we can point at.
+    pub initial_commit: Option<String>,
+    /// Newest commit of the **active segment**, not of the thread. `None` whenever
+    /// that segment owns none — which includes the steady approved state, whose
+    /// trailing gap is legitimately empty.
+    pub latest_commit: Option<String>,
+    /// **The newest file-changing commit of the trailing gap** — the sha
+    /// `ChangesAfterApproval` carries. `None` in every other state, including
+    /// `Approved`: a gap with no file-changing commit is approved, not changed.
+    ///
+    /// Distinct from [`Self::latest_commit`], and deliberately so. **S1** picks the
+    /// newest commit of the gap that *touched the file*, because drift that never
+    /// touched it is not something a reviewer is asked to comment on — so for a gap
+    /// like `[X(file_changed: false), Y(file_changed: true)]` the status names `Y`
+    /// while `latest_commit` is `X`. Without this field a client rendering "changed at"
+    /// from `latest_commit` names a commit that never touched the file, which is the
+    /// backend-knows/frontend-guesses split D12 exists to close.
+    pub changed_commit: Option<String>,
+    /// The newest commit the active round reviewed. `None` when the active segment is
+    /// a gap, when the round has posted no review, or when every review it posted
+    /// names a commit the round does not own — coverage is scoped to the round's own
+    /// commits (S3), so an event outside them reports nothing.
+    ///
+    /// Round-scoped on purpose: the card labels a row *Reviewed*, and
+    /// [`Self::latest_commit`] now means the branch tip, so rendering that under the
+    /// label would call unreviewed drift reviewed.
+    pub last_reviewed_commit: Option<String>,
+    /// The newest commit the active round notified, on the same terms as
+    /// [`Self::last_reviewed_commit`] — the card's *Last Posted* row, and `None` on all
+    /// three of that field's null cases.
+    pub last_notified_commit: Option<String>,
 }
 
 impl From<&IssueThread> for QCStatus {
     fn from(issue: &IssueThread) -> Self {
         let status = crate::QCStatus::determine_status(issue);
+        // Notifications and reviews of the *active* round only. The projection lives
+        // here rather than on `IssueThread` because nothing else needs it yet (A4).
+        let active_round = issue.active_segment().as_round();
+        let newest_event = |want_review: bool| -> Option<String> {
+            let round = active_round?;
+            round
+                .events
+                .iter()
+                .filter(|event| matches!(event, crate::RoundEvent::Review { .. }) == want_review)
+                .filter_map(|event| {
+                    round
+                        .commit_position(event.commit())
+                        .map(|position| (position, event.commit()))
+                })
+                .min_by_key(|(position, _)| *position)
+                .map(|(_, commit)| commit.to_string())
+        };
+        // The status already selected the trailing gap's newest *file-changing* commit
+        // (S1); the enum projection throws that sha away, so capture it before the
+        // conversion rather than leaving the client to re-derive it from the gap's
+        // commits — it would have to reimplement the `file_changed` scan to get it right.
+        let changed_commit = match status.as_ref() {
+            Some(crate::QCStatus::ChangesAfterApproval(hash)) => Some(hash.to_string()),
+            _ => None,
+        };
         Self {
-            status_detail: status.to_string(),
+            // An unplaceable active segment yields no status at all (S4), which the
+            // enum reports as its eighth value, `unknown`. The detail says the same
+            // thing in words, mirroring the CLI's "Unknown".
+            status_detail: status
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Unknown".to_string()),
             status: status.into(),
-            approved_commit: issue.approved_commit().map(|c| c.hash.to_string()),
-            initial_commit: issue.initial_commit().to_string(),
-            latest_commit: issue.latest_commit().hash.to_string(),
+            standing_approval: issue.standing_approval().map(ObjectId::to_string),
+            last_approved_commit: issue.last_approved_commit().map(ObjectId::to_string),
+            initial_commit: issue
+                .segments
+                .first()
+                .and_then(crate::Segment::as_round)
+                .filter(|round| round.is_placed())
+                .map(|round| round.opened_at.to_string()),
+            latest_commit: issue.latest_commit().map(|c| c.hash.to_string()),
+            changed_commit,
+            last_reviewed_commit: newest_event(true),
+            last_notified_commit: newest_event(false),
         }
     }
 }
@@ -166,6 +246,32 @@ pub enum QCStatusEnum {
     InProgress,
     ApprovalRequired,
     ChangesToComment,
+    /// **The absence of a status, not an activity.** Emitted for — and only for — the
+    /// `None` the domain returns when the active segment could not be placed (S4).
+    ///
+    /// It is the eighth value on the wire and has no domain counterpart: the domain's
+    /// seven are the statuses a *placed* segment can report. It co-occurs with the
+    /// card's graying through D15's clause 2 (active segment `Unplaceable`), which is
+    /// the only clause that accompanies the absence of a status.
+    Unknown,
+}
+
+impl From<Option<crate::QCStatus>> for QCStatusEnum {
+    /// `None` — an unplaceable active segment (S4) — maps to [`QCStatusEnum::Unknown`].
+    ///
+    /// It deliberately does **not** map to `in_progress`, which it used to: that is a
+    /// real status a *placed* round reports when it owns commits, none of which touched
+    /// the QC'd file, and it announced nothing (S2's last row,
+    /// `crate::QCStatus::InProgress`). Collapsing the two would tell a client "nothing
+    /// can be asserted" about a round that is perfectly placeable and fully understood,
+    /// and would tie graying to a status that D15's second addendum reserves for the
+    /// absence of one.
+    fn from(value: Option<crate::QCStatus>) -> Self {
+        match value {
+            None => QCStatusEnum::Unknown,
+            Some(status) => status.into(),
+        }
+    }
 }
 
 impl From<crate::QCStatus> for QCStatusEnum {
@@ -235,7 +341,11 @@ pub enum GitStatusEnum {
     Diverged,
 }
 
-/// Commit information for an issue.
+/// A commit owned by one segment.
+///
+/// The wire shape is unchanged, but `statuses` is now a projection of the owning
+/// segment's events and state rather than a stored parse of the comment thread (A4):
+/// the comments are folded once, into rounds, and this reads that fold.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueCommit {
     pub hash: String,
@@ -244,18 +354,76 @@ pub struct IssueCommit {
     pub file_changed: bool,
 }
 
-impl From<&crate::IssueCommit> for IssueCommit {
-    fn from(commit: &crate::IssueCommit) -> Self {
+impl IssueCommit {
+    /// Project one commit as its **owning segment** sees it.
+    ///
+    /// `initial_anchor` is Initial QC's anchor — the only source of
+    /// [`CommitStatusEnum::Initial`], and the only status that is not a fact about the
+    /// owning segment.
+    ///
+    /// A gap has no events and no state, so a gap's commits can only ever carry
+    /// `initial`. An event naming a commit its own round does not own therefore loses
+    /// its status: coverage is scoped to the round's own commits (S3).
+    ///
+    /// **The two copies of a shared boundary commit disagree, deliberately.** A round's
+    /// `opened_at` may equal the previous round's closing commit (D1), so the same hash
+    /// appears in both segments' `commits`. The older round's copy carries `approved`
+    /// and the newer round's copy carries nothing, because in the newer round's frame
+    /// that commit genuinely is not its approval (D14). This is not a bug to fix by
+    /// unioning the two.
+    ///
+    /// **`approved` is now per round, and that is an undocumented behaviour change.**
+    /// The parse this replaced tracked a single `approved_commit` and stripped
+    /// `Approved` from every other commit, so exactly one `approved` dot existed
+    /// thread-wide. This projection dots *every* closed round's closing commit, so a
+    /// thread like `[R1(closed@b), Gap(c), R2(closed@d), Gap()]` emits `["approved"]`
+    /// on both `b` and `d`. Arguably a fix — each round's approval belongs in its own
+    /// frame, which is the same reasoning as D14 — but neither the spec, the wire
+    /// contract nor the old code says so, so it is recorded here rather than assumed.
+    fn project(commit: &crate::IssueCommit, segment: &crate::Segment) -> Self {
+        // Fixed order, deduplicated: the old field came from a `HashSet` and so had
+        // non-deterministic order, which every consumer had to re-sort.
+        let mut statuses = Vec::new();
+        if let Some(round) = segment.as_round() {
+            // `Initial` marks **the owning round's own anchor**, not just Initial QC's.
+            // The round comment names it `initial qc round commit`, and D10 gives it to
+            // the round rather than the preceding gap, so every round has one and the
+            // picker should show it. Previously only `segments[0].opened_at` qualified,
+            // which left every round from 2 on with an unmarked start.
+            //
+            // Being inside `as_round()` also makes a Gap commit structurally incapable
+            // of carrying `Initial` — see D14's corollary. It was already unreachable in
+            // practice, since Round 1 owns its own anchor.
+            if round.opened_at == commit.hash {
+                statuses.push(CommitStatusEnum::Initial);
+            }
+            let names = |want_review: bool| {
+                round.events.iter().any(|event| {
+                    *event.commit() == commit.hash
+                        && matches!(event, crate::RoundEvent::Review { .. }) == want_review
+                })
+            };
+            if names(false) {
+                statuses.push(CommitStatusEnum::Notification);
+            }
+            if round.closing_commit() == Some(&commit.hash) {
+                statuses.push(CommitStatusEnum::Approved);
+            }
+            if names(true) {
+                statuses.push(CommitStatusEnum::Reviewed);
+            }
+        }
         Self {
             hash: commit.hash.to_string(),
             message: commit.message.to_string(),
-            statuses: commit.statuses.iter().map(CommitStatusEnum::from).collect(),
+            statuses,
             file_changed: commit.file_changed,
         }
     }
 }
 
-/// Commit status enum values.
+/// Commit status enum values. Serialized in the fixed order they are declared in —
+/// see [`IssueCommit::project`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CommitStatusEnum {
@@ -263,17 +431,6 @@ pub enum CommitStatusEnum {
     Notification,
     Approved,
     Reviewed,
-}
-
-impl From<&crate::CommitStatus> for CommitStatusEnum {
-    fn from(status: &crate::CommitStatus) -> Self {
-        match status {
-            crate::CommitStatus::Initial => CommitStatusEnum::Initial,
-            crate::CommitStatus::Notification => CommitStatusEnum::Notification,
-            crate::CommitStatus::Approved => CommitStatusEnum::Approved,
-            crate::CommitStatus::Reviewed => CommitStatusEnum::Reviewed,
-        }
-    }
 }
 
 /// Checklist completion summary.
@@ -295,6 +452,645 @@ impl From<Vec<(String, crate::ChecklistSummary)>> for ChecklistSummary {
             } else {
                 sum.completed as f32 / sum.total as f32
             },
+        }
+    }
+}
+
+/// Whether a QC round is still being reviewed, or was closed by an approval.
+///
+/// Mirrors [`crate::RoundState`]'s discriminant; the closing details live in
+/// [`RoundInfo`]'s flat `closing_*` fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundStateEnum {
+    Open,
+    Closed,
+}
+
+/// Where a round's checklist lives. Mirrors [`crate::ChecklistSource`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChecklistSourceKind {
+    /// Initial QC: the checklist is in the issue body.
+    IssueBody,
+    /// Round N > 1: the checklist is in the round comment.
+    Comment,
+}
+
+/// The checklist source of a round, with the comment it lives in when known.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundChecklistSource {
+    pub kind: ChecklistSourceKind,
+    /// GitHub's comment id; `None` for `issue_body` and for cache-loaded comments.
+    pub comment_id: Option<u64>,
+    /// Permalink to the comment; `None` for the same reasons as `comment_id`.
+    pub comment_url: Option<String>,
+}
+
+impl From<&crate::ChecklistSource> for RoundChecklistSource {
+    fn from(source: &crate::ChecklistSource) -> Self {
+        match source {
+            crate::ChecklistSource::IssueBody => Self {
+                kind: ChecklistSourceKind::IssueBody,
+                comment_id: None,
+                comment_url: None,
+            },
+            crate::ChecklistSource::Comment {
+                comment_id,
+                comment_url,
+                ..
+            } => Self {
+                kind: ChecklistSourceKind::Comment,
+                comment_id: *comment_id,
+                comment_url: comment_url.clone(),
+            },
+        }
+    }
+}
+
+/// Whether a round was opened by creating the issue, or by a round comment.
+/// Mirrors [`crate::RoundOpen`]'s discriminant.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundOpenKind {
+    IssueCreated,
+    NewRound,
+}
+
+/// What opened a round.
+///
+/// Projected as a struct with a `kind` field rather than a tagged enum so all six keys
+/// are always present and a client can read `comment_url` without narrowing. The
+/// fold-internal `comment_index` is deliberately not exposed.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundOpenInfo {
+    pub kind: RoundOpenKind,
+    /// GitHub's comment id; `None` for `issue_created` and for cache-loaded comments.
+    pub comment_id: Option<u64>,
+    /// Permalink to the opening comment; `None` for the same reasons as `comment_id`.
+    pub comment_url: Option<String>,
+    /// `None` for `issue_created`.
+    pub author: Option<String>,
+    /// `None` for `issue_created`.
+    pub at: Option<DateTime<Utc>>,
+    /// The `note:` the round comment recorded, when it recorded one.
+    pub note: Option<String>,
+}
+
+impl From<&crate::RoundOpen> for RoundOpenInfo {
+    fn from(opened: &crate::RoundOpen) -> Self {
+        match opened {
+            crate::RoundOpen::IssueCreated => Self {
+                kind: RoundOpenKind::IssueCreated,
+                comment_id: None,
+                comment_url: None,
+                author: None,
+                at: None,
+                note: None,
+            },
+            crate::RoundOpen::NewRound {
+                comment_id,
+                comment_url,
+                author,
+                at,
+                note,
+                ..
+            } => Self {
+                kind: RoundOpenKind::NewRound,
+                comment_id: *comment_id,
+                comment_url: comment_url.clone(),
+                author: Some(author.clone()),
+                at: Some(*at),
+                note: note.clone(),
+            },
+        }
+    }
+}
+
+/// Whether a round event was a notification or a review.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundEventKind {
+    Notification,
+    Review,
+}
+
+/// A notification or review posted inside a round. Mirrors [`crate::RoundEvent`],
+/// flattened the same way [`RoundOpenInfo`] is.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundEventInfo {
+    pub kind: RoundEventKind,
+    /// The commit this event names.
+    pub commit: String,
+    pub by: String,
+    pub at: DateTime<Utc>,
+    /// `None` for cache-loaded comments, which carry no identity.
+    pub comment_id: Option<u64>,
+    /// `None` for the same reason as `comment_id`.
+    pub comment_url: Option<String>,
+}
+
+impl From<&crate::RoundEvent> for RoundEventInfo {
+    fn from(event: &crate::RoundEvent) -> Self {
+        let (kind, commit, by, at, comment_id, comment_url) = match event {
+            crate::RoundEvent::Notification {
+                commit,
+                by,
+                at,
+                comment_id,
+                comment_url,
+                ..
+            } => (
+                RoundEventKind::Notification,
+                commit,
+                by,
+                at,
+                comment_id,
+                comment_url,
+            ),
+            crate::RoundEvent::Review {
+                commit,
+                by,
+                at,
+                comment_id,
+                comment_url,
+                ..
+            } => (
+                RoundEventKind::Review,
+                commit,
+                by,
+                at,
+                comment_id,
+                comment_url,
+            ),
+        };
+        Self {
+            kind,
+            commit: commit.to_string(),
+            by: by.clone(),
+            at: *at,
+            comment_id: *comment_id,
+            comment_url: comment_url.clone(),
+        }
+    }
+}
+
+/// A `# QC Un-Approval` that took back a round's approval. Mirrors
+/// [`crate::Retraction`].
+#[derive(Debug, Clone, Serialize)]
+pub struct RetractionInfo {
+    pub retracted_commit: String,
+    pub by: String,
+    pub at: DateTime<Utc>,
+    /// `None` for cache-loaded comments.
+    pub comment_id: Option<u64>,
+    /// `None` for the same reason as `comment_id`.
+    pub comment_url: Option<String>,
+}
+
+impl From<&crate::Retraction> for RetractionInfo {
+    fn from(retraction: &crate::Retraction) -> Self {
+        Self {
+            retracted_commit: retraction.retracted_commit.to_string(),
+            by: retraction.by.clone(),
+            at: retraction.at,
+            comment_id: retraction.comment_id,
+            comment_url: retraction.comment_url.clone(),
+        }
+    }
+}
+
+/// A round comment that extended an open round instead of opening a new one.
+/// Mirrors [`crate::Extension`].
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtensionInfo {
+    pub by: String,
+    pub at: DateTime<Utc>,
+    /// The written `round commit:`, when present and resolvable. The round's own
+    /// anchor is deliberately left alone by an extension.
+    pub at_commit: Option<String>,
+    pub note: Option<String>,
+    /// `None` for cache-loaded comments.
+    pub comment_id: Option<u64>,
+    /// `None` for the same reason as `comment_id`.
+    pub comment_url: Option<String>,
+}
+
+impl From<&crate::Extension> for ExtensionInfo {
+    fn from(extension: &crate::Extension) -> Self {
+        Self {
+            by: extension.by.clone(),
+            at: extension.at,
+            at_commit: extension.at_commit.map(|c| c.to_string()),
+            note: extension.note.clone(),
+            comment_id: extension.comment_id,
+            comment_url: extension.comment_url.clone(),
+        }
+    }
+}
+
+/// Why a segment's commits could not be located. Mirrors
+/// [`crate::UnplaceableReason`].
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UnplaceableReasonEnum {
+    BranchNotDeclared,
+    BranchUnavailable,
+    AnchorUnreachable,
+    MergeBaseUnreachable,
+    NeighbourUnplaceable,
+}
+
+impl From<&crate::UnplaceableReason> for UnplaceableReasonEnum {
+    fn from(reason: &crate::UnplaceableReason) -> Self {
+        match reason {
+            crate::UnplaceableReason::BranchNotDeclared => Self::BranchNotDeclared,
+            crate::UnplaceableReason::BranchUnavailable => Self::BranchUnavailable,
+            crate::UnplaceableReason::AnchorUnreachable => Self::AnchorUnreachable,
+            crate::UnplaceableReason::MergeBaseUnreachable => Self::MergeBaseUnreachable,
+            crate::UnplaceableReason::NeighbourUnplaceable => Self::NeighbourUnplaceable,
+        }
+    }
+}
+
+/// Whether a segment's commits could be located. Mirrors [`crate::Placement`], but as
+/// a **struct** variant rather than M5's newtype.
+///
+/// That restructuring is load-bearing, not cosmetic: internally tagging a newtype
+/// variant around a unit-only enum compiles *and* serializes, silently emitting
+/// `{"kind":"unplaceable","branch_unavailable":null}` — the reason becomes a key. The
+/// domain type must therefore never derive `Serialize`; it reaches the wire only here.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlacementInfo {
+    Placed,
+    Unplaceable { reason: UnplaceableReasonEnum },
+}
+
+impl From<&crate::Placement> for PlacementInfo {
+    fn from(placement: &crate::Placement) -> Self {
+        match placement {
+            crate::Placement::Placed => Self::Placed,
+            crate::Placement::Unplaceable(reason) => Self::Unplaceable {
+                reason: reason.into(),
+            },
+        }
+    }
+}
+
+/// How a gap's two bounding commits relate. Mirrors [`crate::GapContinuity`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GapContinuityInfo {
+    Linear,
+    Diverged { merge_base: String },
+    Unrelated,
+}
+
+impl From<&crate::GapContinuity> for GapContinuityInfo {
+    fn from(continuity: &crate::GapContinuity) -> Self {
+        match continuity {
+            crate::GapContinuity::Linear => Self::Linear,
+            crate::GapContinuity::Diverged { merge_base } => Self::Diverged {
+                merge_base: merge_base.to_string(),
+            },
+            crate::GapContinuity::Unrelated => Self::Unrelated,
+        }
+    }
+}
+
+impl GapContinuityInfo {
+    /// The same fact as a round-start response's `divergence`, where `null` already
+    /// means "no divergence". [`crate::GapContinuity::Linear`] therefore maps to
+    /// `None`: emitting both encodings of one fact would let them disagree, so
+    /// `{"kind":"linear"}` is unrepresentable on those two fields.
+    pub fn divergence(continuity: &crate::GapContinuity) -> Option<Self> {
+        match continuity {
+            crate::GapContinuity::Linear => None,
+            other => Some(other.into()),
+        }
+    }
+}
+
+/// What archiving **this** round would produce, projected from the one derivation the
+/// archive itself runs. Mirrors [`crate::archive::ArchivePreview`].
+///
+/// It exists because the UI had grown a second implementation of the content rule, the
+/// approval tie-break and all four supersession clauses in TypeScript — one rule in two
+/// languages, which is the drift this model keeps removing. Nothing here is recomputed by
+/// the projection: for one thread and round this and the archive's metadata agree by
+/// construction.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchivePreviewInfo {
+    /// The commit that would be archived: this round's closing commit when it is closed,
+    /// its latest actioned commit when it is open. **Not** necessarily `commits[0]`.
+    pub commit: String,
+    /// `None` ⇒ those bytes were never approved.
+    pub approval: Option<ApprovalInfo>,
+    /// Empty ⇒ the bytes are provably the newest QC state; non-empty ⇒ every reason they
+    /// are not, in clause order. Always emitted, including as `[]`.
+    ///
+    /// There is deliberately **no** `superseded` bool beside it: `superseded` *is*
+    /// `superseding_causes.length > 0`, and two fields for one fact is the defect this
+    /// model exists to remove. A client that wants the bool folds the array.
+    pub superseding_causes: Vec<SupersedingCauseEnum>,
+}
+
+/// An approval claim about the previewed commit. Mirrors [`crate::Approval`].
+#[derive(Debug, Clone, Serialize)]
+pub struct ApprovalInfo {
+    /// The round that closed on this commit — **may be less than the enclosing round's
+    /// `index`**, because a round's anchor may be the previous round's closing commit.
+    /// Read as *you are on round N; these bytes are round M's approval*. A consumer must
+    /// never render the enclosing round as approved on the strength of this field.
+    pub round: u32,
+    pub commit: String,
+    pub by: String,
+    pub at: DateTime<Utc>,
+}
+
+impl From<&crate::Approval> for ApprovalInfo {
+    fn from(approval: &crate::Approval) -> Self {
+        Self {
+            round: approval.round,
+            commit: approval.commit.to_string(),
+            by: approval.by.clone(),
+            at: approval.at,
+        }
+    }
+}
+
+/// One reason a round's archived bytes would not be provably the newest QC state — one
+/// variant per supersession clause. Mirrors [`crate::archive::SupersedingCause`].
+///
+/// Not mutually exclusive: `later_approval` and `round_open` co-occur routinely.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupersedingCauseEnum {
+    LaterApproval,
+    RoundOpen,
+    ChangedSince,
+    Undeterminable,
+}
+
+impl From<crate::archive::SupersedingCause> for SupersedingCauseEnum {
+    fn from(cause: crate::archive::SupersedingCause) -> Self {
+        match cause {
+            crate::archive::SupersedingCause::LaterApproval => Self::LaterApproval,
+            crate::archive::SupersedingCause::RoundOpen => Self::RoundOpen,
+            crate::archive::SupersedingCause::ChangedSince => Self::ChangedSince,
+            crate::archive::SupersedingCause::Undeterminable => Self::Undeterminable,
+        }
+    }
+}
+
+impl From<&crate::archive::ArchivePreview> for ArchivePreviewInfo {
+    fn from(preview: &crate::archive::ArchivePreview) -> Self {
+        Self {
+            commit: preview.commit.to_string(),
+            approval: preview.approval.as_ref().map(ApprovalInfo::from),
+            superseding_causes: preview
+                .superseding_causes
+                .iter()
+                .copied()
+                .map(SupersedingCauseEnum::from)
+                .collect(),
+        }
+    }
+}
+
+/// One QC round and the commits it owns. Mirrors [`crate::Round`].
+///
+/// `previous_approval` is gone: it is the closing commit of the round two positions
+/// back, which a consumer reads positionally (or, for the round it is rendering, from
+/// `qc_status.standing_approval`). The three `*_count` fields are gone too — the lists
+/// themselves are projected, and a count beside its list is data that can disagree.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundSegment {
+    /// 1-based, derived round number. `1` is Initial QC.
+    pub index: u32,
+    /// Human-readable name: `"Initial QC"` or `"Round N"`.
+    pub name: String,
+    /// The commit the round opened at — its anchor, owned by this round and not by the
+    /// gap before it.
+    ///
+    /// `None` when the round could not be placed. The fold leaves an unresolved anchor as
+    /// the **all-zero OID**, which is not a commit anyone can address; emitting it would
+    /// put a fake sha on an audit tool's wire, where every other unresolvable sha on this
+    /// response is already null. Nulled at the source rather than guarded downstream.
+    pub opened_at: Option<String>,
+    /// The branch this round was reviewed on. Always present: a round comment without
+    /// one is malformed input, reported as `placement.reason == branch_not_declared`
+    /// rather than as a null branch.
+    pub branch: String,
+    pub opened: RoundOpenInfo,
+    /// Projects the model's `checklist`; the wire name is unchanged.
+    pub checklist_source: RoundChecklistSource,
+    pub checklist_name: Option<String>,
+    pub state: RoundStateEnum,
+    /// Set only when `state == closed`: the approved commit.
+    pub closing_commit: Option<String>,
+    /// Set only when `state == closed`: who approved.
+    pub closed_by: Option<String>,
+    /// Set only when `state == closed`: when the approval landed.
+    pub closed_at: Option<DateTime<Utc>>,
+    /// Notifications and reviews inside this round, oldest first.
+    pub events: Vec<RoundEventInfo>,
+    /// `# QC Un-Approval` comments that took back this round's approval, oldest first.
+    pub retractions: Vec<RetractionInfo>,
+    /// Round comments that extended this round instead of opening one, oldest first.
+    pub extensions: Vec<ExtensionInfo>,
+    /// The commits this round owns, newest first. Empty when unplaceable.
+    pub commits: Vec<IssueCommit>,
+    /// This round's newest commit carrying an action — its anchor, a notification or a
+    /// review — by position within this round's own `commits`. Drift nobody acted on is
+    /// not a candidate.
+    ///
+    /// `None` exactly when `placement` is unplaceable: such a round owns no commits and
+    /// its anchor is the fold's all-zero placeholder, already nulled at `opened_at` so no
+    /// fake sha reaches an audit tool.
+    ///
+    /// Derivable from `commits`, `events` and `opened_at`, and on the wire anyway: the
+    /// archive's default target is this commit, and a client re-deriving it would be the
+    /// sixth independent implementation of round scope across two languages.
+    ///
+    /// Not `commits[0]`, which is the newest commit full stop, and not `closing_commit`:
+    /// an approval is not an event, so a closed round can report an actioned commit
+    /// *older* than the commit it closed at. Only an open round's archive selection reads
+    /// this field.
+    pub latest_actioned_commit: Option<String>,
+    /// What archiving this round would produce, so a client renders the answer instead of
+    /// re-deriving the rules behind it.
+    ///
+    /// `None` exactly when `placement` is unplaceable: such a round cannot be archived at
+    /// all, which is the same refusal the archive itself reports. The reason is **not**
+    /// repeated here — it is already in `placement.reason`, and one fact belongs in one
+    /// place.
+    pub archive_preview: Option<ArchivePreviewInfo>,
+    pub placement: PlacementInfo,
+}
+
+/// The drift between two rounds, or after the last one. Mirrors [`crate::Gap`].
+///
+/// Gaps carry no index, name or id: they are addressed positionally.
+#[derive(Debug, Clone, Serialize)]
+pub struct GapSegment {
+    /// The branch this gap was walked on: the bounding newer round's, or — for a
+    /// trailing gap — the bounding older round's. Never the viewer's checkout.
+    pub branch: String,
+    /// The commits this gap owns, newest first. Legitimately empty.
+    pub commits: Vec<IssueCommit>,
+    pub continuity: GapContinuityInfo,
+    /// The older bounding commit — the previous round's closing commit, exclusive.
+    /// `None` when it does not resolve.
+    pub lower_bound: Option<String>,
+    /// The newer bounding commit — the next round's anchor, exclusive, or the branch
+    /// tip for a trailing gap. `None` when it does not resolve.
+    pub upper_bound: Option<String>,
+    pub placement: PlacementInfo,
+}
+
+/// One segment of a thread: a QC round, or the drift between two of them.
+///
+/// Internally tagged on `kind`, which is what makes `segments.at(-1).kind == "round"`
+/// the test for "a round is open" and what a TypeScript discriminated union consumes
+/// unwrapped. Both variants wrap structs — an internally-tagged newtype variant
+/// around anything that does not serialize as a map fails at runtime.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
+pub enum SegmentInfo {
+    Round(RoundSegment),
+    Gap(GapSegment),
+}
+
+impl SegmentInfo {
+    /// Project the segment at `position`.
+    ///
+    /// The whole thread is passed, not just the segment: a gap's bounds are positional
+    /// facts about its neighbours, `initial` statuses are a fact about `segments[0]`, and
+    /// a round's `archive_preview` is a fact about the round *within* its thread — the
+    /// segments after it decide its supersession causes.
+    fn project(thread: &IssueThread, position: usize) -> Self {
+        let segments = &thread.segments;
+        let segment = &segments[position];
+        let commits = segment
+            .commits()
+            .iter()
+            .map(|commit| IssueCommit::project(commit, segment))
+            .collect();
+
+        match segment {
+            crate::Segment::Round(round) => {
+                let (state, closing_commit, closed_by, closed_at) = match &round.state {
+                    crate::RoundState::Open => (RoundStateEnum::Open, None, None, None),
+                    crate::RoundState::Closed { commit, by, at, .. } => (
+                        RoundStateEnum::Closed,
+                        Some(commit.to_string()),
+                        Some(by.clone()),
+                        Some(*at),
+                    ),
+                };
+                Self::Round(RoundSegment {
+                    index: round.index,
+                    name: round.name(),
+                    opened_at: round.is_placed().then(|| round.opened_at.to_string()),
+                    branch: round.branch.clone(),
+                    opened: (&round.opened).into(),
+                    checklist_source: (&round.checklist).into(),
+                    checklist_name: round.checklist_name.clone(),
+                    state,
+                    closing_commit,
+                    closed_by,
+                    closed_at,
+                    events: round.events.iter().map(RoundEventInfo::from).collect(),
+                    retractions: round.retractions.iter().map(RetractionInfo::from).collect(),
+                    extensions: round.extensions.iter().map(ExtensionInfo::from).collect(),
+                    commits,
+                    // The accessor, never a second derivation here: it is the one
+                    // implementation of "the round's latest update commit", shared with
+                    // `next_notification_from`.
+                    latest_actioned_commit: round
+                        .latest_actioned_commit()
+                        .map(|commit| commit.hash.to_string()),
+                    // Projected, never re-derived here: this calls the same derivation the
+                    // archive runs, so the answer a user selects on and the answer the
+                    // metadata records cannot disagree.
+                    archive_preview: crate::archive::archive_preview(thread, round.index)
+                        .as_ref()
+                        .map(ArchivePreviewInfo::from),
+                    placement: (&round.placement).into(),
+                })
+            }
+            crate::Segment::Gap(gap) => {
+                // Positional, and the offsets differ from a round's: the rounds
+                // bounding a gap at `position` are its immediate neighbours, at
+                // `position - 1` (older) and `position + 1` (newer). `position - 2`
+                // is another gap.
+                let bounding = |at: Option<usize>| {
+                    at.and_then(|at| segments.get(at))
+                        .and_then(crate::Segment::as_round)
+                        // An unplaceable round's commits were never resolved, so its
+                        // anchor is not a commit we can hand a consumer as a bound.
+                        .filter(|round| round.is_placed())
+                };
+                let older = bounding(position.checked_sub(1));
+                // "Trailing" is a structural fact about the position, not the absence
+                // of a *placeable* newer round: an interior gap whose newer round is
+                // unplaceable must lose that bound (W6), not silently fall through to
+                // the trailing rule and claim its own newest commit.
+                let trailing = position + 1 >= segments.len();
+                let newer = bounding(Some(position + 1));
+
+                // The bounding *approval*, not the merge-base the walk stopped at.
+                // For a diverged gap the two differ — which is exactly the case this
+                // field exists to render — and the merge-base is already on the wire
+                // as `continuity.merge_base`.
+                let lower_bound = older.and_then(crate::Round::closing_commit).copied();
+                let upper_bound = if trailing {
+                    // A trailing gap's newer bound is the branch tip, inclusive: its
+                    // own newest commit. With nothing since the approval the tip *is*
+                    // that approval, so both bounds are the same commit — expected,
+                    // not a bug. Only claimable when the walk actually reached back to
+                    // it, i.e. a placed, linear gap. The non-linear fallback is
+                    // unreachable from the fold today (D15's addendum: a trailing gap
+                    // walks the previous round's branch, on which a placed round's
+                    // closing commit necessarily sits, so continuity is always
+                    // `Linear`); it guards a future model change.
+                    gap.commits.first().map(|commit| commit.hash).or_else(|| {
+                        (gap.is_placed() && gap.continuity == crate::GapContinuity::Linear)
+                            .then_some(lower_bound)
+                            .flatten()
+                    })
+                } else {
+                    // An interior gap's newer bound is the next round's anchor — and
+                    // nothing else. `bounding` has already nulled it if that round
+                    // could not be placed (W6: no substitution).
+                    newer.map(|round| round.opened_at)
+                };
+
+                // A gap that could not be placed *itself* has no range, so neither bound
+                // is a handle anyone may draw on — even when both neighbours are placed
+                // and the bounds therefore resolve. Reachable through `build_gap`'s
+                // `BranchUnavailable` / `AnchorUnreachable` / `MergeBaseUnreachable`
+                // paths, where the *gap* is grayed while the rounds around it are fine.
+                // Handing U1 a real handle to draw across a segment it is graying is
+                // W6's plausible-but-wrong, which is worse than nothing.
+                let (lower_bound, upper_bound) = if gap.is_placed() {
+                    (lower_bound, upper_bound)
+                } else {
+                    (None, None)
+                };
+
+                Self::Gap(GapSegment {
+                    branch: gap.branch.clone(),
+                    commits,
+                    continuity: (&gap.continuity).into(),
+                    lower_bound: lower_bound.map(|c| c.to_string()),
+                    upper_bound: upper_bound.map(|c| c.to_string()),
+                    placement: (&gap.placement).into(),
+                })
+            }
         }
     }
 }
@@ -360,10 +1156,34 @@ pub struct IssueStatusResponse {
     pub issue: Issue,
     pub qc_status: QCStatus,
     pub dirty: bool,
-    pub branch: String,
-    pub commits: Vec<IssueCommit>,
+    /// The branch the status was computed on: the active segment's. Never the
+    /// viewer's checkout, so two people on different branches see the same status.
+    /// A client compares this with `/api/repo`'s branch at render time — the compare
+    /// is a join of stable data with a polled fact, not derivation.
+    pub active_branch: String,
     pub checklist_summary: ChecklistSummary,
     pub blocking_qc_status: BlockingQCStatus,
+    /// The thread as a strict alternation of rounds and the drift between them,
+    /// oldest first. Replaces **both** the round list and the thread-wide commit
+    /// list: every commit is owned by the segment that covers it.
+    ///
+    /// `segments[0]` is Initial QC and the last segment is an open round or a gap, so
+    /// `segments.at(-1).kind == "round"` replaces the removed `open_round_index`.
+    pub segments: Vec<SegmentInfo>,
+    /// The commit a new notification would diff against — the UI's default
+    /// comparison base for its commit picker. `None` when the active segment can
+    /// supply none: an unplaceable segment owns no commits, so there is neither a
+    /// newest event commit nor a standing approval to fall back to.
+    pub next_notification_from: Option<String>,
+    /// Which of the open round's follow-up steps are incomplete, so a client can
+    /// offer a repair without asking. `null` when no round is open, or when the
+    /// open round is Initial QC (which no start-round action opened).
+    ///
+    /// This lives here rather than on the round seed because the status surface
+    /// renders many issues at once and must decide per card without a second
+    /// request, and because it is a pure function of the rounds already folded for
+    /// this response: no extra API call, no writes.
+    pub round_repair: Option<RoundRepairStatus>,
 }
 
 impl IssueStatusResponse {
@@ -376,14 +1196,21 @@ impl IssueStatusResponse {
             dirty: dirty_files.contains(&PathBuf::from(&issue.title)),
             issue: issue.clone().into(),
             qc_status: issue_thread.into(),
-            branch: issue
-                .body
-                .as_deref()
-                .and_then(crate::parse_branch_from_body)
-                .unwrap_or("unknown".to_string()),
-            commits: issue_thread.commits.iter().map(IssueCommit::from).collect(),
+            active_branch: issue_thread.active_branch().to_string(),
             checklist_summary: analyze_issue_checklists(issue.body.as_deref()).into(),
             blocking_qc_status: BlockingQCStatus::default(),
+            segments: (0..issue_thread.segments.len())
+                .map(|position| SegmentInfo::project(issue_thread, position))
+                .collect(),
+            next_notification_from: issue_thread
+                .next_notification_from()
+                .map(|commit| commit.to_string()),
+            // By I3 a closed round is never last, so the only round that can be open
+            // is the active segment.
+            round_repair: issue_thread
+                .active_segment()
+                .as_round()
+                .and_then(|round| RoundRepairStatus::derive(issue, round)),
         }
     }
 
@@ -485,6 +1312,332 @@ pub struct ApprovalResponse {
 pub struct UnapprovalResponse {
     pub unapproval_url: String,
     pub opened: bool,
+}
+
+/// How one of a round start's recoverable steps turned out. Mirrors
+/// [`crate::StepOutcome`], whose failure message becomes `error`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepStatusEnum {
+    Done,
+    /// Not attempted because it was not requested.
+    Skipped,
+    Failed,
+}
+
+/// Outcome of one recoverable step of a round start.
+#[derive(Debug, Clone, Serialize)]
+pub struct StepOutcomeResponse {
+    pub status: StepStatusEnum,
+    /// Present only when `status == failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Why the step was skipped, when the reason is not simply that there was nothing
+    /// to do. Present only when `status == skipped` *and* such a reason exists, exactly
+    /// as `error` is present only on `failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
+}
+
+impl From<&crate::StepOutcome> for StepOutcomeResponse {
+    fn from(outcome: &crate::StepOutcome) -> Self {
+        match outcome {
+            crate::StepOutcome::Done => Self {
+                status: StepStatusEnum::Done,
+                error: None,
+                skipped_reason: None,
+            },
+            crate::StepOutcome::Skipped => Self {
+                status: StepStatusEnum::Skipped,
+                error: None,
+                skipped_reason: None,
+            },
+            crate::StepOutcome::Failed(error) => Self {
+                status: StepStatusEnum::Failed,
+                error: Some(error.clone()),
+                skipped_reason: None,
+            },
+        }
+    }
+}
+
+impl StepOutcomeResponse {
+    /// Attach why this step was skipped.
+    ///
+    /// A reason on a step that ran is dropped rather than reported: `done` was not
+    /// skipped, and `failed` already says why in `error`. The domain type carries no
+    /// reason of its own (`crate::StepOutcome::Skipped` is a unit variant shared with
+    /// the start path), so the caller supplies it — see
+    /// [`crate::RepairRoundResult::notification_skip_reason`].
+    pub fn skipped_because(mut self, reason: Option<&str>) -> Self {
+        if self.status == StepStatusEnum::Skipped {
+            self.skipped_reason = reason.map(str::to_string);
+        }
+        self
+    }
+}
+
+/// A downstream issue a new round may have invalidated. Display only — the round
+/// action never writes to a downstream issue.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactedIssueItem {
+    pub issue_number: u64,
+    pub file_name: String,
+    pub milestone: String,
+    /// Human-readable relationship, e.g. `"previous QC"`.
+    pub relationship: String,
+}
+
+/// Direct downstream issues, one layer deep. Mirrors [`crate::ImpactedIssues`].
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactedIssuesResponse {
+    /// `false` when the dependency API is unavailable on this GitHub instance, in
+    /// which case `issues` is empty because nothing could be checked.
+    pub api_available: bool,
+    pub issues: Vec<ImpactedIssueItem>,
+}
+
+impl From<&crate::ImpactedIssues> for ImpactedIssuesResponse {
+    fn from(impacted: &crate::ImpactedIssues) -> Self {
+        match impacted {
+            crate::ImpactedIssues::None => Self {
+                api_available: true,
+                issues: Vec::new(),
+            },
+            crate::ImpactedIssues::ApiUnavailable => Self {
+                api_available: false,
+                issues: Vec::new(),
+            },
+            crate::ImpactedIssues::Some(nodes) => Self {
+                api_available: true,
+                issues: nodes
+                    .iter()
+                    .map(|node| ImpactedIssueItem {
+                        issue_number: node.issue_number,
+                        file_name: node.file_name.display().to_string(),
+                        milestone: node.milestone.clone(),
+                        relationship: node.relationship.to_string(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
+/// Response for starting a new QC round.
+///
+/// The round exists as soon as `round_comment_url` is set; the three step fields
+/// report what else landed. A `failed` step is **not** an error response: each
+/// step is idempotent and independently retryable, which is what `needs_repair`
+/// flags.
+#[derive(Debug, Clone, Serialize)]
+pub struct StartRoundResponse {
+    /// Derived index of the round that was opened (always >= 2).
+    pub round: u32,
+    /// Human-readable name of the new round, e.g. `"Round 2"`.
+    pub round_name: String,
+    /// URL of the round comment: the round's identity.
+    pub round_comment_url: String,
+    /// The commit the round opened at (HEAD at open time).
+    pub anchor: String,
+    /// The branch the round was opened on, recorded in its round comment.
+    pub branch: String,
+    /// What the notification diff compared against: the previous approval, unless it
+    /// was unreachable from `branch`.
+    pub comparison_base: String,
+    /// How the previous approval relates to `anchor`, when it was not an ancestor of
+    /// it. `None` for the linear case, which is what `null` means on this field.
+    pub divergence: Option<GapContinuityInfo>,
+    /// Step 2: reopening the issue.
+    pub reopened: StepOutcomeResponse,
+    /// Step 3: refreshing the `## QC Round` block in the issue body.
+    pub body_marker: StepOutcomeResponse,
+    /// Step 4: the `# QC Notification` comment.
+    pub notification: StepOutcomeResponse,
+    /// Whether any of the steps above failed and wants a retry.
+    pub needs_repair: bool,
+    pub impacted_issues: ImpactedIssuesResponse,
+}
+
+impl From<&crate::StartRoundResult> for StartRoundResponse {
+    fn from(result: &crate::StartRoundResult) -> Self {
+        Self {
+            round: result.round,
+            round_name: format!("Round {}", result.round),
+            round_comment_url: result.round_comment_url.clone(),
+            anchor: result.anchor.to_string(),
+            branch: result.branch.clone(),
+            comparison_base: result.comparison_base.to_string(),
+            divergence: GapContinuityInfo::divergence(&result.continuity),
+            reopened: (&result.reopened).into(),
+            body_marker: (&result.body_marker).into(),
+            notification: (&result.notification).into(),
+            needs_repair: result.needs_repair(),
+            impacted_issues: (&result.impacted_issues).into(),
+        }
+    }
+}
+
+/// Which of the open round's follow-up steps are incomplete. Mirrors
+/// [`crate::RepairPlan`], and is what `POST /api/issues/{n}/rounds/repair` would
+/// act on.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundRepairStatus {
+    /// Index of the open round these flags describe.
+    pub round: u32,
+    /// Name of that round, e.g. `"Round 2"`.
+    pub round_name: String,
+    /// The issue is closed while this round is open.
+    pub reopen: bool,
+    /// The `## QC Round` body marker is missing or disagrees with this round.
+    pub body_marker: bool,
+    /// This round carries no `# QC Notification`. Informational: **not** a defect,
+    /// and therefore excluded from `needs_repair` — opening a round without
+    /// notifying is a legitimate choice, and a repair only posts one on request.
+    pub notification_missing: bool,
+    /// Whether something is actually wrong, i.e. `reopen || body_marker`. The only
+    /// field a client should use to decide whether to offer a repair.
+    pub needs_repair: bool,
+}
+
+impl RoundRepairStatus {
+    /// `None` unless `round` is open **and** was opened by a `# QC Round`
+    /// comment: Initial QC is opened by creating the issue, so it has no follow-up
+    /// steps of a start-round action to complete.
+    pub fn derive(issue: &octocrab::models::issues::Issue, round: &crate::Round) -> Option<Self> {
+        if !round.is_open() || !matches!(round.opened, crate::RoundOpen::NewRound { .. }) {
+            return None;
+        }
+        let plan = crate::plan_repair(issue, round);
+        Some(Self {
+            round: round.index,
+            round_name: round.name(),
+            reopen: plan.reopen,
+            body_marker: plan.body_marker,
+            notification_missing: plan.notification_missing,
+            needs_repair: plan.needs_repair(),
+        })
+    }
+}
+
+/// Response for repairing an issue's open round.
+///
+/// Mirrors [`StartRoundResponse`]'s per-step shape. A `failed` step is **not** an
+/// error response: the repair is a best-effort completion of steps that are each
+/// idempotent, so `needs_repair` simply says one still wants another attempt.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepairRoundResponse {
+    /// Index of the open round that was repaired.
+    pub round: u32,
+    /// Name of that round, e.g. `"Round 2"`.
+    pub round_name: String,
+    /// URL of the round's round comment. `null` when the comment came
+    /// from the disk cache and so carries no identity — in which case the body
+    /// marker is deliberately left alone rather than rewritten with a wrong URL.
+    pub round_comment_url: Option<String>,
+    /// Reopening the issue.
+    pub reopened: StepOutcomeResponse,
+    /// Refreshing the `## QC Round` block in the issue body. `skipped` with a
+    /// `skipped_reason` when the round's comment URL is unknown, because no correct
+    /// marker can be derived then — the CLI has always explained that skip, and this is
+    /// the second step that can carry a reason.
+    pub body_marker: StepOutcomeResponse,
+    /// The `# QC Notification` comment. `skipped` unless the request asked for one
+    /// *and* the round had none — and `skipped` with a `skipped_reason` when the round
+    /// could not be placed, which is the one step placement blocks (the other two still
+    /// run).
+    pub notification: StepOutcomeResponse,
+    /// Whether anything was actually written.
+    pub repaired: bool,
+    /// Whether a step that was attempted failed and still wants a retry.
+    pub needs_repair: bool,
+}
+
+impl From<&crate::RepairRoundResult> for RepairRoundResponse {
+    fn from(result: &crate::RepairRoundResult) -> Self {
+        Self {
+            round: result.round,
+            round_name: result.round_name.clone(),
+            round_comment_url: result.round_comment_url.clone(),
+            reopened: (&result.reopened).into(),
+            body_marker: StepOutcomeResponse::from(&result.body_marker)
+                .skipped_because(result.body_marker_skip_reason()),
+            notification: StepOutcomeResponse::from(&result.notification)
+                .skipped_because(result.notification_skip_reason()),
+            repaired: result.repaired(),
+            needs_repair: result.needs_repair(),
+        }
+    }
+}
+
+/// Everything a "start new round" form needs, with no side effects.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundSeedResponse {
+    /// Repo-relative path of the QC'd file, so a caller can diff it without
+    /// inferring the path from the issue title.
+    pub file: String,
+    /// Index the next round would get.
+    pub next_round: u32,
+    /// Name the next round would get, e.g. `"Round 2"`.
+    pub next_round_name: String,
+    /// Seeded checklist markdown, boxes reset — the `default_round` entry of
+    /// `checklist_options`. `None` when no round's checklist could be recovered.
+    pub checklist_content: Option<String>,
+    /// Name of the template the seed came from, when recorded.
+    pub checklist_name: Option<String>,
+    /// Every round's checklist, oldest first, so the form can offer a choice of
+    /// which round to base the new one on. Rounds whose checklist could not be
+    /// recovered are absent, so this may be shorter than the round list — and
+    /// empty, in which case there is nothing to seed from.
+    pub checklist_options: Vec<RoundChecklistOption>,
+    /// `round` of the pre-selected entry of `checklist_options` (the most recent
+    /// one). `None` when `checklist_options` is empty.
+    pub default_round: Option<u32>,
+    /// The anchor the round would open at (HEAD of the issue's branch). `None`
+    /// when HEAD could not be resolved.
+    pub anchor: Option<String>,
+    /// The approval the new round would build on: the last round's closing commit.
+    /// `None` when the last round is still open.
+    pub previous_approval: Option<String>,
+    /// The branch the round would open on: whatever is currently checked out, which
+    /// need not be the branch the issue was created on. `None` when it could not be
+    /// determined.
+    pub branch: Option<String>,
+    /// What the round's diff would actually compare against — `previous_approval`
+    /// normally, or the merge-base when that approval is not an ancestor of `anchor`.
+    pub comparison_base: Option<String>,
+    /// Set only when the previous approval is unreachable from `branch`. `None` for
+    /// the linear case, which is what `null` means on this field.
+    pub divergence: Option<GapContinuityInfo>,
+    /// Whether starting a round is currently legal.
+    pub can_start: bool,
+    /// Why not, when `can_start` is false.
+    pub blocked_reason: Option<String>,
+}
+
+/// One selectable checklist source for a new round: an existing round, and the
+/// checklist it was QC'd against with every box reset.
+#[derive(Debug, Clone, Serialize)]
+pub struct RoundChecklistOption {
+    /// Index of the round this checklist came from.
+    pub round: u32,
+    /// That round's display name, e.g. `"Initial QC"` or `"Round 2"`.
+    pub round_name: String,
+    /// Template name that round recorded, when it recorded one.
+    pub checklist_name: Option<String>,
+    /// Checklist markdown, boxes reset.
+    pub content: String,
+}
+
+impl From<&crate::ChecklistOption> for RoundChecklistOption {
+    fn from(option: &crate::ChecklistOption) -> Self {
+        Self {
+            round: option.round,
+            round_name: option.round_name.clone(),
+            checklist_name: option.checklist_name.clone(),
+            content: option.content.clone(),
+        }
+    }
 }
 
 /// Repository assignee.
@@ -784,5 +1937,977 @@ impl RepoInfoResponse {
             dirty_files,
             current_user,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    use crate::{Gap, GapContinuity, Placement, Round, Segment, UnplaceableReason};
+
+    /// A recognisable full sha made of one repeated hex digit.
+    fn oid(digit: char) -> ObjectId {
+        ObjectId::from_str(&std::iter::repeat_n(digit, 40).collect::<String>())
+            .expect("40 hex digits is a sha")
+    }
+
+    fn commit(hash: ObjectId) -> crate::IssueCommit {
+        crate::IssueCommit {
+            hash,
+            message: "a commit".to_string(),
+            file_changed: true,
+        }
+    }
+
+    fn round(index: u32, opened_at: ObjectId, commits: Vec<crate::IssueCommit>) -> Round {
+        Round {
+            index,
+            opened_at,
+            branch: "main".to_string(),
+            opened: crate::RoundOpen::IssueCreated,
+            checklist: crate::ChecklistSource::IssueBody,
+            checklist_name: None,
+            state: crate::RoundState::Open,
+            events: Vec::new(),
+            retractions: Vec::new(),
+            extensions: Vec::new(),
+            commits,
+            placement: Placement::Placed,
+        }
+    }
+
+    fn closed_at(mut round: Round, commit: ObjectId) -> Round {
+        round.state = crate::RoundState::Closed {
+            commit,
+            by: "reviewer".to_string(),
+            at: Utc::now(),
+            comment_index: 0,
+            comment_id: None,
+            comment_url: None,
+        };
+        round
+    }
+
+    fn notification(commit: ObjectId) -> crate::RoundEvent {
+        crate::RoundEvent::Notification {
+            commit,
+            by: "author".to_string(),
+            at: Utc::now(),
+            comment_index: 0,
+            comment_id: None,
+            comment_url: None,
+        }
+    }
+
+    fn review(commit: ObjectId) -> crate::RoundEvent {
+        crate::RoundEvent::Review {
+            commit,
+            by: "reviewer".to_string(),
+            at: Utc::now(),
+            comment_index: 0,
+            comment_id: None,
+            comment_url: None,
+        }
+    }
+
+    fn gap(commits: Vec<crate::IssueCommit>) -> Gap {
+        Gap {
+            branch: "main".to_string(),
+            commits,
+            continuity: GapContinuity::Linear,
+            placement: Placement::Placed,
+        }
+    }
+
+    /// A thread with nothing but the segments under test: everything the projections
+    /// below read is a function of the segment list.
+    fn thread(segments: Vec<Segment>) -> IssueThread {
+        IssueThread {
+            file: PathBuf::from("src/test.rs"),
+            open: true,
+            milestone: "v1.0".to_string(),
+            blocking_qcs: Vec::new(),
+            segments,
+            anomalies: Vec::new(),
+        }
+    }
+
+    /// The emitted JSON **text** for one segment.
+    ///
+    /// `serde_json::Value` is a `BTreeMap`, so it re-sorts keys alphabetically and cannot
+    /// witness emission order at all — an order assertion made on a `Value` silently tests
+    /// the alphabet instead of the struct. Key-order claims are made on this.
+    fn project_text(segments: &[Segment], position: usize) -> String {
+        let thread = thread(segments.to_vec());
+        serde_json::to_string(&SegmentInfo::project(&thread, position))
+            .expect("a segment serializes")
+    }
+
+    /// Serialize the whole segment list, as the status response does.
+    ///
+    /// The segments are wrapped in a thread first, because that is what the projection
+    /// takes: a round's `archive_preview` depends on the segments that follow it.
+    fn project(segments: &[Segment]) -> Vec<serde_json::Value> {
+        let thread = thread(segments.to_vec());
+        (0..segments.len())
+            .map(|position| {
+                serde_json::to_value(SegmentInfo::project(&thread, position))
+                    .expect("a segment serializes")
+            })
+            .collect()
+    }
+
+    /// The `Placement` serde trap: internally tagging M5's newtype variant around a
+    /// unit-only enum compiles *and* serializes, emitting the reason as a **key**
+    /// (`{"kind":"unplaceable","branch_unavailable":null}`). Neither the compiler nor
+    /// serialization catches it, so this asserts the emitted JSON.
+    #[test]
+    fn an_unplaceable_placement_emits_its_reason_as_a_value_not_a_key() {
+        let mut initial = round(1, oid('a'), Vec::new());
+        initial.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let segments = vec![Segment::Round(initial)];
+
+        assert_eq!(
+            project(&segments)[0]["placement"],
+            serde_json::json!({ "kind": "unplaceable", "reason": "branch_unavailable" })
+        );
+    }
+
+    /// `reason` is *absent* rather than null when placed, so a client narrows on `kind`
+    /// alone.
+    #[test]
+    fn a_placed_placement_carries_no_reason_key_at_all() {
+        let segments = vec![Segment::Round(round(1, oid('a'), Vec::new()))];
+
+        assert_eq!(
+            project(&segments)[0]["placement"],
+            serde_json::json!({ "kind": "placed" })
+        );
+    }
+
+    /// `kind` sits *alongside* the variant's own fields, which is what makes
+    /// `segments.at(-1).kind === "round"` the test for "a round is open".
+    #[test]
+    fn a_segments_kind_is_a_sibling_of_its_own_fields() {
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, oid('a'), vec![commit(oid('a'))]),
+                oid('a'),
+            )),
+            Segment::Gap(gap(Vec::new())),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[0]["kind"], "round");
+        assert_eq!(projected[0]["index"], 1);
+        assert_eq!(projected[1]["kind"], "gap");
+        assert!(projected[1].get("index").is_none(), "gaps are positional");
+    }
+
+    /// The order is fixed and deduplicated, unlike the `HashSet` the field used to come
+    /// from: the events below are declared review-first and notify the same commit
+    /// twice.
+    #[test]
+    fn commit_statuses_are_emitted_in_a_fixed_order_without_duplicates() {
+        let anchor = oid('a');
+        let mut initial = closed_at(round(1, anchor, vec![commit(anchor)]), anchor);
+        initial.events = vec![review(anchor), notification(anchor), notification(anchor)];
+        let segments = vec![Segment::Round(initial), Segment::Gap(gap(Vec::new()))];
+
+        assert_eq!(
+            project(&segments)[0]["commits"][0]["statuses"],
+            serde_json::json!(["initial", "notification", "approved", "reviewed"])
+        );
+    }
+
+    /// D14: a boundary commit is projected per owning segment, so the same hash carries
+    /// `approved` in the round it closed and `initial` in the round it anchors. The
+    /// asymmetry is the point — in round 2's frame that commit is not an approval, it is
+    /// where round 2 starts — and each copy now states its own frame's meaning rather
+    /// than one of them being blank.
+    #[test]
+    fn a_shared_boundary_commit_is_approved_in_one_round_and_the_anchor_of_the_next() {
+        let (older, boundary, newer) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, older, vec![commit(boundary), commit(older)]),
+                boundary,
+            )),
+            Segment::Gap(gap(Vec::new())),
+            Segment::Round(round(2, boundary, vec![commit(newer), commit(boundary)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[0]["commits"][0]["hash"], boundary.to_string());
+        assert_eq!(
+            projected[0]["commits"][0]["statuses"],
+            serde_json::json!(["approved"])
+        );
+        assert_eq!(projected[2]["commits"][1]["hash"], boundary.to_string());
+        assert_eq!(
+            projected[2]["commits"][1]["statuses"],
+            serde_json::json!(["initial"])
+        );
+    }
+
+    /// Every round's anchor is marked, not just Initial QC's. Round 2's `opened_at` is
+    /// its `initial qc round commit`, so the picker draws the same blue dot at the start
+    /// of every round; before this, rounds from 2 on began unmarked.
+    #[test]
+    fn every_rounds_anchor_carries_initial_not_only_initial_qcs() {
+        let (first, drift, second) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(round(1, first, vec![commit(first)]), first)),
+            Segment::Gap(gap(vec![commit(drift)])),
+            Segment::Round(round(2, second, vec![commit(second)])),
+        ];
+        let projected = project(&segments);
+
+        // Round 1's anchor, as before.
+        assert_eq!(projected[0]["commits"][0]["hash"], first.to_string());
+        assert!(
+            projected[0]["commits"][0]["statuses"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("initial"))
+        );
+        // Round 2's anchor — this is the commit that used to carry nothing.
+        assert_eq!(projected[2]["commits"][0]["hash"], second.to_string());
+        assert_eq!(
+            projected[2]["commits"][0]["statuses"],
+            serde_json::json!(["initial"])
+        );
+        // The drift between them is a gap commit and is still bare, so this is not a
+        // blanket "mark everything" change.
+        assert_eq!(
+            projected[1]["commits"][0]["statuses"],
+            serde_json::json!([])
+        );
+    }
+
+    /// D14's corollary: a gap has no events, no state and no anchor, so its commits can
+    /// never carry a status at all — `initial` included, since that check now lives
+    /// inside the round branch of the projection.
+    #[test]
+    fn a_gaps_commits_carry_no_round_statuses() {
+        let (anchor, drift) = (oid('a'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(round(1, anchor, vec![commit(anchor)]), anchor)),
+            Segment::Gap(gap(vec![commit(drift)])),
+        ];
+
+        assert_eq!(
+            project(&segments)[1]["commits"][0]["statuses"],
+            serde_json::json!([])
+        );
+    }
+
+    /// A5's bounds are read from the *immediate* neighbours: older at `pos - 1`, newer
+    /// at `pos + 1`. A round's `pos - 2` rule would land on another gap.
+    #[test]
+    fn an_interior_gaps_bounds_come_from_its_two_neighbouring_rounds() {
+        let (first, approval, drift, anchor) = (oid('a'), oid('b'), oid('c'), oid('d'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, first, vec![commit(approval), commit(first)]),
+                approval,
+            )),
+            Segment::Gap(gap(vec![commit(drift)])),
+            Segment::Round(round(2, anchor, vec![commit(anchor)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["lower_bound"], approval.to_string());
+        assert_eq!(projected[1]["upper_bound"], anchor.to_string());
+    }
+
+    /// A trailing gap's newer bound is the branch tip, inclusive. With nothing since
+    /// the approval the tip *is* that approval, so the two bounds coincide.
+    #[test]
+    fn an_empty_trailing_gap_has_both_bounds_on_the_approval() {
+        let (first, approval) = (oid('a'), oid('b'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, first, vec![commit(approval), commit(first)]),
+                approval,
+            )),
+            Segment::Gap(gap(Vec::new())),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["lower_bound"], approval.to_string());
+        assert_eq!(projected[1]["upper_bound"], approval.to_string());
+    }
+
+    /// A gap that could not be placed **itself** has no range, so neither bound is a
+    /// handle a consumer may draw on — however well the bounds resolve.
+    ///
+    /// This is the reachable shape: `build_gap` marks a gap whose bounding round is
+    /// unplaceable as `NeighbourUnplaceable`, so a gap can never be `Placed` alongside an
+    /// unplaceable neighbour. Reporting a real `lower_bound` on a segment U1 is graying
+    /// hands it a detached handle to draw across an unknown range — W6's
+    /// plausible-but-wrong, which is worse than nothing.
+    #[test]
+    fn a_self_unplaceable_gap_reports_neither_bound() {
+        let (first, approval, anchor) = (oid('a'), oid('b'), oid('d'));
+        let mut second = round(2, anchor, Vec::new());
+        second.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let mut between = gap(Vec::new());
+        between.placement = Placement::Unplaceable(UnplaceableReason::NeighbourUnplaceable);
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, first, vec![commit(approval), commit(first)]),
+                approval,
+            )),
+            Segment::Gap(between),
+            Segment::Round(second),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(
+            projected[1]["lower_bound"],
+            serde_json::Value::Null,
+            "the approval resolves, but this gap's range is unknown"
+        );
+        assert_eq!(projected[1]["upper_bound"], serde_json::Value::Null);
+        // The reason is still named, so U2 can gray it with an explanation (D4).
+        assert_eq!(
+            projected[1]["placement"],
+            serde_json::json!({"kind": "unplaceable", "reason": "neighbour_unplaceable"})
+        );
+    }
+
+    /// The neighbour filter, independently of the gap's own placement: an unplaceable
+    /// round resolved no commits, so its anchor is not a bound anyone can be handed,
+    /// while the approval on the other side still is.
+    ///
+    /// **Unreachable from the fold**, and hand-built for that reason: `build_gap` returns
+    /// `NeighbourUnplaceable` before computing bounds whenever a bounding round is
+    /// unplaceable, so a `Placed` gap beside one cannot arise — the assertion above
+    /// covers every shape the fold emits. Kept so the per-neighbour rule keeps its
+    /// meaning if the model ever places such a gap.
+    #[test]
+    fn a_placed_gap_still_loses_only_the_unplaceable_neighbours_bound() {
+        let (first, approval, anchor) = (oid('a'), oid('b'), oid('d'));
+        let mut second = round(2, anchor, Vec::new());
+        second.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, first, vec![commit(approval), commit(first)]),
+                approval,
+            )),
+            Segment::Gap(gap(Vec::new())),
+            Segment::Round(second),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["lower_bound"], approval.to_string());
+        assert_eq!(projected[1]["upper_bound"], serde_json::Value::Null);
+    }
+
+    /// An unplaceable round's anchor is the all-zero OID the fold leaves behind, which is
+    /// not a commit anyone can address — so `opened_at` is null rather than a fake sha.
+    #[test]
+    fn an_unplaceable_round_reports_no_opened_at() {
+        let mut initial = round(1, ObjectId::null(gix::hash::Kind::Sha1), Vec::new());
+        initial.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let projected = project(&[Segment::Round(initial)]);
+
+        assert_eq!(projected[0]["opened_at"], serde_json::Value::Null);
+        assert!(
+            !projected[0].to_string().contains("0000000000"),
+            "no all-zero sha may reach the wire: {}",
+            projected[0]
+        );
+    }
+
+    // ── A3: `latest_actioned_commit` on the round segment ────────────────────
+
+    /// The archive's default target on the wire, and the three claims the contract makes
+    /// about it: it is the newest *actioned* commit and not `commits[0]`; it is not
+    /// `closing_commit`; and it sits between `commits` and `placement`.
+    #[test]
+    fn a_rounds_latest_actioned_commit_is_the_newest_commit_someone_acted_on() {
+        let (anchor, notified, approval, drift) = (oid('a'), oid('b'), oid('c'), oid('d'));
+        // Newest first, as the fold emits them: drift on top of the approval, which is
+        // on top of the notified commit.
+        let mut only = round(
+            1,
+            anchor,
+            vec![
+                commit(drift),
+                commit(approval),
+                commit(notified),
+                commit(anchor),
+            ],
+        );
+        only.events = vec![notification(notified)];
+        let segments = vec![Segment::Round(closed_at(only, approval))];
+        let projected = project(&segments);
+
+        assert_eq!(
+            projected[0]["latest_actioned_commit"],
+            serde_json::json!(notified.to_string()),
+            "drift nobody acted on is not a candidate, and an approval is not an event"
+        );
+        // Both of the fields it is routinely confused with are present and different.
+        assert_eq!(projected[0]["commits"][0]["hash"], drift.to_string());
+        assert_eq!(projected[0]["closing_commit"], approval.to_string());
+
+        // On the emitted text, not on a `Value`: a `Value` sorts its keys, so an order
+        // assertion made on one tests the alphabet instead of the struct.
+        let text = project_text(&segments, 0);
+        let at = |key: &str| text.find(key).unwrap_or_else(|| panic!("{key} is emitted"));
+        assert!(
+            at(r#""commits":"#) < at(r#""latest_actioned_commit":"#)
+                && at(r#""latest_actioned_commit":"#) < at(r#""placement":"#),
+            "the key order the contract pins is commits, latest_actioned_commit, \
+             placement: {text}"
+        );
+    }
+
+    /// Null exactly when the round is unplaceable — present, so a consumer can tell
+    /// "unresolvable" from "this writer does not emit the field", and never the all-zero
+    /// anchor a fake sha would come from.
+    #[test]
+    fn an_unplaceable_round_reports_a_null_latest_actioned_commit() {
+        let mut initial = round(1, ObjectId::null(gix::hash::Kind::Sha1), Vec::new());
+        initial.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let projected = project(&[Segment::Round(initial)]);
+
+        assert!(
+            projected[0]
+                .as_object()
+                .expect("a round segment is a map")
+                .contains_key("latest_actioned_commit"),
+            "nullable means present: {}",
+            projected[0]
+        );
+        assert_eq!(
+            projected[0]["latest_actioned_commit"],
+            serde_json::Value::Null
+        );
+        assert_eq!(projected[0]["placement"]["kind"], "unplaceable");
+    }
+
+    /// A gap has no anchor and no events, so the concept does not exist there rather than
+    /// being unknown: the key is **absent**, matching every other single-variant key on
+    /// this union. Nothing on the wire attributes an actioned commit to a gap.
+    #[test]
+    fn a_gap_carries_no_latest_actioned_commit_key_at_all() {
+        let (anchor, approval, drift) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(vec![commit(drift)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["kind"], "gap");
+        assert!(
+            !projected[1]
+                .as_object()
+                .expect("a gap segment is a map")
+                .contains_key("latest_actioned_commit"),
+            "absent, not null, on a gap: {}",
+            projected[1]
+        );
+        // The round beside it still reports its own.
+        assert_eq!(
+            projected[0]["latest_actioned_commit"],
+            serde_json::json!(anchor.to_string()),
+            "a closed round with no events reports its anchor"
+        );
+    }
+
+    // ── archive_preview: the projected archive answer ────────────────────────
+
+    /// A closed round with nothing after it but an ordinary empty gap is provably the
+    /// newest QC state, and the cause array says so by being **empty** — emitted as `[]`,
+    /// never omitted, because "no reason" is the load-bearing answer here.
+    ///
+    /// Also the key-order pin: `commits`, `latest_actioned_commit`, `archive_preview`,
+    /// `placement`, in that order.
+    #[test]
+    fn an_approved_and_current_round_previews_an_empty_cause_list() {
+        let (anchor, approval) = (oid('a'), oid('b'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(Vec::new())),
+        ];
+        let projected = project(&segments);
+        let preview = &projected[0]["archive_preview"];
+
+        assert_eq!(preview["commit"], approval.to_string(), "S1 row 2's bytes");
+        assert_eq!(preview["approval"]["round"], 1);
+        assert_eq!(preview["approval"]["commit"], approval.to_string());
+        assert_eq!(preview["approval"]["by"], "reviewer");
+        assert!(preview["approval"]["at"].is_string());
+        assert_eq!(
+            preview["superseding_causes"],
+            serde_json::json!([]),
+            "an empty array, not a missing key: {preview}"
+        );
+        // No `superseded` bool anywhere: the emptiness of the array *is* that fact.
+        assert!(
+            !projected[0].to_string().contains("superseded\""),
+            "two fields for one fact is what this shape removes: {}",
+            projected[0]
+        );
+
+        let text = project_text(&segments, 0);
+        let at = |key: &str| text.find(key).unwrap_or_else(|| panic!("{key} is emitted"));
+        assert!(
+            at(r#""commits":"#) < at(r#""latest_actioned_commit":"#)
+                && at(r#""latest_actioned_commit":"#) < at(r#""archive_preview":"#)
+                && at(r#""archive_preview":"#) < at(r#""placement":"#),
+            "the pinned key order is commits, latest_actioned_commit, archive_preview, \
+             placement: {text}"
+        );
+    }
+
+    /// Causes are not mutually exclusive and are reported in clause order: a round with a
+    /// later approval *and* an open latest round reports both, `later_approval` first.
+    #[test]
+    fn co_occurring_causes_are_reported_in_clause_order() {
+        let (first, second, third) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(round(1, first, vec![commit(first)]), first)),
+            Segment::Gap(gap(Vec::new())),
+            Segment::Round(closed_at(round(2, second, vec![commit(second)]), second)),
+            Segment::Gap(gap(Vec::new())),
+            Segment::Round(round(3, third, vec![commit(third)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(
+            projected[0]["archive_preview"]["superseding_causes"],
+            serde_json::json!(["later_approval", "round_open"]),
+            "round 2 closed after it, and round 3 is open"
+        );
+        // Round 2 is superseded only by the open round 3 — no *later* approval exists.
+        assert_eq!(
+            projected[2]["archive_preview"]["superseding_causes"],
+            serde_json::json!(["round_open"])
+        );
+    }
+
+    /// The subtle case the wire must not let a reader collapse: round 2 is open and
+    /// anchored at round 1's approval, so previewing round 2 archives approved bytes whose
+    /// `approval.round` is **1** — less than the enclosing segment's `index`. Nothing here
+    /// asserts round 2 was approved.
+    #[test]
+    fn a_previewed_open_round_can_carry_an_older_rounds_approval() {
+        let (anchor, approval) = (oid('a'), oid('b'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(Vec::new())),
+            // D1: the new round's anchor is the previous round's closing commit, HEAD
+            // having not moved since the approval.
+            Segment::Round(round(2, approval, vec![commit(approval)])),
+        ];
+        let projected = project(&segments);
+        let preview = &projected[2]["archive_preview"];
+
+        assert_eq!(projected[2]["index"], 2);
+        assert_eq!(preview["commit"], approval.to_string());
+        assert_eq!(
+            preview["approval"]["round"], 1,
+            "the round that closed on those bytes, not the round being previewed: {preview}"
+        );
+        assert_eq!(
+            preview["superseding_causes"],
+            serde_json::json!(["round_open"])
+        );
+    }
+
+    /// Never approved: the approval is present-and-null, and the open latest round makes
+    /// the entry superseded — so an unapproved preview is never unflagged.
+    #[test]
+    fn an_unapproved_round_previews_a_null_approval() {
+        let (anchor, drift) = (oid('a'), oid('d'));
+        let mut only = round(1, anchor, vec![commit(drift), commit(anchor)]);
+        only.events = vec![notification(anchor)];
+        let projected = project(&[Segment::Round(only)]);
+        let preview = &projected[0]["archive_preview"];
+
+        assert!(
+            preview
+                .as_object()
+                .expect("a preview is a map")
+                .contains_key("approval"),
+            "nullable means present: {preview}"
+        );
+        assert_eq!(preview["approval"], serde_json::Value::Null);
+        // The newest *actioned* commit, not the drift on top of it.
+        assert_eq!(preview["commit"], anchor.to_string());
+        assert_eq!(
+            preview["superseding_causes"],
+            serde_json::json!(["round_open"])
+        );
+    }
+
+    /// An unplaceable round cannot be archived at all, so there is no preview to give —
+    /// `null`, mirroring the archive's own refusal. The reason is **not** duplicated into
+    /// the preview: it is already on `placement`.
+    #[test]
+    fn an_unplaceable_round_previews_null_and_leaves_the_reason_on_placement() {
+        let mut initial = round(1, ObjectId::null(gix::hash::Kind::Sha1), Vec::new());
+        initial.placement = Placement::Unplaceable(UnplaceableReason::AnchorUnreachable);
+        let projected = project(&[Segment::Round(initial)]);
+
+        assert!(
+            projected[0]
+                .as_object()
+                .expect("a round segment is a map")
+                .contains_key("archive_preview"),
+            "nullable means present: {}",
+            projected[0]
+        );
+        assert_eq!(projected[0]["archive_preview"], serde_json::Value::Null);
+        assert_eq!(
+            projected[0]["placement"],
+            serde_json::json!({ "kind": "unplaceable", "reason": "anchor_unreachable" }),
+            "the reason lives here, and only here"
+        );
+    }
+
+    /// A gap can never be selected for an archive, so the key does not exist there —
+    /// absent, not null, matching every other single-variant key on this union.
+    #[test]
+    fn a_gap_carries_no_archive_preview_key_at_all() {
+        let (anchor, approval, drift) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(vec![commit(drift)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["kind"], "gap");
+        assert!(
+            !projected[1]
+                .as_object()
+                .expect("a gap segment is a map")
+                .contains_key("archive_preview"),
+            "absent, not null, on a gap: {}",
+            projected[1]
+        );
+        // The round beside it still previews — and its trailing gap changed the file, so
+        // the approval is no longer provably current.
+        assert_eq!(
+            projected[0]["archive_preview"]["superseding_causes"],
+            serde_json::json!(["changed_since"])
+        );
+    }
+
+    /// An `Unrelated` trailing gap owns nothing and its tip shares no history with the
+    /// approval, so there is no newer bound to report.
+    ///
+    /// **Unreachable from the fold today; this guards a future model change.** Per D15's
+    /// addendum a trailing gap walks the previous round's branch, and a `Placed`/`Closed`
+    /// round necessarily has its closing commit on that walk, so the lower bound always
+    /// resolves and the continuity is always `Linear`. An approval whose commit has
+    /// vanished degrades through `Unplaceable` instead. The state is hand-built here so
+    /// the fallback keeps its meaning if the model ever emits it.
+    #[test]
+    fn an_unrelated_trailing_gap_reports_no_upper_bound() {
+        let (first, approval) = (oid('a'), oid('b'));
+        let mut trailing = gap(Vec::new());
+        trailing.continuity = GapContinuity::Unrelated;
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, first, vec![commit(approval), commit(first)]),
+                approval,
+            )),
+            Segment::Gap(trailing),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(
+            projected[1]["continuity"],
+            serde_json::json!({"kind": "unrelated"})
+        );
+        assert_eq!(projected[1]["lower_bound"], approval.to_string());
+        assert_eq!(projected[1]["upper_bound"], serde_json::Value::Null);
+    }
+
+    /// `merge_base` is required and non-null on `diverged`, and absent on the other two
+    /// variants — which is what makes the client's union ergonomic.
+    #[test]
+    fn gap_continuity_carries_a_merge_base_only_when_diverged() {
+        let mut diverged = gap(Vec::new());
+        diverged.continuity = GapContinuity::Diverged {
+            merge_base: oid('e'),
+        };
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, oid('a'), vec![commit(oid('a'))]),
+                oid('a'),
+            )),
+            Segment::Gap(diverged),
+        ];
+
+        assert_eq!(
+            project(&segments)[1]["continuity"],
+            serde_json::json!({ "kind": "diverged", "merge_base": oid('e').to_string() })
+        );
+    }
+
+    // ── D12: the two event-named commit fields ───────────────────────────────
+
+    /// D12's whole point: *Reviewed* and *Last Posted* are different facts, so the two
+    /// fields must be derived from the right event kind and must report the **newest**
+    /// commit each names. The round below notifies the two oldest commits and reviews
+    /// the two newest, so a swapped derivation and an oldest-instead-of-newest
+    /// derivation both change the answer.
+    #[test]
+    fn the_active_rounds_reviewed_and_notified_commits_are_its_newest_of_each_kind() {
+        let (newest, mid, oldest) = (oid('c'), oid('b'), oid('a'));
+        let mut open = round(1, oldest, vec![commit(newest), commit(mid), commit(oldest)]);
+        open.events = vec![
+            notification(oldest),
+            notification(mid),
+            review(mid),
+            review(newest),
+        ];
+        let status = QCStatus::from(&thread(vec![Segment::Round(open)]));
+
+        assert_eq!(
+            status.last_notified_commit.as_deref(),
+            Some(mid.to_string().as_str())
+        );
+        assert_eq!(
+            status.last_reviewed_commit.as_deref(),
+            Some(newest.to_string().as_str())
+        );
+        assert_ne!(
+            status.last_notified_commit, status.last_reviewed_commit,
+            "the two fields must not be interchangeable — swapping them is the bug D12 exists for"
+        );
+    }
+
+    /// Coverage is scoped to the round's own commits (S3), so an event naming a commit
+    /// outside them reports nothing rather than leaking a foreign hash.
+    #[test]
+    fn an_event_naming_a_commit_the_round_does_not_own_reports_neither_field() {
+        let (anchor, foreign) = (oid('a'), oid('f'));
+        let mut open = round(1, anchor, vec![commit(anchor)]);
+        open.events = vec![notification(foreign), review(foreign)];
+        let status = QCStatus::from(&thread(vec![Segment::Round(open)]));
+
+        assert_eq!(status.last_notified_commit, None);
+        assert_eq!(status.last_reviewed_commit, None);
+    }
+
+    // ── A2/A3: the branch and the two approvals ──────────────────────────────
+
+    /// A2, and the card-graying bug P3 exists to kill: `active_branch` is the **last**
+    /// segment's branch, not the first's. A cross-branch round 2 is the only shape that
+    /// tells them apart, which is why every earlier single-round assertion missed it.
+    ///
+    /// A3's asymmetry rides along: with a round open the standing approval is gone even
+    /// though the thread's last approval is not.
+    #[test]
+    fn a_cross_branch_round_two_reports_its_own_branch_and_only_the_ungated_approval() {
+        let (first, approval, anchor) = (oid('a'), oid('b'), oid('d'));
+        let mut second = round(2, anchor, vec![commit(anchor)]);
+        second.branch = "feature/x".to_string();
+        let mut between = gap(Vec::new());
+        between.branch = "feature/x".to_string();
+        let thread = thread(vec![
+            Segment::Round(closed_at(
+                round(1, first, vec![commit(approval), commit(first)]),
+                approval,
+            )),
+            Segment::Gap(between),
+            Segment::Round(second),
+        ]);
+        let issue = crate::test_utils::create_test_issue(
+            "o",
+            "r",
+            1,
+            "src/test.rs",
+            "Quality check issue for src/test.rs",
+            Some(1),
+            "open",
+        );
+        let response = IssueStatusResponse::new(&issue, &thread, &[]);
+
+        assert_eq!(response.active_branch, "feature/x");
+        assert_eq!(
+            thread.segments[0].branch(),
+            "main",
+            "the first segment's branch is the one the old field reported"
+        );
+        // A round is active, so nothing stands — but something was approved.
+        assert_eq!(response.qc_status.standing_approval, None);
+        assert_eq!(
+            response.qc_status.last_approved_commit.as_deref(),
+            Some(approval.to_string().as_str())
+        );
+        assert_eq!(
+            response.qc_status.initial_commit.as_deref(),
+            Some(first.to_string().as_str())
+        );
+    }
+
+    /// An unplaceable Initial QC resolved no commits, so its anchor is not a sha anyone
+    /// may address (S4/I5) and there is no status to report: `determine_status` yields
+    /// `None`, which the wire reports as the dedicated `unknown` value rather than
+    /// borrowing `in_progress`. The two are distinct facts — see
+    /// [`crate::qc_status`]'s `a_placed_round_with_no_file_change_and_no_events_is_in_progress_not_unknown`,
+    /// which pins the reachable `InProgress` state this must never collapse into.
+    #[test]
+    fn an_unplaceable_initial_qc_has_no_initial_commit_and_an_unknown_detail() {
+        let mut initial = round(1, oid('a'), Vec::new());
+        initial.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let thread = thread(vec![Segment::Round(initial)]);
+        let issue = crate::test_utils::create_test_issue(
+            "o",
+            "r",
+            1,
+            "src/test.rs",
+            "Quality check issue for src/test.rs",
+            Some(1),
+            "open",
+        );
+        let response = IssueStatusResponse::new(&issue, &thread, &[]);
+
+        assert_eq!(response.qc_status.initial_commit, None);
+        assert_eq!(response.qc_status.status_detail, "Unknown");
+        assert_eq!(response.qc_status.status, QCStatusEnum::Unknown);
+        // No commits to place means no base for the next notification either.
+        assert_eq!(response.next_notification_from, None);
+    }
+
+    /// `changed_commit` names the trailing gap's newest **file-changing** commit, which
+    /// is not the same commit as `latest_commit` whenever the newest drift never touched
+    /// the file. **S1** picks the file-changing one, so a client rendering "changed at"
+    /// from `latest_commit` would name a commit that never touched the file.
+    #[test]
+    fn changed_commit_names_the_file_changing_commit_not_the_newest() {
+        let approval = oid('b');
+        let initial = closed_at(round(1, oid('a'), vec![commit(oid('a'))]), approval);
+        // Newest-first: the newest commit did not touch the file; the older one did.
+        let untouched = crate::IssueCommit {
+            file_changed: false,
+            ..commit(oid('d'))
+        };
+        let touched = commit(oid('c'));
+        let thread = thread(vec![
+            Segment::Round(initial),
+            Segment::Gap(gap(vec![untouched, touched])),
+        ]);
+        let issue = crate::test_utils::create_test_issue(
+            "o",
+            "r",
+            1,
+            "src/test.rs",
+            "Quality check issue for src/test.rs",
+            Some(1),
+            "open",
+        );
+        let response = IssueStatusResponse::new(&issue, &thread, &[]);
+
+        assert_eq!(
+            response.qc_status.status,
+            QCStatusEnum::ChangesAfterApproval
+        );
+        assert_eq!(
+            response.qc_status.changed_commit.as_deref(),
+            Some(oid('c').to_string().as_str()),
+            "S1 selects the newest file-changing commit of the trailing gap"
+        );
+        assert_eq!(
+            response.qc_status.latest_commit.as_deref(),
+            Some(oid('d').to_string().as_str()),
+            "latest_commit is the gap's newest commit, which changed nothing"
+        );
+        assert_ne!(
+            response.qc_status.changed_commit, response.qc_status.latest_commit,
+            "the whole point: these two are different commits here"
+        );
+    }
+
+    /// `changed_commit` is null in every state but `changes_after_approval` — a trailing
+    /// gap whose commits never touched the file is approved, not changed.
+    #[test]
+    fn changed_commit_is_null_when_nothing_changed_the_file() {
+        let approval = oid('b');
+        let initial = closed_at(round(1, oid('a'), vec![commit(oid('a'))]), approval);
+        let untouched = crate::IssueCommit {
+            file_changed: false,
+            ..commit(oid('d'))
+        };
+        let thread = thread(vec![
+            Segment::Round(initial),
+            Segment::Gap(gap(vec![untouched])),
+        ]);
+        let issue = crate::test_utils::create_test_issue(
+            "o",
+            "r",
+            1,
+            "src/test.rs",
+            "Quality check issue for src/test.rs",
+            Some(1),
+            "open",
+        );
+        let response = IssueStatusResponse::new(&issue, &thread, &[]);
+
+        assert_eq!(response.qc_status.status, QCStatusEnum::Approved);
+        assert_eq!(response.qc_status.changed_commit, None);
+    }
+
+    // ── W6: an unplaceable *neighbour* nulls one bound, never both ───────────
+
+    /// An interior gap is bounded by position, not by "is there a placeable round
+    /// after me": with its newer round unplaceable the newer bound is null, and the
+    /// trailing rule — which would hand back the gap's own newest commit — must not
+    /// apply (W6 forbids substituting a bound the record does not support).
+    #[test]
+    fn an_interior_gap_never_falls_through_to_the_trailing_bound_rule() {
+        let (first, approval, drift, anchor) = (oid('a'), oid('b'), oid('c'), oid('d'));
+        let mut second = round(2, anchor, Vec::new());
+        second.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, first, vec![commit(approval), commit(first)]),
+                approval,
+            )),
+            // Deliberately *not* itself unplaceable and deliberately non-empty: the
+            // cascade that makes this shape unreachable today is not what the rule
+            // rests on.
+            Segment::Gap(gap(vec![commit(drift)])),
+            Segment::Round(second),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["lower_bound"], approval.to_string());
+        assert_eq!(projected[1]["upper_bound"], serde_json::Value::Null);
+    }
+
+    /// On a round-start response `null` already means "no divergence", so the linear
+    /// case has no encoding of its own there.
+    #[test]
+    fn linear_continuity_is_null_as_a_round_start_divergence() {
+        assert!(GapContinuityInfo::divergence(&GapContinuity::Linear).is_none());
+        assert_eq!(
+            serde_json::to_value(GapContinuityInfo::divergence(&GapContinuity::Unrelated))
+                .expect("serializes"),
+            serde_json::json!({ "kind": "unrelated" })
+        );
     }
 }

@@ -1,0 +1,47 @@
+name: "POST /api/issues/{number}/rounds/repair - nothing to repair"
+description: "No round is open, so there are no follow-up steps to complete: 409, and nothing is written"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      state: "closed"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        # Code Review Checklist
+        - [x] Reviewed the logic
+      milestone: 1
+  comments:
+    # Initial QC is closed and nothing reopened it.
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds/repair"
+  body:
+    notification: "full"
+
+response:
+  status: 409
+  body:
+    match_type: partial
+    fields:
+      error: "Nothing to repair: Initial QC is closed, so no round is open on this issue. A repair only ever completes the follow-up steps of a round that is currently open."
+
+assert_write_calls: []

@@ -773,7 +773,7 @@ fn edit_yaml_checklist(name: &str, initial: &str) -> Result<Option<String>> {
 
 /// Open the editor on markdown checklist content, re-opening while it contains
 /// no checklist items — a checklist without `- [ ]` lines tracks nothing.
-fn edit_markdown_checklist(name: &str, initial: &str) -> Result<Option<String>> {
+pub(crate) fn edit_markdown_checklist(name: &str, initial: &str) -> Result<Option<String>> {
     let mut content = initial.to_string();
 
     loop {

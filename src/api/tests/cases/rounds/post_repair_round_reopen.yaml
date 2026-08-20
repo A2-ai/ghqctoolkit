@@ -1,0 +1,98 @@
+name: "POST /api/issues/{number}/rounds/repair - reopen only"
+description: "Round 2 is open but the issue is closed (a start-round whose step 2 failed): the repair reopens it and touches nothing else"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      # Closed, while round 2 is open — exactly the self-locking state a failed
+      # step 2 leaves behind. The body marker is already correct.
+      state: "closed"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        ## QC Round
+        * current round: 2
+        * round comment: https://github.com/test-owner/test-repo/issues/1#issuecomment-456
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+      milestone: 1
+  comments:
+    # Closes Initial QC.
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+    # Opens round 2 — the round is real, so only the follow-up steps can be wrong.
+    - issue: 1
+      author: author
+      id: 456
+      html_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
+      body: |
+        # QC Round
+
+        ## Metadata
+        * round: 2
+        * initial qc round commit: abc1234567890abcdef1234567890abcdef12340
+        * previous approved commit: 456def789abc012345678901234567890123cdef
+        * git branch: main
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+    # Round 2 was notified, so nothing is missing there either.
+    - issue: 1
+      author: author
+      body: |
+        # QC Notification
+
+        ## Metadata
+        current commit: abc1234567890abcdef1234567890abcdef12340
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+  # Round 2 anchors on HEAD, so HEAD must be on the walk or the round is
+  # unplaceable — which would skip the notification step, not the repair.
+  commits:
+    - "abc1234567890abcdef1234567890abcdef12340"
+    - "456def789abc012345678901234567890123cdef"
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds/repair"
+  body: {}
+
+response:
+  status: 200
+  body:
+    match_type: exact
+    value:
+      round: 2
+      round_name: "Round 2"
+      round_comment_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
+      reopened:
+        status: "done"
+      body_marker:
+        status: "skipped"
+      notification:
+        status: "skipped"
+      repaired: true
+      needs_repair: false
+
+# First and last write: the reopen is the *only* thing the repair did.
+assert_write_calls:
+  - type: OpenIssue
+    issue_number: 1
+    position: 0
+  - type: OpenIssue
+    issue_number: 1
+    position: last

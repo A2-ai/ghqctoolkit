@@ -1,0 +1,55 @@
+name: "GET /api/issues/{number}/rounds/seed - an unrelated approval"
+description: "The approval and HEAD share no ancestor at all: the divergence is reported and the approval remains the only base there is"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        # Code Review Checklist
+        - [x] Reviewed the logic
+      milestone: 1
+  comments:
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+  merge_base:
+    type: unrelated
+
+request:
+  method: GET
+  path: "/api/issues/1/rounds/seed"
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      next_round: 2
+      branch: main
+      anchor: "abc1234567890abcdef1234567890abcdef12340"
+      previous_approval: "456def789abc012345678901234567890123cdef"
+      # No common ancestor leaves nothing better to compare against, so the approval
+      # stands as the base while `divergence` says it cannot be trusted as one.
+      comparison_base: "456def789abc012345678901234567890123cdef"
+      divergence:
+        kind: unrelated
+      can_start: true
+      blocked_reason: null
+
+assert_write_calls: []

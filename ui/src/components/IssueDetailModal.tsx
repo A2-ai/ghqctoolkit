@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -9,8 +9,6 @@ import {
   Checkbox,
   Group,
   Modal,
-  ScrollArea,
-  Slider,
   Stack,
   Tabs,
   Text,
@@ -22,30 +20,51 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest, ReviewStashResult } from '~/api/issues'
 import { fetchSingleIssueStatus, postApprove, postComment, postReview, useInvalidateBlockingDependents } from '~/api/issues'
 import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
-import { CommitSlider } from '~/components/CommitSlider'
+import {
+  RoundCommitPickerTrack,
+  STATUS_DOT_COLORS,
+  useRoundPicker,
+} from '~/components/RoundCommitPicker'
+import { RoundRail } from '~/components/RoundRail'
 import { UnapproveSwimLanes } from '~/components/UnapproveSwimLanes'
 import { wrapInGithubStyles } from '~/utils/github'
 import { STATUS_LANE_COLOR } from '~/utils/statusColors'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
 import { StatusErrorDisplay } from './StatusErrorDisplay'
-
-// Commit status dot colors (rendered oldest→newest, lowest→highest)
-const STATUS_DOT_COLORS: Record<string, string> = {
-  initial:      '#339af0', // blue
-  notification: '#ffd43b', // yellow
-  approved:     '#51cf66', // green
-  reviewed:     '#ff922b', // orange
-}
-const STATUS_ORDER = ['initial', 'notification', 'approved', 'reviewed'] as const
+import {
+  activeRound,
+  activeRoundPos,
+  findCommitIndex,
+  flattenSegmentCommits,
+  previousApprovalOf,
+  previousRoundOf,
+  shortHash,
+} from '~/utils/rounds'
 
 interface Props {
   status: IssueStatusResponse | null
   onClose: () => void
   onStatusUpdate: (status: IssueStatusResponse) => void
+  /**
+   * Opens the start-new-round modal for this issue. Threaded down to the round rail
+   * in every tab through `StartRoundActionContext` rather than as a prop on each
+   * tab: the rail is rendered in three places, and the modal it opens has exactly
+   * one owner — the caller.
+   */
+  onStartRound?: () => void
 }
 
-export function IssueDetailModal({ status, onClose, onStatusUpdate }: Props) {
+/** The rail's "+ Start a new round" action, or undefined when none was supplied. */
+const StartRoundActionContext = createContext<(() => void) | undefined>(undefined)
+
+/** The round rail as every tab renders it: segments from the status, action from context. */
+function DetailRoundRail({ segments }: { segments: IssueStatusResponse['segments'] }) {
+  const onStartRound = useContext(StartRoundActionContext)
+  return <RoundRail segments={segments} onStartRound={onStartRound} />
+}
+
+export function IssueDetailModal({ status, onClose, onStatusUpdate, onStartRound }: Props) {
   if (!status) return null
 
   return (
@@ -56,7 +75,9 @@ export function IssueDetailModal({ status, onClose, onStatusUpdate }: Props) {
       withCloseButton={false}
       styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }, content: { minHeight: 560, display: 'flex', flexDirection: 'column' } }}
     >
-      <ModalContent status={status} onClose={onClose} onStatusUpdate={onStatusUpdate} />
+      <StartRoundActionContext.Provider value={onStartRound}>
+        <ModalContent status={status} onClose={onClose} onStatusUpdate={onStatusUpdate} />
+      </StartRoundActionContext.Provider>
     </Modal>
   )
 }
@@ -74,6 +95,11 @@ function defaultTab(status: IssueStatusResponse): string {
     case 'change_requested':
     case 'in_progress':
     case 'changes_to_comment':
+    // `unknown` has no correct default tab — an unplaceable segment supplies no
+    // commit base for any action. This is where it landed before it had its own
+    // status value, so the default is unchanged; the tab surfaces its own empty
+    // state, and the card is already grayed with the reason.
+    case 'unknown':
       return 'notify'
     case 'approved':
     case 'changes_after_approval':
@@ -121,15 +147,32 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
 function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  // Build oldest-first commit list
-  const orderedCommits = [...status.commits].reverse()
+  // Build oldest-first commit list from the segments (ordering only — the segment a
+  // commit belongs to was decided server-side, per D7).
+  const orderedCommits = useMemo(() => flattenSegmentCommits(status.segments), [status.segments])
 
-  // Default FROM: last index with statuses.length > 0
+  // A1: a round is open iff the last segment is a Round.
+  const openRound = activeRound(status.segments)
+  const openRoundPos = activeRoundPos(status.segments)
+  // Q1: `previous_approval` is an accessor now — the closing commit of the Round two
+  // positions before this one.
+  const openRoundPreviousApproval =
+    openRoundPos !== null ? previousApprovalOf(status.segments, openRoundPos) : null
+
+  // S5: the default FROM comes from the API's `next_notification_from` — the
+  // newest of {last standing approval, last notified, last reviewed, initial
+  // commit}, computed server-side. Only fall back to the old client-side
+  // heuristic (last commit carrying a status) when that hash is not in the list.
+  const apiFromIdx = findCommitIndex(orderedCommits, status.next_notification_from)
   let fromDefault = 0
-  for (let i = orderedCommits.length - 1; i >= 0; i--) {
-    if (orderedCommits[i].statuses.length > 0) {
-      fromDefault = i
-      break
+  if (apiFromIdx >= 0) {
+    fromDefault = apiFromIdx
+  } else {
+    for (let i = orderedCommits.length - 1; i >= 0; i--) {
+      if (orderedCommits[i].statuses.length > 0) {
+        fromDefault = i
+        break
+      }
     }
   }
 
@@ -146,7 +189,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 
   // Exception index: toDefault when latest commit and NOT file_changed
   const exceptionIdx =
-    toDefault === orderedCommits.length - 1 && !orderedCommits[toDefault].file_changed
+    toDefault === orderedCommits.length - 1 && !orderedCommits[toDefault]?.file_changed
       ? toDefault
       : -1
 
@@ -181,41 +224,57 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setAckApproved(false)
   }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visibleCommits = orderedCommits
-    .map((c, i) => ({ ...c, origIdx: i }))
-    .filter(({ file_changed, statuses, origIdx }) =>
-      showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
-    )
+  // S2/S3/S7: round-scoped picker. The window is the open round's membership
+  // (plus its anchor, the commit the round is measured against); the defaults are
+  // pinned visible so a from-commit that predates the round — e.g. the previous
+  // round's approval — stays reachable without widening the whole track.
+  const forcedIdxs = useMemo(
+    () => [exceptionIdx, fromDefault, toDefault],
+    [exceptionIdx, fromDefault, toDefault],
+  )
+  const picker = useRoundPicker({
+    orderedCommits,
+    segments: status.segments,
+    mode: 'range',
+    a: sliderAOrigIdx,
+    setA: setSliderAOrigIdx,
+    b: sliderBOrigIdx,
+    setB: setSliderBOrigIdx,
+    forcedIdxs,
+    showAll,
+    // U6: Notify asks someone to read a range, so `to` bounds the question — it means
+    // "the newest state I claim to have addressed", which cannot sit in a round that
+    // already closed. Keyed on position (U7), so trailing-gap drift still qualifies.
+    endReach: 'scope-and-newer',
+  })
 
-  const hasScrolledToRight = useRef(false)
-  const sliderViewportRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!hasScrolledToRight.current && visibleCommits.length > 0 && sliderViewportRef.current) {
-      sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
-      hasScrolledToRight.current = true
-    }
-  }, [visibleCommits.length])
-
-  // Snap origIdx to nearest visible slider position
-  const snapToVisible = (targetOrigIdx: number): number => {
-    const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
-    if (exact >= 0) return exact
-    let best = 0, bestDist = Infinity
-    for (let i = 0; i < visibleCommits.length; i++) {
-      const dist = Math.abs(visibleCommits[i].origIdx - targetOrigIdx)
-      if (dist < bestDist) { bestDist = dist; best = i }
-    }
-    return best
-  }
-
-  const snapA = snapToVisible(sliderAOrigIdx)
-  const snapB = snapToVisible(sliderBOrigIdx)
-
-  // from = earlier handle, to = later handle — handles can freely cross
-  const fromCommit = visibleCommits[Math.min(snapA, snapB)]
-  const toCommit   = visibleCommits[Math.max(snapA, snapB)]
+  const { visibleCommits, fromCommit, toCommit } = picker
   const fromOrigIdx = fromCommit?.origIdx ?? 0
   const toOrigIdx   = toCommit?.origIdx ?? 0
+
+  // S5: when the open round has no notification yet, `next_notification_from` is
+  // the previous round's approval, so the default already spans the whole round.
+  const prevRoundName =
+    openRoundPos !== null ? (previousRoundOf(status.segments, openRoundPos)?.name ?? null) : null
+  const spansWholeRound =
+    !!openRound &&
+    !!openRoundPreviousApproval &&
+    apiFromIdx >= 0 &&
+    apiFromIdx === findCommitIndex(orderedCommits, openRoundPreviousApproval) &&
+    fromOrigIdx === apiFromIdx
+
+  // S5: an empty diff. Happens after an unapproval, where the last notified commit
+  // is the commit that was just approved. Only surfaced when there is a better
+  // range to offer — the open round's previous approval — so single-round issues,
+  // where from === to is an ordinary state, are untouched.
+  const prevApprovalIdx = findCommitIndex(orderedCommits, openRoundPreviousApproval)
+  const emptyDiff =
+    fromOrigIdx === toOrigIdx && prevApprovalIdx >= 0 && prevApprovalIdx !== toOrigIdx
+
+  function presentWholeRound() {
+    setSliderAOrigIdx(prevApprovalIdx)
+    setSliderBOrigIdx(toOrigIdx)
+  }
 
   // File changed: any commit strictly after from, up to and including to
   const fileChangedInRange =
@@ -265,11 +324,12 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     <>
     <Stack gap="md">
       <StatusCard status={status} />
+      <DetailRoundRail segments={status.segments} />
 
       {isApproved && (
         <Alert color="orange">
           <Text size="sm" fw={600}>This issue is already approved</Text>
-          <Text size="xs" mt={4}>Consider unapproving first before posting a notification comment.</Text>
+          <Text size="xs" mt={4}>For another QC pass, start a new round.</Text>
           <Checkbox
             mt="xs"
             label="Notify anyway"
@@ -282,97 +342,78 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
       {/* Commit range slider */}
       {visibleCommits.length > 0 && (
         <Stack gap="xs">
-          {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text size="sm" fw={700}>Select Commits to Compare</Text>
-            <Checkbox
-              label="Show all commits"
-              checked={showAll}
-              onChange={(e) => setShowAll(e.currentTarget.checked)}
-            />
-          </div>
-
-          {/* Dots row + two independent overlaid sliders */}
-          <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-          <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
-            <div style={{ position: 'relative', height: 8 }}>
-              {visibleCommits.map((c, i) => {
-                const n = visibleCommits.length
-                const pct = n > 1 ? i / (n - 1) : 0.5
-                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                return (
-                  <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                    {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                      <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Slider A (in flow — renders track + marks) */}
-            <div style={{ position: 'relative' }}>
-              <CommitSlider
-                commits={visibleCommits}
-                value={snapA}
-                mb={28}
-                onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
-              />
-              {/* Slider B (overlaid — transparent track, no marks, independent thumb) */}
-              {visibleCommits.length > 1 && (
-                <div style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
-                  <Slider
-                    min={0}
-                    max={Math.max(0, visibleCommits.length - 1)}
-                    step={1}
-                    value={snapB}
-                    onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
-                    label={null}
-                    styles={{
-                      bar: { display: 'none' },
-                      root: { pointerEvents: 'none' },
-                      thumb: { pointerEvents: 'auto', zIndex: 3 },
-                      track: { backgroundColor: 'transparent' },
-                      mark: { display: 'none' },
-                      markLabel: { display: 'none' },
-                    }}
-                  />
-                </div>
+          <RoundCommitPickerTrack
+            title="Select Commits to Compare"
+            picker={picker}
+            showAll={showAll}
+            onShowAllChange={setShowAll}
+            testId="notify-picker"
+            banner={
+              <>
+                {spansWholeRound && prevRoundName && (
+                  <Text size="xs" c="dimmed" ta="center" data-testid="since-previous-approval">
+                    Since {prevRoundName} approval — this shows the reviewer everything in{' '}
+                    {openRound?.name}
+                  </Text>
+                )}
+                {emptyDiff && (
+                  <Alert color="yellow" p="xs" data-testid="empty-diff-alert">
+                    <Text size="xs" fw={600}>
+                      Nothing to compare — the from and to commits are the same (
+                      {shortHash(toCommit?.hash)}).
+                    </Text>
+                    <Text size="xs" mt={2}>
+                      This is usual right after unapproving: the last notification landed on the
+                      commit that was just approved.
+                    </Text>
+                    <Button
+                      mt="xs"
+                      size="compact-xs"
+                      variant="light"
+                      data-testid="present-whole-round"
+                      onClick={presentWholeRound}
+                    >
+                      Compare against {prevRoundName ?? 'the previous'} approval (
+                      {shortHash(openRoundPreviousApproval)})
+                    </Button>
+                  </Alert>
+                )}
+              </>
+            }
+          >
+            {/* From / To / Include diff */}
+            <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+              {/*
+                U1: when a non-linear Gap sits between the two ends, the from-handle
+                is rendered detached — cut off from the To block rather than reading
+                as one continuous span, because the path between them does not exist.
+              */}
+              {fromCommit && (
+                <CommitBlock label="From" commit={fromCommit} detached={picker.detached} />
               )}
-            </div>
-          </div>
-          </ScrollArea>
-
-          {/* Legend */}
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {STATUS_ORDER.map((s) => (
-              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
-              </div>
-            ))}
-          </div>
-
-          {/* From / To / Include diff */}
-          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-            {fromCommit && <CommitBlock label="From" commit={fromCommit} />}
-            {toCommit && <CommitBlock label="To" commit={toCommit} />}
-            <Tooltip
-              label="No changes between selected commits"
-              disabled={fileChangedInRange}
-              withArrow
-              position="right"
-            >
-              <span style={{ display: 'inline-flex' }}>
-                <Checkbox
-                  label="Include diff"
-                  checked={fileChangedInRange ? includeDiff : false}
-                  disabled={!fileChangedInRange}
-                  onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
-                />
-              </span>
-            </Tooltip>
-          </Stack>
+              {picker.detached && (
+                <Text size="xs" c="orange" data-testid="detached-previous-approval">
+                  Not connected — the history between these two commits is not one path.
+                </Text>
+              )}
+              {toCommit && <CommitBlock label="To" commit={toCommit} />}
+              <Tooltip
+                label="No changes between selected commits"
+                disabled={fileChangedInRange}
+                withArrow
+                position="right"
+              >
+                <span style={{ display: 'inline-flex' }}>
+                  <Checkbox
+                    label="Include diff"
+                    checked={fileChangedInRange ? includeDiff : false}
+                    disabled={!fileChangedInRange}
+                    onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                  />
+                </span>
+              </Tooltip>
+            </Stack>
+          </RoundCommitPickerTrack>
 
           <CommentEditor
             label="Comment"
@@ -445,7 +486,10 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 const EMPTY_BLOCKING_QC_STATUS = { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] }
 
 function StatusCard({ status }: { status: IssueStatusResponse }) {
-  const { issue, qc_status, branch, checklist_summary } = status
+  // A2: the branch the status was actually computed on — the active segment's — not
+  // the issue body's. `status.issue.branch` still carries the body's answer; showing
+  // that here is the bug the segment model deletes.
+  const { issue, qc_status, active_branch, checklist_summary } = status
   const blocking_qc_status = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const laneColor = STATUS_LANE_COLOR[qc_status.status]
   const formattedStatus = qc_status.status.replace(/_/g, ' ')
@@ -492,7 +536,7 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
             </Tooltip>
           )}
         </div>
-        <Text size="sm"><b>Branch:</b> {branch}</Text>
+        <Text size="sm"><b>Branch:</b> {active_branch}</Text>
         <Text size="sm"><b>Reviewers:</b> {issue.assignees.join(', ') || 'None'}</Text>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Text size="sm" fw={700}>Status:</Text>
@@ -550,7 +594,7 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
 function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  const orderedCommits = [...status.commits].reverse()
+  const orderedCommits = useMemo(() => flattenSegmentCommits(status.segments), [status.segments])
 
   // Default: newest commit (last in orderedCommits = latest)
   const defaultCommitOrigIdx = orderedCommits.length - 1
@@ -593,34 +637,23 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setAckApproved(false)
   }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visibleCommits = orderedCommits
-    .map((c, i) => ({ ...c, origIdx: i }))
-    .filter(({ file_changed, statuses, origIdx }) =>
-      showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
-    )
-
-  const hasScrolledToRight = useRef(false)
-  const sliderViewportRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!hasScrolledToRight.current && visibleCommits.length > 0 && sliderViewportRef.current) {
-      sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
-      hasScrolledToRight.current = true
-    }
-  }, [visibleCommits.length])
-
-  const snapToVisible = (targetOrigIdx: number): number => {
-    const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
-    if (exact >= 0) return exact
-    let best = 0, bestDist = Infinity
-    for (let i = 0; i < visibleCommits.length; i++) {
-      const dist = Math.abs(visibleCommits[i].origIdx - targetOrigIdx)
-      if (dist < bestDist) { bestDist = dist; best = i }
-    }
-    return best
-  }
-
-  const sliderIdx = snapToVisible(commitOrigIdx)
-  const selectedCommit = visibleCommits[sliderIdx]
+  const forcedIdxs = useMemo(
+    () => [exceptionIdx, defaultCommitOrigIdx],
+    [exceptionIdx, defaultCommitOrigIdx],
+  )
+  const picker = useRoundPicker({
+    orderedCommits,
+    segments: status.segments,
+    mode: 'single',
+    a: commitOrigIdx,
+    setA: setCommitOrigIdx,
+    forcedIdxs,
+    showAll,
+    // U6: a review records what the reviewer *read*, and reading an older round's commit
+    // is legitimate — so no constraint here.
+    endReach: 'any',
+  })
+  const { visibleCommits, selectedCommit } = picker
 
   const reviewRequest: ReviewRequest = {
     commit: selectedCommit?.hash ?? '',
@@ -667,11 +700,12 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     <>
     <Stack gap="md">
       <StatusCard status={status} />
+      <DetailRoundRail segments={status.segments} />
 
       {isApproved && (
         <Alert color="orange">
           <Text size="sm" fw={600}>This issue is already approved</Text>
-          <Text size="xs" mt={4}>Consider unapproving first before posting a review comment.</Text>
+          <Text size="xs" mt={4}>For another QC pass, start a new round.</Text>
           <Checkbox
             mt="xs"
             label="Review anyway"
@@ -683,83 +717,47 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 
       {visibleCommits.length > 0 && (
         <Stack gap="xs">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text size="sm" fw={700}>Select Commit</Text>
-            <Checkbox
-              label="Show all commits"
-              checked={showAll}
-              onChange={(e) => setShowAll(e.currentTarget.checked)}
-            />
-          </div>
-
-          <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
-              <div style={{ position: 'relative', height: 8 }}>
-                {visibleCommits.map((c, i) => {
-                  const n = visibleCommits.length
-                  const pct = n > 1 ? i / (n - 1) : 0.5
-                  const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                  return (
-                    <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                      {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                        <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                      ))}
-                    </div>
-                  )
-                })}
-              </div>
-
-              <CommitSlider
-                commits={visibleCommits}
-                value={sliderIdx}
-                mb={28}
-                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-              />
-            </div>
-          </ScrollArea>
-
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {STATUS_ORDER.map((s) => (
-              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
-              </div>
-            ))}
-          </div>
-
-          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-            {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
-            <Tooltip
-              label="No local changes for this file"
-              disabled={status.dirty}
-              withArrow
-              position="right"
-            >
-              <span style={{ display: 'inline-flex' }}>
-                <Checkbox
-                  label="Include diff"
-                  checked={status.dirty ? includeDiff : false}
-                  disabled={!status.dirty}
-                  onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
-                />
-              </span>
-            </Tooltip>
-            <Tooltip
-              label="No local changes to stash for this file"
-              disabled={status.dirty}
-              withArrow
-              position="right"
-            >
-              <span style={{ display: 'inline-flex' }}>
-                <Checkbox
-                  label="Stash file changes from review"
-                  checked={status.dirty ? autoStash : false}
-                  disabled={!status.dirty}
-                  onChange={(e) => setAutoStash(e.currentTarget.checked)}
-                />
-              </span>
-            </Tooltip>
-          </Stack>
+          <RoundCommitPickerTrack
+            title="Select Commit"
+            picker={picker}
+            showAll={showAll}
+            onShowAllChange={setShowAll}
+            testId="review-picker"
+          >
+            <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+              {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
+              <Tooltip
+                label="No local changes for this file"
+                disabled={status.dirty}
+                withArrow
+                position="right"
+              >
+                <span style={{ display: 'inline-flex' }}>
+                  <Checkbox
+                    label="Include diff"
+                    checked={status.dirty ? includeDiff : false}
+                    disabled={!status.dirty}
+                    onChange={(e) => setIncludeDiff(e.currentTarget.checked)}
+                  />
+                </span>
+              </Tooltip>
+              <Tooltip
+                label="No local changes to stash for this file"
+                disabled={status.dirty}
+                withArrow
+                position="right"
+              >
+                <span style={{ display: 'inline-flex' }}>
+                  <Checkbox
+                    label="Stash file changes from review"
+                    checked={status.dirty ? autoStash : false}
+                    disabled={!status.dirty}
+                    onChange={(e) => setAutoStash(e.currentTarget.checked)}
+                  />
+                </span>
+              </Tooltip>
+            </Stack>
+          </RoundCommitPickerTrack>
 
           <CommentEditor
             label="Comment"
@@ -837,7 +835,7 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
   const { issue } = status
 
-  const orderedCommits = [...status.commits].reverse()
+  const orderedCommits = useMemo(() => flattenSegmentCommits(status.segments), [status.segments])
 
   // Default: last commit with non-empty statuses; fall back to latest
   let defaultCommitOrigIdx = orderedCommits.length - 1
@@ -881,34 +879,24 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
   const bqs = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const hasBlockingIssues = bqs.total > 0 && (bqs.not_approved.length > 0 || bqs.errors.length > 0)
 
-  const visibleCommits = orderedCommits
-    .map((c, i) => ({ ...c, origIdx: i }))
-    .filter(({ file_changed, statuses, origIdx }) =>
-      showAll || file_changed || statuses.length > 0 || origIdx === exceptionIdx
-    )
-
-  const hasScrolledToRight = useRef(false)
-  const sliderViewportRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!hasScrolledToRight.current && visibleCommits.length > 0 && sliderViewportRef.current) {
-      sliderViewportRef.current.scrollLeft = sliderViewportRef.current.scrollWidth
-      hasScrolledToRight.current = true
-    }
-  }, [visibleCommits.length])
-
-  const snapToVisible = (targetOrigIdx: number): number => {
-    const exact = visibleCommits.findIndex((c) => c.origIdx === targetOrigIdx)
-    if (exact >= 0) return exact
-    let best = 0, bestDist = Infinity
-    for (let i = 0; i < visibleCommits.length; i++) {
-      const dist = Math.abs(visibleCommits[i].origIdx - targetOrigIdx)
-      if (dist < bestDist) { bestDist = dist; best = i }
-    }
-    return best
-  }
-
-  const sliderIdx = snapToVisible(commitOrigIdx)
-  const selectedCommit = visibleCommits[sliderIdx]
+  const forcedIdxs = useMemo(
+    () => [exceptionIdx, defaultCommitOrigIdx],
+    [exceptionIdx, defaultCommitOrigIdx],
+  )
+  const picker = useRoundPicker({
+    orderedCommits,
+    segments: status.segments,
+    mode: 'single',
+    a: commitOrigIdx,
+    setA: setCommitOrigIdx,
+    forcedIdxs,
+    showAll,
+    // U6: approval closes a round **at** a commit, so the commit must belong to that
+    // round. The trailing gap is excluded too: approving drift no round covers would
+    // bypass the model (S5 resolves `changes_after_approval` by starting a new round).
+    endReach: 'scope-round-only',
+  })
+  const { visibleCommits, selectedCommit } = picker
 
   const canApprove =
     !!selectedCommit &&
@@ -962,6 +950,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     <>
     <Stack gap="md">
       <StatusCard status={status} />
+      <DetailRoundRail segments={status.segments} />
 
       {hasBlockingIssues && (
         <Alert color="orange">
@@ -987,53 +976,17 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
 
       {visibleCommits.length > 0 && (
         <Stack gap="xs">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text size="sm" fw={700}>Select Commit</Text>
-            <Checkbox
-              label="Show all commits"
-              checked={showAll}
-              onChange={(e) => setShowAll(e.currentTarget.checked)}
-            />
-          </div>
-
-          <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
-              <div style={{ position: 'relative', height: 8 }}>
-                {visibleCommits.map((c, i) => {
-                  const n = visibleCommits.length
-                  const pct = n > 1 ? i / (n - 1) : 0.5
-                  const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
-                  return (
-                    <div key={i} style={{ position: 'absolute', left, transform: 'translateX(-50%)', display: 'flex', gap: 2 }}>
-                      {STATUS_ORDER.filter((s) => c.statuses.includes(s)).map((s) => (
-                        <span key={s} title={s} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                      ))}
-                    </div>
-                  )
-                })}
-              </div>
-
-              <CommitSlider
-                commits={visibleCommits}
-                value={sliderIdx}
-                mb={28}
-                onChange={(val) => setCommitOrigIdx(visibleCommits[val]?.origIdx ?? commitOrigIdx)}
-              />
-            </div>
-          </ScrollArea>
-
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {STATUS_ORDER.map((s) => (
-              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: STATUS_DOT_COLORS[s] }} />
-                <Text size="xs" c="dimmed" style={{ textTransform: 'capitalize' }}>{s}</Text>
-              </div>
-            ))}
-          </div>
-
-          <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
-            {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
-          </Stack>
+          <RoundCommitPickerTrack
+            title="Select Commit"
+            picker={picker}
+            showAll={showAll}
+            onShowAllChange={setShowAll}
+            testId="approve-picker"
+          >
+            <Stack gap="xs" style={{ maxWidth: 380, marginLeft: 'auto', marginRight: 'auto', width: '100%' }}>
+              {selectedCommit && <CommitBlock label="Commit" commit={selectedCommit} />}
+            </Stack>
+          </RoundCommitPickerTrack>
 
           <CommentEditor
             label={overrideBlocking ? 'Note (required)' : 'Comment'}
@@ -1118,12 +1071,30 @@ function UnapproveTab({ status, onStatusUpdate, onBlockedUnavailable }: { status
 function CommitBlock({
   label,
   commit,
+  detached = false,
 }: {
   label: string
   commit: { hash: string; message: string; statuses: string[] }
+  /** U1: draw this handle as *not* connected to the other end of the comparison. */
+  detached?: boolean
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+    <div
+      data-detached={detached ? 'true' : undefined}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+        overflow: 'hidden',
+        ...(detached
+          ? {
+              borderLeft: '2px dashed var(--mantine-color-orange-6)',
+              paddingLeft: 6,
+            }
+          : undefined),
+      }}
+    >
       <Text size="sm" fw={700} style={{ flexShrink: 0 }}>{label}:</Text>
       <Text size="sm" style={{ fontFamily: 'monospace', flexShrink: 0 }}>{commit.hash.slice(0, 7)}</Text>
       <Text size="sm" c="dimmed" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>

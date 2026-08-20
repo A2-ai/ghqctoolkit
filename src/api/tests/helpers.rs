@@ -53,14 +53,26 @@ pub struct MockGitInfo {
 
     // Mock data storage
     issues: Arc<Mutex<HashMap<u64, Issue>>>,
+    comments: Arc<Mutex<HashMap<u64, Vec<crate::GitComment>>>>,
     blocked_issues: Arc<Mutex<HashMap<u64, Vec<Issue>>>>,
     milestones: Arc<Mutex<Vec<octocrab::models::Milestone>>>,
     users: Arc<Mutex<Vec<crate::RepoUser>>>,
+
+    // Repository
+    branch_tip: Option<String>,
+    /// The branch walk every branch reports, newest first. `None` keeps the single
+    /// default commit every fixture was written against.
+    commits: Option<Vec<GitCommit>>,
+    /// What `merge_base` reports for any pair. The outer `None` is the default —
+    /// the first argument, i.e. "`a` is an ancestor of `b`"; `Some(None)` is
+    /// "no common ancestor at all".
+    merge_base: Option<Option<ObjectId>>,
 
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
     git_state: GitState,
     stash_error: Option<String>,
+    open_issue_fails: bool,
 
     // Authentication
     current_user: Option<String>,
@@ -90,6 +102,7 @@ pub struct MockGitInfoBuilder {
     branch: String,
     remote_commit: String,
     issues: HashMap<u64, Issue>,
+    comments: HashMap<u64, Vec<crate::GitComment>>,
     blocked_issues: HashMap<u64, Vec<Issue>>,
     milestones: Vec<octocrab::models::Milestone>,
     users: Vec<crate::RepoUser>,
@@ -97,6 +110,10 @@ pub struct MockGitInfoBuilder {
     git_state: GitState,
     current_user: Option<String>,
     stash_error: Option<String>,
+    open_issue_fails: bool,
+    branch_tip: Option<String>,
+    commits: Option<Vec<GitCommit>>,
+    merge_base: Option<Option<ObjectId>>,
 }
 
 impl MockGitInfoBuilder {
@@ -108,6 +125,7 @@ impl MockGitInfoBuilder {
             branch: "main".to_string(),
             remote_commit: "def4567890abcdef4567890abcdef4567890abc0".to_string(),
             issues: HashMap::new(),
+            comments: HashMap::new(),
             blocked_issues: HashMap::new(),
             milestones: Vec::new(),
             users: Vec::new(),
@@ -115,6 +133,10 @@ impl MockGitInfoBuilder {
             git_state: GitState::Clean,
             current_user: Some("test-user".to_string()),
             stash_error: None,
+            open_issue_fails: false,
+            branch_tip: None,
+            commits: None,
+            merge_base: None,
         }
     }
 
@@ -145,6 +167,34 @@ impl MockGitInfoBuilder {
 
     pub fn with_issue(mut self, number: u64, issue: Issue) -> Self {
         self.issues.insert(number, issue);
+        self
+    }
+
+    /// Timeline comments for an issue, in thread order.
+    pub fn with_comments(mut self, number: u64, comments: Vec<crate::GitComment>) -> Self {
+        self.comments.insert(number, comments);
+        self
+    }
+
+    /// HEAD of the (single) branch this mock knows about. `None` keeps the default
+    /// of reporting the branch as not available locally.
+    pub fn with_branch_tip(mut self, tip: Option<String>) -> Self {
+        self.branch_tip = tip;
+        self
+    }
+
+    /// The commit walk every branch reports, newest first — what a multi-segment
+    /// thread needs, since a fold can only own commits the walk returned.
+    pub fn with_commits(mut self, commits: Vec<GitCommit>) -> Self {
+        self.commits = Some(commits);
+        self
+    }
+
+    /// What `merge_base` reports for any pair: `Some(base)` for a shared ancestor,
+    /// `None` for none at all. Left unset the mock keeps its default of returning the
+    /// first argument, which *is* "`a` is an ancestor of `b`" and so never diverges.
+    pub fn with_merge_base(mut self, base: Option<ObjectId>) -> Self {
+        self.merge_base = Some(base);
         self
     }
 
@@ -183,6 +233,12 @@ impl MockGitInfoBuilder {
         self
     }
 
+    /// Make `open_issue` fail, for exercising partially-failed multi-step actions.
+    pub fn with_open_issue_failure(mut self) -> Self {
+        self.open_issue_fails = true;
+        self
+    }
+
     pub fn build(self) -> MockGitInfo {
         MockGitInfo {
             owner: self.owner,
@@ -191,6 +247,7 @@ impl MockGitInfoBuilder {
             current_branch: self.branch,
             remote_commit: self.remote_commit,
             issues: Arc::new(Mutex::new(self.issues)),
+            comments: Arc::new(Mutex::new(self.comments)),
             blocked_issues: Arc::new(Mutex::new(self.blocked_issues)),
             milestones: Arc::new(Mutex::new(self.milestones)),
             users: Arc::new(Mutex::new(self.users)),
@@ -198,6 +255,10 @@ impl MockGitInfoBuilder {
             git_state: self.git_state,
             current_user: self.current_user,
             stash_error: self.stash_error,
+            open_issue_fails: self.open_issue_fails,
+            branch_tip: self.branch_tip,
+            commits: self.commits,
+            merge_base: self.merge_base,
             calls: Arc::new(Mutex::new(Vec::new())),
             write_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -307,25 +368,45 @@ impl GitStatusOps for MockGitInfo {
     }
 }
 
+impl MockGitInfo {
+    /// The walk every branch reports, newest first: the configured one, or the single
+    /// commit that matches the JSON fixtures (`config_file_issue.json`'s initial
+    /// commit) and is treated as touching every file.
+    fn walk(&self) -> Vec<GitCommit> {
+        self.commits.clone().unwrap_or_else(|| {
+            let commit_hash = ObjectId::from_str("456def789abc012345678901234567890123cdef")
+                .unwrap_or_else(|_| ObjectId::empty_tree(gix::hash::Kind::Sha1));
+
+            vec![GitCommit {
+                commit: commit_hash,
+                message: "Initial commit".to_string(),
+            }]
+        })
+    }
+}
+
 impl GitCommitOps for MockGitInfo {
+    /// No divergence unless configured: returning the first argument is exactly
+    /// "a is an ancestor of b".
+    fn merge_base(&self, a: &ObjectId, _b: &ObjectId) -> Result<Option<ObjectId>, GitFileOpsError> {
+        Ok(self.merge_base.unwrap_or(Some(*a)))
+    }
+
     fn commits(
         &self,
         _branch: &Option<String>,
         _stop_at: Option<ObjectId>,
     ) -> Result<Vec<GitCommit>, GitFileOpsError> {
-        // Return a commit that matches test fixtures and touches all common test files
-        // This matches the initial commit from config_file_issue.json
-        let commit_hash = ObjectId::from_str("456def789abc012345678901234567890123cdef")
-            .unwrap_or_else(|_| ObjectId::empty_tree(gix::hash::Kind::Sha1));
-
-        Ok(vec![GitCommit {
-            commit: commit_hash,
-            message: "Initial commit".to_string(),
-        }])
+        Ok(self.walk())
     }
 
     fn branch_tip(&self, _branch: &Option<String>) -> Result<ObjectId, GitFileOpsError> {
-        Err(GitFileOpsError::LocalBranchNotFound("mock".to_string()))
+        match &self.branch_tip {
+            Some(tip) => {
+                ObjectId::from_str(tip).map_err(|e| GitFileOpsError::ParseError(e.to_string()))
+            }
+            None => Err(GitFileOpsError::LocalBranchNotFound("mock".to_string())),
+        }
     }
 
     fn file_touching_commits(
@@ -333,10 +414,12 @@ impl GitCommitOps for MockGitInfo {
         _branch: Option<String>,
         _file: &Path,
     ) -> Result<std::collections::HashSet<String>, GitFileOpsError> {
-        // The mock returns one commit; treat it as touching every file
-        let commit_hash = ObjectId::from_str("456def789abc012345678901234567890123cdef")
-            .unwrap_or_else(|_| ObjectId::empty_tree(gix::hash::Kind::Sha1));
-        Ok(std::iter::once(commit_hash.to_string()).collect())
+        // Every commit the mock walks is treated as touching every file.
+        Ok(self
+            .walk()
+            .iter()
+            .map(|commit| commit.commit.to_string())
+            .collect())
     }
 
     fn get_branches_containing_commit(
@@ -467,9 +550,15 @@ impl GitHubReader for MockGitInfo {
 
     async fn get_issue_comments(
         &self,
-        _issue: &Issue,
+        issue: &Issue,
     ) -> Result<Vec<crate::GitComment>, GitHubApiError> {
-        Ok(vec![])
+        Ok(self
+            .comments
+            .lock()
+            .unwrap()
+            .get(&issue.number)
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn get_issue_events(
@@ -618,6 +707,9 @@ impl GitHubWriter for MockGitInfo {
             .lock()
             .unwrap()
             .push(WriteCall::OpenIssue { issue_number });
+        if self.open_issue_fails {
+            return Err(GitHubApiError::NoApi);
+        }
         Ok(())
     }
 

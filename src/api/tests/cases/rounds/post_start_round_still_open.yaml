@@ -1,0 +1,37 @@
+name: "POST /api/issues/{number}/rounds - round still open"
+description: "A still-open round is a precondition violation: 409, and nothing is written"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+      milestone: 1
+  # No approval comment: Initial QC is still open.
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds"
+  body:
+    checklist_content: "- [ ] Reviewed the logic"
+    notification: "none"
+
+response:
+  status: 409
+  body:
+    match_type: partial
+    fields:
+      error: "Cannot start a new round: Initial QC is still open. Approve it first — a `# QC Round` comment posted now would extend that round instead of opening a new one."

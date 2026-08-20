@@ -12,6 +12,8 @@ mod status;
 
 pub use action::{GitCli, GitCliError, GitCommand, PullOutcome};
 pub use api::{GitComment, GitHubApiError, GitHubReader, GitHubWriter, RepoUser};
+#[cfg(test)]
+pub(crate) use api::{MockGitHubReader, MockGitHubWriter};
 pub use auth::{AuthError, AuthSourceKind, AuthSources};
 pub use file_ops::{
     GitAuthor, GitCommit, GitCommitOps, GitFileOps, GitFileOpsError, find_commits,

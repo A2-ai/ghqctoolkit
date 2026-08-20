@@ -1,0 +1,60 @@
+name: "GET /api/issues/{number}/rounds/seed - a diverged approval"
+description: "The approval is not an ancestor of HEAD: the seed reports the divergence and offers the merge-base as the comparison base"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        # Code Review Checklist
+        - [x] Reviewed the logic
+      milestone: 1
+  comments:
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+
+git_state:
+  branch_tip: "abc1234567890abcdef1234567890abcdef12340"
+  # The approval and HEAD share an ancestor that is *not* the approval — the whole
+  # reason the cross-branch work exists, and unreachable with the default mock, whose
+  # merge-base is always its first argument.
+  merge_base:
+    type: commit
+    commit: "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeee"
+
+request:
+  method: GET
+  path: "/api/issues/1/rounds/seed"
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      next_round: 2
+      branch: main
+      anchor: "abc1234567890abcdef1234567890abcdef12340"
+      previous_approval: "456def789abc012345678901234567890123cdef"
+      # Not the approval: there is nothing on this branch to diff against it.
+      comparison_base: "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeee"
+      divergence:
+        kind: diverged
+        merge_base: "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeee"
+      can_start: true
+      blocked_reason: null
+
+# A seed must never write, divergence or not.
+assert_write_calls: []

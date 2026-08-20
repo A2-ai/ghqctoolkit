@@ -10,10 +10,14 @@ mod create;
 mod diff_utils;
 mod git;
 mod issue;
+mod new_round;
 mod qc_status;
 mod record;
 mod relevant_files;
+mod repair_round;
 mod review;
+mod round;
+mod start_round;
 pub mod utils;
 
 #[cfg(test)]
@@ -33,7 +37,11 @@ pub use approve::{
     QCUnapprove, UnapprovalResult, approve_with_validation, get_unapproved_blocking_qcs,
     unapprove_with_impact,
 };
-pub use archive::{ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, archive};
+pub use archive::{
+    Approval, ArchiveError, ArchiveFile, ArchiveMetadata, ArchivePreview, ArchiveQC, ArchiveTarget,
+    METADATA_VERSION, RoundProvenance, SelectedRound, SupersedingCause, archive, archive_preview,
+    selected_round,
+};
 pub use auth::{
     AuthStore, AuthStoreError, AuthToken, canonicalize_base_url, extract_host_from_base_url,
     token_page_url, validate_github_token,
@@ -59,9 +67,15 @@ pub use git::{
     head_commit_hash,
 };
 pub use issue::{
-    BlockingQC, BlockingRelationship, CommitStatus, FileRenameEvent, IssueCommit, IssueError,
-    IssueThread, determine_relationship_from_body, file_history_section, find_checklist_start,
+    BlockingQC, BlockingRelationship, FileRenameEvent, IssueCommit, IssueError, IssueThread,
+    determine_relationship_from_body, file_history_section, find_checklist_start,
     parse_blocking_qcs, parse_branch_from_body, parse_file_history, splice_file_history,
+};
+pub use new_round::{
+    ChecklistOption, QCNewRound, ROUND_MARKER_HEADING, RoundMarker, SeededChecklist,
+    available_checklists, checklist_from_issue_body, checklist_from_round_comment,
+    checklist_name_from_round_comment, parse_round_marker, prior_round_comment_body,
+    reset_checklist, seed_checklist, upsert_round_marker,
 };
 pub use qc_status::{
     BlockingQCStatus, ChecklistSummary, QCStatus, QCStatusError, analyze_issue_checklists,
@@ -73,4 +87,16 @@ pub use record::{
     record, render,
 };
 pub use relevant_files::{RelevantFile, RelevantFileClass};
+pub use repair_round::{
+    NotificationSkip, RepairPlan, RepairRoundError, RepairRoundRequest, RepairRoundResult,
+    plan_repair, repair_round,
+};
 pub use review::{QCReview, ReviewStashResult, ReviewStashStatus, stash_review_file};
+pub use round::{
+    ChecklistSource, Extension, ExtensionReason, Gap, GapContinuity, Placement, Retraction, Round,
+    RoundAnomaly, RoundEvent, RoundOpen, RoundState, Segment, UnplaceableReason,
+};
+pub use start_round::{
+    NotificationMode, RoundBasis, StartRoundError, StartRoundRequest, StartRoundResult,
+    StepOutcome, round_basis, start_round,
+};

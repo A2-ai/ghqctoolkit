@@ -1,0 +1,85 @@
+name: "POST /api/issues/{number}/rounds/repair - an unplaceable round skips only its notification"
+description: "Round 2's anchor is not on the walk, so the model grays it: the reopen and the body marker still run, and only the notification is skipped — with its reason, not a 409"
+
+fixtures:
+  issues:
+    - type: mock
+      number: 1
+      title: "src/test.rs"
+      # Closed while round 2 is open, and the marker still names Initial QC: both of the
+      # steps that do not read placement are incomplete.
+      state: "closed"
+      body: |
+        Quality check issue for src/test.rs
+
+        ## Metadata
+        initial qc commit: 456def789abc012345678901234567890123cdef
+        git branch: main
+        author: The Octocat <octocat@example.com>
+
+        ## QC Round
+        * current round: 1
+        * round comment: https://github.com/test-owner/test-repo/issues/1#issuecomment-1
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+      milestone: 1
+  comments:
+    - issue: 1
+      author: reviewer
+      body: |
+        # QC Approval
+
+        ## Metadata
+        approved qc commit: 456def789abc012345678901234567890123cdef
+    - issue: 1
+      author: author
+      id: 456
+      html_url: "https://github.com/test-owner/test-repo/issues/1#issuecomment-456"
+      body: |
+        # QC Round
+
+        ## Metadata
+        * round: 2
+        * initial qc round commit: abc1234567890abcdef1234567890abcdef12340
+        * previous approved commit: 456def789abc012345678901234567890123cdef
+        * git branch: main
+
+        # Code Review Checklist
+        - [ ] Reviewed the logic
+
+git_state:
+  # Round 2's anchor is on no walk the mock reports, so the fold grays round 2 and gives
+  # it the null-OID anchor placeholder — the ordinary degradation this endpoint used to
+  # answer with a 409.
+  commits: []
+
+request:
+  method: POST
+  path: "/api/issues/1/rounds/repair"
+  # A notification is asked for, and round 2 has none: only the placement stops it.
+  body:
+    notification: "full"
+
+response:
+  status: 200
+  body:
+    match_type: partial
+    fields:
+      round: 2
+      reopened:
+        status: "done"
+      body_marker:
+        status: "done"
+      notification:
+        status: "skipped"
+        skipped_reason: "its commits are not on that branch"
+      repaired: true
+      needs_repair: false
+
+# The two placement-free steps ran; nothing was posted against a commit nobody can locate.
+assert_write_calls:
+  - type: OpenIssue
+    issue_number: 1
+  - type: UpdateIssue
+    issue_number: 1

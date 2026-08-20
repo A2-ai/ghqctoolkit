@@ -2,7 +2,7 @@
 
 use crate::api::routes::{
     archive, comments, commits, configuration, files, health, issues, milestones, preview, record,
-    status,
+    rounds, status,
 };
 use crate::api::state::AppState;
 use crate::{GitCli, GitProvider};
@@ -76,6 +76,18 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
             post(comments::unapprove_issue),
         )
         .route("/api/issues/{number}/review", post(comments::review_issue))
+        // QC rounds
+        .route("/api/issues/{number}/rounds", post(rounds::start_new_round))
+        .route(
+            "/api/issues/{number}/rounds/seed",
+            get(rounds::get_round_seed),
+        )
+        // `rounds/repair` cannot be shadowed by `rounds` or `rounds/seed`: all three
+        // are distinct literal paths, and `{number}` only ever matches one segment.
+        .route(
+            "/api/issues/{number}/rounds/repair",
+            post(rounds::repair_open_round),
+        )
         // Files
         .route("/api/files/tree", get(files::list_tree))
         .route(
@@ -110,6 +122,7 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
         .route("/api/assignees", get(status::list_assignees))
         .route("/api/repo", get(status::repo_info))
         .route("/api/commits", get(commits::get_commits))
+        .route("/api/commits/diff", get(commits::get_commit_diff))
         // Record PDF generation
         .route(
             "/api/record/upload",
