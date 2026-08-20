@@ -15,6 +15,7 @@
 import type { Issue, IssueCommit, IssueStatusResponse } from '../../src/api/issues'
 import type {
   GapSegment,
+  SupersedingCause,
   RepairRoundResponse,
   RoundEventInfo,
   RoundRepairStatus,
@@ -23,6 +24,13 @@ import type {
   Segment,
   StartRoundResponse,
 } from '../../src/api/rounds'
+
+/**
+ * Git's "no object". `opened_at` is nullable on the wire — an unplaceable round has no anchor
+ * sha — and no fixture here builds a round without one, so this is a type-level no-op today;
+ * it keeps the anchor commit honest rather than `undefined` if one ever does.
+ */
+const ZERO_SHA = '0'.repeat(40)
 
 /** Full 40-char hashes, since the UI abbreviates them. */
 export const ROUND1_OPENED = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
@@ -103,10 +111,147 @@ export function roundSegment(
     // QC's. The round comment names it `initial qc round commit`. This mirrors
     // `IssueCommit::project`; it previously read `index === 1 ? ['initial'] : []`, which
     // left rounds from 2 on with an unmarked start.
-    commits: [commit(overrides.opened_at, { statuses: ['initial'] })],
+    commits: [commit(overrides.opened_at ?? ZERO_SHA, { statuses: ['initial'] })],
+    // A3/M4: `latest_actioned_commit` — the newest of the round's events and its own anchor,
+    // by position in its own commits. A round with no events is anchored-only, so its anchor
+    // is the one candidate, which is why the default here is `opened_at` rather than null.
+    // `notificationEvent`/`reviewEvent` fixtures pass it explicitly when they add an event;
+    // an unplaceable round passes null, the only shape the wire allows for one.
+    latest_actioned_commit: overrides.opened_at,
     placement: { kind: 'placed' },
     ...overrides,
+    // Supplies `archive_preview`, so the literal above deliberately does not: a scaffold
+    // value there would be overwritten by the spread and reported as TS2783.
+    ...previewFields(overrides),
   }
+}
+
+/**
+ * A `archive_preview` for the round the caller is building — §26/contract §12.
+ *
+ * Applied after the overrides spread, so it describes the round as overridden rather than as
+ * defaulted. It states only what a single round can be asked about on its own:
+ *
+ * - the commit is S1's — the closing commit when closed, the latest actioned commit when
+ *   open;
+ * - the approval names this round when it closed (§13.1's "the selected round if it closed
+ *   there"), and is null otherwise;
+ * - `superseding_causes` is left **provisional** and is finalized by [`coherentPreviews`],
+ *   which is the only code here with the thread in view. Every clause but none is a fact
+ *   about the segments *after* a round, so a round-at-a-time builder claiming `[]` would be
+ *   claiming currency it never checked — the §18.3/§20.1 hazard in fixture code.
+ *
+ * An unplaceable round gets `null`, the only shape the wire allows for one. This is fixture
+ * code deliberately reproducing a projection; product code renders it (§26.6).
+ */
+function previewFields(
+  overrides: Partial<RoundSegment> & Pick<RoundSegment, 'index' | 'name' | 'opened_at'>,
+): Pick<RoundSegment, 'archive_preview'> {
+  if ('archive_preview' in overrides) return { archive_preview: overrides.archive_preview ?? null }
+  if (overrides.placement?.kind === 'unplaceable') return { archive_preview: null }
+
+  const closing = overrides.closing_commit ?? null
+  const actioned =
+    'latest_actioned_commit' in overrides
+      ? (overrides.latest_actioned_commit ?? null)
+      : overrides.opened_at
+  const commit = closing ?? actioned
+  if (commit === null) return { archive_preview: null }
+
+  return {
+    archive_preview: {
+      commit,
+      approval:
+        closing === null
+          ? null
+          : {
+              round: overrides.index,
+              commit: closing,
+              by: overrides.closed_by ?? 'reviewer1',
+              at: overrides.closed_at ?? '2024-01-05T00:00:00Z',
+            },
+      superseding_causes: PROVISIONAL_CAUSES,
+    },
+  }
+}
+
+/**
+ * The cause list a round-at-a-time builder is entitled to state: none, pending
+ * [`coherentPreviews`].
+ *
+ * It is never observable on a fixture that reaches the wire — `segmentFields` recomputes
+ * every round's causes from the thread — and it is a named constant rather than a bare `[]`
+ * so that reading `closeRound` or `previewFields` cannot be mistaken for reading a claim
+ * that nothing supersedes the round.
+ */
+const PROVISIONAL_CAUSES: SupersedingCause[] = []
+
+/**
+ * Finalize every round's `superseding_causes` from the thread they sit in — S3's four
+ * clauses, in the wire's clause order, with §20.1's corrected clause 4.
+ *
+ * **Why this exists.** A closed round is not "current" because it closed; it is current only
+ * if nothing after it says otherwise, and only a whole segment list can answer that. The
+ * builders each see one round, so they leave the array provisional and this pass fills it.
+ * A fixture that claimed `[]` on its own authority would be a positive claim of currency
+ * derived from information nothing checked — the exact defect §18.3 removes from the product
+ * — and a lying fixture is worse than none, because the next reader trusts it.
+ *
+ * Scope, deliberately narrow: **only `superseding_causes`**. `commit` and `approval` are S1's
+ * and I2's answers and stay whatever the fixture author stated, which is what lets a spec
+ * hand the UI a preview that disagrees with its own round and prove the UI renders rather
+ * than re-derives (§31.1). Idempotent, so applying it twice is harmless.
+ *
+ * This reproduces a projection in **fixture** code on purpose. Product code renders the
+ * wire and derives nothing (§26.6); the rule's one authority is `src/archive.rs`.
+ */
+export function coherentPreviews(segments: Segment[]): Segment[] {
+  const rounds = segments.filter((s): s is RoundSegment => s.kind === 'round')
+  const latest = rounds[rounds.length - 1]
+  const n = rounds.length
+  const trailing = segments[segments.length - 1]
+
+  return segments.map((segment, position) => {
+    if (segment.kind !== 'round' || segment.archive_preview === null) return segment
+    const r = segment.index
+    const causes: SupersedingCause[] = []
+
+    // Clause 1 — a round after this one has closed.
+    if (rounds.some((round) => round.index > r && round.closing_commit !== null)) {
+      causes.push('later_approval')
+    }
+    // Clause 2 — the thread's latest round is open.
+    if (latest !== undefined && latest.state === 'open') {
+      causes.push('round_open')
+    }
+    // Clause 3 — this is the latest round, it is closed, and the gap trailing it changed the
+    // file. A closed round is never last, so that gap is the last segment.
+    if (
+      r === n &&
+      segment.closing_commit !== null &&
+      trailing !== undefined &&
+      trailing.kind === 'gap' &&
+      trailing.commits.some((c) => c.file_changed)
+    ) {
+      causes.push('changed_since')
+    }
+    // Clause 4 (§20.1) — a segment after this one could not be located, or owns nothing
+    // because its ends share no history. An empty *linear* gap proves currency; an empty
+    // *unrelated* one proves nothing.
+    if (
+      segments.slice(position + 1).some(
+        (after) =>
+          after.placement.kind === 'unplaceable' ||
+          (after.kind === 'gap' &&
+            after.commits.length === 0 &&
+            after.continuity.kind === 'unrelated'),
+      )
+    ) {
+      causes.push('undeterminable')
+    }
+
+    return { ...segment, archive_preview: { ...segment.archive_preview, superseding_causes: causes } }
+  })
 }
 
 /** Round 1 — checklist lives in the issue body. */
@@ -162,7 +307,23 @@ export function closeRound(
           i === existing ? { ...c, statuses: [...new Set([...c.statuses, 'approved' as const])] } : c,
         )
       : [commit(closing_commit, { statuses: ['approved'] }), ...round.commits]
-  return { ...round, state: 'closed', closing_commit, closed_by, closed_at, commits }
+  return {
+    ...round,
+    state: 'closed',
+    closing_commit,
+    closed_by,
+    closed_at,
+    commits,
+    // The preview follows the round: closing it changes the commit an archive would take and
+    // adds the approval. The cause list stays **provisional** — whether anything supersedes
+    // this approval depends on the segments after it, which this function cannot see, and
+    // `segmentFields` finalizes it via `coherentPreviews`.
+    archive_preview: {
+      commit: closing_commit,
+      approval: { round: round.index, commit: closing_commit, by: closed_by, at: closed_at },
+      superseding_causes: PROVISIONAL_CAUSES,
+    },
+  }
 }
 
 /**
@@ -232,7 +393,10 @@ export function segmentFields(
 
   return {
     active_branch: last.branch,
-    segments,
+    // Every round's `superseding_causes` finalized here, where the thread is in view. A
+    // fixture that needs the wire to disagree with its own segments builds this object by
+    // hand and says why (§31.1).
+    segments: coherentPreviews(segments),
     next_notification_from: nextNotificationFrom ?? fromOpenRound ?? standingApproval ?? null,
     round_repair: repair,
   }
@@ -359,7 +523,10 @@ export const multiRoundIssue = makeRoundIssue(112, 'src/multi-round.rs')
 
 /** The three segments #112's scenario is built from, in one place. */
 export function multiRoundSegments(overrides: { round2?: Partial<RoundSegment> } = {}): Segment[] {
-  return [
+  // Coherent at the source: the round-picker specs consume this list directly rather than
+  // through `segmentFields`, and a round-1 preview claiming currency while round 2 is open
+  // would be a fixture asserting what nothing checked (§31.2).
+  return coherentPreviews([
     closeRound(
       initialQcRound(ROUND1_OPENED, {
         commits: [
@@ -379,7 +546,7 @@ export function multiRoundSegments(overrides: { round2?: Partial<RoundSegment> }
       events: [notificationEvent(ROUND2_OPENED)],
       ...overrides.round2,
     }),
-  ]
+  ])
 }
 
 export const multiRoundStatus: IssueStatusResponse = {
@@ -443,7 +610,9 @@ export const quietRoundStatus: IssueStatusResponse = {
  * user is working in, while `issue.branch` still says `main`.
  */
 export const crossBranchIssue = makeRoundIssue(114, 'src/cross-branch.rs')
-export const crossBranchSegments: Segment[] = [
+// Coherent at the source, for the same reason as `multiRoundSegments`: round-picker specs
+// read this list directly (§31.2).
+export const crossBranchSegments: Segment[] = coherentPreviews([
   closeRound(
     initialQcRound(ROUND1_OPENED, {
       commits: [
@@ -465,7 +634,7 @@ export const crossBranchSegments: Segment[] = [
     commits: [commit(ROUND2_OPENED, { message: 'round 2 changes', statuses: ['initial', 'notification'] })],
     events: [notificationEvent(ROUND2_OPENED)],
   }),
-]
+])
 export const crossBranchStatus: IssueStatusResponse = {
   ...multiRoundStatus,
   issue: crossBranchIssue,
@@ -512,6 +681,9 @@ export const unplaceableStatus: IssueStatusResponse = {
     laterRound(2, ROUND2_OPENED, {
       branch: 'feature/gone',
       commits: [],
+      // Null exactly when the round is unplaceable (contract §4.1): it owns no commits,
+      // so no commit of its own can be the one somebody acted on.
+      latest_actioned_commit: null,
       placement: { kind: 'unplaceable', reason: 'branch_unavailable' },
     }),
   ]),
@@ -579,6 +751,11 @@ export const vanishedApprovalStatus: IssueStatusResponse = {
       closing_commit: ROUND1_CLOSED,
       closed_by: 'reviewer1',
       closed_at: '2024-01-05T00:00:00Z',
+      latest_actioned_commit: null,
+      // §20.2 on the wire: a real, identified closing sha whose anchor is on no walked
+      // branch, so the round is refused and there is no preview to give. `closing_commit`
+      // is therefore not proof a round is archivable — a non-null preview is.
+      archive_preview: null,
       placement: { kind: 'unplaceable', reason: 'anchor_unreachable' },
     },
     gapSegment({ placement: { kind: 'unplaceable', reason: 'neighbour_unplaceable' } }),

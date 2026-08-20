@@ -5,6 +5,7 @@ import type { CreateOutcome } from '~/components/CreateResultModal'
 import type { QueuedItem, RelevantFileDraft } from '~/components/CreateIssueModal'
 import type { FileResolution } from '~/components/FileResolveModal'
 import type { FilePreviewKind } from '~/api/preview'
+import type { ArchiveFilterKey } from '~/utils/archiveSelection'
 
 export type CreateMilestoneMode = 'select' | 'new'
 
@@ -80,6 +81,22 @@ export interface ArchiveUiState {
   selectedMilestones: number[]
   showOpenMilestones: boolean
   includeNonApproved: Record<number, boolean>
+  /**
+   * U2/D7: issue number → the round the user retargeted that file to. Absent means the
+   * default, which is the **latest** round (D9) and travels as `round: null`. Only an
+   * entry here makes the request carry a number, so "the user overrode this" is a
+   * property of the state rather than something re-derived at send time.
+   */
+  roundOverrides: Record<number, number>
+  /** U4: active round-aware filters. Empty means every file the milestones contribute. */
+  filters: ArchiveFilterKey[]
+  /**
+   * U8/§11.1: the set of blocked files the user has acknowledged, as a signature of issue
+   * numbers and selected rounds. Acknowledging means *proceed without them* — never
+   * include them — and the signature is what makes the acknowledgement expire when a
+   * different file becomes blocked, rather than silently covering it too.
+   */
+  unplaceableAckKey: string | null
   outputPath: string
   outputPathUserEdited: boolean
   outputPathIsCustom: boolean
@@ -158,6 +175,9 @@ const defaultArchiveState: ArchiveUiState = {
   selectedMilestones: [],
   showOpenMilestones: false,
   includeNonApproved: {},
+  roundOverrides: {},
+  filters: [],
+  unplaceableAckKey: null,
   outputPath: '',
   outputPathUserEdited: false,
   outputPathIsCustom: false,

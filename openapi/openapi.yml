@@ -906,6 +906,10 @@ paths:
       description: |
         Builds a tar.gz archive containing each specified file at its given commit.
         When flatten is true, directory structure is stripped (files placed at root).
+
+        Every error response on this route — including the deserialization rejections
+        below — carries the `{ "error": string }` envelope, so a client parses one shape
+        whatever it got wrong.
       operationId: generateArchive
       tags: [archive]
       requestBody:
@@ -922,9 +926,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/ArchiveGenerateResponse'
         '400':
-          description: Invalid request (empty output_path, invalid commit hash, etc.)
+          description: |
+            Invalid request: empty output_path, invalid commit hash, a `round` outside
+            `1..=` the thread's round count, malformed JSON, or a mode-1 entry whose
+            **selected** round could not be placed — a later round being unplaceable
+            never blocks an explicitly selected earlier one.
+        '404':
+          description: A mode-1 entry named an issue that does not exist
+        '413':
+          description: |
+            The request body exceeded the server's 2 MB limit, so it was never parsed
+        '415':
+          description: |
+            The request did not declare a `Content-Type` of `application/json`
+        '422':
+          description: |
+            The body did not deserialize: an unknown or absent `mode`, a field that does
+            not belong to the declared mode, or a field of the wrong type.
         '500':
           description: Archive generation failed
+        '502':
+          description: |
+            The upstream read failed while resolving a mode-1 entry's issue thread — this
+            endpoint fetches the issue and its comments to derive the file, the commit and
+            the provenance, so a GitHub outage surfaces here. An issue that simply does
+            not exist is the 404 above, not this.
 
   /record/upload:
     post:
@@ -1412,7 +1438,8 @@ components:
       required:
         [kind, index, name, opened_at, branch, opened, checklist_source,
          checklist_name, state, closing_commit, closed_by, closed_at, events,
-         retractions, extensions, commits, placement]
+         retractions, extensions, commits, latest_actioned_commit, archive_preview,
+         placement]
       properties:
         kind:
           type: string
@@ -1484,6 +1511,23 @@ components:
             `opened_at` inclusive. Empty when the round is unplaceable.
           items:
             $ref: '#/components/schemas/IssueCommit'
+        latest_actioned_commit:
+          type: string
+          nullable: true
+          description: |
+            The round's newest commit carrying an action — its anchor, a notification or a
+            review — by position within this round's own commits. Null exactly when the
+            round is unplaceable. Not the round's newest commit, and not its closing
+            commit: a closed round's approval is not an event, so this may be older.
+        archive_preview:
+          allOf:
+            - $ref: '#/components/schemas/ArchivePreview'
+          nullable: true
+          description: |
+            What archiving **this** round would produce, so a client renders the answer
+            instead of re-deriving the rules behind it. Null exactly when the round is
+            unplaceable and therefore cannot be archived; the reason is not repeated here,
+            it is on `placement.reason`.
         placement:
           $ref: '#/components/schemas/Placement'
 
@@ -1566,6 +1610,66 @@ components:
           type: string
           nullable: true
           description: The `note:` recorded on the round comment, when written
+
+    ArchivePreview:
+      type: object
+      description: |
+        What archiving one round would produce, projected from the derivation the archive
+        itself runs — so the answer a user selects on and the provenance the archive
+        records cannot disagree.
+
+        There is deliberately **no** `superseded` boolean: `superseded` is
+        `superseding_causes.length > 0`, and two fields for one fact is exactly the defect
+        this projection removes. A client that wants the bool folds the array.
+      required: [commit, approval, superseding_causes]
+      properties:
+        commit:
+          type: string
+          description: |
+            The commit that would be archived: this round's closing commit when it is
+            closed, its latest actioned commit when it is open. Not necessarily
+            `commits[0]`.
+        approval:
+          allOf:
+            - $ref: '#/components/schemas/ArchivePreviewApproval'
+          nullable: true
+          description: |
+            Null when those bytes were never approved; non-null when they are some round's
+            closing commit.
+        superseding_causes:
+          type: array
+          description: |
+            Empty when the bytes are provably the newest QC state; otherwise every reason
+            they are not, in the order listed here. Causes are not mutually exclusive —
+            `later_approval` and `round_open` co-occur routinely.
+          items:
+            type: string
+            enum: [later_approval, round_open, changed_since, undeterminable]
+
+    ArchivePreviewApproval:
+      type: object
+      description: |
+        An approval claim about the previewed commit.
+      required: [round, commit, by, at]
+      properties:
+        round:
+          type: integer
+          description: |
+            The round that closed on this commit. **May be less than the enclosing round
+            segment's `index`**: a round's anchor may be the previous round's closing
+            commit, so previewing an open round 2 anchored at round 1's approval reports
+            `round: 1` here. Read as "you are on round N; these bytes are round M's
+            approval" — never render the enclosing round as approved on the strength of
+            this field.
+        commit:
+          type: string
+          description: That round's closing commit; equal to the preview's `commit`
+        by:
+          type: string
+          description: The GitHub login that approved
+        at:
+          type: string
+          format: date-time
 
     RoundEventInfo:
       type: object
@@ -2855,24 +2959,52 @@ components:
           minItems: 1
 
     ArchiveFileRequest:
+      description: |
+        One file to archive. Mode 1 (`mode: issue`) names a QC issue and, optionally, the
+        round the selection addresses; the server derives the path, the commit and the
+        provenance. Mode 2 (`mode: file`) names a path and a commit directly.
+      oneOf:
+        - $ref: '#/components/schemas/ArchiveIssueFileRequest'
+        - $ref: '#/components/schemas/ArchiveAddedFileRequest'
+      discriminator:
+        propertyName: mode
+        mapping:
+          issue: '#/components/schemas/ArchiveIssueFileRequest'
+          file: '#/components/schemas/ArchiveAddedFileRequest'
+
+    ArchiveIssueFileRequest:
       type: object
-      required: [repository_file, commit]
+      additionalProperties: false
+      required: [mode, issue_number, round]
       properties:
+        mode:
+          type: string
+          enum: [issue]
+        issue_number:
+          type: integer
+          description: The QC issue whose thread supplies the file, milestone and commit
+        round:
+          type: integer
+          nullable: true
+          description: |
+            1-based round the selection addresses; 1 is Initial QC. Null targets the
+            latest round, which for a reopened file is unapproved content — intentional
+            and ungated. Always send the key; send null rather than omitting it.
+
+    ArchiveAddedFileRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, repository_file, commit]
+      properties:
+        mode:
+          type: string
+          enum: [file]
         repository_file:
           type: string
-          description: Path to the file in the repository
-          example: "src/analysis.R"
+          example: "scripts/helpers.R"
         commit:
           type: string
-          description: Full commit hash to retrieve the file at
-        milestone:
-          type: string
-          nullable: true
-          description: Milestone name (for QC metadata in archive)
-        approved:
-          type: boolean
-          nullable: true
-          description: Whether the file's QC issue is approved
+          description: Full 40-char commit hash to retrieve the file at
 
     ArchiveGenerateResponse:
       type: object

@@ -602,19 +602,22 @@ test('archive tab preserves state across route changes until refresh', async ({ 
   await expect(outputPath(page)).toHaveValue('')
 })
 
-// ── Files the archive cannot resolve a commit for ─────────────────────────────
+// ── Files whose selected round cannot be archived ─────────────────────────────
 
 /**
- * An audit tool must not omit a file silently. The card used to show a dash and a dead
- * Preview button and say nothing about the archive itself; the omission was only
- * discoverable by unpacking the tarball afterwards.
+ * An audit tool must not omit a file silently — and a note at the bottom of the sidebar
+ * saying only *how many* files were dropped is close enough to silent that U8 replaced it.
+ * The block is now explicit, names the file and carries the reason, and generation waits
+ * for the user to say they want the archive without it (§11.1).
  */
-test('a file with no resolvable commit says it is left out, and is counted before generating', async ({ page }) => {
+test('a file whose selected round cannot be archived blocks generation and names the reason', async ({ page }) => {
   const goneIssue = makeIssue({ number: 103, title: 'src/gone.R', milestone: 'Milestone A' })
   const goneStatus = unresolvableStatus(goneIssue)
-  // The premise: nothing on this status resolves to a commit.
-  expect(goneStatus.qc_status.last_approved_commit).toBeNull()
-  expect(goneStatus.qc_status.latest_commit).toBeNull()
+  // The premise: the one round this thread has could not be placed.
+  expect(goneStatus.segments[0].placement).toEqual({
+    kind: 'unplaceable',
+    reason: 'branch_unavailable',
+  })
 
   const bodies = captureArchiveRequests(page)
   await setupRoutes(page, {
@@ -626,32 +629,39 @@ test('a file with no resolvable commit says it is left out, and is counted befor
   await selectMilestone(page, 'Milestone A')
   await waitForStatusLoaded(page)
 
-  // `approval_required` is not approved, so the card only appears once the milestone
-  // is set to include non-approved issues.
+  // No round ever closed on this thread, so S4 keeps it out until the milestone says
+  // otherwise — which is the whole of what "include non-approved" now means.
   await page.getByRole('switch', { name: 'Include non-approved' }).click()
 
-  const note = page.getByTestId('archive-excluded-103')
-  await expect(note).toContainText('Left out of the archive')
-  // Not blanket: the file that does resolve carries no such note.
-  await expect(page.getByTestId('archive-excluded-100')).toHaveCount(0)
-
-  // And the count is stated where the archive is written, before writing it.
-  await expect(main(page).getByTestId('archive-exclusion-summary')).toContainText(
-    '1 file will be left out',
+  await expect(page.getByTestId('archive-blocked-note-103')).toContainText(
+    'Initial QC cannot be archived — its branch is unavailable locally',
   )
+  // Not blanket: the file that does resolve carries no such note.
+  await expect(page.getByTestId('archive-blocked-note-100')).toHaveCount(0)
 
+  const callout = main(page).getByTestId('archive-unplaceable-callout')
+  await expect(callout).toContainText('1 file cannot be archived')
+  await expect(callout).toContainText('src/gone.R (#103, Initial QC): its branch is unavailable locally')
+  await expect(main(page).getByRole('button', { name: 'Generate Archive' })).toBeDisabled()
+
+  await callout.getByTestId('archive-unplaceable-acknowledge').click()
   await main(page).getByRole('button', { name: 'Generate Archive' }).click()
   await expect(page.getByText(/Archive written to/)).toBeVisible()
   expect(bodies).toHaveLength(1)
-  expect(bodies[0].files.map((f) => f.repository_file)).toEqual(['src/utils.R'])
+  // A1: mode-1 entries carry the issue number and the round, and no path at all.
+  expect(bodies[0].files).toEqual([{ mode: 'issue', issue_number: 100, round: null }])
 })
 
 /**
- * The added-files branch used to drop a file whenever the backing issue's status
- * resolved to no commit — even though the resolution carries a commit of its own. Old
- * behaviour always produced a request; the fallback restores that.
+ * An added file resolved *via its QC issue* is a mode-1 entry: it has a thread, so the
+ * round addresses it and the server derives the commit (A1/D6). It used to be sent as a
+ * path plus a commit the tab derived with `archiveCommitOf`, falling back to the
+ * resolution's own commit — which for a file added from the relevant-files list is the
+ * empty string. With that predicate deleted there is nothing to fall back *to*, and
+ * nothing to fall back *from*: an unplaceable selected round blocks like any other (U8),
+ * and a user who knows the commit adds the file with it directly (D4).
  */
-test('an added file whose backing issue resolves to no commit still reaches the request', async ({ page }) => {
+test('an added file whose backing round cannot be placed blocks, and is left out when acknowledged', async ({ page }) => {
   const depIssue = makeIssue({
     number: 500,
     title: 'src/dep.R',
@@ -681,17 +691,17 @@ test('an added file whose backing issue resolves to no commit still reaches the 
   await waitForStatusLoaded(page)
 
   await page.getByRole('button', { name: 'Add src/dep.R' }).click()
-  // The card renders from the backing issue's status, which resolves to no commit.
   await expect(page.getByRole('link', { name: 'src/dep.R' })).toBeVisible()
+  await expect(page.getByTestId('archive-blocked-note-500')).toContainText(
+    'Initial QC cannot be archived',
+  )
 
+  await main(page).getByTestId('archive-unplaceable-acknowledge').click()
   await main(page).getByRole('button', { name: 'Generate Archive' }).click()
   await expect(page.getByText(/Archive written to/)).toBeVisible()
 
   expect(bodies).toHaveLength(1)
-  expect(bodies[0].files.map((f) => f.repository_file).sort()).toEqual([
-    'src/dep.R',
-    'src/utils.R',
-  ])
+  expect(bodies[0].files).toEqual([{ mode: 'issue', issue_number: 100, round: null }])
 })
 
 // ── "Multiple QC issues use different commits" ────────────────────────────────
@@ -733,13 +743,16 @@ test('a referencer that resolves to no commit is not counted as a differing comm
 })
 
 test('referencers that really do disagree still say so', async ({ page }) => {
+  /*
+   * The disagreement now lives in the **segments**, because that is where the commit comes
+   * from: this referencer's Initial QC closed on `ddd4444`, so the archive would take that
+   * for it and `aaa1111` for the other two. Overriding `qc_status.last_approved_commit`
+   * alone — as this fixture used to — no longer produces a disagreement, which is exactly
+   * the point of deleting that predicate.
+   */
   const differing: IssueStatusResponse = {
     ...makeStatus(issueA3),
-    qc_status: {
-      ...makeStatus(issueA3).qc_status,
-      standing_approval: 'ddd4444',
-      last_approved_commit: 'ddd4444',
-    },
+    ...approvedRoundFields('bbb2222', 'ddd4444'),
   }
   await setupRoutes(page, sharedFileSetup(differing))
   await goToArchive(page)

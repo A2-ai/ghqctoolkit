@@ -772,6 +772,93 @@ impl GapContinuityInfo {
     }
 }
 
+/// What archiving **this** round would produce, projected from the one derivation the
+/// archive itself runs. Mirrors [`crate::archive::ArchivePreview`].
+///
+/// It exists because the UI had grown a second implementation of the content rule, the
+/// approval tie-break and all four supersession clauses in TypeScript — one rule in two
+/// languages, which is the drift this model keeps removing. Nothing here is recomputed by
+/// the projection: for one thread and round this and the archive's metadata agree by
+/// construction.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchivePreviewInfo {
+    /// The commit that would be archived: this round's closing commit when it is closed,
+    /// its latest actioned commit when it is open. **Not** necessarily `commits[0]`.
+    pub commit: String,
+    /// `None` ⇒ those bytes were never approved.
+    pub approval: Option<ApprovalInfo>,
+    /// Empty ⇒ the bytes are provably the newest QC state; non-empty ⇒ every reason they
+    /// are not, in clause order. Always emitted, including as `[]`.
+    ///
+    /// There is deliberately **no** `superseded` bool beside it: `superseded` *is*
+    /// `superseding_causes.length > 0`, and two fields for one fact is the defect this
+    /// model exists to remove. A client that wants the bool folds the array.
+    pub superseding_causes: Vec<SupersedingCauseEnum>,
+}
+
+/// An approval claim about the previewed commit. Mirrors [`crate::Approval`].
+#[derive(Debug, Clone, Serialize)]
+pub struct ApprovalInfo {
+    /// The round that closed on this commit — **may be less than the enclosing round's
+    /// `index`**, because a round's anchor may be the previous round's closing commit.
+    /// Read as *you are on round N; these bytes are round M's approval*. A consumer must
+    /// never render the enclosing round as approved on the strength of this field.
+    pub round: u32,
+    pub commit: String,
+    pub by: String,
+    pub at: DateTime<Utc>,
+}
+
+impl From<&crate::Approval> for ApprovalInfo {
+    fn from(approval: &crate::Approval) -> Self {
+        Self {
+            round: approval.round,
+            commit: approval.commit.to_string(),
+            by: approval.by.clone(),
+            at: approval.at,
+        }
+    }
+}
+
+/// One reason a round's archived bytes would not be provably the newest QC state — one
+/// variant per supersession clause. Mirrors [`crate::archive::SupersedingCause`].
+///
+/// Not mutually exclusive: `later_approval` and `round_open` co-occur routinely.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupersedingCauseEnum {
+    LaterApproval,
+    RoundOpen,
+    ChangedSince,
+    Undeterminable,
+}
+
+impl From<crate::archive::SupersedingCause> for SupersedingCauseEnum {
+    fn from(cause: crate::archive::SupersedingCause) -> Self {
+        match cause {
+            crate::archive::SupersedingCause::LaterApproval => Self::LaterApproval,
+            crate::archive::SupersedingCause::RoundOpen => Self::RoundOpen,
+            crate::archive::SupersedingCause::ChangedSince => Self::ChangedSince,
+            crate::archive::SupersedingCause::Undeterminable => Self::Undeterminable,
+        }
+    }
+}
+
+impl From<&crate::archive::ArchivePreview> for ArchivePreviewInfo {
+    fn from(preview: &crate::archive::ArchivePreview) -> Self {
+        Self {
+            commit: preview.commit.to_string(),
+            approval: preview.approval.as_ref().map(ApprovalInfo::from),
+            superseding_causes: preview
+                .superseding_causes
+                .iter()
+                .copied()
+                .map(SupersedingCauseEnum::from)
+                .collect(),
+        }
+    }
+}
+
 /// One QC round and the commits it owns. Mirrors [`crate::Round`].
 ///
 /// `previous_approval` is gone: it is the closing commit of the round two positions
@@ -815,6 +902,31 @@ pub struct RoundSegment {
     pub extensions: Vec<ExtensionInfo>,
     /// The commits this round owns, newest first. Empty when unplaceable.
     pub commits: Vec<IssueCommit>,
+    /// This round's newest commit carrying an action — its anchor, a notification or a
+    /// review — by position within this round's own `commits`. Drift nobody acted on is
+    /// not a candidate.
+    ///
+    /// `None` exactly when `placement` is unplaceable: such a round owns no commits and
+    /// its anchor is the fold's all-zero placeholder, already nulled at `opened_at` so no
+    /// fake sha reaches an audit tool.
+    ///
+    /// Derivable from `commits`, `events` and `opened_at`, and on the wire anyway: the
+    /// archive's default target is this commit, and a client re-deriving it would be the
+    /// sixth independent implementation of round scope across two languages.
+    ///
+    /// Not `commits[0]`, which is the newest commit full stop, and not `closing_commit`:
+    /// an approval is not an event, so a closed round can report an actioned commit
+    /// *older* than the commit it closed at. Only an open round's archive selection reads
+    /// this field.
+    pub latest_actioned_commit: Option<String>,
+    /// What archiving this round would produce, so a client renders the answer instead of
+    /// re-deriving the rules behind it.
+    ///
+    /// `None` exactly when `placement` is unplaceable: such a round cannot be archived at
+    /// all, which is the same refusal the archive itself reports. The reason is **not**
+    /// repeated here — it is already in `placement.reason`, and one fact belongs in one
+    /// place.
+    pub archive_preview: Option<ArchivePreviewInfo>,
     pub placement: PlacementInfo,
 }
 
@@ -855,9 +967,12 @@ pub enum SegmentInfo {
 impl SegmentInfo {
     /// Project the segment at `position`.
     ///
-    /// The whole list is passed because a gap's bounds are positional facts about its
-    /// neighbours, and `initial` statuses are a fact about `segments[0]`.
-    fn project(segments: &[crate::Segment], position: usize) -> Self {
+    /// The whole thread is passed, not just the segment: a gap's bounds are positional
+    /// facts about its neighbours, `initial` statuses are a fact about `segments[0]`, and
+    /// a round's `archive_preview` is a fact about the round *within* its thread — the
+    /// segments after it decide its supersession causes.
+    fn project(thread: &IssueThread, position: usize) -> Self {
+        let segments = &thread.segments;
         let segment = &segments[position];
         let commits = segment
             .commits()
@@ -892,6 +1007,18 @@ impl SegmentInfo {
                     retractions: round.retractions.iter().map(RetractionInfo::from).collect(),
                     extensions: round.extensions.iter().map(ExtensionInfo::from).collect(),
                     commits,
+                    // The accessor, never a second derivation here: it is the one
+                    // implementation of "the round's latest update commit", shared with
+                    // `next_notification_from`.
+                    latest_actioned_commit: round
+                        .latest_actioned_commit()
+                        .map(|commit| commit.hash.to_string()),
+                    // Projected, never re-derived here: this calls the same derivation the
+                    // archive runs, so the answer a user selects on and the answer the
+                    // metadata records cannot disagree.
+                    archive_preview: crate::archive::archive_preview(thread, round.index)
+                        .as_ref()
+                        .map(ArchivePreviewInfo::from),
                     placement: (&round.placement).into(),
                 })
             }
@@ -1073,7 +1200,7 @@ impl IssueStatusResponse {
             checklist_summary: analyze_issue_checklists(issue.body.as_deref()).into(),
             blocking_qc_status: BlockingQCStatus::default(),
             segments: (0..issue_thread.segments.len())
-                .map(|position| SegmentInfo::project(&issue_thread.segments, position))
+                .map(|position| SegmentInfo::project(issue_thread, position))
                 .collect(),
             next_notification_from: issue_thread
                 .next_notification_from()
@@ -1907,11 +2034,26 @@ mod tests {
         }
     }
 
+    /// The emitted JSON **text** for one segment.
+    ///
+    /// `serde_json::Value` is a `BTreeMap`, so it re-sorts keys alphabetically and cannot
+    /// witness emission order at all — an order assertion made on a `Value` silently tests
+    /// the alphabet instead of the struct. Key-order claims are made on this.
+    fn project_text(segments: &[Segment], position: usize) -> String {
+        let thread = thread(segments.to_vec());
+        serde_json::to_string(&SegmentInfo::project(&thread, position))
+            .expect("a segment serializes")
+    }
+
     /// Serialize the whole segment list, as the status response does.
+    ///
+    /// The segments are wrapped in a thread first, because that is what the projection
+    /// takes: a round's `archive_preview` depends on the segments that follow it.
     fn project(segments: &[Segment]) -> Vec<serde_json::Value> {
+        let thread = thread(segments.to_vec());
         (0..segments.len())
             .map(|position| {
-                serde_json::to_value(SegmentInfo::project(segments, position))
+                serde_json::to_value(SegmentInfo::project(&thread, position))
                     .expect("a segment serializes")
             })
             .collect()
@@ -2178,6 +2320,296 @@ mod tests {
             !projected[0].to_string().contains("0000000000"),
             "no all-zero sha may reach the wire: {}",
             projected[0]
+        );
+    }
+
+    // ── A3: `latest_actioned_commit` on the round segment ────────────────────
+
+    /// The archive's default target on the wire, and the three claims the contract makes
+    /// about it: it is the newest *actioned* commit and not `commits[0]`; it is not
+    /// `closing_commit`; and it sits between `commits` and `placement`.
+    #[test]
+    fn a_rounds_latest_actioned_commit_is_the_newest_commit_someone_acted_on() {
+        let (anchor, notified, approval, drift) = (oid('a'), oid('b'), oid('c'), oid('d'));
+        // Newest first, as the fold emits them: drift on top of the approval, which is
+        // on top of the notified commit.
+        let mut only = round(
+            1,
+            anchor,
+            vec![
+                commit(drift),
+                commit(approval),
+                commit(notified),
+                commit(anchor),
+            ],
+        );
+        only.events = vec![notification(notified)];
+        let segments = vec![Segment::Round(closed_at(only, approval))];
+        let projected = project(&segments);
+
+        assert_eq!(
+            projected[0]["latest_actioned_commit"],
+            serde_json::json!(notified.to_string()),
+            "drift nobody acted on is not a candidate, and an approval is not an event"
+        );
+        // Both of the fields it is routinely confused with are present and different.
+        assert_eq!(projected[0]["commits"][0]["hash"], drift.to_string());
+        assert_eq!(projected[0]["closing_commit"], approval.to_string());
+
+        // On the emitted text, not on a `Value`: a `Value` sorts its keys, so an order
+        // assertion made on one tests the alphabet instead of the struct.
+        let text = project_text(&segments, 0);
+        let at = |key: &str| text.find(key).unwrap_or_else(|| panic!("{key} is emitted"));
+        assert!(
+            at(r#""commits":"#) < at(r#""latest_actioned_commit":"#)
+                && at(r#""latest_actioned_commit":"#) < at(r#""placement":"#),
+            "the key order the contract pins is commits, latest_actioned_commit, \
+             placement: {text}"
+        );
+    }
+
+    /// Null exactly when the round is unplaceable — present, so a consumer can tell
+    /// "unresolvable" from "this writer does not emit the field", and never the all-zero
+    /// anchor a fake sha would come from.
+    #[test]
+    fn an_unplaceable_round_reports_a_null_latest_actioned_commit() {
+        let mut initial = round(1, ObjectId::null(gix::hash::Kind::Sha1), Vec::new());
+        initial.placement = Placement::Unplaceable(UnplaceableReason::BranchUnavailable);
+        let projected = project(&[Segment::Round(initial)]);
+
+        assert!(
+            projected[0]
+                .as_object()
+                .expect("a round segment is a map")
+                .contains_key("latest_actioned_commit"),
+            "nullable means present: {}",
+            projected[0]
+        );
+        assert_eq!(
+            projected[0]["latest_actioned_commit"],
+            serde_json::Value::Null
+        );
+        assert_eq!(projected[0]["placement"]["kind"], "unplaceable");
+    }
+
+    /// A gap has no anchor and no events, so the concept does not exist there rather than
+    /// being unknown: the key is **absent**, matching every other single-variant key on
+    /// this union. Nothing on the wire attributes an actioned commit to a gap.
+    #[test]
+    fn a_gap_carries_no_latest_actioned_commit_key_at_all() {
+        let (anchor, approval, drift) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(vec![commit(drift)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["kind"], "gap");
+        assert!(
+            !projected[1]
+                .as_object()
+                .expect("a gap segment is a map")
+                .contains_key("latest_actioned_commit"),
+            "absent, not null, on a gap: {}",
+            projected[1]
+        );
+        // The round beside it still reports its own.
+        assert_eq!(
+            projected[0]["latest_actioned_commit"],
+            serde_json::json!(anchor.to_string()),
+            "a closed round with no events reports its anchor"
+        );
+    }
+
+    // ── archive_preview: the projected archive answer ────────────────────────
+
+    /// A closed round with nothing after it but an ordinary empty gap is provably the
+    /// newest QC state, and the cause array says so by being **empty** — emitted as `[]`,
+    /// never omitted, because "no reason" is the load-bearing answer here.
+    ///
+    /// Also the key-order pin: `commits`, `latest_actioned_commit`, `archive_preview`,
+    /// `placement`, in that order.
+    #[test]
+    fn an_approved_and_current_round_previews_an_empty_cause_list() {
+        let (anchor, approval) = (oid('a'), oid('b'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(Vec::new())),
+        ];
+        let projected = project(&segments);
+        let preview = &projected[0]["archive_preview"];
+
+        assert_eq!(preview["commit"], approval.to_string(), "S1 row 2's bytes");
+        assert_eq!(preview["approval"]["round"], 1);
+        assert_eq!(preview["approval"]["commit"], approval.to_string());
+        assert_eq!(preview["approval"]["by"], "reviewer");
+        assert!(preview["approval"]["at"].is_string());
+        assert_eq!(
+            preview["superseding_causes"],
+            serde_json::json!([]),
+            "an empty array, not a missing key: {preview}"
+        );
+        // No `superseded` bool anywhere: the emptiness of the array *is* that fact.
+        assert!(
+            !projected[0].to_string().contains("superseded\""),
+            "two fields for one fact is what this shape removes: {}",
+            projected[0]
+        );
+
+        let text = project_text(&segments, 0);
+        let at = |key: &str| text.find(key).unwrap_or_else(|| panic!("{key} is emitted"));
+        assert!(
+            at(r#""commits":"#) < at(r#""latest_actioned_commit":"#)
+                && at(r#""latest_actioned_commit":"#) < at(r#""archive_preview":"#)
+                && at(r#""archive_preview":"#) < at(r#""placement":"#),
+            "the pinned key order is commits, latest_actioned_commit, archive_preview, \
+             placement: {text}"
+        );
+    }
+
+    /// Causes are not mutually exclusive and are reported in clause order: a round with a
+    /// later approval *and* an open latest round reports both, `later_approval` first.
+    #[test]
+    fn co_occurring_causes_are_reported_in_clause_order() {
+        let (first, second, third) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(round(1, first, vec![commit(first)]), first)),
+            Segment::Gap(gap(Vec::new())),
+            Segment::Round(closed_at(round(2, second, vec![commit(second)]), second)),
+            Segment::Gap(gap(Vec::new())),
+            Segment::Round(round(3, third, vec![commit(third)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(
+            projected[0]["archive_preview"]["superseding_causes"],
+            serde_json::json!(["later_approval", "round_open"]),
+            "round 2 closed after it, and round 3 is open"
+        );
+        // Round 2 is superseded only by the open round 3 — no *later* approval exists.
+        assert_eq!(
+            projected[2]["archive_preview"]["superseding_causes"],
+            serde_json::json!(["round_open"])
+        );
+    }
+
+    /// The subtle case the wire must not let a reader collapse: round 2 is open and
+    /// anchored at round 1's approval, so previewing round 2 archives approved bytes whose
+    /// `approval.round` is **1** — less than the enclosing segment's `index`. Nothing here
+    /// asserts round 2 was approved.
+    #[test]
+    fn a_previewed_open_round_can_carry_an_older_rounds_approval() {
+        let (anchor, approval) = (oid('a'), oid('b'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(Vec::new())),
+            // D1: the new round's anchor is the previous round's closing commit, HEAD
+            // having not moved since the approval.
+            Segment::Round(round(2, approval, vec![commit(approval)])),
+        ];
+        let projected = project(&segments);
+        let preview = &projected[2]["archive_preview"];
+
+        assert_eq!(projected[2]["index"], 2);
+        assert_eq!(preview["commit"], approval.to_string());
+        assert_eq!(
+            preview["approval"]["round"], 1,
+            "the round that closed on those bytes, not the round being previewed: {preview}"
+        );
+        assert_eq!(
+            preview["superseding_causes"],
+            serde_json::json!(["round_open"])
+        );
+    }
+
+    /// Never approved: the approval is present-and-null, and the open latest round makes
+    /// the entry superseded — so an unapproved preview is never unflagged.
+    #[test]
+    fn an_unapproved_round_previews_a_null_approval() {
+        let (anchor, drift) = (oid('a'), oid('d'));
+        let mut only = round(1, anchor, vec![commit(drift), commit(anchor)]);
+        only.events = vec![notification(anchor)];
+        let projected = project(&[Segment::Round(only)]);
+        let preview = &projected[0]["archive_preview"];
+
+        assert!(
+            preview
+                .as_object()
+                .expect("a preview is a map")
+                .contains_key("approval"),
+            "nullable means present: {preview}"
+        );
+        assert_eq!(preview["approval"], serde_json::Value::Null);
+        // The newest *actioned* commit, not the drift on top of it.
+        assert_eq!(preview["commit"], anchor.to_string());
+        assert_eq!(
+            preview["superseding_causes"],
+            serde_json::json!(["round_open"])
+        );
+    }
+
+    /// An unplaceable round cannot be archived at all, so there is no preview to give —
+    /// `null`, mirroring the archive's own refusal. The reason is **not** duplicated into
+    /// the preview: it is already on `placement`.
+    #[test]
+    fn an_unplaceable_round_previews_null_and_leaves_the_reason_on_placement() {
+        let mut initial = round(1, ObjectId::null(gix::hash::Kind::Sha1), Vec::new());
+        initial.placement = Placement::Unplaceable(UnplaceableReason::AnchorUnreachable);
+        let projected = project(&[Segment::Round(initial)]);
+
+        assert!(
+            projected[0]
+                .as_object()
+                .expect("a round segment is a map")
+                .contains_key("archive_preview"),
+            "nullable means present: {}",
+            projected[0]
+        );
+        assert_eq!(projected[0]["archive_preview"], serde_json::Value::Null);
+        assert_eq!(
+            projected[0]["placement"],
+            serde_json::json!({ "kind": "unplaceable", "reason": "anchor_unreachable" }),
+            "the reason lives here, and only here"
+        );
+    }
+
+    /// A gap can never be selected for an archive, so the key does not exist there —
+    /// absent, not null, matching every other single-variant key on this union.
+    #[test]
+    fn a_gap_carries_no_archive_preview_key_at_all() {
+        let (anchor, approval, drift) = (oid('a'), oid('b'), oid('c'));
+        let segments = vec![
+            Segment::Round(closed_at(
+                round(1, anchor, vec![commit(approval), commit(anchor)]),
+                approval,
+            )),
+            Segment::Gap(gap(vec![commit(drift)])),
+        ];
+        let projected = project(&segments);
+
+        assert_eq!(projected[1]["kind"], "gap");
+        assert!(
+            !projected[1]
+                .as_object()
+                .expect("a gap segment is a map")
+                .contains_key("archive_preview"),
+            "absent, not null, on a gap: {}",
+            projected[1]
+        );
+        // The round beside it still previews — and its trailing gap changed the file, so
+        // the approval is no longer provably current.
+        assert_eq!(
+            projected[0]["archive_preview"]["superseding_causes"],
+            serde_json::json!(["changed_since"])
         );
     }
 

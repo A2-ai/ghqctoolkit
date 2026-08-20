@@ -322,6 +322,11 @@ impl IssueThread {
     ///
     /// `None` when the active segment could not be placed: its anchor and closing commit
     /// may be null-OID placeholders, and a diff against those is not a diff.
+    ///
+    /// The round branch is the same computation as
+    /// [`Round::latest_actioned_commit`] — the round's newest actioned commit — and
+    /// calls it rather than repeating it, so the notification base and the archive's
+    /// "latest update commit" (archive-rounds **M4**) cannot drift apart.
     pub fn next_notification_from(&self) -> Option<ObjectId> {
         if !self.active_segment().is_placed() {
             return None;
@@ -329,8 +334,10 @@ impl IssueThread {
         match self.active_segment() {
             Segment::Round(round) => Some(
                 round
-                    .newest_event_commit()
-                    .copied()
+                    .latest_actioned_commit()
+                    .map(|commit| commit.hash)
+                    // A placed round always owns its anchor, so this only fires if the
+                    // fold placed a round that owns nothing; the anchor stays the answer.
                     .unwrap_or(round.opened_at),
             ),
             Segment::Gap(_) => self.standing_approval().copied(),

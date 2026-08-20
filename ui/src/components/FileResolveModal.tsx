@@ -38,20 +38,24 @@ import { useMilestones } from '~/api/milestones'
 import { type BranchCommit, fetchBranchCommits } from '~/api/commits'
 import { CommitSlider } from './CommitSlider'
 import { shortHash } from '~/utils/rounds'
+import { archiveSelectionOf } from '~/utils/archiveSelection'
 
 import { FileTreeBrowser } from './FileTreeBrowser'
 
 /**
- * The commit a file resolves to for a given QC issue.
+ * The commit a file resolves to for a given QC issue: **the commit the archive would take
+ * for it**, which is the selected round's own — its `closing_commit` while closed, its
+ * `latest_actioned_commit` while open (S1).
  *
- * `last_approved_commit` is the ungated newest closing commit across all rounds —
- * precisely what the removed `approved_commit` held on the wire (contract §3) — so
- * this is the mechanical replacement for the old expression, not a change of
- * behaviour. Both fields are nullable and are null together only for an unplaceable
- * segment (S4/I5), which D4 says to grey rather than error.
+ * It used to be `last_approved_commit ?? latest_commit`, the ungated newest closing commit
+ * across all rounds. That is the expression U7 deleted from `ArchiveTab`, and leaving a
+ * copy here would have kept the modal offering a commit the archive no longer takes: for
+ * an approved-then-reopened file the two disagree, which is the §0 defect with the sign
+ * flipped. Null only when the round could not be placed, and then the row is not
+ * selectable.
  */
 function resolvedCommitOf(s: IssueStatusResponse): string | null {
-  return s.qc_status.last_approved_commit ?? s.qc_status.latest_commit
+  return archiveSelectionOf(s).commit
 }
 
 export interface FileResolution {
@@ -308,6 +312,16 @@ function CommitIssueStep({
 
   const isLoadingStatuses = isLoadingIssues || matchingStatusQueries.some(q => q.isPending && q.fetchStatus !== 'idle')
 
+  /*
+   * Ordering and a badge, not an archive decision.
+   *
+   * This reads the server's `qc_status.status` to put settled issues at the top of the
+   * picker and to label each row with the state the status surface shows. It is
+   * deliberately *not* the deleted `isApprovedStatus`: nothing here decides whether a file
+   * is included, which commit it is taken at, or what the archive claims about it — those
+   * follow from the round selection and the server's derivation (U7/D6). A reopened file
+   * sorts into `other` and wears its own status, which is the honest label for it.
+   */
   const { approvedStatuses, otherStatuses, statusErrors } = useMemo(() => {
     const approved: IssueStatusResponse[] = []
     const other: IssueStatusResponse[] = []

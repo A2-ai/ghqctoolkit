@@ -113,6 +113,19 @@ expression: json
               "file_changed": true
             }
           ],
+          "latest_actioned_commit": "1111111111111111111111111111111111111111",
+          "archive_preview": {
+            "commit": "2222222222222222222222222222222222222222",
+            "approval": {
+              "round": 1,
+              "commit": "2222222222222222222222222222222222222222",
+              "by": "reviewer",
+              "at": "2026-08-01T10:03:00Z"
+            },
+            "superseding_causes": [
+              "round_open"
+            ]
+          },
           "placement": {
             "kind": "placed"
           }
@@ -190,6 +203,14 @@ expression: json
               "file_changed": true
             }
           ],
+          "latest_actioned_commit": "4444444444444444444444444444444444444444",
+          "archive_preview": {
+            "commit": "4444444444444444444444444444444444444444",
+            "approval": null,
+            "superseding_causes": [
+              "round_open"
+            ]
+          },
           "placement": {
             "kind": "placed"
           }

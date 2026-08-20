@@ -4,6 +4,7 @@ import {
   Alert,
   Anchor,
   Button,
+  Chip,
   Combobox,
   InputBase,
   Loader,
@@ -32,6 +33,18 @@ import {
   useMilestoneIssues,
 } from '~/api/issues'
 import { type ArchiveFileRequest, generateArchive } from '~/api/archive'
+import type { Segment, UnplaceableReason } from '~/api/rounds'
+import {
+  ARCHIVE_FILTERS,
+  type ArchiveFilterKey,
+  type ArchiveSelection,
+  archiveSelectionOf,
+  isApprovedAndCurrent,
+  matchesArchiveFilter,
+  neverApproved,
+  provenanceLine,
+} from '~/utils/archiveSelection'
+import { ArchiveRoundPicker } from './ArchiveRoundPicker'
 import { useRepoInfo } from '~/api/repo'
 import { OpenPill } from './MilestoneFilter'
 import { StatusErrorDisplay } from './StatusErrorDisplay'
@@ -39,7 +52,7 @@ import { ResizableSidebar } from './ResizableSidebar'
 import { type FileResolution, FileResolveModal } from './FileResolveModal'
 import { RelevantFilesList } from './RelevantFilesList'
 import { extractIssueNumber } from '~/utils'
-import { shortHash } from '~/utils/rounds'
+import { shortHash, unplaceableReasonText } from '~/utils/rounds'
 import { ToggleField } from './ToggleField'
 import { useUiSession } from '~/state/uiSession'
 import { buildFileRawUrl, fetchFileContent, getFileExtensionLabel, getFilePreviewKind } from '~/api/preview'
@@ -50,46 +63,34 @@ import { DocPreview } from './DocPreview'
 const CARD_HEIGHT = 185
 
 
-function isApprovedStatus(s: IssueStatusResponse): boolean {
-  return s.qc_status.status === 'approved' || s.qc_status.status === 'changes_after_approval'
-}
-
-/**
- * The commit this file is archived at.
- *
- * `last_approved_commit` is the newest closing commit across all rounds, ungated —
- * exactly what the removed `approved_commit` field held on the wire — so this
- * expression is the mechanical replacement for it (contract §3). Whether the archive
- * should instead *offer* the user a choice between the last approval and the current
- * latest is A3's deferred UX question and is deliberately not decided here.
- *
- * Both are nullable, and both are null together only when nothing was ever approved
- * *and* the active segment owns no commits — i.e. an unplaceable segment (S4/I5). D4
- * says such a thing is greyed, not errored: the card renders a dash and the file is
- * left out of the request, because there is no commit to archive it at.
+// ─── What this tab no longer decides ─────────────────────────────────────────
+/*
+ * The three predicates that used to live here — `isApprovedStatus`
+ * (`status ∈ {approved, changes_after_approval}`), `archiveCommitOf`
+ * (`last_approved_commit ?? latest_commit`) and `addedFileCommitOf`'s status branch —
+ * are **deleted** (U7/D6). They were two of the four disagreeing definitions of
+ * "approved": between them the UI sent a reopened file's *approved* bytes labelled
+ * `approved: false`, while the CLI wrote `approved: true` for the same issue. The tab now
+ * sends `{issue_number, round}` and renders what the segments say; it computes no
+ * approval, no supersession, and no commit beyond reading the selected round's own
+ * `closing_commit` / `latest_actioned_commit`, which A3 put on the wire for exactly this.
  */
-function archiveCommitOf(s: IssueStatusResponse): string | null {
-  return s.qc_status.last_approved_commit ?? s.qc_status.latest_commit
-}
-
-/**
- * The commit a manually added file is archived at.
- *
- * The status-derived commit when the backing issue has one, falling back to the
- * resolution's own `commit` — which is a non-nullable string the user already chose.
- * The fallback matters: a status that yields null (an unplaceable segment) is not a
- * reason to throw away a commit that is sitting right here, and dropping the file was
- * a silent regression on the pre-segment behaviour, which always produced a request.
- */
-function addedFileCommitOf(
-  resolution: FileResolution,
-  status: IssueStatusResponse | undefined,
-): string {
-  return (status ? archiveCommitOf(status) : null) ?? resolution.commit
-}
 
 function basename(path: string): string {
   return path.split('/').pop() ?? path
+}
+
+/**
+ * Why a round cannot be archived, in the user's terms.
+ *
+ * The reason comes from `placement.reason`, which is where the wire keeps it — the round's
+ * `archive_preview` is `null` and deliberately carries no copy of it. `null` is unreachable
+ * on a conforming response (a null preview means unplaceable, and an unplaceable placement
+ * has a reason); it is rendered rather than asserted so a shape the server says cannot occur
+ * cannot take the tab down either.
+ */
+function refusalText(reason: UnplaceableReason | null): string {
+  return reason === null ? 'its commits could not be located' : unplaceableReasonText(reason)
 }
 
 // ─── ArchiveTab ───────────────────────────────────────────────────────────────
@@ -128,15 +129,26 @@ export function ArchiveTab() {
     })),
   })
 
-  // Per-milestone file sets: "all" = every issue title, "approvedOnly" = closed issues only
+  /*
+   * Per-milestone file sets — every issue title, and nothing else.
+   *
+   * The `approvedOnly` partition this used to carry was
+   * `issues.filter(iss => iss.state === 'closed')`: **GitHub issue state** standing in for
+   * approval. It is deleted (U7/§0.6). It read `false` for every approved-then-reopened
+   * file, so the conflict predictor built on it mispredicted for exactly the case rounds
+   * exist to describe.
+   *
+   * A milestone the user has not selected yet has no statuses fetched, so which of its
+   * files an archive *would* include is not knowable here. Its full title set is the
+   * honest answer for the dropdown's collision check: a superset, so it never claims
+   * "no conflict" it cannot back up. The predictor that decides what this archive
+   * actually contains reads the selections instead (U6, `plannedFiles` below).
+   */
   const milestoneFileSets = useMemo(() => {
-    const map = new Map<number, { all: Set<string>; approvedOnly: Set<string> }>()
+    const map = new Map<number, { all: Set<string> }>()
     for (let i = 0; i < allMilestoneNumbers.length; i++) {
       const issues = allMilestoneIssueQueries[i]?.data ?? []
-      map.set(allMilestoneNumbers[i], {
-        all: new Set(issues.map(iss => iss.title)),
-        approvedOnly: new Set(issues.filter(iss => iss.state === 'closed').map(iss => iss.title)),
-      })
+      map.set(allMilestoneNumbers[i], { all: new Set(issues.map(iss => iss.title)) })
     }
     return map
   }, [allMilestoneNumbers, allMilestoneIssueQueries])
@@ -177,70 +189,65 @@ export function ArchiveTab() {
     return map
   }, [milestonesData])
 
-  // Whether a status is visible given per-milestone includeNonApproved settings
+  /**
+   * Where the archive would land for one file: the round this session targets, the commit
+   * that round carries, and the approval on it. One call per render per file, memoized on
+   * the overrides so retargeting one card does not re-derive the rest.
+   *
+   * D2: the round is a *selection*, not a filter. Nothing below asks whether a file is
+   * "approved" in order to decide what to send — it sends the selection and renders the
+   * round.
+   */
+  const selectionOf = useCallback(
+    (s: IssueStatusResponse): ArchiveSelection =>
+      archiveSelectionOf(s, archive.roundOverrides[s.issue.number]),
+    [archive.roundOverrides],
+  )
+
+  /**
+   * U4: the round-aware filters, OR'd — a file is kept when it matches **any** active
+   * filter, so the chips read as "show me these kinds of file". No filter is the default
+   * and keeps everything.
+   */
+  const passesFilters = useCallback(
+    (s: IssueStatusResponse): boolean =>
+      archive.filters.length === 0 ||
+      archive.filters.some((key) => matchesArchiveFilter(key, s, selectionOf(s))),
+    [archive.filters, selectionOf],
+  )
+
+  /**
+   * Whether a milestone file is on screen, and so in the archive.
+   *
+   * S4 narrowed "include non-approved" to mean **threads where no round has ever closed**,
+   * and nothing else. It no longer governs reopened files: those have a standing approval
+   * a round back and a live round in front, and which of the two the archive takes is a
+   * per-file selection (D2), not a milestone-wide toggle.
+   */
   const isStatusVisible = useCallback((s: IssueStatusResponse): boolean => {
-    if (isApprovedStatus(s)) return true
+    if (!passesFilters(s)) return false
+    if (!neverApproved(s)) return true
     const msNum = s.issue.milestone ? milestoneTitleToNumber.get(s.issue.milestone) : undefined
     return msNum !== undefined && !!archive.includeNonApproved[msNum]
-  }, [milestoneTitleToNumber, archive.includeNonApproved])
+  }, [milestoneTitleToNumber, archive.includeNonApproved, passesFilters])
 
+  /**
+   * Per milestone, how many of its files would be archived at **unapproved** bytes.
+   *
+   * Read off the selection, not off a status pill: an approved-then-reopened file defaults
+   * to its open round (D9/S2), so it archives unapproved content and is counted here —
+   * which is precisely what the old `status ∈ {approved, changes_after_approval}` count
+   * hid.
+   */
   const unapprovedByMilestone = useMemo(() => {
     const result: Record<number, number> = {}
     for (const n of archive.selectedMilestones) {
       const milestoneName = (milestonesData ?? []).find((m) => m.number === n)?.title
       const milestoneStatuses = statuses.filter((s) => s.issue.milestone === milestoneName)
-      result[n] = milestoneStatuses.filter((s) => !isApprovedStatus(s)).length
+      result[n] = milestoneStatuses.filter((s) => selectionOf(s).approval === null).length
     }
     return result
-  }, [archive.selectedMilestones, statuses, milestonesData])
-
-  // Per-milestone: detect if enabling non-approved for a milestone would conflict with other milestones
-  const nonApprovedOverlapByMilestone = useMemo(() => {
-    const result: Record<number, string[]> = {}
-    if (archive.selectedMilestones.length < 2) return result
-    for (const candidate of archive.selectedMilestones) {
-      const candidateAll = milestoneFileSets.get(candidate)?.all ?? new Set<string>()
-      const candidateApproved = milestoneFileSets.get(candidate)?.approvedOnly ?? new Set<string>()
-      // Files that are non-approved-only in this milestone
-      const nonApprovedFiles = [...candidateAll].filter(f => !candidateApproved.has(f))
-      // Build set of files from other milestones (using basenames when flatten is ON)
-      const otherFiles = new Set<string>()
-      for (const other of archive.selectedMilestones) {
-        if (other === candidate) continue
-        const otherSet = archive.includeNonApproved[other]
-          ? milestoneFileSets.get(other)?.all
-          : milestoneFileSets.get(other)?.approvedOnly
-        if (otherSet) {
-          for (const f of otherSet) otherFiles.add(archive.flatten ? basename(f) : f)
-        }
-      }
-      // Check if any non-approved files conflict (using basenames when flatten is ON)
-      const conflicts: string[] = []
-      for (const f of nonApprovedFiles) {
-        if (otherFiles.has(archive.flatten ? basename(f) : f)) {
-          conflicts.push(f)
-        }
-      }
-      if (conflicts.length > 0) result[candidate] = conflicts
-    }
-    return result
-  }, [archive.selectedMilestones, milestoneFileSets, archive.includeNonApproved, archive.flatten])
-
-  // Force off any milestone's includeNonApproved that now conflicts
-  useEffect(() => {
-    const toDisable: number[] = []
-    for (const [msNum, conflicts] of Object.entries(nonApprovedOverlapByMilestone)) {
-      const n = Number(msNum)
-      if (conflicts.length > 0 && archive.includeNonApproved[n]) toDisable.push(n)
-    }
-    if (toDisable.length > 0) {
-      setArchive(prev => {
-        const next = { ...prev, includeNonApproved: { ...prev.includeNonApproved } }
-        for (const n of toDisable) next.includeNonApproved[n] = false
-        return next
-      })
-    }
-  }, [nonApprovedOverlapByMilestone, archive.includeNonApproved, setArchive])
+  }, [archive.selectedMilestones, statuses, milestonesData, selectionOf])
 
   // Milestones that have at least one issue visible in the right panel
   const milestonesWithVisibleIssues = useMemo(() => {
@@ -324,14 +331,229 @@ export function ArchiveTab() {
     [addedFileConflicts],
   )
 
-  // Files on screen that the request will not carry: nothing resolved to a commit to
-  // archive them at (an unplaceable segment — D4 greys, it does not error). Counted
-  // here so the omission is stated before the archive is written rather than
-  // discovered in the tarball afterwards.
-  const excludedStatuses = useMemo(
-    () => statuses.filter(s => isStatusVisible(s) && archiveCommitOf(s) === null),
-    [statuses, isStatusVisible],
+  /*
+   * ─── What this archive will contain, post-selection ──────────────────────
+   *
+   * One list, built once, and everything downstream reads it: the request, the flatten
+   * collision check, the conflict predictor (U6), the pre-generate summary (U5) and the
+   * unplaceable block (U8). The predictor used to partition by GitHub issue state
+   * instead, which is why it mispredicted for every approved-then-reopened file (§0.6).
+   *
+   * Two kinds of entry, and they are the wire's two modes:
+   *
+   * - **mode 1** — a file under QC. Its handle is the issue number, and nothing else
+   *   travels: the server reads the thread and derives the path, the milestone, the
+   *   commit, the approval and `superseded` (A1/D6). Milestone cards are always this, and
+   *   so is an added file that was resolved *via its QC issue* — that file has a thread,
+   *   and a round selection is the honest way to address it.
+   * - **mode 2** — a bare added file the user picked a commit for, unchanged (D4/R1).
+   */
+  type PlannedFile =
+    | {
+        mode: 'issue'
+        /** Repo path, for collision checks and card ordering. */
+        path: string
+        issueNumber: number
+        /** Absent while the status query is still in flight. */
+        status: IssueStatusResponse | undefined
+        selection: ArchiveSelection | null
+      }
+    | { mode: 'file'; path: string; commit: string }
+
+  const plannedFiles = useMemo<PlannedFile[]>(() => {
+    const planned: PlannedFile[] = []
+
+    for (const s of statuses) {
+      if (!isStatusVisible(s)) continue
+      planned.push({
+        mode: 'issue',
+        path: s.issue.title,
+        issueNumber: s.issue.number,
+        status: s,
+        selection: selectionOf(s),
+      })
+    }
+
+    for (const r of archive.addedFiles.values()) {
+      // A file the milestone side already covers is deduped there (D8: one entry per file).
+      if (addedFileConflicts.has(r.file_name)) continue
+      if (r.source_issue_number != null) {
+        const status = addedFileStatusMap.get(r.source_issue_number)
+        planned.push({
+          mode: 'issue',
+          path: r.file_name,
+          issueNumber: r.source_issue_number,
+          status,
+          selection: status ? selectionOf(status) : null,
+        })
+        continue
+      }
+      planned.push({ mode: 'file', path: r.file_name, commit: r.commit })
+    }
+
+    return planned
+  }, [statuses, isStatusVisible, selectionOf, archive.addedFiles, addedFileConflicts, addedFileStatusMap])
+
+  /**
+   * Files whose **selected round** cannot be archived (§18.1/§20.2).
+   *
+   * The gate keys on the selected round, not on the active segment: a file whose trailing
+   * gap could not be placed is perfectly archivable at its round's approval, so it is not
+   * greyed and not dropped. What is refused is a selection whose own round owns no
+   * locatable commits — there is no sha such an archive could honestly point at (§11.1).
+   */
+  const blockedFiles = useMemo(
+    () =>
+      plannedFiles.flatMap((f) =>
+        f.mode === 'issue' && f.selection?.blocked
+          ? [{
+              path: f.path,
+              issueNumber: f.issueNumber,
+              roundName: f.selection.blocked.roundName,
+              reason: f.selection.blocked.reason,
+            }]
+          : [],
+      ),
+    [plannedFiles],
   )
+
+  /**
+   * The signature the acknowledgement is keyed on. Acknowledging means *proceed without
+   * these files* (§11.1) — never include them — so the acknowledgement must lapse the
+   * moment a different file becomes blocked rather than quietly covering it too.
+   */
+  const blockedKey = useMemo(
+    () => blockedFiles.map((f) => `${f.issueNumber}:${f.roundName}`).sort().join('|'),
+    [blockedFiles],
+  )
+  const blockedAcknowledged =
+    blockedFiles.length === 0 || archive.unplaceableAckKey === blockedKey
+
+  /** Exactly what the request will carry: the planned files minus the blocked ones. */
+  const includedFiles = useMemo(
+    () => plannedFiles.filter((f) => !(f.mode === 'issue' && f.selection?.blocked)),
+    [plannedFiles],
+  )
+
+  /**
+   * U6: whether turning a milestone's "include non-approved" on would collide with a file
+   * this archive **already contains**.
+   *
+   * Repointed at the post-selection set. The old version partitioned both sides by
+   * `issue.state === 'closed'`, so an approved-then-reopened file counted as non-approved
+   * in one milestone and as absent from the other — the mispredict §0.6 names. What
+   * arrives with the toggle is now S4's set exactly (threads where no round has ever
+   * closed), and what it is compared against is the list the request will carry.
+   */
+  const nonApprovedOverlapByMilestone = useMemo(() => {
+    const result: Record<number, string[]> = {}
+    if (archive.selectedMilestones.length < 2) return result
+    const titleOf = (n: number) => (milestonesData ?? []).find((m) => m.number === n)?.title
+
+    for (const candidate of archive.selectedMilestones) {
+      const candidateTitle = titleOf(candidate)
+      const wouldAdd = statuses
+        .filter((s) => s.issue.milestone === candidateTitle && neverApproved(s))
+        .map((s) => s.issue.title)
+      if (wouldAdd.length === 0) continue
+
+      const key = (path: string) => (archive.flatten ? basename(path) : path)
+      const otherFiles = new Set(
+        includedFiles
+          .filter((f) => !(f.mode === 'issue' && f.status?.issue.milestone === candidateTitle))
+          .map((f) => key(f.path)),
+      )
+      const conflicts = wouldAdd.filter((f) => otherFiles.has(key(f)))
+      if (conflicts.length > 0) result[candidate] = conflicts
+    }
+    return result
+  }, [archive.selectedMilestones, archive.flatten, statuses, includedFiles, milestonesData])
+
+  // Force off any milestone's includeNonApproved that now conflicts
+  useEffect(() => {
+    const toDisable: number[] = []
+    for (const [msNum, conflicts] of Object.entries(nonApprovedOverlapByMilestone)) {
+      const n = Number(msNum)
+      if (conflicts.length > 0 && archive.includeNonApproved[n]) toDisable.push(n)
+    }
+    if (toDisable.length > 0) {
+      setArchive(prev => {
+        const next = { ...prev, includeNonApproved: { ...prev.includeNonApproved } }
+        for (const n of toDisable) next.includeNonApproved[n] = false
+        return next
+      })
+    }
+  }, [nonApprovedOverlapByMilestone, archive.includeNonApproved, setArchive])
+
+  /**
+   * U5: what this archive is about to contain, stated before it is written.
+   *
+   * Aggregation only — the per-file answer is the server's, projected onto each round
+   * (§26), and the 200 body is `{output_path}` and nothing else, so this counts the previews
+   * the response already carried rather than a post-hoc report or a second derivation of
+   * `superseded`. "Approved & current" is `approval !== null` with an **empty** cause list,
+   * which the wire means as a positive claim of currency; every non-empty list, whatever its
+   * causes, counts as superseded.
+   */
+  const archiveSummary = useMemo(() => {
+    let approvedCurrent = 0
+    let approvedSuperseded = 0
+    let unapproved = 0
+    let added = 0
+    let pending = 0
+    const openRounds = new Set<string>()
+
+    for (const f of includedFiles) {
+      if (f.mode === 'file') {
+        added++
+        continue
+      }
+      if (f.selection === null || f.selection.selected === null) {
+        pending++
+        continue
+      }
+      if (f.selection.approval === null) {
+        unapproved++
+        if (f.selection.selected.state === 'open') openRounds.add(f.selection.selected.name)
+      } else if (isApprovedAndCurrent(f.selection)) {
+        approvedCurrent++
+      } else {
+        approvedSuperseded++
+      }
+    }
+
+    const parts: string[] = [`${includedFiles.length} file${includedFiles.length === 1 ? '' : 's'}`]
+    if (approvedCurrent > 0) parts.push(`${approvedCurrent} approved & current`)
+    if (approvedSuperseded > 0) parts.push(`${approvedSuperseded} approved but superseded`)
+    if (unapproved > 0) {
+      const rounds = [...openRounds]
+      parts.push(
+        rounds.length > 0 && rounds.length <= 2
+          ? `${unapproved} unapproved (${rounds.join(', ')} open)`
+          : `${unapproved} unapproved`,
+      )
+    }
+    if (added > 0) parts.push(`${added} added file${added === 1 ? '' : 's'}`)
+    if (pending > 0) parts.push(`${pending} still loading`)
+
+    return { text: parts.join(' · '), unapproved, approvedSuperseded }
+  }, [includedFiles])
+
+  /**
+   * U2/D7: retarget one file's round, or clear the override with `null`.
+   *
+   * `null` is stored as an *absence*, not as the latest round's number: the default is
+   * "the latest round, whatever it becomes", and pinning today's latest by number would
+   * silently turn into an override the next time a round opens.
+   */
+  const setRoundOverride = useCallback((issueNumber: number, round: number | null) => {
+    setArchive(prev => {
+      const next = { ...prev.roundOverrides }
+      if (round === null) delete next[issueNumber]
+      else next[issueNumber] = round
+      return { ...prev, roundOverrides: next }
+    })
+  }, [setArchive])
 
   // ─── Relevant file selection handlers ──────────────────────────────────
 
@@ -411,43 +633,52 @@ export function ArchiveTab() {
   async function handleGenerate() {
     setArchive(prev => ({ ...prev, generateError: null, generateSuccess: null, generateLoading: true }))
     try {
-      const milestoneIssueFiles: ArchiveFileRequest[] = statuses
-        .filter(s => isStatusVisible(s))
-        .flatMap(s => {
-          const commit = archiveCommitOf(s)
-          if (commit === null) return []
-          return [{
-            repository_file: s.issue.title,
-            commit,
-            milestone: s.issue.milestone ?? undefined,
-            approved: isApprovedStatus(s),
-          }]
-        })
+      /*
+       * A1/A2: the request is built from the tagged types and never hand-assembled.
+       *
+       * Mode 1 carries the issue number and the round, and nothing else — no
+       * `repository_file`, no `commit`, no `milestone`, and no `approved`. Each of those
+       * was either a second source of truth for a fact the server already holds, or the
+       * one bool that was unfalsifiable after the first approval. `round` travels as an
+       * explicit `null` for the default so "latest" has exactly one encoding on the wire,
+       * and as a number only where the user overrode it (D7).
+       *
+       * Mode 2 carries the path and the commit the user picked, as it always did — and no
+       * `approved: false`, which is the key the server rejected with a 400 for every
+       * manually added file (§11.5). The migration is what fixes that; it was never
+       * patched against the old flat shape.
+       */
+      const files: ArchiveFileRequest[] = includedFiles.map((f) =>
+        f.mode === 'issue'
+          ? {
+              mode: 'issue' as const,
+              issue_number: f.issueNumber,
+              round: archive.roundOverrides[f.issueNumber] ?? null,
+            }
+          : { mode: 'file' as const, repository_file: f.path, commit: f.commit },
+      )
 
-      const addedFilesRequests: ArchiveFileRequest[] = Array.from(archive.addedFiles.values())
-        .filter(r => !addedFileConflicts.has(r.file_name))
-        .flatMap(r => {
-          // For QC files added via relevant files, prefer the status-derived commit
-          const statusCommit = r.source_issue_number != null
-            ? addedFileStatusMap.get(r.source_issue_number)
-            : undefined
-          const commit = addedFileCommitOf(r, statusCommit)
-          return [{
-            repository_file: r.file_name,
-            commit,
-            approved: false,
-          }]
-        })
-
-      const files = [...milestoneIssueFiles, ...addedFilesRequests]
       const result = await generateArchive({ output_path: archive.outputPath, flatten: archive.flatten, files })
       setArchive(prev => ({ ...prev, generateSuccess: result.output_path }))
     } catch (err) {
+      // The server's message, verbatim: the round-selection and unplaceable refusals name
+      // the issue and the reason on purpose, and every client error on this route wears
+      // the `{"error": …}` envelope, so there is nothing to translate.
       setArchive(prev => ({ ...prev, generateError: (err as Error).message }))
     } finally {
       setArchive(prev => ({ ...prev, generateLoading: false }))
     }
   }
+
+  /**
+   * How many milestone files the active filters take off screen — and so out of the
+   * archive. A filter that silently shrinks an audit artifact is the omission §0.4
+   * describes, so the number is shown beside the chips.
+   */
+  const hiddenByFilterCount = useMemo(() => {
+    if (archive.filters.length === 0) return 0
+    return statuses.filter((s) => !passesFilters(s)).length
+  }, [statuses, archive.filters, passesFilters])
 
   const visibleFileCount =
     statuses.filter(s => isStatusVisible(s)).length +
@@ -455,10 +686,15 @@ export function ArchiveTab() {
 
   const canGenerate =
     visibleFileCount > 0 &&
+    includedFiles.length > 0 &&
     archive.outputPath.trim().length > 0 &&
     !isLoadingStatuses &&
     unresolvedAddedFileCount === 0 &&
-    conflictCount === 0
+    conflictCount === 0 &&
+    // U8/§11.1: a file whose selected round owns no locatable commits blocks generation
+    // until it is acknowledged, and acknowledging leaves it out. The old note said only
+    // how many files were dropped, at the bottom of the sidebar, where it was missed.
+    blockedAcknowledged
 
   // Files already occupying the right panel — unselectable in AddFileModal
   const claimedFiles = useMemo(() => {
@@ -470,14 +706,12 @@ export function ArchiveTab() {
 
   // ─── Flatten collision detection ─────────────────────────────────────
 
-  const allArchiveFiles = useMemo(() => {
-    const files: string[] = []
-    statuses.filter(s => isStatusVisible(s)).forEach(s => files.push(s.issue.title))
-    for (const [fn] of archive.addedFiles) {
-      if (!addedFileConflicts.get(fn)?.dedup) files.push(fn)
-    }
-    return files
-  }, [statuses, isStatusVisible, archive.addedFiles, addedFileConflicts])
+  // U6: the collision check reads the files this archive will actually include, which is
+  // the same list the request is built from — not a set partitioned by issue state.
+  const allArchiveFiles = useMemo(
+    () => includedFiles.map((f) => f.path),
+    [includedFiles],
+  )
 
   const basenameCollisions = useMemo(() => {
     const seen = new Map<string, string>()
@@ -587,10 +821,62 @@ export function ArchiveTab() {
                   />
                 </div>
               </Tooltip>
-              {excludedStatuses.length > 0 && (
-                <Text size="xs" c="orange.7" data-testid="archive-exclusion-summary">
-                  {excludedStatuses.length} file{excludedStatuses.length === 1 ? '' : 's'} will be
-                  left out — no commit could be resolved.
+              {/*
+                U8/§11.1: a blocking callout, naming each file and carrying the reason —
+                not the footnote it replaces. The override is *acknowledge and proceed
+                without these files*; it never includes them, because an unplaceable round
+                owns no commits and there is no sha the archive could honestly point at. A
+                user who knows the commit they want adds the file directly, which is what
+                the Add-file card is for (D4).
+              */}
+              {blockedFiles.length > 0 && (
+                <Alert color="red" p="xs" data-testid="archive-unplaceable-callout">
+                  <Stack gap={4}>
+                    <Text size="xs" fw={700}>
+                      {blockedFiles.length} file{blockedFiles.length === 1 ? '' : 's'} cannot be
+                      archived — the round selected for each owns no locatable commits:
+                    </Text>
+                    {blockedFiles.map((f) => (
+                      <Text size="xs" key={f.issueNumber} data-testid={`archive-blocked-${f.issueNumber}`}>
+                        {f.path} (#{f.issueNumber}, {f.roundName}): {refusalText(f.reason)}
+                      </Text>
+                    ))}
+                    <Text size="xs">
+                      Proceeding leaves {blockedFiles.length === 1 ? 'it' : 'them'} out of the
+                      archive entirely. To archive one anyway, add it with the commit you name.
+                    </Text>
+                    {!blockedAcknowledged && (
+                      <Button
+                        size="compact-xs"
+                        color="red"
+                        variant="light"
+                        data-testid="archive-unplaceable-acknowledge"
+                        onClick={() => setArchive(prev => ({ ...prev, unplaceableAckKey: blockedKey }))}
+                      >
+                        Continue without {blockedFiles.length === 1 ? 'this file' : 'these files'}
+                      </Button>
+                    )}
+                  </Stack>
+                </Alert>
+              )}
+              {/* U5: stated before the archive is written, from the selections. */}
+              {includedFiles.length > 0 && (
+                <Text size="xs" c="dimmed" data-testid="archive-summary">
+                  {archiveSummary.text}
+                </Text>
+              )}
+              {/*
+                U3/D9: the default is the latest round, so a reopened file archives
+                unapproved content. Said loudly and nothing gates it — a user cutting an
+                archive for a previous QC round retargets that file's round picker.
+              */}
+              {archiveSummary.unapproved > 0 && (
+                <Text size="xs" c="orange.7" data-testid="archive-unapproved-note">
+                  {archiveSummary.unapproved} file{archiveSummary.unapproved === 1 ? '' : 's'} will be
+                  archived at unapproved bytes: the round selected for
+                  {archiveSummary.unapproved === 1 ? ' it' : ' them'} is open. That is the default —
+                  the latest round, not the newest approval. Target an earlier round to archive the
+                  approval that stands there.
                 </Text>
               )}
               <Button
@@ -618,6 +904,38 @@ export function ArchiveTab() {
                   checked={archive.showOpenMilestones}
                   onChange={(checked) => setArchive(prev => ({ ...prev, showOpenMilestones: checked }))}
                 />
+                {/*
+                  U4: round-aware bulk filters, each derived from the segments or from a
+                  fact `qc_status` already carries — never from a local approval predicate.
+                  They narrow what is on screen, and what is on screen is what the archive
+                  contains, so the count of what they hide is stated next to them rather
+                  than left to be discovered in the tarball.
+                */}
+                <Stack gap={4}>
+                  <Text size="xs" fw={600} c="dimmed">Filter files</Text>
+                  <Chip.Group
+                    multiple
+                    value={archive.filters}
+                    onChange={(value) => setArchive(prev => ({ ...prev, filters: value as ArchiveFilterKey[] }))}
+                  >
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {ARCHIVE_FILTERS.map((f) => (
+                        // The testid sits on the wrapper, not the Chip: Mantine forwards it
+                        // to the visually hidden checkbox, which nothing can click.
+                        <span key={f.key} data-testid={`archive-filter-${f.key}`}>
+                          <Chip value={f.key} size="xs">{f.label}</Chip>
+                        </span>
+                      ))}
+                    </div>
+                  </Chip.Group>
+                  {archive.filters.length > 0 && (
+                    <Text size="xs" c="orange.7" data-testid="archive-filter-note">
+                      {hiddenByFilterCount} file{hiddenByFilterCount === 1 ? '' : 's'} hidden by
+                      {' '}{archive.filters.length === 1 ? 'this filter' : 'these filters'} — hidden
+                      files are not archived.
+                    </Text>
+                  )}
+                </Stack>
                 <ArchiveMilestoneCombobox
                   selectedMilestones={archive.selectedMilestones}
                   onSelectedMilestonesChange={(selectedMilestones) => setArchive(prev => ({ ...prev, selectedMilestones }))}
@@ -732,9 +1050,13 @@ export function ArchiveTab() {
                 : undefined
 
               if (issueStatus) {
-                const approved = isApprovedStatus(issueStatus)
-                const commit = addedFileCommitOf(res, issueStatus)
-                const shortCommit = shortHash(commit)
+                // An added file with a QC issue behind it is a **mode-1** entry: it has a
+                // thread, so the round is what addresses it and the server derives the
+                // commit. The commit shown here is the selected round's own, read for the
+                // card and the preview — never sent, and never the deleted
+                // `last_approved_commit ?? latest_commit`.
+                const selection = selectionOf(issueStatus)
+                const commit = selection.commit
                 const statusLabel = issueStatus.qc_status.status.replace(/_/g, ' ')
 
                 return (
@@ -766,8 +1088,8 @@ export function ArchiveTab() {
                         >
                           {issueStatus.issue.title}
                         </Anchor>
-                        {!approved && (
-                          <Tooltip label="Not yet approved" withArrow>
+                        {selection.approval === null && !selection.blocked && (
+                          <Tooltip label="These bytes were never approved" withArrow>
                             <span style={{ flexShrink: 0, marginTop: 2 }}>
                               <IconAlertTriangle size={12} color="#f59f00" />
                             </span>
@@ -787,7 +1109,12 @@ export function ArchiveTab() {
                       {issueStatus.issue.milestone && (
                         <Text size="xs" c="dimmed"><b>Milestone:</b> {issueStatus.issue.milestone}</Text>
                       )}
-                      <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
+                      <ArchiveProvenance
+                        issueNumber={issueStatus.issue.number}
+                        segments={issueStatus.segments ?? []}
+                        selection={selection}
+                        onSelectRound={(round) => setRoundOverride(issueStatus.issue.number, round)}
+                      />
                       <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
                       <RelevantFilesList
                         relevantFiles={issueStatus.issue.relevant_files ?? []}
@@ -802,8 +1129,8 @@ export function ArchiveTab() {
                         size="compact-xs"
                         variant="light"
                         leftSection={<IconEye size={12} />}
-                        disabled={!commit}
-                        onClick={e => { e.stopPropagation(); if (commit) void handlePreviewFile(fileName, commit) }}
+                        disabled={commit === null}
+                        onClick={e => { e.stopPropagation(); if (commit !== null) void handlePreviewFile(fileName, commit) }}
                       >
                         Preview
                       </Button>
@@ -857,9 +1184,8 @@ export function ArchiveTab() {
             {archive.selectedMilestones.length > 0 && (<>
             {/* ── Milestone issue cards ──────────────────────────────────── */}
             {statuses.filter(s => isStatusVisible(s)).map((s) => {
-              const approved = isApprovedStatus(s)
-              const commit = archiveCommitOf(s)
-              const shortCommit = shortHash(commit)
+              const selection = selectionOf(s)
+              const commit = selection.commit
               const statusLabel = s.qc_status.status.replace(/_/g, ' ')
 
               return (
@@ -869,8 +1195,8 @@ export function ArchiveTab() {
                   style={{
                     padding: '10px 12px',
                     borderRadius: 6,
-                    border: '1px solid var(--mantine-color-gray-3)',
-                    backgroundColor: 'white',
+                    border: `1px solid ${selection.blocked ? '#ff8787' : 'var(--mantine-color-gray-3)'}`,
+                    backgroundColor: selection.blocked ? '#ffe3e3' : 'white',
                     height: CARD_HEIGHT,
                     overflowY: 'auto',
                     minWidth: 0,
@@ -888,8 +1214,8 @@ export function ArchiveTab() {
                       >
                         {s.issue.title}
                       </Anchor>
-                      {!approved && (
-                        <Tooltip label="Not yet approved" withArrow>
+                      {selection.approval === null && !selection.blocked && (
+                        <Tooltip label="These bytes were never approved" withArrow>
                           <span style={{ flexShrink: 0, marginTop: 2 }}>
                             <IconAlertTriangle size={12} color="#f59f00" />
                           </span>
@@ -899,18 +1225,13 @@ export function ArchiveTab() {
                     {s.issue.milestone && (
                       <Text size="xs" c="dimmed"><b>Milestone:</b> {s.issue.milestone}</Text>
                     )}
-                    <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
+                    <ArchiveProvenance
+                      issueNumber={s.issue.number}
+                      segments={s.segments ?? []}
+                      selection={selection}
+                      onSelectRound={(round) => setRoundOverride(s.issue.number, round)}
+                    />
                     <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
-                    {/*
-                      A silent omission is the wrong default for an audit tool: the
-                      dash above and a dead Preview button only *imply* that this file
-                      is not in the archive. Say it.
-                    */}
-                    {commit === null && (
-                      <Text size="xs" c="orange.7" data-testid={`archive-excluded-${s.issue.number}`}>
-                        Left out of the archive — no commit could be resolved for this file.
-                      </Text>
-                    )}
                     <RelevantFilesList
                       relevantFiles={s.issue.relevant_files ?? []}
                       claimedFiles={claimedFiles}
@@ -1005,6 +1326,66 @@ export function ArchiveTab() {
   )
 }
 
+// ─── ArchiveProvenance ────────────────────────────────────────────────────────
+//
+// U1/D1: **two independent facts, never one bool.** The provenance of the bytes — which
+// round the selection addressed, whether those bytes were approved, by whom, when, and at
+// which commit — and, separately, whether anything newer is known about the file. One bool
+// compressing the two is the root cause §0 diagnoses.
+//
+// The two round frames are kept visibly apart. When a round's anchor is the previous
+// round's approval, selecting the open round archives approved bytes under a different
+// frame (I2), and this card reads *"Round 2 · bytes are Initial QC's approval …"* — never
+// "Round 2 · approved", which would assert an approval of a round that is still open.
+
+function ArchiveProvenance({
+  issueNumber,
+  segments,
+  selection,
+  onSelectRound,
+}: {
+  issueNumber: number
+  segments: Segment[]
+  selection: ArchiveSelection
+  onSelectRound: (round: number | null) => void
+}) {
+  if (selection.blocked !== null) {
+    return (
+      <>
+        <Text size="xs" c="red.8" fw={600} data-testid={`archive-blocked-note-${issueNumber}`}>
+          {selection.blocked.roundName} cannot be archived —{' '}
+          {refusalText(selection.blocked.reason)}. This file will be left out.
+        </Text>
+        <ArchiveRoundPicker
+          segments={segments}
+          selection={selection}
+          issueNumber={issueNumber}
+          onSelectRound={onSelectRound}
+        />
+      </>
+    )
+  }
+
+  return (
+    <>
+      <Text size="xs" c="dimmed" data-testid={`archive-provenance-${issueNumber}`}>
+        {provenanceLine(selection)}
+      </Text>
+      {selection.stale.length > 0 && (
+        <Text size="xs" c="orange.7" data-testid={`archive-superseded-${issueNumber}`}>
+          Not the newest QC state: {selection.stale.join('; ')}.
+        </Text>
+      )}
+      <ArchiveRoundPicker
+        segments={segments}
+        selection={selection}
+        issueNumber={issueNumber}
+        onSelectRound={onSelectRound}
+      />
+    </>
+  )
+}
+
 // ─── ResolvedFileCard ─────────────────────────────────────────────────────────
 // Shared card for resolved bare files and manually added files.
 
@@ -1087,7 +1468,11 @@ interface ArchiveMilestoneComboboxProps {
   showOpenMilestones: boolean
   statusByMilestone: Record<number, MilestoneStatusInfo>
   unapprovedByMilestone: Record<number, number>
-  milestoneFileSets: Map<number, { all: Set<string>; approvedOnly: Set<string> }>
+  /**
+   * Every file title per milestone. The `approvedOnly` half is gone with U7 — it was
+   * `issue.state === 'closed'`, GitHub issue state standing in for approval (§0.6).
+   */
+  milestoneFileSets: Map<number, { all: Set<string> }>
   includeNonApproved: Record<number, boolean>
   onIncludeNonApprovedChange: (milestoneNumber: number, value: boolean) => void
   nonApprovedOverlapByMilestone: Record<number, string[]>
@@ -1118,17 +1503,26 @@ function ArchiveMilestoneCombobox({
   )
   const selectedItems = (data ?? []).filter((m) => selectedMilestones.includes(m.number))
 
-  // Build the union of file names from currently selected milestones
+  /*
+   * The union of file names the selected milestones contribute.
+   *
+   * Both sides of this check are now the milestones' **full** file sets. It used to switch
+   * between `all` and `approvedOnly` per milestone, which put a reopened file on one side
+   * and not the other; the collision this predicts is between *file identities*, and a
+   * milestone containing a path at all is a milestone that can collide on it. The check is
+   * deliberately conservative here — it disables a dropdown option, so claiming "no
+   * conflict" it cannot back up is the worse error, and the archive's actual contents are
+   * predicted from the selections instead (U6).
+   */
   const selectedFileUnion = useMemo(() => {
     const union = new Set<string>()
     for (const n of selectedMilestones) {
       const fileSet = milestoneFileSets.get(n)
       if (!fileSet) continue
-      const set = includeNonApproved[n] ? fileSet.all : fileSet.approvedOnly
-      for (const f of set) union.add(flatten ? basename(f) : f)
+      for (const f of fileSet.all) union.add(flatten ? basename(f) : f)
     }
     return union
-  }, [selectedMilestones, milestoneFileSets, includeNonApproved, flatten])
+  }, [selectedMilestones, milestoneFileSets, flatten])
 
   // For each candidate milestone, compute conflicts with the selected set
   const milestoneConflicts = useMemo(() => {
@@ -1136,8 +1530,7 @@ function ArchiveMilestoneCombobox({
     for (const m of filtered) {
       const candidateFiles = milestoneFileSets.get(m.number)
       if (!candidateFiles) continue
-      // Candidate defaults to approvedOnly since it's not yet selected
-      const candidateSet = candidateFiles.approvedOnly
+      const candidateSet = candidateFiles.all
       const conflicts: string[] = []
       for (const f of candidateSet) {
         if (selectedFileUnion.has(flatten ? basename(f) : f)) conflicts.push(f)
@@ -1147,9 +1540,8 @@ function ArchiveMilestoneCombobox({
         for (const n of selectedMilestones) {
           const fileSet = milestoneFileSets.get(n)
           if (!fileSet) continue
-          const set = includeNonApproved[n] ? fileSet.all : fileSet.approvedOnly
           for (const f of conflicts) {
-            if (set.has(f)) {
+            if (fileSet.all.has(f)) {
               const title = (data ?? []).find(ms => ms.number === n)?.title ?? String(n)
               owningMilestones.add(title)
             }
@@ -1159,7 +1551,7 @@ function ArchiveMilestoneCombobox({
       }
     }
     return map
-  }, [filtered, milestoneFileSets, includeNonApproved, selectedFileUnion, selectedMilestones, data, flatten])
+  }, [filtered, milestoneFileSets, selectedFileUnion, selectedMilestones, data, flatten])
 
   function add(number: number) {
     onSelectedMilestonesChange([...selectedMilestones, number])
@@ -1292,9 +1684,14 @@ function ArchiveMilestoneCard({
           {statusInfo.statusErrorCount > 0 && (
             <StatusErrorDisplay errors={statusInfo.statusErrors} variant="icon-red" />
           )}
+          {/*
+            Round-aware: the count is of files whose *selected* round yields unapproved
+            bytes, which includes an approved-then-reopened file sitting on its open round
+            by default (D9/S2). The old count read a status pill and hid exactly those.
+          */}
           {isYellow && (
             <Tooltip
-              label={`${unapprovedCount} issue${unapprovedCount !== 1 ? 's' : ''} not yet approved`}
+              label={`${unapprovedCount} file${unapprovedCount !== 1 ? 's' : ''} would be archived at unapproved bytes`}
               withArrow
             >
               <span data-testid="unapproved-warning" style={{ color: '#e67700', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>

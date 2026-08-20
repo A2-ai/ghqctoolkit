@@ -1,9 +1,10 @@
 use crate::GitCommit;
-use crate::archive::ArchiveFile;
+use crate::archive::{ArchiveFile, ArchiveTarget};
 use anyhow::{Result, anyhow, bail};
 use clap::builder::TypedValueParser;
 use clap::{Arg, Command, error::ErrorKind};
 use gix::ObjectId;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -353,6 +354,125 @@ impl TypedValueParser for RelevantFileArgParser {
     }
 }
 
+/// A per-issue archive round selection, from `--round <issue#>=<n>`.
+///
+/// The round is a *selection*, 1-based with `1` being Initial QC — never a claim that
+/// the round was approved. Two things this deliberately does not check, because neither
+/// is knowable here: whether the issue is in the selected milestones, and whether the
+/// round exists on its thread. Both are reported where they are known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IssueRoundArg {
+    pub issue_number: u64,
+    pub round: u32,
+}
+
+impl IssueRoundArg {
+    /// The archive target this selection addresses.
+    pub fn target(self) -> ArchiveTarget {
+        ArchiveTarget::Round(self.round)
+    }
+}
+
+impl FromStr for IssueRoundArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        const FORMAT: &str = "Format must be '<issue#>=<round>'. Example: 42=1";
+
+        // `split_once` rather than `split`: a second `=` lands in the round half and is
+        // rejected there by name, instead of being reported as a shapeless format error.
+        let (issue, round) = s.split_once('=').ok_or_else(|| FORMAT.to_string())?;
+        let (issue, round) = (issue.trim(), round.trim());
+
+        if issue.is_empty() || round.is_empty() {
+            return Err(FORMAT.to_string());
+        }
+
+        let issue_number = issue
+            .parse::<u64>()
+            .map_err(|_| format!("Issue number '{issue}' is not a number. {FORMAT}"))?;
+        if issue_number == 0 {
+            return Err("Issue numbers start at 1".to_string());
+        }
+
+        let round = round
+            .parse::<u32>()
+            .map_err(|_| format!("Round '{round}' is not a number. {FORMAT}"))?;
+        // Rejected here rather than left to the thread: round 0 names no round on any
+        // thread, so nothing about the issue's history is needed to know it is wrong.
+        if round == 0 {
+            return Err(
+                "Rounds are 1-based and round 1 is Initial QC, so round 0 does not exist"
+                    .to_string(),
+            );
+        }
+
+        Ok(IssueRoundArg {
+            issue_number,
+            round,
+        })
+    }
+}
+
+// Custom parser for clap
+#[derive(Clone)]
+pub struct IssueRoundArgParser;
+
+impl TypedValueParser for IssueRoundArgParser {
+    type Value = IssueRoundArg;
+
+    fn parse_ref(
+        &self,
+        _cmd: &Command,
+        arg: Option<&Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let s = value.to_str().ok_or_else(|| {
+            clap::Error::raw(
+                ErrorKind::InvalidUtf8,
+                "Invalid UTF-8 in issue#=round specification",
+            )
+        })?;
+
+        // Raw rather than the context-inserting shape used above for `file:commit`:
+        // clap drops a `Usage` context on a value error, so that shape reports only
+        // "invalid value", and which half of `issue#=round` is wrong is the whole of
+        // what the user needs to know here.
+        s.parse().map_err(|err_msg: String| {
+            clap::Error::raw(
+                ErrorKind::ValueValidation,
+                format!(
+                    "invalid value '{s}' for '{}': {err_msg}\n",
+                    arg.map(|arg| arg.to_string())
+                        .unwrap_or_else(|| "--round <issue#=round>".to_string())
+                ),
+            )
+        })
+    }
+}
+
+/// Collapse repeated `--round` arguments into one target per issue.
+///
+/// An issue named twice is reported rather than resolved last-one-wins: a file appears
+/// at most once in an archive, so two rounds for one file is a contradiction in the
+/// request, not a preference.
+pub fn round_targets(rounds: &[IssueRoundArg]) -> Result<HashMap<u64, ArchiveTarget>> {
+    let mut targets: HashMap<u64, ArchiveTarget> = HashMap::new();
+    for selection in rounds {
+        if let Some(ArchiveTarget::Round(existing)) =
+            targets.insert(selection.issue_number, selection.target())
+        {
+            bail!(
+                "--round names issue #{} more than once (round {existing} and round {}): \
+                 a file is archived at exactly one round",
+                selection.issue_number,
+                selection.round
+            );
+        }
+    }
+    Ok(targets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,5 +577,94 @@ mod tests {
 
         // Empty file path
         assert!("::some justification".parse::<RelevantFileArg>().is_err());
+    }
+
+    #[test]
+    fn test_issue_round_arg_parsing() {
+        let arg: IssueRoundArg = "42=1".parse().unwrap();
+        assert_eq!(arg.issue_number, 42);
+        assert_eq!(arg.round, 1);
+        assert_eq!(arg.target(), ArchiveTarget::Round(1));
+
+        // Whitespace around either half is tolerated
+        let arg: IssueRoundArg = " 7 = 3 ".parse().unwrap();
+        assert_eq!(arg.issue_number, 7);
+        assert_eq!(arg.round, 3);
+
+        // Missing separator
+        assert!("42".parse::<IssueRoundArg>().is_err());
+        // Missing either half
+        assert!("42=".parse::<IssueRoundArg>().is_err());
+        assert!("=1".parse::<IssueRoundArg>().is_err());
+        // Non-numeric halves
+        assert!("abc=1".parse::<IssueRoundArg>().is_err());
+        assert!("42=abc".parse::<IssueRoundArg>().is_err());
+        // A second separator lands in the round half and is rejected there
+        assert!("42=1=2".parse::<IssueRoundArg>().is_err());
+        // Rounds are 1-based; round 0 names no round on any thread
+        assert!("42=0".parse::<IssueRoundArg>().is_err());
+        assert!("0=1".parse::<IssueRoundArg>().is_err());
+        // Negative numbers are not issue numbers or rounds
+        assert!("-42=1".parse::<IssueRoundArg>().is_err());
+        assert!("42=-1".parse::<IssueRoundArg>().is_err());
+    }
+
+    #[test]
+    fn test_round_targets_maps_each_issue_once() {
+        let targets = round_targets(&[
+            IssueRoundArg {
+                issue_number: 42,
+                round: 2,
+            },
+            IssueRoundArg {
+                issue_number: 43,
+                round: 1,
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.get(&42), Some(&ArchiveTarget::Round(2)));
+        assert_eq!(targets.get(&43), Some(&ArchiveTarget::Round(1)));
+        // Unlisted issues are absent, which is how the caller reads "latest round"
+        assert_eq!(targets.get(&44), None);
+    }
+
+    #[test]
+    fn test_round_targets_rejects_a_duplicate_issue() {
+        let err = round_targets(&[
+            IssueRoundArg {
+                issue_number: 42,
+                round: 1,
+            },
+            IssueRoundArg {
+                issue_number: 42,
+                round: 2,
+            },
+        ])
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("#42"), "error should name the issue: {err}");
+        assert!(
+            err.contains("more than once"),
+            "error should say what is wrong: {err}"
+        );
+
+        // Repeating the *same* round is still a duplicate: the request says one thing
+        // twice, and honouring it silently is how a contradiction goes unnoticed.
+        assert!(
+            round_targets(&[
+                IssueRoundArg {
+                    issue_number: 42,
+                    round: 1,
+                },
+                IssueRoundArg {
+                    issue_number: 42,
+                    round: 1,
+                },
+            ])
+            .is_err()
+        );
     }
 }

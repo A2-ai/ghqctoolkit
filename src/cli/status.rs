@@ -4,13 +4,16 @@ use anyhow::{Result, bail};
 use gix::ObjectId;
 use octocrab::models::Milestone;
 
+use crate::cli::archive::{ArchiveSummary, categorize};
 use crate::cli::interactive::{prompt_existing_milestone, prompt_issue};
 use crate::cli::rename::alert_renames;
+use crate::cli::section_header;
 use crate::round::{GapContinuity, Placement, Segment};
 use crate::{
-    BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState, IssueThread,
-    QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
+    ArchiveTarget, BlockingQCStatus, ChecklistSummary, DiskCache, GitHubReader, GitInfo, GitState,
+    IssueThread, QCStatus, analyze_issue_checklists, get_blocking_qc_status, get_git_status,
 };
+pub use report::MilestoneStatusReport;
 
 pub async fn interactive_status(
     milestones: &[Milestone],
@@ -300,23 +303,11 @@ pub fn single_issue_status(
     res.join("\n")
 }
 
-#[derive(Debug, Clone)]
-pub struct MilestoneStatusRow {
-    pub file: String,
-    pub milestone: String,
-    pub branch: String,
-    pub issue_state: String,
-    pub qc_status: String,
-    pub git_status: String,
-    pub checklist_summary: ChecklistSummary,
-    pub blocking_qc_status: BlockingQCStatus,
-}
-
 pub async fn interactive_milestone_status(
     milestones: &[Milestone],
     cache: Option<&DiskCache>,
     git_info: &GitInfo,
-) -> Result<()> {
+) -> Result<MilestoneStatusReport> {
     println!("📊 Welcome to GHQC Milestone Status Mode!");
 
     if milestones.is_empty() {
@@ -373,20 +364,16 @@ pub async fn interactive_milestone_status(
         bail!("No milestones selected");
     }
 
-    // Get status for all selected milestones
-    let status_rows = get_milestone_status_rows(&selected_milestones, cache, git_info).await?;
-
-    // Display results
-    display_milestone_status_table(&status_rows);
-
-    Ok(())
+    // Get status for all selected milestones. Printing is the caller's, and there is one
+    // caller: the report is a single value so its two halves cannot be shown separately.
+    report::of_milestones(&selected_milestones, cache, git_info).await
 }
 
 pub async fn milestone_status(
     milestones: &[Milestone],
     cache: Option<&DiskCache>,
     git_info: &GitInfo,
-) -> Result<()> {
+) -> Result<MilestoneStatusReport> {
     if milestones.is_empty() {
         bail!("No milestones provided");
     }
@@ -395,196 +382,224 @@ pub async fn milestone_status(
     let milestone_refs: Vec<&Milestone> = milestones.iter().collect();
 
     // Get status for all milestones
-    let status_rows = get_milestone_status_rows(&milestone_refs, cache, git_info).await?;
-
-    // Display results
-    display_milestone_status_table(&status_rows);
-
-    Ok(())
+    report::of_milestones(&milestone_refs, cache, git_info).await
 }
 
-async fn get_milestone_status_rows(
-    milestones: &[&Milestone],
-    cache: Option<&DiskCache>,
-    git_info: &GitInfo,
-) -> Result<Vec<MilestoneStatusRow>> {
-    let mut rows = Vec::new();
+/// The status report, and everything that builds it.
+///
+/// Behind a module boundary on purpose: `rows` and `archive` are private to this module and
+/// the only way to obtain a report is [`of_milestones`], which accumulates both from the
+/// same threads in one pass. So an entry point outside this module cannot construct a
+/// report, cannot replace its readiness with an empty one, and cannot print half of it.
+///
+/// The previous shape had each entry point call a table printer and then a readiness
+/// printer. Deleting the second call from one of the two left the other looking identical,
+/// the output plausible, and the suite green — which is how a reviewer removed the
+/// default-target caveat from one command without anything noticing. The two halves now
+/// travel together as one value, so that divergence is a compile error rather than a
+/// regression a test has to be remembered for.
+mod report {
+    use super::*;
 
-    // Fetch once before processing issues (same result for all issues)
-    let (git_status, dirty_files) = match get_git_status(git_info) {
-        Ok(status) => (status.state, status.dirty),
-        Err(_) => (GitState::Clean, Vec::new()),
-    };
+    /// Everything `ghqc milestone status` reports, as one value.
+    ///
+    /// Both entry points return this and neither prints: the table and the archive readiness
+    /// block are obtainable only together, so the two commands cannot show different halves of
+    /// the same report. The previous shape — each entry point calling a table printer and then
+    /// a readiness printer — is what let a reviewer delete the readiness call from one of them
+    /// with the suite staying green.
+    #[derive(Debug, Clone)]
+    pub struct MilestoneStatusReport {
+        rows: Vec<MilestoneStatusRow>,
+        archive: ArchiveSummary,
+    }
 
-    for milestone in milestones {
-        // Get all issues for this milestone
-        let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
+    impl MilestoneStatusReport {
+        /// The whole report, line by line, in the order it is printed.
+        fn lines(&self) -> Vec<String> {
+            let mut lines = status_table_lines(&self.rows);
+            lines.extend(archive_readiness_block(&self.archive));
+            lines
+        }
 
-        // Alert about any pending file renames (run `ghqc issue rename` to confirm).
-        alert_renames(git_info, &issues).await?;
-
-        for issue in issues {
-            // Create IssueThread for each issue
-            if let Ok(issue_thread) = IssueThread::from_issue(&issue, cache, git_info).await {
-                let file_commits = issue_thread.file_commits();
-
-                // Determine QC status
-                let qc_status = QCStatus::determine_status(&issue_thread);
-                let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
-                let checklist_summary =
-                    ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
-
-                let mut git_status_str = git_status.format_for_file(&file_commits);
-                if dirty_files.contains(&issue_thread.file) {
-                    git_status_str.push_str(" (file has uncommitted local changes)");
-                }
-
-                let row = MilestoneStatusRow {
-                    file: issue_thread.file.display().to_string(),
-                    milestone: milestone.title.clone(),
-                    branch: issue_thread.active_branch().to_string(),
-                    issue_state: if issue_thread.open {
-                        "open".to_string()
-                    } else {
-                        "closed".to_string()
-                    },
-                    qc_status: qc_status
-                        .map(|status| status.to_string())
-                        // One row per issue, so an unplaceable active segment says so
-                        // in place of a status rather than dropping the issue.
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    git_status: git_status_str,
-                    checklist_summary,
-                    blocking_qc_status: get_blocking_qc_status(
-                        &issue_thread.blocking_qcs,
-                        git_info,
-                        cache,
-                    )
-                    .await,
-                };
-                rows.push(row);
+        /// Print the report. The one place either command produces output.
+        pub fn print(&self) {
+            for line in self.lines() {
+                println!("{line}");
             }
         }
     }
 
-    // Sort by milestone name, then by file name
-    rows.sort_by(|a, b| {
-        a.milestone
-            .cmp(&b.milestone)
-            .then_with(|| a.file.cmp(&b.file))
-    });
-
-    Ok(rows)
-}
-
-fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
-    if rows.is_empty() {
-        println!("No issues found in selected milestones.");
-        return;
+    #[derive(Debug, Clone)]
+    pub struct MilestoneStatusRow {
+        pub file: String,
+        pub milestone: String,
+        pub branch: String,
+        pub issue_state: String,
+        pub qc_status: String,
+        pub git_status: String,
+        pub checklist_summary: ChecklistSummary,
+        pub blocking_qc_status: BlockingQCStatus,
     }
 
-    // Calculate column widths
-    let file_width = rows.iter().map(|r| r.file.len()).max().unwrap_or(4).max(4);
-    let milestone_width = rows
-        .iter()
-        .map(|r| r.milestone.len())
-        .max()
-        .unwrap_or(9)
-        .max(9);
-    let branch_width = rows
-        .iter()
-        .map(|r| r.branch.len())
-        .max()
-        .unwrap_or(6)
-        .max(6);
-    let issue_state_width = rows
-        .iter()
-        .map(|r| r.issue_state.len())
-        .max()
-        .unwrap_or(11)
-        .max(11);
-    let qc_status_width = rows
-        .iter()
-        .map(|r| r.qc_status.len())
-        .max()
-        .unwrap_or(9)
-        .max(9);
-    let git_status_width = rows
-        .iter()
-        .map(|r| r.git_status.len())
-        .max()
-        .unwrap_or(10)
-        .max(10);
-    let checklist_width = rows
-        .iter()
-        .map(|r| r.checklist_summary.to_string().len())
-        .max()
-        .unwrap_or(9)
-        .max(9);
-    let blocking_qc_width = rows
-        .iter()
-        .map(|r| r.blocking_qc_status.as_summary_string().len())
-        .max()
-        .unwrap_or(12)
-        .max(12);
+    /// The rows of the status table, plus the archive readiness the same threads imply.
+    ///
+    /// The summary is accumulated here rather than derived from the rows: a row is formatted
+    /// text, and re-parsing it to decide whether a file is archivable would be a second
+    /// categorization — which is the thing this must not be.
+    pub(super) async fn of_milestones(
+        milestones: &[&Milestone],
+        cache: Option<&DiskCache>,
+        git_info: &GitInfo,
+    ) -> Result<MilestoneStatusReport> {
+        let mut rows = Vec::new();
+        let mut archive_summary = ArchiveSummary::default();
 
-    // Print header
-    println!();
-    println!(
-        "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$} | {:<checklist_width$} | {:<blocking_qc_width$}",
-        "File",
-        "Milestone",
-        "Branch",
-        "Issue State",
-        "QC Status",
-        "Git Status",
-        "Checklist",
-        "Blocking QCs",
-        file_width = file_width,
-        milestone_width = milestone_width,
-        branch_width = branch_width,
-        issue_state_width = issue_state_width,
-        qc_status_width = qc_status_width,
-        git_status_width = git_status_width,
-        checklist_width = checklist_width,
-        blocking_qc_width = blocking_qc_width,
-    );
+        // Fetch once before processing issues (same result for all issues)
+        let (git_status, dirty_files) = match get_git_status(git_info) {
+            Ok(status) => (status.state, status.dirty),
+            Err(_) => (GitState::Clean, Vec::new()),
+        };
 
-    // Print separator
-    println!(
-        "{:-<file_width$}-+-{:-<milestone_width$}-+-{:-<branch_width$}-+-{:-<issue_state_width$}-+-{:-<qc_status_width$}-+-{:-<git_status_width$}-+-{:-<checklist_width$}-+-{:-<blocking_qc_width$}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        file_width = file_width,
-        milestone_width = milestone_width,
-        branch_width = branch_width,
-        issue_state_width = issue_state_width,
-        qc_status_width = qc_status_width,
-        git_status_width = git_status_width,
-        checklist_width = checklist_width,
-        blocking_qc_width = blocking_qc_width,
-    );
+        for milestone in milestones {
+            // Get all issues for this milestone
+            let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
 
-    // Print rows
-    for row in rows {
-        let checklist_str = row.checklist_summary.to_string();
-        let blocking_qc_str = row.blocking_qc_status.as_summary_string();
-        println!(
+            // Alert about any pending file renames (run `ghqc issue rename` to confirm).
+            alert_renames(git_info, &issues).await?;
+
+            for issue in issues {
+                // Create IssueThread for each issue
+                if let Ok(issue_thread) = IssueThread::from_issue(&issue, cache, git_info).await {
+                    let file_commits = issue_thread.file_commits();
+
+                    // What `ghqc milestone archive` would do with this file, asked of the
+                    // archive's own categorization. `ArchiveTarget::Latest` is the only target
+                    // this command can speak for: it has no `--round`, so it reports the
+                    // no-override archive and says as much when it prints.
+                    //
+                    // The error case is a target naming no round, which `Latest` cannot be on
+                    // a thread that always has at least Initial QC — but it is propagated
+                    // rather than swallowed, because a swallowed miscount is a readiness check
+                    // that quietly stops counting.
+                    archive_summary.push(categorize(&issue_thread, ArchiveTarget::Latest)?);
+
+                    // Determine QC status
+                    let qc_status = QCStatus::determine_status(&issue_thread);
+                    let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
+                    let checklist_summary =
+                        ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
+
+                    let mut git_status_str = git_status.format_for_file(&file_commits);
+                    if dirty_files.contains(&issue_thread.file) {
+                        git_status_str.push_str(" (file has uncommitted local changes)");
+                    }
+
+                    let row = MilestoneStatusRow {
+                        file: issue_thread.file.display().to_string(),
+                        milestone: milestone.title.clone(),
+                        branch: issue_thread.active_branch().to_string(),
+                        issue_state: if issue_thread.open {
+                            "open".to_string()
+                        } else {
+                            "closed".to_string()
+                        },
+                        qc_status: qc_status
+                            .map(|status| status.to_string())
+                            // One row per issue, so an unplaceable active segment says so
+                            // in place of a status rather than dropping the issue.
+                            .unwrap_or_else(|| "Unknown".to_string()),
+                        git_status: git_status_str,
+                        checklist_summary,
+                        blocking_qc_status: get_blocking_qc_status(
+                            &issue_thread.blocking_qcs,
+                            git_info,
+                            cache,
+                        )
+                        .await,
+                    };
+                    rows.push(row);
+                }
+            }
+        }
+
+        // Sort by milestone name, then by file name
+        rows.sort_by(|a, b| {
+            a.milestone
+                .cmp(&b.milestone)
+                .then_with(|| a.file.cmp(&b.file))
+        });
+
+        Ok(MilestoneStatusReport {
+            rows,
+            archive: archive_summary,
+        })
+    }
+
+    /// The table's lines, blank spacers included, so the whole report is one value a test can
+    /// read rather than a sequence of prints only a human can check.
+    fn status_table_lines(rows: &[MilestoneStatusRow]) -> Vec<String> {
+        if rows.is_empty() {
+            return vec!["No issues found in selected milestones.".to_string()];
+        }
+
+        // Calculate column widths
+        let file_width = rows.iter().map(|r| r.file.len()).max().unwrap_or(4).max(4);
+        let milestone_width = rows
+            .iter()
+            .map(|r| r.milestone.len())
+            .max()
+            .unwrap_or(9)
+            .max(9);
+        let branch_width = rows
+            .iter()
+            .map(|r| r.branch.len())
+            .max()
+            .unwrap_or(6)
+            .max(6);
+        let issue_state_width = rows
+            .iter()
+            .map(|r| r.issue_state.len())
+            .max()
+            .unwrap_or(11)
+            .max(11);
+        let qc_status_width = rows
+            .iter()
+            .map(|r| r.qc_status.len())
+            .max()
+            .unwrap_or(9)
+            .max(9);
+        let git_status_width = rows
+            .iter()
+            .map(|r| r.git_status.len())
+            .max()
+            .unwrap_or(10)
+            .max(10);
+        let checklist_width = rows
+            .iter()
+            .map(|r| r.checklist_summary.to_string().len())
+            .max()
+            .unwrap_or(9)
+            .max(9);
+        let blocking_qc_width = rows
+            .iter()
+            .map(|r| r.blocking_qc_status.as_summary_string().len())
+            .max()
+            .unwrap_or(12)
+            .max(12);
+
+        // Print header
+        let mut lines = vec![String::new()];
+        lines.push(format!(
             "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$} | {:<checklist_width$} | {:<blocking_qc_width$}",
-            row.file,
-            row.milestone,
-            row.branch,
-            row.issue_state,
-            row.qc_status,
-            row.git_status,
-            checklist_str,
-            blocking_qc_str,
+            "File",
+            "Milestone",
+            "Branch",
+            "Issue State",
+            "QC Status",
+            "Git Status",
+            "Checklist",
+            "Blocking QCs",
             file_width = file_width,
             milestone_width = milestone_width,
             branch_width = branch_width,
@@ -593,9 +608,189 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
             git_status_width = git_status_width,
             checklist_width = checklist_width,
             blocking_qc_width = blocking_qc_width,
-        );
+        ));
+
+        // Print separator
+        lines.push(format!(
+            "{:-<file_width$}-+-{:-<milestone_width$}-+-{:-<branch_width$}-+-{:-<issue_state_width$}-+-{:-<qc_status_width$}-+-{:-<git_status_width$}-+-{:-<checklist_width$}-+-{:-<blocking_qc_width$}",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            file_width = file_width,
+            milestone_width = milestone_width,
+            branch_width = branch_width,
+            issue_state_width = issue_state_width,
+            qc_status_width = qc_status_width,
+            git_status_width = git_status_width,
+            checklist_width = checklist_width,
+            blocking_qc_width = blocking_qc_width,
+        ));
+
+        // Print rows
+        for row in rows {
+            let checklist_str = row.checklist_summary.to_string();
+            let blocking_qc_str = row.blocking_qc_status.as_summary_string();
+            lines.push(format!(
+                "{:<file_width$} | {:<milestone_width$} | {:<branch_width$} | {:<issue_state_width$} | {:<qc_status_width$} | {:<git_status_width$} | {:<checklist_width$} | {:<blocking_qc_width$}",
+                row.file,
+                row.milestone,
+                row.branch,
+                row.issue_state,
+                row.qc_status,
+                row.git_status,
+                checklist_str,
+                blocking_qc_str,
+                file_width = file_width,
+                milestone_width = milestone_width,
+                branch_width = branch_width,
+                issue_state_width = issue_state_width,
+                qc_status_width = qc_status_width,
+                git_status_width = git_status_width,
+                checklist_width = checklist_width,
+                blocking_qc_width = blocking_qc_width,
+            ));
+        }
+        lines.push(String::new());
+
+        lines
     }
-    println!();
+
+    /// The pre-archive summary block: the same counts, from the same categorization, that
+    /// `ghqc milestone archive` prints before it writes.
+    ///
+    /// Stated at the **default** target, because this command has no `--round`: it is what an
+    /// archive taken now with no override would contain. **The caveat is part of this block,
+    /// not of any caller.** It was previously printed by each entry point, which meant one of
+    /// the two could stop printing it and nothing would notice; the counts and the target they
+    /// speak for are now one value, so a surface cannot show the first without the second.
+    fn archive_readiness_block(summary: &ArchiveSummary) -> Vec<String> {
+        if summary.files == 0 {
+            return Vec::new();
+        }
+
+        vec![
+            section_header("Archive readiness"),
+            format!("  {summary}"),
+            "  Counted at each file's latest round — what `ghqc milestone archive` would produce with \
+             no `--round` override."
+                .to_string(),
+            String::new(),
+        ]
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::cli::archive::ArchiveCategory;
+
+        const CAVEAT: &str = "  Counted at each file's latest round — what \
+                              `ghqc milestone archive` would produce with no `--round` \
+                              override.";
+
+        fn summary_of_three() -> ArchiveSummary {
+            let mut summary = ArchiveSummary::default();
+            summary.push(ArchiveCategory::ApprovedCurrent);
+            summary.push(ArchiveCategory::ApprovedSuperseded);
+            summary.push(ArchiveCategory::Unapproved { round: 3 });
+            summary
+        }
+
+        fn status_row(file: &str) -> MilestoneStatusRow {
+            MilestoneStatusRow {
+                file: file.to_string(),
+                milestone: "Milestone 1".to_string(),
+                branch: "main".to_string(),
+                issue_state: "open".to_string(),
+                qc_status: "Approved".to_string(),
+                git_status: "Up to date".to_string(),
+                checklist_summary: ChecklistSummary::new(5, 5),
+                blocking_qc_status: BlockingQCStatus::default(),
+            }
+        }
+
+        /// C4: the readiness block states the buckets and, in the same breath, that it speaks
+        /// only for the default target — a reader who intends to retarget a file at archive
+        /// time must not read this line as having accounted for it.
+        #[test]
+        fn the_readiness_block_names_the_target_it_speaks_for() {
+            assert_eq!(
+                archive_readiness_block(&summary_of_three()),
+                vec![
+                    section_header("Archive readiness"),
+                    "  3 files · 1 approved & current · 1 approved but superseded · \
+                     1 unapproved (round 3 open)"
+                        .to_string(),
+                    CAVEAT.to_string(),
+                    String::new(),
+                ]
+            );
+        }
+
+        /// The block is nothing when there is nothing to report, rather than a header over an
+        /// empty count.
+        #[test]
+        fn an_empty_milestone_gets_no_readiness_block() {
+            assert!(archive_readiness_block(&ArchiveSummary::default()).is_empty());
+        }
+
+        /// **Both** entry points report the table *and* the readiness block with its caveat,
+        /// because there is only one report: they return this value and print nothing
+        /// themselves. Previously each printed the table and then the readiness block, so
+        /// deleting the second call from one of them left the other looking identical and the
+        /// suite green — this test is what fails if either half of the report goes missing.
+        #[test]
+        fn the_report_carries_the_table_and_the_caveat_together() {
+            let report = MilestoneStatusReport {
+                rows: vec![status_row("scripts/analysis.R")],
+                archive: summary_of_three(),
+            };
+
+            let lines = report.lines();
+
+            let table_header = lines
+                .iter()
+                .position(|line| line.starts_with("File "))
+                .expect("the table header");
+            let row = lines
+                .iter()
+                .position(|line| line.starts_with("scripts/analysis.R"))
+                .expect("the file's row");
+            let summary = lines
+                .iter()
+                .position(|line| line.contains("3 files · 1 approved & current"))
+                .expect("the readiness summary");
+            let caveat = lines
+                .iter()
+                .position(|line| line == CAVEAT)
+                .expect("the readiness caveat");
+
+            // Order matters: the readiness block reads as a conclusion drawn from the table
+            // above it, and the caveat qualifies the summary it follows.
+            assert!(table_header < row, "{lines:#?}");
+            assert!(row < summary, "{lines:#?}");
+            assert_eq!(caveat, summary + 1, "{lines:#?}");
+        }
+
+        /// An empty milestone still reports, and reports only what it can: the table's own
+        /// "no issues" line, with no readiness block claiming anything about zero files.
+        #[test]
+        fn an_empty_report_says_so_without_a_readiness_block() {
+            let report = MilestoneStatusReport {
+                rows: Vec::new(),
+                archive: ArchiveSummary::default(),
+            };
+
+            assert_eq!(
+                report.lines(),
+                vec!["No issues found in selected milestones.".to_string()]
+            );
+        }
+    }
 }
 
 #[cfg(test)]

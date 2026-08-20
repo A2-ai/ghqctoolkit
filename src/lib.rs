@@ -37,7 +37,11 @@ pub use approve::{
     QCUnapprove, UnapprovalResult, approve_with_validation, get_unapproved_blocking_qcs,
     unapprove_with_impact,
 };
-pub use archive::{ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, archive};
+pub use archive::{
+    Approval, ArchiveError, ArchiveFile, ArchiveMetadata, ArchivePreview, ArchiveQC, ArchiveTarget,
+    METADATA_VERSION, RoundProvenance, SelectedRound, SupersedingCause, archive, archive_preview,
+    selected_round,
+};
 pub use auth::{
     AuthStore, AuthStoreError, AuthToken, canonicalize_base_url, extract_host_from_base_url,
     token_page_url, validate_github_token,

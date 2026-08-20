@@ -102,6 +102,62 @@ export interface ExtensionInfo {
   comment_url: string | null
 }
 
+/**
+ * One reason a round's archived bytes would not be provably the newest QC state — one
+ * value per supersession clause (S3), in the order the wire emits them.
+ *
+ * Not mutually exclusive: `later_approval` and `round_open` co-occur routinely.
+ */
+export type SupersedingCause =
+  | 'later_approval'
+  | 'round_open'
+  | 'changed_since'
+  | 'undeterminable'
+
+/** An approval claim about a previewed commit. */
+export interface PreviewApproval {
+  /**
+   * The round that closed on this commit. **May be less than the enclosing segment's
+   * `index`** (I2): a round's anchor may be the previous round's closing commit, so
+   * previewing an open round can yield approved bytes under a different frame. Read as
+   * *you are on round N; these bytes are round M's approval* — and never render the
+   * enclosing round as approved on the strength of this field.
+   */
+  round: number
+  commit: string
+  by: string
+  /** RFC 3339. */
+  at: string
+}
+
+/**
+ * What archiving **this** round would produce (spec §26, contract §12).
+ *
+ * Projected from the one derivation the archive itself runs, so the answer a user selects
+ * on and the answer the metadata records cannot disagree. Render it; do not re-derive it —
+ * the S1 content rule, the I2 approval tie-break and all four supersession clauses used to
+ * live in `utils/archiveSelection.ts` as well, and one rule in two languages is the drift
+ * this model keeps removing.
+ */
+export interface ArchivePreview {
+  /**
+   * The commit that would be archived: this round's `closing_commit` when it is closed, its
+   * `latest_actioned_commit` when it is open. **Not** necessarily `commits[0]`.
+   */
+  commit: string
+  /** null ⇒ those bytes were never approved. */
+  approval: PreviewApproval | null
+  /**
+   * Empty ⇒ the bytes are provably the newest QC state — a **positive** claim, never
+   * "unknown". Non-empty ⇒ every reason they are not, in clause order.
+   *
+   * There is deliberately no `superseded` bool beside it, on the wire or in this file:
+   * `superseded` **is** `superseding_causes.length > 0`, and two fields for one fact is the
+   * defect this model exists to remove.
+   */
+  superseding_causes: SupersedingCause[]
+}
+
 /** A Round segment. `index` is 1-based; 1 is Initial QC. */
 export interface RoundSegment {
   kind: 'round'
@@ -136,6 +192,30 @@ export interface RoundSegment {
   extensions: ExtensionInfo[]
   /** Commits this round owns, newest first. Empty when `placement.kind === 'unplaceable'`. */
   commits: IssueCommit[]
+  /**
+   * M4: this round's newest commit carrying an action — its anchor, a notification, or a
+   * review — by position in its own `commits`. Drift nobody acted on is not a candidate.
+   *
+   * null exactly when `placement.kind === 'unplaceable'`. Not `commits[0]` (S6) and not
+   * `closing_commit`: a closed round's approval is not an event, so this can be older.
+   *
+   * It is the commit an **open** round would be archived at (S1 row 3). A closed round is
+   * archived at its `closing_commit`; reading this field for one reads the wrong field.
+   */
+  latest_actioned_commit: string | null
+  /**
+   * What archiving this round would produce — the projected answer to S1, I2 and S3.
+   *
+   * **null exactly when `placement.kind === 'unplaceable'`**: the round cannot be archived,
+   * which is the archive's own refusal, and the reason stays on `placement.reason` rather
+   * than being duplicated here. It does *not* mean "unknown round" — the segment is right
+   * here in the array.
+   *
+   * A round may carry a non-null `closing_commit` **and** a null preview (§20.2): it closed
+   * at a real identified sha whose anchor is on no walked branch. So a closing commit is not
+   * proof a round is archivable; a non-null preview is the only such proof.
+   */
+  archive_preview: ArchivePreview | null
   placement: Placement
 }
 

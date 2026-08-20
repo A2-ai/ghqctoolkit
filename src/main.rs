@@ -6,24 +6,25 @@ use std::path::PathBuf;
 
 use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
-    CacheCommands, ConfigurationEditCommands, FileCommitPair, FileCommitPairParser, IssueUrlArg,
-    IssueUrlArgParser, MilestoneSelectionFilter, NewRoundArgs, NotificationArg, RelevantFileArg,
-    RelevantFileArgParser, RepairRoundArgs, configuration_edit, configuration_init,
-    confirm_rename_noninteractive, find_issue, generate_archive_name, get_milestone_issue_threads,
+    CacheCommands, ConfigurationEditCommands, FileCommitPair, FileCommitPairParser, IssueRoundArg,
+    IssueRoundArgParser, IssueUrlArg, IssueUrlArgParser, MilestoneSelectionFilter, NewRoundArgs,
+    NotificationArg, RelevantFileArg, RelevantFileArgParser, RepairRoundArgs, configuration_edit,
+    configuration_init, confirm_rename_noninteractive, find_issue, generate_archive_name,
     gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token, handle_cache,
-    interactive_milestone_status, interactive_rename, interactive_status, milestone_status,
-    new_round, prompt_archive, prompt_context_files, prompt_milestone_record, repair_open_round,
+    interactive_milestone_status, interactive_rename, interactive_status, milestone_archive_files,
+    milestone_status, new_round, prompt_archive, prompt_context_files, prompt_milestone_record,
+    reject_unreachable_round_targets, repair_open_round, report_archive_provenance, round_targets,
     single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, ConfigUpdateResult, Configuration, ContextPosition, DiskCache,
-    GitCommand, GitCommitOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread,
-    PullOutcome, QCContext, QCStatus, UreqDownloader, analyze_issue_checklists,
-    approve_with_validation, archive, configuration_status, create_labels_if_needed,
-    create_staging_dir, determine_config_dir, fetch_milestone_issues, get_blocking_qc_status,
-    get_git_status, get_milestone_issue_information, get_repo_users, record, render,
-    setup_configuration, stash_review_file, unapprove_with_impact, update_configuration,
+    ArchiveMetadata, ConfigUpdateResult, Configuration, ContextPosition, DiskCache, GitCommand,
+    GitCommitOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread, PullOutcome,
+    QCContext, QCStatus, UreqDownloader, analyze_issue_checklists, approve_with_validation,
+    archive, configuration_status, create_labels_if_needed, create_staging_dir,
+    determine_config_dir, fetch_milestone_issues, get_blocking_qc_status, get_git_status,
+    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
+    stash_review_file, unapprove_with_impact, update_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -411,9 +412,20 @@ enum MilestoneCommands {
         #[arg(long)]
         all_milestones: bool,
 
-        /// Include unapproved issues in archive
+        /// Include issues no round has ever closed on. Files approved in an earlier round
+        /// are always included; use --round to archive one at that round
         #[arg(long)]
         include_unapproved: bool,
+
+        /// Round to archive an issue's file at, 1-based, 1 being Initial QC
+        /// (format: issue#=round, repeatable). Defaults to each file's latest round
+        #[arg(long = "round", value_parser = IssueRoundArgParser)]
+        rounds: Vec<IssueRoundArg>,
+
+        /// Archive the remaining files when an issue's selected round has no locatable
+        /// commits, instead of stopping. Never archives such a file
+        #[arg(long)]
+        skip_unplaceable: bool,
 
         /// Flatten archive structure (put all files in root directory)
         #[arg(long)]
@@ -896,7 +908,10 @@ async fn main() -> Result<()> {
                     let cache = DiskCache::from_git_info(&git_info).ok();
                     let all_milestones_data = git_info.get_milestones().await?;
 
-                    match (milestones.is_empty(), all_milestones) {
+                    // Every arm produces the report; printing happens once, below. The
+                    // table and the archive readiness block travel together in one value,
+                    // so no arm can print one half of the report and not the other.
+                    let report = match (milestones.is_empty(), all_milestones) {
                         (true, false) => {
                             // Interactive mode - no milestones specified and not all_milestones
                             interactive_milestone_status(
@@ -904,12 +919,12 @@ async fn main() -> Result<()> {
                                 cache.as_ref(),
                                 &git_info,
                             )
-                            .await?;
+                            .await?
                         }
                         (true, true) => {
                             // All milestones requested
                             milestone_status(&all_milestones_data, cache.as_ref(), &git_info)
-                                .await?;
+                                .await?
                         }
                         (false, false) => {
                             // Specific milestones provided - filter by name
@@ -926,12 +941,14 @@ async fn main() -> Result<()> {
                             }
 
                             milestone_status(&selected_milestones, cache.as_ref(), &git_info)
-                                .await?;
+                                .await?
                         }
                         (false, true) => {
                             bail!("Cannot specify both milestone names and --all-milestones flag");
                         }
-                    }
+                    };
+
+                    report.print();
                 }
                 MilestoneCommands::Record {
                     milestones,
@@ -1081,10 +1098,16 @@ async fn main() -> Result<()> {
                     all_closed_milestones,
                     all_milestones,
                     include_unapproved,
+                    rounds,
+                    skip_unplaceable,
                     flatten,
                     archive_path,
                     additional_file,
                 } => {
+                    // One target per issue: an issue named twice is a contradiction in the
+                    // request, since a file is archived at exactly one round.
+                    let round_targets = round_targets(&rounds)?;
+
                     let selected_archive_files = if !additional_file.is_empty() {
                         let commits = git_info.commits(&None, None)?;
                         additional_file
@@ -1108,6 +1131,7 @@ async fn main() -> Result<()> {
                         (true, false, false)
                             if archive_path.is_none() && additional_file.is_empty() =>
                         {
+                            reject_unreachable_round_targets(&round_targets)?;
                             // Interactive mode - no milestones, no archive_path, no file_commit
                             prompt_archive(
                                 &milestones_data,
@@ -1123,6 +1147,9 @@ async fn main() -> Result<()> {
                                     "Must specify milestones and/or file commits to generate an archive"
                                 );
                             }
+                            // This arm archives no milestone file, so it never consults
+                            // the round map either.
+                            reject_unreachable_round_targets(&round_targets)?;
                             // No milestones but have file_commit or archive_path - just use empty milestone files
                             let archive_path = archive_path.unwrap_or(
                                 PathBuf::from("archive")
@@ -1134,16 +1161,16 @@ async fn main() -> Result<()> {
                             // All milestones requested
                             let selected_milestones =
                                 MilestoneSelectionFilter::All.filter_milestones(&milestones_data);
-                            let artifact_files = get_milestone_issue_threads(
+                            let artifact_files = milestone_archive_files(
                                 &selected_milestones,
+                                &round_targets,
+                                include_unapproved,
+                                skip_unplaceable,
+                                flatten,
                                 &git_info,
                                 cache.as_ref(),
                             )
-                            .await?
-                            .into_iter()
-                            .filter(|i| include_unapproved || i.last_approved_commit().is_some())
-                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
-                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+                            .await?;
 
                             let archive_path = archive_path.unwrap_or(
                                 PathBuf::from("archive")
@@ -1160,16 +1187,16 @@ async fn main() -> Result<()> {
                                 bail!("No closed milestones found in repository");
                             }
 
-                            let artifact_files = get_milestone_issue_threads(
+                            let artifact_files = milestone_archive_files(
                                 &selected_milestones,
+                                &round_targets,
+                                include_unapproved,
+                                skip_unplaceable,
+                                flatten,
                                 &git_info,
                                 cache.as_ref(),
                             )
-                            .await?
-                            .into_iter()
-                            .filter(|i| include_unapproved || i.last_approved_commit().is_some())
-                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
-                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+                            .await?;
 
                             let archive_path = archive_path.unwrap_or(
                                 PathBuf::from("archive")
@@ -1191,16 +1218,16 @@ async fn main() -> Result<()> {
                                 );
                             }
 
-                            let artifact_files = get_milestone_issue_threads(
+                            let artifact_files = milestone_archive_files(
                                 &selected_milestones,
+                                &round_targets,
+                                include_unapproved,
+                                skip_unplaceable,
+                                flatten,
                                 &git_info,
                                 cache.as_ref(),
                             )
-                            .await?
-                            .into_iter()
-                            .filter(|i| include_unapproved || i.last_approved_commit().is_some())
-                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
-                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+                            .await?;
 
                             let archive_path = archive_path.unwrap_or(
                                 PathBuf::from("archive")
@@ -1232,6 +1259,13 @@ async fn main() -> Result<()> {
                     } else {
                         cli.directory.join(&archive_path)
                     };
+
+                    // Say what is about to be archived, per file: which round the bytes
+                    // came from, whether they were approved, at which commit, and whether
+                    // they were still the newest QC state. The default target is the
+                    // latest round, so an approved-then-reopened file archives unapproved
+                    // bytes — ungated, but never unlabelled.
+                    report_archive_provenance(&archive_files);
 
                     // Create the actual archive using ArchiveFile approach
                     let metadata = ArchiveMetadata::new(archive_files, &env)?;

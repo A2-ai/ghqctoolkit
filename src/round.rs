@@ -258,10 +258,25 @@ pub struct Round {
 impl Round {
     /// Human-readable name of the round.
     pub fn name(&self) -> String {
-        if self.index == 1 {
+        Self::name_of(self.index)
+    }
+
+    /// Human-readable name of the round at `index`, without a round to hand.
+    ///
+    /// **The one authority for the naming rule** — `1` is `Initial QC`, every later round
+    /// is `Round n` — which is a spec-pinned string, not a formatting preference.
+    ///
+    /// It takes a bare index because legitimate callers have nothing else: provenance read
+    /// back from `ghqc_archive_metadata.json` carries `round` and `approval.round` as
+    /// `u32` with no thread in scope, so a `&Round` cannot be required. Rendering that
+    /// through a local copy of the rule is how the same string ends up spelled two ways,
+    /// so the index-only shape lives here beside [`Self::name`] rather than in each
+    /// surface.
+    pub fn name_of(index: u32) -> String {
+        if index == 1 {
             "Initial QC".to_string()
         } else {
-            format!("Round {}", self.index)
+            format!("Round {index}")
         }
     }
 
@@ -279,15 +294,36 @@ impl Round {
         matches!(self.placement, Placement::Placed)
     }
 
-    /// The newest commit any of this round's events names, by position in the round's
-    /// own commits. Events naming a commit this round does not own are ignored — there
-    /// is no index arithmetic against a thread-wide array to get wrong.
-    pub fn newest_event_commit(&self) -> Option<&ObjectId> {
+    /// This round's newest commit carrying an action — its anchor (`opened_at`, which
+    /// for Initial QC is the `initial qc commit`), a notification, or a review — by
+    /// position in the round's own commits. Commits nobody acted on are not candidates,
+    /// so drift on top of the last notification is never reported here.
+    ///
+    /// `None` exactly when the round is unplaceable: it then owns no commits and its
+    /// anchor is a null-OID placeholder, which is not a commit anyone may address.
+    ///
+    /// Not `commits[0]`, which is the newest commit full stop, and not
+    /// [`Self::closing_commit`]: an approval is not a [`RoundEvent`], so a closed round
+    /// can report an actioned commit *older* than the commit it closed at.
+    ///
+    /// **This is the one implementation of "the round's latest update commit."**
+    /// [`crate::IssueThread::next_notification_from`]'s round branch is the same
+    /// computation and calls this so the two cannot drift apart (archive-rounds **M4**).
+    pub fn latest_actioned_commit(&self) -> Option<&IssueCommit> {
+        // Stated rather than left to fall out of the empty candidate set below: an
+        // unplaceable round owns no commits today, so the filter would return `None`
+        // anyway, and this is the claim being made rather than a coincidence of it.
+        if !self.is_placed() {
+            return None;
+        }
+        // {opened_at} ∪ {e.commit}, newest by position in this round's own commits.
         self.events
             .iter()
-            .filter_map(|event| self.commit_position(event.commit()))
+            .map(RoundEvent::commit)
+            .chain(std::iter::once(&self.opened_at))
+            .filter_map(|hash| self.commit_position(hash))
             .min()
-            .map(|position| &self.commits[position].hash)
+            .map(|position| &self.commits[position])
     }
 
     /// Position of `hash` in this round's commits (newest-first), if it owns it.
@@ -2224,7 +2260,13 @@ mod tests {
         assert_eq!(thread.rounds().count(), 1);
         assert!(thread.anomalies.is_empty());
         assert_eq!(thread.standing_approval(), Some(&oid(B)));
-        assert_eq!(round_at(&thread, 0).newest_event_commit(), Some(&oid(B)));
+        assert_eq!(
+            round_at(&thread, 0)
+                .latest_actioned_commit()
+                .map(|commit| commit.hash),
+            Some(oid(B)),
+            "the notification's short sha resolved to the full commit"
+        );
     }
 
     #[test]
@@ -2237,8 +2279,107 @@ mod tests {
         assert!(round_at(&thread, 0).is_open());
         assert_eq!(thread.standing_approval(), None);
         assert_eq!(thread.last_approved_commit(), None);
-        assert_eq!(round_at(&thread, 0).newest_event_commit(), None);
         assert_eq!(thread.next_notification_from(), Some(oid(A)));
+    }
+
+    /// One function answers for both call shapes: a caller holding a `&Round`, and one
+    /// holding only the bare index a metadata file gives it. The `Initial QC` string is
+    /// spec-pinned, so a divergence between the two spellings must fail the suite.
+    #[test]
+    fn the_naming_rule_has_one_home_for_both_call_shapes() {
+        assert_eq!(Round::name_of(1), "Initial QC");
+        assert_eq!(Round::name_of(2), "Round 2");
+        assert_eq!(Round::name_of(7), "Round 7");
+
+        let thread = thread(
+            &[A, B, C, D, E],
+            A,
+            &[
+                approval(B),
+                new_round(2, C, B),
+                approval(D),
+                new_round(3, E, D),
+            ],
+        );
+        assert_eq!(thread.rounds().count(), 3);
+        for round in thread.rounds() {
+            assert_eq!(
+                round.name(),
+                Round::name_of(round.index),
+                "a round's own name must be what the index-only caller renders"
+            );
+        }
+    }
+
+    // ── The round's latest actioned commit (archive M4) ──────────────────────
+
+    /// Drift on top of the newest notification is not an actioned commit: nobody put it
+    /// up for review. This is the whole difference between this accessor and
+    /// `commits[0]`.
+    #[test]
+    fn the_latest_actioned_commit_ignores_drift_nobody_acted_on() {
+        let thread = thread(&[A, B, C, D], A, &[notification(B), review(C)]);
+        let round = round_at(&thread, 0);
+
+        assert_eq!(owned(&thread.segments[0])[0], D.to_string());
+        assert_eq!(
+            round.latest_actioned_commit().map(|commit| commit.hash),
+            Some(oid(C))
+        );
+    }
+
+    /// With nothing acted on yet, the round's own anchor is the answer.
+    #[test]
+    fn a_round_with_no_events_reports_its_anchor_as_actioned() {
+        let thread = thread(&[A, B], A, &[]);
+
+        assert_eq!(
+            round_at(&thread, 0)
+                .latest_actioned_commit()
+                .map(|commit| commit.hash),
+            Some(oid(A))
+        );
+    }
+
+    /// An approval is not a `RoundEvent`, so a closed round can report an actioned
+    /// commit *older* than the commit it closed at. A consumer wanting the approval
+    /// reads `closing_commit`.
+    #[test]
+    fn a_closed_rounds_latest_actioned_commit_can_predate_its_approval() {
+        let thread = thread(&[A, B, C], A, &[notification(B), approval(C)]);
+        let round = round_at(&thread, 0);
+
+        assert_eq!(round.closing_commit(), Some(&oid(C)));
+        assert_eq!(
+            round.latest_actioned_commit().map(|commit| commit.hash),
+            Some(oid(B))
+        );
+    }
+
+    /// An unplaceable round owns no commits and its anchor is a placeholder, so there is
+    /// no commit to report — the same gate `next_notification_from` applies.
+    #[test]
+    fn an_unplaceable_round_has_no_actioned_commit() {
+        let missing = "fffffff000000000000000000000000000000009";
+        let thread = thread(&[A, B], missing, &[]);
+
+        assert!(!round_at(&thread, 0).is_placed());
+        assert_eq!(round_at(&thread, 0).latest_actioned_commit(), None);
+        assert_eq!(thread.next_notification_from(), None);
+    }
+
+    /// The identity `next_notification_from` is built on: an open round's notification
+    /// base *is* its latest actioned commit.
+    #[test]
+    fn the_notification_base_of_an_open_round_is_its_latest_actioned_commit() {
+        let thread = thread(&[A, B, C, D], A, &[notification(B), review(C)]);
+
+        assert_eq!(
+            thread.next_notification_from(),
+            round_at(&thread, 0)
+                .latest_actioned_commit()
+                .map(|commit| commit.hash)
+        );
     }
 
     // ── Degradation: unplaceable segments ────────────────────────────────────
@@ -3172,7 +3313,13 @@ mod tests {
     fn next_notification_from_prefers_the_newer_review() {
         let thread = thread(&[A, B, C, D], A, &[notification(B), review(C)]);
         assert_eq!(thread.next_notification_from(), Some(oid(C)));
-        assert_eq!(round_at(&thread, 0).newest_event_commit(), Some(&oid(C)));
+        assert_eq!(
+            round_at(&thread, 0)
+                .latest_actioned_commit()
+                .map(|commit| commit.hash),
+            Some(oid(C)),
+            "the review outranks the older notification"
+        );
     }
 
     /// An open round with nothing notified yet diffs against its own anchor: the round
