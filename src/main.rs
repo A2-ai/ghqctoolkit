@@ -44,6 +44,35 @@ struct Cli {
     verbose: Verbosity<InfoLevel>,
 }
 
+/// Parse a bind address, tolerating the bracketed IPv6 form (`[::1]`) so an
+/// address copied out of a printed URL can be pasted straight back in.
+///
+/// Not cfg-gated on `api`/`ui`: it is referenced by the derived `value_parser` of
+/// whichever `bind` field the active features expose, and by tests in every
+/// configuration. Neither `bind` field exists in a server-less build, hence the
+/// conditional dead-code allowance (`ui` implies `api`).
+#[cfg_attr(not(feature = "api"), allow(dead_code))]
+fn parse_bind_addr(s: &str) -> Result<std::net::IpAddr, String> {
+    // Only strip when both brackets are present, so a mismatched `[::1` or `::1]`
+    // still fails instead of quietly parsing as something else.
+    if let Some(inner) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        return match inner.parse::<std::net::IpAddr>() {
+            // Brackets are the IPv6-literal form only; `[127.0.0.1]` is not valid syntax.
+            Ok(std::net::IpAddr::V4(_)) => Err(format!(
+                "invalid bind address `{s}`: brackets are only valid around an IPv6 address, use `{inner}`"
+            )),
+            Ok(addr) => Ok(addr),
+            Err(_) => Err(format!(
+                "invalid bind address `{s}`: `{inner}` is not a valid IPv6 address"
+            )),
+        };
+    }
+
+    s.parse::<std::net::IpAddr>().map_err(|_| {
+        format!("invalid bind address `{s}`: expected an IP address such as `127.0.0.1`, `::1`, `::`, or `0.0.0.0`")
+    })
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Issue management commands
@@ -87,9 +116,9 @@ enum Commands {
         #[arg(short, long, default_value = "3103")]
         port: u16,
 
-        /// Force IPv4-only bind and loopback URL
-        #[arg(long)]
-        ipv4_only: bool,
+        /// Address to bind. Defaults to IPv4 loopback; use `::1` for IPv6 loopback, `::` for a dual-stack wildcard, or `0.0.0.0` for all IPv4 interfaces. Bracketed IPv6 (`[::1]`) is also accepted
+        #[arg(long, default_value = "127.0.0.1", env = "GHQC_BIND_ADDR", value_parser = parse_bind_addr)]
+        bind: std::net::IpAddr,
     },
     #[cfg(feature = "ui")]
     /// Start the embedded UI server and open the browser
@@ -103,9 +132,9 @@ enum Commands {
         /// Do not open frontend in new tab
         #[arg(long)]
         no_open: bool,
-        /// Force IPv4-only bind and loopback URL
-        #[arg(long)]
-        ipv4_only: bool,
+        /// Address to bind. Defaults to IPv4 loopback; use `::1` for IPv6 loopback, `::` for a dual-stack wildcard, or `0.0.0.0` for all IPv4 interfaces. Bracketed IPv6 (`[::1]`) is also accepted
+        #[arg(long, default_value = "127.0.0.1", env = "GHQC_BIND_ADDR", value_parser = parse_bind_addr)]
+        bind: std::net::IpAddr,
     },
 }
 
@@ -1260,7 +1289,7 @@ async fn main() -> Result<()> {
             }
         }
         #[cfg(all(feature = "api", not(feature = "ui")))]
-        Commands::Serve { port, ipv4_only } => {
+        Commands::Serve { port, bind } => {
             use ghqctoolkit::api::{AppState, bind_local_server, create_router, local_server_url};
 
             let config_dir = determine_config_dir(cli.config_dir, &env)?;
@@ -1286,7 +1315,8 @@ async fn main() -> Result<()> {
                 });
             let app = create_router::<GitInfo, GitCommand>(state);
 
-            let listener = bind_local_server(port, ipv4_only).await?;
+            let socket = std::net::SocketAddr::new(bind, port);
+            let listener = bind_local_server(socket).await?;
             println!("Starting API server on {}", local_server_url(&listener));
             axum::serve(listener, app).await?;
         }
@@ -1295,12 +1325,14 @@ async fn main() -> Result<()> {
             action,
             port,
             no_open,
-            ipv4_only,
+            bind,
         } => {
             use ghqctoolkit::api::{AppState, bind_local_server_with_url};
 
+            let socket = std::net::SocketAddr::new(bind, port);
+
             if action == Some(UiAction::Url) {
-                let (_listener, url) = bind_local_server_with_url(port, ipv4_only).await?;
+                let (_listener, url) = bind_local_server_with_url(socket).await?;
                 println!("{url}");
                 return Ok(());
             }
@@ -1326,7 +1358,7 @@ async fn main() -> Result<()> {
                 .with_creator(move |path| {
                     GitInfo::from_path(path, &StdEnvProvider, store_clone.as_ref()).ok()
                 });
-            ghqctoolkit::ui::run::<GitInfo, GitCommand>(port, state, no_open, ipv4_only).await?;
+            ghqctoolkit::ui::run::<GitInfo, GitCommand>(socket, state, no_open).await?;
         }
     }
 
@@ -1346,12 +1378,12 @@ mod tests {
                 action,
                 port,
                 no_open,
-                ipv4_only,
+                bind,
             } => {
                 assert_eq!(action, None);
                 assert_eq!(port, 0);
                 assert!(!no_open);
-                assert!(!ipv4_only);
+                assert_eq!(bind, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
             }
             _ => panic!("expected ui command"),
         }
@@ -1366,29 +1398,192 @@ mod tests {
                 action,
                 port,
                 no_open,
-                ipv4_only,
+                bind,
             } => {
                 assert_eq!(action, Some(UiAction::Url));
                 assert_eq!(port, 8080);
                 assert!(!no_open);
-                assert!(!ipv4_only);
+                assert_eq!(bind, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
             }
             _ => panic!("expected ui command"),
         }
     }
 
     #[test]
-    fn ui_url_parses_with_ipv4_only() {
-        let cli = Cli::try_parse_from(["ghqc", "ui", "url", "--ipv4-only"]).unwrap();
+    fn ui_url_defaults_bind_to_ipv4_loopback() {
+        let cli = Cli::try_parse_from(["ghqc", "ui", "url"]).unwrap();
 
         match cli.command {
-            Commands::Ui {
-                action, ipv4_only, ..
-            } => {
+            Commands::Ui { action, bind, .. } => {
                 assert_eq!(action, Some(UiAction::Url));
-                assert!(ipv4_only);
+                assert_eq!(bind, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
             }
             _ => panic!("expected ui command"),
+        }
+    }
+
+    #[test]
+    fn ui_url_parses_ipv6_loopback_bind() {
+        let cli = Cli::try_parse_from(["ghqc", "ui", "url", "--bind", "::1"]).unwrap();
+
+        match cli.command {
+            Commands::Ui { bind, .. } => {
+                assert_eq!(bind, std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST));
+            }
+            _ => panic!("expected ui command"),
+        }
+    }
+
+    #[test]
+    fn ui_url_parses_bracketed_ipv6_bind() {
+        // An address copied out of a printed URL pastes straight back in.
+        let cli = Cli::try_parse_from(["ghqc", "ui", "url", "--bind", "[::]"]).unwrap();
+
+        match cli.command {
+            Commands::Ui { bind, .. } => {
+                assert_eq!(bind, std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
+            }
+            _ => panic!("expected ui command"),
+        }
+    }
+
+    #[test]
+    fn ui_url_rejects_bracketed_ipv4_bind() {
+        assert!(Cli::try_parse_from(["ghqc", "ui", "url", "--bind", "[127.0.0.1]"]).is_err());
+    }
+
+    #[test]
+    fn ui_url_parses_ipv4_wildcard_bind() {
+        let cli = Cli::try_parse_from(["ghqc", "ui", "url", "--bind", "0.0.0.0"]).unwrap();
+
+        match cli.command {
+            Commands::Ui { bind, .. } => {
+                assert_eq!(bind, std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            }
+            _ => panic!("expected ui command"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod bind_addr_tests {
+    use super::parse_bind_addr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn parses_bare_addresses() {
+        assert_eq!(
+            parse_bind_addr("::").unwrap(),
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        );
+        assert_eq!(
+            parse_bind_addr("::1").unwrap(),
+            IpAddr::V6(Ipv6Addr::LOCALHOST)
+        );
+        assert_eq!(
+            parse_bind_addr("127.0.0.1").unwrap(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert_eq!(
+            parse_bind_addr("0.0.0.0").unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn parses_bracketed_ipv6() {
+        assert_eq!(
+            parse_bind_addr("[::]").unwrap(),
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        );
+        assert_eq!(
+            parse_bind_addr("[::1]").unwrap(),
+            IpAddr::V6(Ipv6Addr::LOCALHOST)
+        );
+    }
+
+    #[test]
+    fn bracketed_and_bare_ipv6_agree() {
+        assert_eq!(
+            parse_bind_addr("[::1]").unwrap(),
+            parse_bind_addr("::1").unwrap()
+        );
+    }
+
+    #[test]
+    fn rejects_bracketed_ipv4() {
+        // Brackets are an IPv6-literal form only.
+        let err = parse_bind_addr("[127.0.0.1]").unwrap_err();
+        assert!(err.contains("[127.0.0.1]"), "got {err}");
+    }
+
+    #[test]
+    fn rejects_mismatched_brackets() {
+        for input in ["[::1", "::1]", "[]"] {
+            let err = parse_bind_addr(input).unwrap_err();
+            assert!(err.contains(input), "got {err} for {input}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_addresses() {
+        for input in ["bogus", ""] {
+            let err = parse_bind_addr(input).unwrap_err();
+            assert!(err.contains("invalid bind address"), "got {err}");
+        }
+    }
+}
+
+#[cfg(all(test, feature = "api", not(feature = "ui")))]
+mod serve_tests {
+    use super::*;
+
+    #[test]
+    fn serve_defaults_bind_to_ipv4_loopback() {
+        let cli = Cli::try_parse_from(["ghqc", "serve"]).unwrap();
+
+        match cli.command {
+            Commands::Serve { port, bind } => {
+                assert_eq!(port, 3103);
+                assert_eq!(bind, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            }
+            _ => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn serve_parses_ipv6_loopback_bind() {
+        let cli = Cli::try_parse_from(["ghqc", "serve", "--bind", "::1"]).unwrap();
+
+        match cli.command {
+            Commands::Serve { bind, .. } => {
+                assert_eq!(bind, std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST));
+            }
+            _ => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn serve_parses_ipv4_wildcard_bind() {
+        let cli = Cli::try_parse_from(["ghqc", "serve", "--bind", "0.0.0.0"]).unwrap();
+
+        match cli.command {
+            Commands::Serve { bind, .. } => {
+                assert_eq!(bind, std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            }
+            _ => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn serve_parses_bracketed_ipv6_bind() {
+        let cli = Cli::try_parse_from(["ghqc", "serve", "--bind", "[::1]"]).unwrap();
+
+        match cli.command {
+            Commands::Serve { bind, .. } => {
+                assert_eq!(bind, std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST));
+            }
+            _ => panic!("expected serve command"),
         }
     }
 }
