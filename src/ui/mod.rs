@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use rust_embed::Embed;
+use std::net::SocketAddr;
 
 #[derive(Embed)]
 #[folder = "ui/dist/client/"]
@@ -52,14 +53,13 @@ fn serve_index() -> Response {
 
 /// Start the embedded server (API + SPA) and open the browser.
 pub async fn run<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static>(
-    port: u16,
+    addr: SocketAddr,
     state: AppState<G>,
     no_open: bool,
-    ipv4_only: bool,
 ) -> anyhow::Result<()> {
     let app = crate::api::create_router::<G, C>(state).fallback(static_handler);
 
-    let (listener, url) = crate::api::bind_local_server_with_url(port, ipv4_only).await?;
+    let (listener, url) = crate::api::bind_local_server_with_url(addr).await?;
     log::info!("ghqc UI running at {url}");
 
     // Open the browser (non-blocking, ignore errors)

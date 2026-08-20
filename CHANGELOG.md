@@ -1,4 +1,9 @@
 # v0.8.0 - Unreleased
+## Breaking Changes
+* `--ipv4-only` is removed from `ghqc serve` and `ghqc ui`; there is no deprecated alias, so scripts and wrappers still passing the flag will fail with an unknown-flag error and should simply drop it, since the new default is equivalent
+* `--bind <ADDR>` (env var `GHQC_BIND`) replaces `--ipv4-only` on `ghqc serve` and `ghqc ui`, and accepts any IP address — `127.0.0.1` or `::1` for loopback only, `0.0.0.0` for every IPv4 interface (needed in containers), `::` for a dual-stack wildcard, or a specific interface address; bracketed IPv6 forms (`[::]`, `[::1]`) are accepted as well, so an address copied out of a printed URL can be pasted straight back into `--bind`
+* The server now binds `127.0.0.1` by default instead of the dual-stack wildcard, so an unauthenticated API with permissive CORS is no longer exposed on every interface of the host; the requested address is bound exactly as given, with no IPv6 probing and no fallback to IPv4 on bind failure
+
 ## New Features
 * `ghqc configuration edit [checklists|options|logo|record]` command to run a single step of the wizard against an existing configuration repository, located from `--config-dir`, the current directory, or the configured configuration directory; with no component named, they are offered as a menu
 * `ghqc configuration init` command to interactively create a configuration repository — every `options.yaml` option, copying in a logo, the record template, and authoring markdown checklists in an editor, item by item, or from a bundled starter. Logo and template paths are picked with Tab-completing filesystem browsing. Re-running against an existing configuration repository turns it into an editor: current values become the prompt defaults, and existing checklists can be edited, renamed, or deleted. Files only; committing and pushing is left to the user

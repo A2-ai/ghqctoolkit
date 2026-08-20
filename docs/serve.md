@@ -5,7 +5,7 @@
 ## ghqc ui
 
 ```shell
-ghqc ui [url] [--port PORT] [--ipv4-only]
+ghqc ui [url] [--port PORT] [--bind ADDR]
 ```
 
 Starts the embedded web UI server and opens the browser. Requires the binary to be built with the `ui` feature.
@@ -15,17 +15,19 @@ cargo build --features cli,ui --release
 ./target/release/ghqc ui
 # or on a custom port:
 ./target/release/ghqc ui --port 8080
-# or to force IPv4 on hosts with problematic IPv6/localhost behavior:
-./target/release/ghqc ui --ipv4-only
+# or to listen on IPv6 loopback only:
+./target/release/ghqc ui --bind ::1
+# or to reach the UI from outside a container's network namespace:
+./target/release/ghqc ui --bind 0.0.0.0 --port 8080
 # or to print the exact URL the UI would use and exit:
 ./target/release/ghqc ui url
 ./target/release/ghqc ui url --port 8080
 ```
 
-If `--port` is omitted, the UI binds a random available port. The browser opens automatically to a literal loopback URL:
-`http://127.0.0.1:<port>` on IPv4-only systems or `http://[::1]:<port>` when the listener is bound on IPv6.
+If `--port` is omitted, the UI binds a random available port. The browser opens automatically to a URL derived from the address that was actually bound, with wildcard binds displayed as their loopback equivalent: a bind of `0.0.0.0` is shown as `http://127.0.0.1:<port>` and a bind of `::` as `http://[::1]:<port>`.
+A literal address is always bound and printed, rather than `localhost`, because `localhost` may resolve to `::1` before `127.0.0.1` (or the reverse) depending on the host's name resolution order.
 
-`ghqc ui url` uses the same bind logic as `ghqc ui`, so it prints the exact loopback URL selected on the current machine and then exits without starting the server.
+`ghqc ui url` uses the same bind logic as `ghqc ui`, so it prints the exact URL selected on the current machine and then exits without starting the server.
 If `--port` is omitted, `ghqc ui` and `ghqc ui url` bind port `0`, letting the OS choose a random available port.
 
 ### Web UI Tabs
@@ -55,7 +57,7 @@ Opening `/` redirects to `/status`.
 ## ghqc serve
 
 ```shell
-ghqc serve [--port PORT] [--ipv4-only]
+ghqc serve [--port PORT] [--bind ADDR]
 ```
 
 Starts the REST API server only, without the embedded UI. Requires the binary to be built with the `api` feature (but not `ui`).
@@ -65,8 +67,10 @@ cargo build --features cli,api --release
 ./target/release/ghqc serve
 # or on a custom port:
 ./target/release/ghqc serve --port 3104
-# or to force IPv4:
-./target/release/ghqc serve --ipv4-only
+# or to listen on IPv6 loopback only:
+./target/release/ghqc serve --bind ::1
+# or to accept connections from outside a container:
+./target/release/ghqc serve --bind 0.0.0.0
 ```
 
 The server starts on port **3103** by default.
@@ -79,9 +83,25 @@ The API spec is available at `openapi/openapi.yml` in the repository.
 |---|---|---|
 | `-p, --port` (`ghqc ui`) | random | Port to listen on; omit to let the OS choose an available port |
 | `-p, --port` (`ghqc serve`) | `3103` | Port to listen on |
-| `--ipv4-only` | `false` | Force an IPv4-only listener and `127.0.0.1` loopback URL |
+| `--bind` (env `GHQC_BIND`) | `127.0.0.1` | IP address to bind the listener to |
 | `-d, --directory` | `.` | Git project directory to serve |
 | `--config-dir` | (auto-resolved) | Configuration directory path |
+
+### Bind Address
+
+`--bind` (env var `GHQC_BIND`) takes any IP address, and that address is bound exactly as given — there is no probing and no fallback to another address, so a bind failure is reported as an error instead of being silently retried elsewhere. The default, `127.0.0.1`, listens on IPv4 loopback only, so the server is reachable only from processes on the same host. That matters because the API has no authentication and permissive CORS; a wildcard bind exposes it on every interface of the host, which is a real problem on shared or multi-tenant cluster nodes.
+
+| Value | Reachable from |
+|---|---|
+| `127.0.0.1` (default) | IPv4 loopback only — processes on the same host |
+| `::1` | IPv6 loopback only |
+| `::` | Dual-stack wildcard — every IPv4 and IPv6 interface |
+| `0.0.0.0` | Every IPv4 interface; needed in containers, where the client lives outside the container's network namespace |
+| `10.0.0.5` | One specific interface address |
+
+Bracketed IPv6 forms (`[::]`, `[::1]`) are accepted as well, so an address copied out of a printed URL can be pasted straight back into `--bind`.
+
+Reverse-proxied environments (Posit Workbench, RStudio Server, JupyterHub) run the proxy on the same host and connect over loopback, so they work with the default and should **not** pass `--bind`.
 
 ## Configuration Resolution
 

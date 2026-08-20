@@ -13,7 +13,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -136,48 +136,46 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
         .with_state(state)
 }
 
-/// Bind the local HTTP server.
+/// Bind the local HTTP server to an explicit address.
 ///
-/// When `ipv4_only` is false, prefer IPv6 and fall back to IPv4 if IPv6 bind fails.
-pub async fn bind_local_server(port: u16, ipv4_only: bool) -> std::io::Result<TcpListener> {
-    if ipv4_only {
-        return bind_ipv4(port).await;
-    }
-
-    match bind_dual_stack_ipv6(port).await {
-        Ok(listener) => Ok(listener),
-        Err(v6_err) => {
-            log::warn!(
-                "Failed to bind dual-stack IPv6 listener on port {port}: {v6_err}. Falling back to IPv4"
-            );
-            bind_ipv4(port).await
-        }
-    }
+/// The caller decides the address (the CLI defaults to IPv4 loopback). There is no
+/// probing and no fallback: if the requested address cannot be bound, that is an error
+/// the caller should see rather than a silent switch to a different interface.
+pub async fn bind_local_server(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    TcpListener::bind(addr).await
 }
 
+/// Bind as [`bind_local_server`] and also return the URL to reach the listener.
 pub async fn bind_local_server_with_url(
-    port: u16,
-    ipv4_only: bool,
+    addr: SocketAddr,
 ) -> std::io::Result<(TcpListener, String)> {
-    let listener = bind_local_server(port, ipv4_only).await?;
+    let listener = bind_local_server(addr).await?;
     let url = local_server_url(&listener);
     Ok((listener, url))
 }
 
+/// The URL for the address the listener actually bound.
+///
+/// Wildcard addresses are not reachable as-is, so they are displayed as the matching
+/// loopback address.
 pub fn local_server_url(listener: &TcpListener) -> String {
     match listener.local_addr() {
-        Ok(addr) if addr.is_ipv6() => format!("http://[::1]:{}", addr.port()),
-        Ok(addr) => format!("http://127.0.0.1:{}", addr.port()),
+        Ok(addr) => format!("http://{}:{}", display_host(addr.ip()), addr.port()),
         Err(_) => "http://127.0.0.1".to_string(),
     }
 }
 
-async fn bind_dual_stack_ipv6(port: u16) -> std::io::Result<TcpListener> {
-    TcpListener::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))).await
-}
-
-async fn bind_ipv4(port: u16) -> std::io::Result<TcpListener> {
-    TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))).await
+/// Render `ip` as a URL host component.
+///
+/// Wildcards map to loopback, and IPv6 literals are bracketed. Built from the `IpAddr`
+/// rather than the `SocketAddr` so an IPv6 scope id (`%eth0`) never leaks into the URL.
+fn display_host(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) if v4 == Ipv4Addr::UNSPECIFIED => Ipv4Addr::LOCALHOST.to_string(),
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(v6) if v6 == Ipv6Addr::UNSPECIFIED => format!("[{}]", Ipv6Addr::LOCALHOST),
+        IpAddr::V6(v6) => format!("[{v6}]"),
+    }
 }
 
 #[cfg(test)]
@@ -185,21 +183,33 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn bind_local_server_with_url_uses_ipv4_when_requested() {
-        let (_listener, url) = bind_local_server_with_url(0, true).await.unwrap();
+    async fn bind_local_server_with_url_reports_ipv4_loopback() {
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let (_listener, url) = bind_local_server_with_url(addr).await.unwrap();
 
-        assert!(url.starts_with("http://127.0.0.1:"));
+        assert!(url.starts_with("http://127.0.0.1:"), "got {url}");
     }
 
     #[tokio::test]
-    async fn bind_local_server_with_url_returns_matching_loopback_host() {
-        let (listener, url) = bind_local_server_with_url(0, false).await.unwrap();
+    async fn bind_local_server_with_url_reports_ipv6_loopback() {
+        let addr = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
+        let Ok((_listener, url)) = bind_local_server_with_url(addr).await else {
+            // Some sandboxes have no IPv6 stack at all; nothing to assert there.
+            return;
+        };
 
-        let addr = listener.local_addr().unwrap();
-        if addr.is_ipv6() {
-            assert!(url.starts_with("http://[::1]:"));
-        } else {
-            assert!(url.starts_with("http://127.0.0.1:"));
-        }
+        assert!(url.starts_with("http://[::1]:"), "got {url}");
+    }
+
+    #[test]
+    fn display_host_maps_wildcards_to_loopback() {
+        assert_eq!(display_host(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), "127.0.0.1");
+        assert_eq!(display_host(IpAddr::V6(Ipv6Addr::UNSPECIFIED)), "[::1]");
+    }
+
+    #[test]
+    fn display_host_brackets_ipv6_literals() {
+        assert_eq!(display_host(IpAddr::V4(Ipv4Addr::LOCALHOST)), "127.0.0.1");
+        assert_eq!(display_host(IpAddr::V6(Ipv6Addr::LOCALHOST)), "[::1]");
     }
 }
