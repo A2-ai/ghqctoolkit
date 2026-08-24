@@ -30,7 +30,9 @@ import {
   type IssueStatusError,
   type IssueStatusResponse,
   type IssueStatusResult,
+  archiveBlockedReason,
   issueStatusBatcher,
+  latestRound,
   useAllMilestoneIssues,
 } from '~/api/issues'
 import { StatusErrorDisplay } from './StatusErrorDisplay'
@@ -177,21 +179,25 @@ function CommitIssueStep({
 
   const queryClient = useQueryClient()
 
-  // Pin hash: most recent commit from referencing statuses (if any)
+  // Pin hash: the latest round's archive commit — A3: what `approved_commit ??
+  // latest_commit` was always approximating.
   const pinHash = useMemo(() => {
     if (referencingStatuses.length === 0) return undefined
-    return (
-      referencingStatuses[0].qc_status.approved_commit ??
-      referencingStatuses[0].qc_status.latest_commit
-    )
+    return latestRound(referencingStatuses[0]).archive_commit
   }, [referencingStatuses])
 
+  // D54: an unresolved round contributes no commit at all — it must not read as a
+  // *different* commit in the "multiple QC issues use different commits" hint.
   const distinctRefCommits = new Set(
-    referencingStatuses.map(s => s.qc_status.approved_commit ?? s.qc_status.latest_commit),
+    referencingStatuses
+      .map(s => latestRound(s).archive_commit)
+      .filter((hash): hash is string => hash !== null),
   )
   const differentBranchesAmongReferencers =
     referencingStatuses.length > 0 &&
-    !referencingStatuses.every(s => s.branch === referencingStatuses[0].branch)
+    !referencingStatuses.every(
+      s => latestRound(s).branch === latestRound(referencingStatuses[0]).branch,
+    )
 
   // ── Commit tab ─────────────────────────────────────────────────────────────
 
@@ -319,10 +325,11 @@ function CommitIssueStep({
   )
 
   function handleIssueSelect(status: IssueStatusResponse) {
-    onResolve(
-      status.qc_status.approved_commit ?? status.qc_status.latest_commit,
-      status.issue.number,
-    )
+    const commit = latestRound(status).archive_commit
+    // D55: an unresolved round has no commit to hand back, and substituting one is
+    // the defect §18 removes. The card says which branch to fetch instead.
+    if (commit === null) return
+    onResolve(commit, status.issue.number)
   }
 
   return (
@@ -468,13 +475,13 @@ function CommitIssueStep({
               const isApproved =
                 s.qc_status.status === 'approved' ||
                 s.qc_status.status === 'changes_after_approval'
-              const commit = s.qc_status.approved_commit ?? s.qc_status.latest_commit
+              const commit = latestRound(s).archive_commit
               return (
                 <div
                   key={s.issue.number}
                   onClick={() => handleIssueSelect(s)}
                   style={{
-                    cursor: 'pointer',
+                    cursor: commit === null ? 'not-allowed' : 'pointer',
                     padding: '8px 12px',
                     borderRadius: 6,
                     border: '1px solid var(--mantine-color-gray-3)',
@@ -490,7 +497,13 @@ function CommitIssueStep({
                       : <Badge color="yellow" size="xs">{s.qc_status.status.replace(/_/g, ' ')}</Badge>}
                   </div>
                   {s.issue.milestone && <Text size="xs" c="dimmed">Milestone: {s.issue.milestone}</Text>}
-                  <Text size="xs" c="dimmed">Commit: {commit.slice(0, 7)}</Text>
+                  {/* D54/D55: no resolved commit ⇒ the card is not selectable and
+                      names the branch to fetch, rather than offering a substitute. */}
+                  {commit === null ? (
+                    <Text size="xs" c="orange.7">{archiveBlockedReason(latestRound(s))}</Text>
+                  ) : (
+                    <Text size="xs" c="dimmed">Commit: {commit.slice(0, 7)}</Text>
+                  )}
                 </div>
               )
             })}

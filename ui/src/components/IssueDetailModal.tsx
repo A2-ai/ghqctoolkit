@@ -20,7 +20,9 @@ import { CommentEditor } from './CommentEditor'
 import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest, ReviewStashResult } from '~/api/issues'
-import { fetchSingleIssueStatus, postApprove, postComment, postReview, useInvalidateBlockingDependents } from '~/api/issues'
+import { approvalCommentUrl, fetchSingleIssueStatus, latestRound, postApprove, postComment, postReview, roundApprovedCommit, roundByIndex, useInvalidateBlockingDependents } from '~/api/issues'
+import { RoundSwitcher } from '~/components/RoundSwitcher'
+import { ApprovalNotInBranchBadge, UnplaceableRoundAlert } from '~/components/RoundBadges'
 import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
 import { CommitSlider } from '~/components/CommitSlider'
 import { UnapproveSwimLanes } from '~/components/UnapproveSwimLanes'
@@ -65,7 +67,7 @@ function defaultTab(status: IssueStatusResponse): string {
   switch (status.qc_status.status) {
     case 'awaiting_review':
     case 'approval_required': {
-      const checklist = status.checklist_summary
+      const checklist = latestRound(status).checklist_summary
       const checklistComplete = checklist.total === 0 || checklist.completed === checklist.total
       const blocking = status.blocking_qc_status
       const blockingComplete = !blocking || blocking.total === 0 || blocking.approved_count === blocking.total
@@ -121,8 +123,13 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
 function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
+  // U4/W5: the slider is round-scoped, defaulting to the latest round. It never spans
+  // the whole QC's life again (§0.5).
+  const [roundIndex, setRoundIndex] = useState(latestRound(status).index)
+  const round = roundByIndex(status, roundIndex)
+
   // Build oldest-first commit list
-  const orderedCommits = [...status.commits].reverse()
+  const orderedCommits = [...round.commits].reverse()
 
   // Default FROM: last index with statuses.length > 0
   let fromDefault = 0
@@ -144,9 +151,12 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     }
   }
 
-  // Exception index: toDefault when latest commit and NOT file_changed
+  // Exception index: toDefault when latest commit and NOT file_changed.
+  // D53.3: an unplaceable round owns no commits, so `orderedCommits` can be empty —
+  // then `toDefault` is -1 and there is no commit to inspect at all.
+  const toDefaultCommit = orderedCommits[toDefault]
   const exceptionIdx =
-    toDefault === orderedCommits.length - 1 && !orderedCommits[toDefault].file_changed
+    toDefaultCommit && toDefault === orderedCommits.length - 1 && !toDefaultCommit.file_changed
       ? toDefault
       : -1
 
@@ -179,7 +189,8 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setPostResultUrl(null)
     setPostError(null)
     setAckApproved(false)
-  }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-defaults when the round changes too: each round has its own commit list.
+  }, [status.issue.number, roundIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
     .map((c, i) => ({ ...c, origIdx: i }))
@@ -278,6 +289,14 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
           />
         </Alert>
       )}
+
+      {/* U4: the round switcher sits above the slider; the slider below renders the
+          selected round's commits only. */}
+      <RoundSwitcher status={status} value={roundIndex} onChange={setRoundIndex} />
+
+      {/* D53/D55: an unplaceable round owns no commits, so the slider below renders
+          nothing — say why and name the branch instead of leaving a blank panel. */}
+      {round.placement === 'unplaceable' && <UnplaceableRoundAlert round={round} />}
 
       {/* Commit range slider */}
       {visibleCommits.length > 0 && (
@@ -445,7 +464,14 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 const EMPTY_BLOCKING_QC_STATUS = { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] }
 
 function StatusCard({ status }: { status: IssueStatusResponse }) {
-  const { issue, qc_status, branch, checklist_summary } = status
+  const { issue, qc_status, drift } = status
+  // D16/D24: the status card always shows the **latest** round; branch and checklist
+  // are round-scoped, so they are read from it rather than from a top-level copy.
+  const round = latestRound(status)
+  const branch = round.branch
+  const checklist_summary = round.checklist_summary
+  const approvedCommit = roundApprovedCommit(round)
+  const approvalUrl = approvalCommentUrl(issue, round)
   const blocking_qc_status = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const laneColor = STATUS_LANE_COLOR[qc_status.status]
   const formattedStatus = qc_status.status.replace(/_/g, ' ')
@@ -493,6 +519,31 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
           )}
         </div>
         <Text size="sm"><b>Branch:</b> {branch}</Text>
+        <Text size="sm"><b>Round:</b> {round.index}</Text>
+        {/* U8: the approved-commit row deep-links the approval comment (D36). D44:
+            `comment_id` is nullable, so with no id the hash is plain text rather than
+            a link to comment 0. */}
+        {approvedCommit && (
+          <Text size="sm">
+            <b>Approved:</b>{' '}
+            {approvalUrl ? (
+              <Anchor href={approvalUrl} target="_blank" style={{ fontFamily: 'monospace' }}>
+                {approvedCommit.slice(0, 7)}
+              </Anchor>
+            ) : (
+              <span style={{ fontFamily: 'monospace' }}>{approvedCommit.slice(0, 7)}</span>
+            )}
+          </Text>
+        )}
+        {/* U7/D35: the ChangesAfterApproval hash comes from drift.newest_file_change. */}
+        {qc_status.status === 'changes_after_approval' && drift.newest_file_change && (
+          <Text size="sm">
+            <b>Changed:</b>{' '}
+            <span style={{ fontFamily: 'monospace' }}>{drift.newest_file_change.slice(0, 7)}</span>
+          </Text>
+        )}
+        {/* U6/D31: an unreachable approval makes that hash meaningless — say so. */}
+        {drift.divergent && <ApprovalNotInBranchBadge />}
         <Text size="sm"><b>Reviewers:</b> {issue.assignees.join(', ') || 'None'}</Text>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Text size="sm" fw={700}>Status:</Text>
@@ -550,7 +601,11 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
 function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  const orderedCommits = [...status.commits].reverse()
+  // U4/W5: round-scoped, latest by default.
+  const [roundIndex, setRoundIndex] = useState(latestRound(status).index)
+  const round = roundByIndex(status, roundIndex)
+
+  const orderedCommits = [...round.commits].reverse()
 
   // Default: newest commit (last in orderedCommits = latest)
   const defaultCommitOrigIdx = orderedCommits.length - 1
@@ -591,7 +646,8 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setPostStashResult(null)
     setPostError(null)
     setAckApproved(false)
-  }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-defaults when the round changes too: each round has its own commit list.
+  }, [status.issue.number, roundIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
     .map((c, i) => ({ ...c, origIdx: i }))
@@ -680,6 +736,14 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
           />
         </Alert>
       )}
+
+      {/* U4: the round switcher sits above the slider; the slider below renders the
+          selected round's commits only. */}
+      <RoundSwitcher status={status} value={roundIndex} onChange={setRoundIndex} />
+
+      {/* D53/D55: an unplaceable round owns no commits, so the slider below renders
+          nothing — say why and name the branch instead of leaving a blank panel. */}
+      {round.placement === 'unplaceable' && <UnplaceableRoundAlert round={round} />}
 
       {visibleCommits.length > 0 && (
         <Stack gap="xs">
@@ -837,7 +901,11 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
   const { issue } = status
 
-  const orderedCommits = [...status.commits].reverse()
+  // U4/W5: round-scoped, latest by default.
+  const [roundIndex, setRoundIndex] = useState(latestRound(status).index)
+  const round = roundByIndex(status, roundIndex)
+
+  const orderedCommits = [...round.commits].reverse()
 
   // Default: last commit with non-empty statuses; fall back to latest
   let defaultCommitOrigIdx = orderedCommits.length - 1
@@ -876,7 +944,8 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     setPostResultOpen(false)
     setPostResultUrl(null)
     setPostError(null)
-  }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-defaults when the round changes too: each round has its own commit list.
+  }, [status.issue.number, roundIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const bqs = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const hasBlockingIssues = bqs.total > 0 && (bqs.not_approved.length > 0 || bqs.errors.length > 0)
@@ -984,6 +1053,14 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
           />
         </Alert>
       )}
+
+      {/* U4: the round switcher sits above the slider; the slider below renders the
+          selected round's commits only. */}
+      <RoundSwitcher status={status} value={roundIndex} onChange={setRoundIndex} />
+
+      {/* D53/D55: an unplaceable round owns no commits, so the slider below renders
+          nothing — say why and name the branch instead of leaving a blank panel. */}
+      {round.placement === 'unplaceable' && <UnplaceableRoundAlert round={round} />}
 
       {visibleCommits.length > 0 && (
         <Stack gap="xs">

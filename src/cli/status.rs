@@ -38,7 +38,6 @@ pub async fn interactive_status(
 
     // Select issue by title
     let issue = prompt_issue(&issues)?;
-    let checklist_summary = analyze_issue_checklists(issue.body.as_deref());
 
     // Create IssueThread from the selected issue
     let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
@@ -61,7 +60,6 @@ pub async fn interactive_status(
             &qc_status,
             &git_status.dirty,
             &file_commits,
-            &checklist_summary,
             &blocking_qc_status,
         )
     );
@@ -69,18 +67,22 @@ pub async fn interactive_status(
     Ok(())
 }
 
+/// D55: `qc_status` is a `Result` because `determine_status` refuses to answer when the
+/// latest round has no resolvable commit. The detail block still renders — including the
+/// round table, which names the round and the branch to fetch — with the QC status line
+/// saying it is undetermined and why. Never blank, never a substituted verdict.
 pub fn single_issue_status(
     issue_thread: &IssueThread,
     git_status: &GitState,
-    qc_status: &QCStatus,
+    qc_status: &Result<QCStatus, crate::IssueError>,
     dirty_files: &[PathBuf],
     file_commits: &[&ObjectId],
-    checklist_summaries: &[(String, ChecklistSummary)],
     blocking_qc_status: &BlockingQCStatus,
 ) -> String {
     let mut res = vec![
+        round_table(issue_thread),
         format!("- File:        {}", issue_thread.file.display()),
-        format!("- Branch:      {}", issue_thread.branch),
+        format!("- Branch:      {}", issue_thread.branch()),
     ];
     res.push(format!(
         "- Issue State: {}",
@@ -88,17 +90,23 @@ pub fn single_issue_status(
     ));
 
     let qc_str = match qc_status {
-        QCStatus::Approved => format!("Approved"),
-        QCStatus::ChangesAfterApproval(_) => {
+        Ok(QCStatus::Approved) => format!("Approved"),
+        Ok(QCStatus::ChangesAfterApproval(_)) => {
             format!("Approved. File has changed since approval")
         }
-        QCStatus::AwaitingReview => format!("Awaiting review. Latest commit notified"),
-        QCStatus::ChangeRequested => format!("Changes requested. Latest commit reviewed"),
-        QCStatus::InProgress => format!("Awaiting approval"),
-        QCStatus::ApprovalRequired => format!("Issue closed without approval"),
-        QCStatus::ChangesToComment(commit) => format!(
+        Ok(QCStatus::AwaitingReview) => format!("Awaiting review. Latest commit notified"),
+        Ok(QCStatus::ChangeRequested) => format!("Changes requested. Latest commit reviewed"),
+        Ok(QCStatus::InProgress) => format!("Awaiting approval"),
+        Ok(QCStatus::ApprovalRequired) => format!("Issue closed without approval"),
+        Ok(QCStatus::ChangesToComment(commit)) => format!(
             "File change in '{}' not commented",
             commit.to_string()[..7].to_string()
+        ),
+        // D55: the round is named above in the table; here we say why there is no
+        // verdict rather than inventing one.
+        Err(e) => format!(
+            "Undetermined for round {} — {e}",
+            issue_thread.latest_round().index
         ),
     };
     let is_dirty = dirty_files.contains(&issue_thread.file);
@@ -155,11 +163,11 @@ pub fn single_issue_status(
             }
         }
     };
-    let indiv_checklist = checklist_summaries
+    let (checklist_sum, checklist_sections) = latest_round_checklist(issue_thread);
+    let indiv_checklist = checklist_sections
         .iter()
         .map(|(name, sum)| format!("{name}: {sum}"))
         .collect::<Vec<_>>();
-    let checklist_sum = ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
 
     res.push(format!("- QC Status:   {qc_str}"));
     res.push(format!("- Git Status:  {git_str}"));
@@ -170,6 +178,162 @@ pub fn single_issue_status(
     res.push(format!("- {}", blocking_qc_status));
 
     res.join("\n")
+}
+
+/// R8: the checklist figures `ghqc issue status` prints come from the **latest round
+/// only**. Reading `issue.body` would report round 1 (D3/§0.4): a completed `2/2` from
+/// round 1 printed directly above a freshly opened round 2 reads to an auditor as a
+/// finished checklist. D24 deleted the API's top-level `checklist_summary` for exactly
+/// this bug class, and `round_table` already sources from `round.checklist.summary()`.
+///
+/// Returns the round's summary (M5) plus its per-section breakdown, so the detail block
+/// keeps today's layout (C3).
+fn latest_round_checklist(
+    issue_thread: &IssueThread,
+) -> (ChecklistSummary, Vec<(String, ChecklistSummary)>) {
+    let checklist = &issue_thread.latest_round().checklist;
+    // `content` excludes its `# ` heading (D37), so put the heading back before
+    // splitting into sections — `analyze_issue_checklists` starts at the first H1.
+    let sections = analyze_issue_checklists(Some(&format!(
+        "# {}\n{}",
+        checklist.name, checklist.content
+    )));
+
+    (checklist.summary(), sections)
+}
+
+/// C3: the per-round table `ghqc issue status` prints before the latest round's
+/// detail.
+///
+/// One row per round: index, branch, start commit, approval commit, checklist n/m,
+/// the preceding gap's commit count and its divergent flag. Round 1 has no
+/// predecessor (I13), so its gap columns read `-`.
+///
+/// D53: an unplaceable round is listed like any other — it keeps its declared index —
+/// with the branch to fetch spelled out below the table. D56: a round that inherited its
+/// branch says so in the `Branch` column, because branch scopes both its own and its
+/// gap's walk (D7/D9).
+pub(crate) fn round_table(issue_thread: &IssueThread) -> String {
+    struct Row {
+        round: String,
+        branch: String,
+        start: String,
+        approval: String,
+        checklist: String,
+        gap: String,
+        divergent: String,
+    }
+
+    let rows: Vec<Row> = issue_thread
+        .rounds
+        .iter()
+        .map(|round| {
+            let summary = round.checklist.summary();
+            // The preceding gap belongs to the round it precedes (D18); round 1 has
+            // no predecessor to gap from or diverge from (I13).
+            let (gap, divergent) = if round.index == 1 {
+                ("-".to_string(), "-".to_string())
+            } else {
+                (
+                    round.preceding_gap.commits.len().to_string(),
+                    if round.preceding_gap.divergent {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    },
+                )
+            };
+
+            Row {
+                round: round.index.to_string(),
+                branch: if round.branch_inherited {
+                    // D56: kept, but never silent.
+                    format!("{} (inherited)", round.branch)
+                } else {
+                    round.branch.clone()
+                },
+                start: short_commit(&round.start_commit),
+                approval: round
+                    .approved_commit()
+                    .map(short_commit)
+                    .unwrap_or_else(|| "-".to_string()),
+                checklist: format!("{}/{}", summary.completed, summary.total),
+                gap,
+                divergent,
+            }
+        })
+        .collect();
+
+    let width = |header: &str, values: &dyn Fn(&Row) -> usize| {
+        rows.iter().map(values).max().unwrap_or(0).max(header.len())
+    };
+    let round_w = width("Round", &|r: &Row| r.round.len());
+    let branch_w = width("Branch", &|r: &Row| r.branch.len());
+    let start_w = width("Start", &|r: &Row| r.start.len());
+    let approval_w = width("Approval", &|r: &Row| r.approval.len());
+    let checklist_w = width("Checklist", &|r: &Row| r.checklist.len());
+    let gap_w = width("Gap", &|r: &Row| r.gap.len());
+    let divergent_w = width("Divergent", &|r: &Row| r.divergent.len());
+
+    let mut lines = vec![
+        format!(
+            "{:<round_w$} | {:<branch_w$} | {:<start_w$} | {:<approval_w$} | {:<checklist_w$} | {:<gap_w$} | {:<divergent_w$}",
+            "Round", "Branch", "Start", "Approval", "Checklist", "Gap", "Divergent",
+        ),
+        format!(
+            "{:-<round_w$}-+-{:-<branch_w$}-+-{:-<start_w$}-+-{:-<approval_w$}-+-{:-<checklist_w$}-+-{:-<gap_w$}-+-{:-<divergent_w$}",
+            "", "", "", "", "", "", "",
+        ),
+    ];
+    for row in &rows {
+        lines.push(format!(
+            "{:<round_w$} | {:<branch_w$} | {:<start_w$} | {:<approval_w$} | {:<checklist_w$} | {:<gap_w$} | {:<divergent_w$}",
+            row.round,
+            row.branch,
+            row.start,
+            row.approval,
+            row.checklist,
+            row.gap,
+            row.divergent,
+        ));
+    }
+
+    // D53/D55: an unplaceable round is rendered with its index and an explicit
+    // fetch-this-branch state — never blank, never a substituted hash.
+    for round in &issue_thread.rounds {
+        if let Some(branch) = round.unplaceable_branch() {
+            lines.push(format!(
+                "⚠️  Round {}: start commit {} could not be placed — fetch '{}' to resolve it",
+                round.index,
+                short_commit(&round.start_commit),
+                branch
+            ));
+        }
+    }
+    // D22: surfaced in the CLI as "no cohesive history". A divergent gap is an
+    // allowable-but-undesired state, and D21/D39 forbid reading it as malformed.
+    for round in &issue_thread.rounds {
+        if round.preceding_gap.divergent {
+            lines.push(format!(
+                "⚠️  Round {}: no cohesive history — its start commit is not a descendant of the previous approval",
+                round.index
+            ));
+        }
+    }
+    // D31/U6: a divergent drift means the approval was rewritten off its branch, so
+    // the reported ChangesAfterApproval hash is not to be read as meaningful.
+    if issue_thread.drift.divergent {
+        lines.push(
+            "⚠️  Approval commit not in branch history — the commits since approval cannot be bounded"
+                .to_string(),
+        );
+    }
+
+    lines.join("\n")
+}
+
+fn short_commit(commit: &ObjectId) -> String {
+    commit.to_string()[..7].to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -300,11 +464,16 @@ async fn get_milestone_status_rows(
             if let Ok(issue_thread) = IssueThread::from_issue(&issue, cache, git_info).await {
                 let file_commits = issue_thread.file_commits();
 
-                // Determine QC status
-                let qc_status = QCStatus::determine_status(&issue_thread);
-                let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
-                let checklist_summary =
-                    ChecklistSummary::sum(checklist_summaries.iter().map(|(_, c)| c));
+                // Determine QC status. D55: when the latest round has no resolvable
+                // commit the row says so, naming the branch to fetch — never a status
+                // derived from a substituted commit.
+                let qc_status = match QCStatus::determine_status(&issue_thread) {
+                    Ok(status) => status.to_string(),
+                    Err(e) => e.to_string(),
+                };
+                // R8: the milestone table reports the latest round, never the issue
+                // body (which is round 1 — D3/§0.4).
+                let checklist_summary = issue_thread.latest_round().checklist.summary();
 
                 let mut git_status_str = git_status.format_for_file(&file_commits);
                 if dirty_files.contains(&issue_thread.file) {
@@ -314,13 +483,13 @@ async fn get_milestone_status_rows(
                 let row = MilestoneStatusRow {
                     file: issue_thread.file.display().to_string(),
                     milestone: milestone.title.clone(),
-                    branch: issue_thread.branch.clone(),
+                    branch: issue_thread.branch().to_string(),
                     issue_state: if issue_thread.open {
                         "open".to_string()
                     } else {
                         "closed".to_string()
                     },
-                    qc_status: qc_status.to_string(),
+                    qc_status,
                     git_status: git_status_str,
                     checklist_summary,
                     blocking_qc_status: get_blocking_qc_status(
@@ -464,4 +633,353 @@ fn display_milestone_status_table(rows: &[MilestoneStatusRow]) {
         );
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::issue::{
+        Approval, Gap, IssueCommit, Round, RoundChecklist, RoundPlacement, RoundState,
+    };
+    use std::collections::HashSet;
+
+    fn commit(seed: char) -> ObjectId {
+        ObjectId::from_hex(seed.to_string().repeat(40).as_bytes()).unwrap()
+    }
+
+    fn issue_commit(seed: char) -> IssueCommit {
+        IssueCommit {
+            hash: commit(seed),
+            message: "a commit".to_string(),
+            statuses: HashSet::from([crate::CommitStatus::Initial]),
+            file_changed: true,
+        }
+    }
+
+    fn round(
+        index: u32,
+        branch: &str,
+        start: char,
+        checklist: &str,
+        state: RoundState,
+        preceding_gap: Gap,
+    ) -> Round {
+        Round {
+            index,
+            branch: branch.to_string(),
+            branch_inherited: false,
+            placement: RoundPlacement::Placed,
+            start_commit: commit(start),
+            preceding_gap,
+            checklist: RoundChecklist {
+                name: format!("Pass {index}"),
+                content: checklist.to_string(),
+            },
+            commits: vec![issue_commit(start)],
+            state,
+        }
+    }
+
+    /// C3: a per-round table — round, branch, start, approval, checklist n/m,
+    /// preceding-gap commit count, divergent flag — for every round, not just the
+    /// latest.
+    #[test]
+    fn test_round_table_renders_every_round_including_the_divergent_flag() {
+        let thread = IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            milestone: "v1".to_string(),
+            open: true,
+            blocking_qcs: Vec::new(),
+            rounds: vec![
+                round(
+                    1,
+                    "main",
+                    'a',
+                    "- [x] one\n- [x] two\n",
+                    RoundState::Approved(Approval {
+                        commit: commit('a'),
+                        comment_id: None,
+                    }),
+                    Gap::default(),
+                ),
+                round(
+                    2,
+                    "feat/two",
+                    'b',
+                    "- [x] one\n- [ ] two\n",
+                    // An unapproved non-last round is Superseded (D21/D27) — which
+                    // D39.4 forbids reading as malformed, so the table just shows no
+                    // approval commit.
+                    RoundState::Unapproved,
+                    Gap {
+                        commits: vec![issue_commit('c'), issue_commit('d')],
+                        // D22: the start commit is not descended from the previous
+                        // approval.
+                        divergent: true,
+                    },
+                ),
+                round(
+                    3,
+                    "feat/three",
+                    'e',
+                    "- [ ] one\n- [ ] two\n- [ ] three\n",
+                    RoundState::Unapproved,
+                    Gap::default(),
+                ),
+            ],
+            drift: Gap::default(),
+        };
+
+        let table = round_table(&thread);
+        let lines: Vec<&str> = table.lines().collect();
+
+        assert!(lines[0].starts_with("Round | Branch"));
+        assert!(lines[0].contains("Start"));
+        assert!(lines[0].contains("Approval"));
+        assert!(lines[0].contains("Checklist"));
+        assert!(lines[0].contains("Gap"));
+        assert!(lines[0].contains("Divergent"));
+
+        // Round 1: approved, and I13 means it has no gap columns to fill.
+        assert_eq!(
+            lines[2],
+            "1     | main       | aaaaaaa | aaaaaaa  | 2/2       | -   | -        "
+        );
+        // Round 2: no approval, a two-commit divergent preceding gap.
+        assert_eq!(
+            lines[3],
+            "2     | feat/two   | bbbbbbb | -        | 1/2       | 2   | yes      "
+        );
+        // Round 3: the latest round, an empty non-divergent gap (the D8 overlap
+        // case is still a real, meaningful gap — W6).
+        assert_eq!(
+            lines[4],
+            "3     | feat/three | eeeeeee | -        | 0/3       | 0   | no       "
+        );
+
+        // D22: surfaced in the CLI as "no cohesive history".
+        assert!(table.contains("⚠️  Round 2: no cohesive history"));
+        assert!(!table.contains("Round 3: no cohesive history"));
+        assert!(!table.contains("Approval commit not in branch history"));
+    }
+
+    /// D53/D55: an unplaceable round is rendered with its **declared** index and an
+    /// explicit fetch-this-branch state — never blank and never a substituted hash.
+    /// D56: a round that inherited its branch says so in the `Branch` column.
+    #[test]
+    fn test_round_table_names_the_branch_to_fetch_and_the_inherited_branch() {
+        let mut unplaceable = round(
+            3,
+            "feat/three",
+            'e',
+            "- [ ] one\n",
+            RoundState::Unapproved,
+            Gap::default(),
+        );
+        unplaceable.commits.clear();
+        unplaceable.placement = RoundPlacement::Unplaceable {
+            branch: "feat/three".to_string(),
+        };
+        let mut inherited = round(
+            2,
+            "main",
+            'b',
+            "- [x] one\n",
+            RoundState::Unapproved,
+            Gap::default(),
+        );
+        inherited.branch_inherited = true;
+
+        let thread = IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            milestone: "v1".to_string(),
+            open: true,
+            blocking_qcs: Vec::new(),
+            rounds: vec![
+                round(
+                    1,
+                    "main",
+                    'a',
+                    "- [x] one\n",
+                    RoundState::Approved(Approval {
+                        commit: commit('a'),
+                        comment_id: None,
+                    }),
+                    Gap::default(),
+                ),
+                inherited,
+                unplaceable,
+            ],
+            drift: Gap::default(),
+        };
+
+        let table = round_table(&thread);
+
+        // The round is listed, with its declared index and its declared start commit.
+        assert!(table.contains("3     | feat/three"), "got:\n{table}");
+        assert!(table.contains(
+            "⚠️  Round 3: start commit eeeeeee could not be placed — fetch 'feat/three' to \
+             resolve it"
+        ));
+        // D56: the inheritance is visible where the round is viewed.
+        assert!(table.contains("main (inherited)"), "got:\n{table}");
+        assert!(
+            !table.contains("1     | main (inherited)"),
+            "round 1 declares its branch in the body"
+        );
+    }
+
+    /// D55: `ghqc issue status` still renders. An unresolvable latest round produces an
+    /// explicit undetermined line naming the round and the branch to fetch — the detail
+    /// block is never blank, and no substituted verdict appears.
+    #[test]
+    fn test_single_issue_status_renders_an_undetermined_status() {
+        let mut unplaceable = round(
+            2,
+            "feat/two",
+            'b',
+            "- [ ] one\n",
+            RoundState::Unapproved,
+            Gap::default(),
+        );
+        unplaceable.commits.clear();
+        unplaceable.placement = RoundPlacement::Unplaceable {
+            branch: "feat/two".to_string(),
+        };
+        let thread = IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            milestone: "v1".to_string(),
+            open: true,
+            blocking_qcs: Vec::new(),
+            rounds: vec![
+                round(
+                    1,
+                    "main",
+                    'a',
+                    "- [x] one\n",
+                    RoundState::Approved(Approval {
+                        commit: commit('a'),
+                        comment_id: None,
+                    }),
+                    Gap::default(),
+                ),
+                unplaceable,
+            ],
+            drift: Gap::default(),
+        };
+
+        let out = single_issue_status(
+            &thread,
+            &GitState::Clean,
+            &Err(crate::IssueError::LocalBranchNotFound(
+                "feat/two".to_string(),
+            )),
+            &[],
+            &[],
+            &BlockingQCStatus::default(),
+        );
+
+        assert!(
+            out.contains("- QC Status:   Undetermined for round 2 — Branch 'feat/two'"),
+            "got:\n{out}"
+        );
+        // The round table is still there, naming what to fetch.
+        assert!(
+            out.contains("fetch 'feat/two' to resolve it"),
+            "got:\n{out}"
+        );
+    }
+
+    /// D31/U6: a divergent drift is a different fact with a different message — the
+    /// approval was rewritten off its branch, so the reported hash is not meaningful.
+    #[test]
+    fn test_round_table_flags_a_divergent_drift() {
+        let thread = IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            milestone: "v1".to_string(),
+            open: false,
+            blocking_qcs: Vec::new(),
+            rounds: vec![round(
+                1,
+                "main",
+                'a',
+                "- [x] one\n",
+                RoundState::Approved(Approval {
+                    commit: commit('a'),
+                    comment_id: None,
+                }),
+                Gap::default(),
+            )],
+            drift: Gap {
+                commits: vec![issue_commit('b')],
+                divergent: true,
+            },
+        };
+
+        let table = round_table(&thread);
+        assert!(table.contains("⚠️  Approval commit not in branch history"));
+        assert!(!table.contains("no cohesive history"));
+    }
+
+    /// R8: the printed checklist summary must come from the LATEST round. Before this
+    /// fix both this block and the milestone table read `analyze_issue_checklists(
+    /// issue.body)` — the body is round 1 (D3/§0.4) — so a finished round-1 checklist
+    /// was printed directly above "Awaiting review" for a freshly opened round 2.
+    #[test]
+    fn test_single_issue_status_checklist_summary_reflects_the_latest_round() {
+        let thread = IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            milestone: "v1".to_string(),
+            open: true,
+            blocking_qcs: Vec::new(),
+            rounds: vec![
+                round(
+                    1,
+                    "main",
+                    'a',
+                    "- [x] one\n- [x] two\n",
+                    RoundState::Approved(Approval {
+                        commit: commit('a'),
+                        comment_id: None,
+                    }),
+                    Gap::default(),
+                ),
+                round(
+                    2,
+                    "feat/two",
+                    'b',
+                    "- [ ] one\n- [ ] two\n- [ ] three\n",
+                    RoundState::Unapproved,
+                    Gap::default(),
+                ),
+            ],
+            drift: Gap::default(),
+        };
+
+        let out = single_issue_status(
+            &thread,
+            &GitState::Clean,
+            &Ok(QCStatus::AwaitingReview),
+            &[],
+            &[],
+            &BlockingQCStatus::default(),
+        );
+
+        // The latest round's figures, in today's layout (C3).
+        assert!(
+            out.contains("- Checklist Summary: 0/3 (0.0%)\n  - Pass 2: 0/3 (0.0%)"),
+            "expected the latest round's checklist summary, got:\n{out}"
+        );
+        // Round 1's completed checklist belongs to the round table (C3) and nowhere
+        // else: it must not leak into the detail block's figures.
+        let summary_block: String = out
+            .lines()
+            .skip_while(|line| !line.starts_with("- Checklist Summary:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !summary_block.contains("2/2"),
+            "round 1's checklist leaked into the summary:\n{summary_block}"
+        );
+    }
 }

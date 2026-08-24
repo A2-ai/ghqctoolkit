@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { Card, Stack, Text, Title, Tooltip } from '@mantine/core'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import type { IssueStatusResponse, QCStatus } from '~/api/issues'
+import { latestRound } from '~/api/issues'
 import { IssueCard } from './IssueCard'
 import { IssueDetailModal } from './IssueDetailModal'
+import { NewRoundModal } from './NewRoundModal'
 
 const LANES: { id: string; title: string; headerColor: string }[] = [
   { id: 'ready-for-review',    title: 'Ready for Review',    headerColor: '#dbeafe' },
@@ -36,17 +38,21 @@ interface Props {
   remoteCommit: string
 }
 
-// Commits are newest-first; commits before the approved index are temporally later.
+// U7/D35: the ChangesAfterApproval hash comes from `drift.newest_file_change` — the
+// server's single source for it. Rescanning `drift.commits` here is exactly the
+// client-side re-derivation U7 forbids. Dispatch on the latest round's state first
+// (S0): an open round's drift is also empty, so emptiness means nothing on its own.
 function postApprovalFileCommit(s: IssueStatusResponse): string | undefined {
-  const { approved_commit } = s.qc_status
-  if (!approved_commit) return undefined
-  const approvedIdx = s.commits.findIndex((c) => c.hash === approved_commit)
-  if (approvedIdx <= 0) return undefined
-  return s.commits.slice(0, approvedIdx).find((c) => c.file_changed)?.hash
+  if (latestRound(s).state.kind !== 'approved') return undefined
+  return s.drift.newest_file_change ?? undefined
 }
 
 export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
   const [selected, setSelected] = useState<IssueStatusResponse | null>(null)
+  // Owned here, not by the card: a Modal is portaled in the DOM but still bubbles
+  // React events up its element tree, so a modal rendered inside the clickable card
+  // would re-open the detail modal on every click inside it.
+  const [newRoundFor, setNewRoundFor] = useState<IssueStatusResponse | null>(null)
 
   const byLane: Record<string, IssueStatusResponse[]> = Object.fromEntries(
     LANES.map((l) => [l.id, []])
@@ -110,7 +116,13 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
                                       : undefined),
                                   }}
                                 >
-                                  <IssueCard status={s} currentBranch={currentBranch} remoteCommit={remoteCommit} postApprovalCommit={postApprovalCommit} />
+                                  <IssueCard
+                                    status={s}
+                                    currentBranch={currentBranch}
+                                    remoteCommit={remoteCommit}
+                                    postApprovalCommit={postApprovalCommit}
+                                    onNewRound={() => setNewRoundFor(s)}
+                                  />
                                 </Card>
                               )
                               return colorTooltip ? (
@@ -139,6 +151,9 @@ export function SwimLanes({ statuses, currentBranch, remoteCommit }: Props) {
       </div>
     </DragDropContext>
     <IssueDetailModal status={selected} onClose={() => setSelected(null)} onStatusUpdate={setSelected} />
+    {newRoundFor && (
+      <NewRoundModal opened onClose={() => setNewRoundFor(null)} status={newRoundFor} />
+    )}
     </>
   )
 }

@@ -97,17 +97,19 @@ impl CreatedThreads {
         let dirty = git_info.dirty().unwrap_or_default();
 
         for (issue, result) in thread_results {
-            match result {
-                Ok(issue_thread) => {
+            let response = result
+                .and_then(|issue_thread| IssueStatusResponse::new(issue, &issue_thread, &dirty));
+            match response {
+                Ok(response) => {
                     created.blocking_qc_numbers.insert(
                         issue.number,
                         IssueStatusResponse::blocking_qc_numbers(issue),
                     );
-                    created.responses.insert(
-                        issue.number,
-                        IssueStatusResponse::new(issue, &issue_thread, &dirty),
-                    );
+                    created.responses.insert(issue.number, response);
                 }
+                // D55: a thread whose latest round has no resolvable commit becomes an
+                // error entry for that issue — `branch_not_local` with the branch to
+                // fetch — instead of a status the server had to invent.
                 Err(e) => {
                     created.thread_errors.insert(issue.number, e);
                 }

@@ -43,14 +43,18 @@ export function ExistingIssueCard({ issue }: Props) {
         </Anchor>
       </div>
 
+      {/* D50/D52: this is a rounds-less list context — no `rounds[]` is fetched here,
+          so `issue.branch` is all there is. It is round 1's declared branch, and it is
+          only the *current* branch when the body carries no `## QC Rounds` marker. When
+          the marker is present the label says which round it belongs to, so a reader is
+          not misled into treating a stale branch as current. */}
       {issue.branch && (
-        <Text size="xs" c="dimmed"><b>Branch:</b> {issue.branch}</Text>
+        <Text size="xs" c="dimmed" data-testid="existing-issue-branch">
+          <b>{issue.has_qc_rounds_marker ? 'Branch (round 1)' : 'Branch'}:</b> {issue.branch}
+        </Text>
       )}
       {issue.created_by && (
         <Text size="xs" c="dimmed"><b>Created by:</b> {issue.created_by}</Text>
-      )}
-      {issue.checklist_name && (
-        <Text size="xs" c="dimmed"><b>Checklist:</b> {issue.checklist_name}</Text>
       )}
       {issue.assignees.length > 0 && (
         <Text size="xs" c="dimmed">

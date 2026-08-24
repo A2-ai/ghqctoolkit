@@ -1,11 +1,14 @@
 import type { RepoInfo } from '../../src/api/repo'
 import type { Milestone } from '../../src/api/milestones'
 import type {
+  Gap,
   Issue,
+  IssueCommit,
   IssueStatusResponse,
   BatchIssueStatusResponse,
   BlockedIssueStatus,
   QCStatus,
+  RoundInfo,
 } from '../../src/api/issues'
 import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
@@ -56,10 +59,76 @@ function makeIssue(overrides: Partial<Issue> & Pick<Issue, 'number' | 'title'>):
     closed_at: null,
     created_by: 'test-user',
     branch: 'main',
-    checklist_name: 'Code Review',
+    // D52: no `## QC Rounds` marker ⇒ single round ⇒ `branch` above is current.
+    has_qc_rounds_marker: false,
     relevant_files: [],
+    file_history: [],
     ...overrides,
   }
+}
+
+/** A gap with nothing in it — normal and meaningful (D8/D26). */
+export function emptyGap(): Gap {
+  return { commits: [], divergent: false, newest_file_change: null }
+}
+
+/**
+ * A round on the wire (A4). `state` is the tagged union (D36) — there is no
+ * `approved_commit` field — and `checklist_content` excludes its `# ` heading (D37).
+ */
+export function makeRound(overrides: Partial<RoundInfo> = {}): RoundInfo {
+  const commits: IssueCommit[] = overrides.commits ?? [
+    { hash: 'ccc3333', message: 'latest commit', statuses: ['notification'], file_changed: false },
+  ]
+  return {
+    index: 1,
+    branch: 'main',
+    // D56: an inherited branch is the exception, so the default is a declared one.
+    branch_inherited: false,
+    // D53: the default round is placed — `unplaceableRound()` builds the other case.
+    placement: 'placed',
+    start_commit: commits[commits.length - 1]?.hash ?? '',
+    state: { kind: 'open' },
+    checklist_name: 'Code Review',
+    checklist_content: '- [ ] Review logic',
+    checklist_summary: { completed: 0, total: 0, percentage: 0 },
+    commits,
+    preceding_gap: emptyGap(),
+    archive_commit: commits[0]?.hash ?? '',
+    subsequent_file_changes: false,
+    ...overrides,
+  }
+}
+
+/**
+ * D53: a round that could not be placed on its branch. It is **never dropped and
+ * never re-indexed** — it keeps its declared index — and it owns no commits, so its
+ * `commits` and `preceding_gap` are empty and `archive_commit` is `null` (D54).
+ * `subsequent_file_changes` is `true` because a null archive commit gives nothing to
+ * measure "after" (D39.3).
+ */
+export function unplaceableRound(overrides: Partial<RoundInfo> = {}): RoundInfo {
+  return makeRound({
+    placement: 'unplaceable',
+    commits: [],
+    // The start commit is *declared* — it just cannot be resolved on `branch`.
+    start_commit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    preceding_gap: emptyGap(),
+    archive_commit: null,
+    subsequent_file_changes: true,
+    ...overrides,
+  })
+}
+
+/** An approved single round: `state.kind === 'approved'` carries the commit and the
+ *  comment id the approved-commit row deep-links (U8). */
+export function makeApprovedRound(commit: string, overrides: Partial<RoundInfo> = {}): RoundInfo {
+  return makeRound({
+    state: { kind: 'approved', commit, comment_id: 1234 },
+    commits: [{ hash: commit, message: 'initial commit', statuses: ['initial'], file_changed: true }],
+    archive_commit: commit,
+    ...overrides,
+  })
 }
 
 function makeStatusResponse(
@@ -67,26 +136,14 @@ function makeStatusResponse(
   status: QCStatus['status'],
   overrides: Partial<IssueStatusResponse> = {},
 ): IssueStatusResponse {
+  const approved = status === 'approved' || status === 'changes_after_approval'
   return {
     issue,
-    qc_status: {
-      status,
-      status_detail: '',
-      approved_commit: status === 'approved' ? 'aaa1111' : null,
-      initial_commit: 'bbb2222',
-      latest_commit: 'ccc3333',
-    },
+    // D35: a verdict, not a commit carrier.
+    qc_status: { status, status_detail: '' },
     dirty: false,
-    branch: 'main',
-    commits: [
-      {
-        hash: 'ccc3333',
-        message: 'latest commit',
-        statuses: ['notification'],
-        file_changed: false,
-      },
-    ],
-    checklist_summary: { completed: 0, total: 0, percentage: 0 },
+    rounds: [approved ? makeApprovedRound('aaa1111') : makeRound()],
+    drift: emptyGap(),
     ...overrides,
   }
 }
@@ -141,13 +198,18 @@ const emptyBlockingQCStatus = {
 export const singleCommitIssue = makeIssue({ number: 70, title: 'src/single.rs', branch: 'feature-branch', assignees: ['alice'] })
 export const singleCommitStatus: IssueStatusResponse = {
   issue: singleCommitIssue,
-  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  rounds: [
+    makeRound({
+      branch: 'feature-branch',
+      checklist_summary: { completed: 2, total: 7, percentage: 28.6 },
+      commits: [
+        { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+      ],
+    }),
   ],
-  checklist_summary: { completed: 2, total: 7, percentage: 28.6 },
+  drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
 }
 
@@ -160,16 +222,20 @@ export const singleCommitStatus: IssueStatusResponse = {
 export const multiCommitIssue = makeIssue({ number: 71, title: 'src/multi.rs' })
 export const multiCommitStatus: IssueStatusResponse = {
   issue: multiCommitIssue,
-  qc_status: { status: 'changes_to_comment', status_detail: 'New changes since last notification', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'ddddddddddddddddddddddddddddddddddddddd1' },
+  qc_status: { status: 'changes_to_comment', status_detail: 'New changes since last notification' },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'ddddddddddddddddddddddddddddddddddddddd1', message: 'new changes', statuses: [], file_changed: true },
-    { hash: 'ccccccccccccccccccccccccccccccccccccccc1', message: 'bump version', statuses: [], file_changed: false },
-    { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'push notification', statuses: ['notification'], file_changed: true },
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  rounds: [
+    makeRound({
+      commits: [
+        { hash: 'ddddddddddddddddddddddddddddddddddddddd1', message: 'new changes', statuses: [], file_changed: true },
+        { hash: 'ccccccccccccccccccccccccccccccccccccccc1', message: 'bump version', statuses: [], file_changed: false },
+        { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'push notification', statuses: ['notification'], file_changed: true },
+        { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+      ],
+      archive_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1',
+    }),
   ],
-  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
 }
 
@@ -180,14 +246,18 @@ export const multiCommitStatus: IssueStatusResponse = {
 export const notifOnNonFileIssue = makeIssue({ number: 72, title: 'src/notif-nofile.rs' })
 export const notifOnNonFileStatus: IssueStatusResponse = {
   issue: notifOnNonFileIssue,
-  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review', approved_commit: null, initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1' },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review' },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'notification on non-file commit', statuses: ['notification'], file_changed: false },
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  rounds: [
+    makeRound({
+      commits: [
+        { hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1', message: 'notification on non-file commit', statuses: ['notification'], file_changed: false },
+        { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial'], file_changed: true },
+      ],
+      archive_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1',
+    }),
   ],
-  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
 }
 
@@ -195,13 +265,17 @@ export const notifOnNonFileStatus: IssueStatusResponse = {
 export const approvedModalIssue = makeIssue({ number: 74, title: 'src/approved-modal.rs', branch: 'feature-branch' })
 export const approvedModalStatus: IssueStatusResponse = {
   issue: approvedModalIssue,
-  qc_status: { status: 'approved', status_detail: 'Approved', approved_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', initial_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', latest_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+  qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
+  rounds: [
+    makeApprovedRound('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', {
+      branch: 'feature-branch',
+      commits: [
+        { hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
+      ],
+    }),
   ],
-  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
 }
 
@@ -224,57 +298,36 @@ export const cleanModalStatus: IssueStatusResponse = {
 export const approvedChildIssue = makeIssue({ number: 80, title: 'src/child-approved.rs', state: 'closed', milestone: 'Sprint 1' })
 export const approvedChildBlocked: BlockedIssueStatus = {
   issue: approvedChildIssue,
-  qc_status: {
-    status: 'approved',
-    status_detail: 'Approved',
-    approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-    initial_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-    latest_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-  },
+  qc_status: { status: 'approved', status_detail: 'Approved' },
 }
 
 // Not-approved child issue blocked by approvedModalIssue (#74)
 export const notApprovedChildIssue = makeIssue({ number: 81, title: 'src/child-pending.rs', milestone: 'Sprint 1' })
 export const notApprovedChildBlocked: BlockedIssueStatus = {
   issue: notApprovedChildIssue,
-  qc_status: {
-    status: 'awaiting_review',
-    status_detail: 'Awaiting review',
-    approved_commit: null,
-    initial_commit: 'dddddddddddddddddddddddddddddddddddddddd',
-    latest_commit: 'dddddddddddddddddddddddddddddddddddddddd',
-  },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review' },
 }
 
 // Grandchild — returned when approvedChildIssue's /blocked is fetched
 export const grandchildIssue = makeIssue({ number: 83, title: 'src/grandchild.rs', milestone: 'Sprint 1' })
 export const grandchildBlocked: BlockedIssueStatus = {
   issue: grandchildIssue,
-  qc_status: {
-    status: 'awaiting_review',
-    status_detail: 'Awaiting review',
-    approved_commit: null,
-    initial_commit: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-    latest_commit: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-  },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review' },
 }
 
 // Full IssueStatusResponse for approvedChildIssue (used in unapproval cache tests)
 export const approvedChildStatus: IssueStatusResponse = {
   issue: approvedChildIssue,
-  qc_status: {
-    status: 'approved',
-    status_detail: 'Approved',
-    approved_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-    initial_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-    latest_commit: 'cccccccccccccccccccccccccccccccccccccccc',
-  },
+  qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'cccccccccccccccccccccccccccccccccccccccc', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
+  rounds: [
+    makeApprovedRound('cccccccccccccccccccccccccccccccccccccccc', {
+      commits: [
+        { hash: 'cccccccccccccccccccccccccccccccccccccccc', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
+      ],
+    }),
   ],
-  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
 }
 
@@ -282,19 +335,17 @@ export const approvedChildStatus: IssueStatusResponse = {
 export const inProgressModalIssue = makeIssue({ number: 82, title: 'src/in-progress-modal.rs', branch: 'feature-branch' })
 export const inProgressModalStatus: IssueStatusResponse = {
   issue: inProgressModalIssue,
-  qc_status: {
-    status: 'in_progress',
-    status_detail: 'In progress',
-    approved_commit: null,
-    initial_commit: 'ffffffffffffffffffffffffffffffffffffffff',
-    latest_commit: 'ffffffffffffffffffffffffffffffffffffffff',
-  },
+  qc_status: { status: 'in_progress', status_detail: 'In progress' },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'ffffffffffffffffffffffffffffffffffffffff', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  rounds: [
+    makeRound({
+      branch: 'feature-branch',
+      commits: [
+        { hash: 'ffffffffffffffffffffffffffffffffffffffff', message: 'initial commit', statuses: ['initial'], file_changed: true },
+      ],
+    }),
   ],
-  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
 }
 
@@ -308,48 +359,45 @@ export const fileAIssue  = makeIssue({ number: 91, title: 'src/file_a.rs' })
 
 export const helperStatusInitial: IssueStatusResponse = {
   issue: helperIssue,
-  qc_status: {
-    status: 'awaiting_review',
-    status_detail: 'Awaiting first review',
-    approved_commit: null,
-    initial_commit: 'aaa0000000000000000000000000000000000000',
-    latest_commit:  'aaa0000000000000000000000000000000000000',
-  },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
   dirty: false,
-  branch: 'feature-branch',
-  commits: [
-    { hash: 'aaa0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  rounds: [
+    makeRound({
+      branch: 'feature-branch',
+      commits: [
+        { hash: 'aaa0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
+      ],
+    }),
   ],
-  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
 }
 
 export const helperStatusApproved: IssueStatusResponse = {
   ...helperStatusInitial,
-  qc_status: {
-    status: 'approved',
-    status_detail: 'Approved',
-    approved_commit: 'aaa0000000000000000000000000000000000000',
-    initial_commit:  'aaa0000000000000000000000000000000000000',
-    latest_commit:   'aaa0000000000000000000000000000000000000',
-  },
+  qc_status: { status: 'approved', status_detail: 'Approved' },
+  rounds: [
+    makeApprovedRound('aaa0000000000000000000000000000000000000', {
+      branch: 'feature-branch',
+      commits: [
+        { hash: 'aaa0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial', 'approved'], file_changed: true },
+      ],
+    }),
+  ],
 }
 
 export const fileAStatusBlocked: IssueStatusResponse = {
   issue: fileAIssue,
-  qc_status: {
-    status: 'awaiting_review',
-    status_detail: 'Awaiting first review',
-    approved_commit: null,
-    initial_commit: 'bbb0000000000000000000000000000000000000',
-    latest_commit:  'bbb0000000000000000000000000000000000000',
-  },
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
   dirty: false,
-  branch: 'main',
-  commits: [
-    { hash: 'bbb0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
+  rounds: [
+    makeRound({
+      commits: [
+        { hash: 'bbb0000000000000000000000000000000000000', message: 'initial commit', statuses: ['initial'], file_changed: true },
+      ],
+    }),
   ],
-  checklist_summary: { completed: 0, total: 0, percentage: 0 },
+  drift: emptyGap(),
   blocking_qc_status: {
     total: 1,
     approved_count: 0,
@@ -466,3 +514,240 @@ export const configRepoDiverged = makeConfigGitRepo({
   ahead_commits: ['eee5555', 'fff6666'],
   behind_commits: ['aaa1111', 'bbb2222', 'ccc3333'],
 })
+
+// ── QC rounds fixtures (§9 U1–U8) ────────────────────────────────────────────
+// A two-round approved issue. Each round owns its own commits (D8), so the
+// slider is scoped to whichever round the switcher selects (U4/W5) — it never
+// spans the whole QC's life again.
+
+export const R1_START = '1a11111111111111111111111111111111111111'
+export const R1_APPROVAL = '1b11111111111111111111111111111111111111'
+export const GAP_COMMIT = '9999999999999999999999999999999999999999'
+export const R2_START = '2a22222222222222222222222222222222222222'
+export const R2_APPROVAL = '2b22222222222222222222222222222222222222'
+/** A file-changing drift commit that is **not** `drift.newest_file_change`. It sits
+ *  first in `drift.commits`, so `commits.find(c => c.file_changed)` — the client-side
+ *  rescan U7 forbids — returns this instead of the hash the server reports. Legal
+ *  data: D39.3 says a divergent gap's ordering is unsound, which is exactly why the
+ *  UI must not re-derive the hash from the walk. */
+export const DRIFT_DECOY = '3c33333333333333333333333333333333333333'
+
+// Two rounds exist, so the body carries the `## QC Rounds` marker (D51/D52) and
+// `issue.branch` is round 1's.
+export const twoRoundIssue = makeIssue({ number: 75, title: 'src/two-rounds.rs', has_qc_rounds_marker: true })
+
+export const twoRoundRounds: RoundInfo[] = [
+  makeRound({
+    index: 1,
+    state: { kind: 'approved', commit: R1_APPROVAL, comment_id: 111 },
+    checklist_name: 'Round One',
+    // D37: no `# ` heading in the content, and the round-1 record keeps its ticks.
+    checklist_content: '- [x] r1 item',
+    checklist_summary: { completed: 1, total: 1, percentage: 1 },
+    commits: [
+      { hash: R1_APPROVAL, message: 'round 1 approval', statuses: ['reviewed'], file_changed: false },
+      { hash: R1_START, message: 'round 1 initial', statuses: ['initial'], file_changed: true },
+    ],
+    start_commit: R1_START,
+    archive_commit: R1_APPROVAL,
+    subsequent_file_changes: true,
+  }),
+  makeRound({
+    index: 2,
+    state: { kind: 'approved', commit: R2_APPROVAL, comment_id: 222 },
+    checklist_name: 'Round Two',
+    checklist_content: '- [x] r2 item one\n- [ ] r2 item two',
+    checklist_summary: { completed: 1, total: 2, percentage: 0.5 },
+    commits: [
+      { hash: R2_APPROVAL, message: 'round 2 approval', statuses: ['notification'], file_changed: false },
+      { hash: R2_START, message: 'round 2 initial', statuses: ['initial'], file_changed: true },
+    ],
+    start_commit: R2_START,
+    archive_commit: R2_APPROVAL,
+    // The D8 overlap case is absent here: a real gap commit sits between the
+    // round-1 approval and the round-2 start.
+    preceding_gap: { commits: [{ hash: GAP_COMMIT, message: 'gap commit', statuses: [], file_changed: true }], divergent: false, newest_file_change: GAP_COMMIT },
+  }),
+]
+
+export const twoRoundStatus: IssueStatusResponse = {
+  issue: twoRoundIssue,
+  qc_status: { status: 'approved', status_detail: 'Approved' },
+  dirty: false,
+  rounds: twoRoundRounds,
+  drift: emptyGap(),
+  blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+}
+
+/** D44: an approval whose `comment_id` is unknown. `comment_id` is nullable precisely
+ *  because a `0` sentinel is indistinguishable from a real comment id, so the
+ *  approved-commit row must drop U8's deep-link rather than point at comment 0. */
+export const nullCommentIdIssue = makeIssue({ number: 76, title: 'src/no-comment-id.rs' })
+
+export const nullCommentIdStatus: IssueStatusResponse = {
+  issue: nullCommentIdIssue,
+  qc_status: { status: 'approved', status_detail: 'Approved' },
+  dirty: false,
+  rounds: [
+    makeApprovedRound(R2_APPROVAL, {
+      state: { kind: 'approved', commit: R2_APPROVAL, comment_id: null },
+    }),
+  ],
+  drift: emptyGap(),
+}
+
+/** A divergent preceding gap (D22): the round-2 start is not descended from the
+ *  round-1 approval, so the two rounds share no cohesive history (U6). */
+export const divergentGapStatus: IssueStatusResponse = {
+  ...twoRoundStatus,
+  rounds: [
+    twoRoundRounds[0],
+    { ...twoRoundRounds[1], preceding_gap: { ...twoRoundRounds[1].preceding_gap, divergent: true } },
+  ],
+}
+
+/** A divergent drift (D31): a force-push removed the approval from its branch, so
+ *  the reported ChangesAfterApproval hash is not meaningful (U6). */
+export const divergentDriftStatus: IssueStatusResponse = {
+  ...twoRoundStatus,
+  qc_status: { status: 'changes_after_approval', status_detail: 'Changes after approval' },
+  drift: {
+    // Two file-changing commits, and the first one is *not* the reported hash — so a
+    // client-side `commits.find(c => c.file_changed)` disagrees with the server (U7).
+    commits: [
+      { hash: DRIFT_DECOY, message: 'older post-approval change', statuses: [], file_changed: true },
+      { hash: GAP_COMMIT, message: 'post-approval change', statuses: [], file_changed: true },
+    ],
+    divergent: true,
+    newest_file_change: GAP_COMMIT,
+  },
+}
+
+// ── §18 (D53–D56) fixtures ───────────────────────────────────────────────────
+
+/** The branch a round was declared on but which is not fetched locally (D53). */
+export const UNFETCHED_BRANCH = 'feature/not-fetched'
+/** Round 1's approval commit. It is real — it is in the comment log — but it cannot
+ *  be placed, so no surface may print it as though it were located (D54/D55). */
+export const R1_UNPLACEABLE_APPROVAL = '1c11111111111111111111111111111111111111'
+
+/**
+ * D53: round 1 is declared on a branch that is not fetched, so it is `unplaceable`:
+ * it keeps its declared index, owns no commits, and has `archive_commit: null`.
+ * Round 2 is on a fetched branch and places normally — which is why this issue is in
+ * `results[]` at all (D55/D10: only the *latest* round gates status).
+ */
+export const unplaceableRoundIssue = makeIssue({
+  number: 77,
+  title: 'src/unplaceable.rs',
+  has_qc_rounds_marker: true,
+})
+
+export const unplaceableRoundStatus: IssueStatusResponse = {
+  issue: unplaceableRoundIssue,
+  qc_status: { status: 'approved', status_detail: 'Approved' },
+  dirty: false,
+  rounds: [
+    unplaceableRound({
+      index: 1,
+      branch: UNFETCHED_BRANCH,
+      state: { kind: 'approved', commit: R1_UNPLACEABLE_APPROVAL, comment_id: 777 },
+      checklist_name: 'Round One',
+      checklist_content: '- [x] r1 item',
+      checklist_summary: { completed: 1, total: 1, percentage: 1 },
+    }),
+    makeRound({
+      index: 2,
+      state: { kind: 'approved', commit: R2_APPROVAL, comment_id: 222 },
+      checklist_name: 'Round Two',
+      checklist_content: '- [x] r2 item one\n- [ ] r2 item two',
+      commits: [
+        { hash: R2_APPROVAL, message: 'round 2 approval', statuses: ['reviewed'], file_changed: false },
+        { hash: R2_START, message: 'round 2 initial', statuses: ['initial'], file_changed: true },
+      ],
+      start_commit: R2_START,
+      archive_commit: R2_APPROVAL,
+    }),
+  ],
+  drift: emptyGap(),
+  blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+}
+
+/**
+ * D55: an issue whose **latest** round is unresolvable arrives in `errors[]` as
+ * `branch_not_local` rather than in `results[]` — the status endpoint refuses to
+ * invent a `QCStatus` for it (S5: no new status variants).
+ */
+export const latestRoundUnplaceableError: BatchIssueStatusResponse = {
+  results: [],
+  errors: [
+    {
+      issue_number: unplaceableRoundIssue.number,
+      kind: 'branch_not_local',
+      error: `Branch not found: ${UNFETCHED_BRANCH}`,
+      branch: UNFETCHED_BRANCH,
+    },
+  ],
+}
+
+/** D56: round 2's comment declared no `git branch:`, so it inherited round 1's. */
+export const branchInheritedStatus: IssueStatusResponse = {
+  ...twoRoundStatus,
+  rounds: [twoRoundRounds[0], { ...twoRoundRounds[1], branch_inherited: true }],
+}
+
+export const R3_START = '3a33333333333333333333333333333333333333'
+export const R3_APPROVAL = '3b33333333333333333333333333333333333333'
+
+/**
+ * D53.2 / item 4: round 2's declaration was malformed, so it was dropped **without
+ * renumbering** — `rounds` is `[1, 3]`. Nothing may derive a round number from an
+ * array position or from `rounds.length`: position 1 holds round *3*, and the next
+ * round to start is *4*, not 3.
+ */
+export const holeRoundsIssue = makeIssue({
+  number: 78,
+  title: 'src/round-hole.rs',
+  has_qc_rounds_marker: true,
+})
+
+export const holeRoundsStatus: IssueStatusResponse = {
+  issue: holeRoundsIssue,
+  qc_status: { status: 'approved', status_detail: 'Approved' },
+  dirty: false,
+  rounds: [
+    twoRoundRounds[0],
+    makeRound({
+      index: 3,
+      state: { kind: 'approved', commit: R3_APPROVAL, comment_id: 333 },
+      checklist_name: 'Round Three',
+      checklist_content: '- [x] r3 item',
+      commits: [
+        { hash: R3_APPROVAL, message: 'round 3 approval', statuses: ['reviewed'], file_changed: false },
+        { hash: R3_START, message: 'round 3 initial', statuses: ['initial'], file_changed: true },
+      ],
+      start_commit: R3_START,
+      archive_commit: R3_APPROVAL,
+    }),
+  ],
+  drift: emptyGap(),
+  blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
+}
+
+/**
+ * D60: the *other* `None` case of `Round::latest_commit()` (D54.2) — the branch is
+ * local, but the approval was force-pushed or rebased off it. It arrives as
+ * `branch_not_local` on purpose (one wire kind, two messages), so the message is the
+ * only signal that "fetch the branch" is the wrong remedy here.
+ */
+export const approvalNotOnBranchError: BatchIssueStatusResponse = {
+  results: [],
+  errors: [
+    {
+      issue_number: unplaceableRoundIssue.number,
+      kind: 'branch_not_local',
+      error: `Approval commit ${R1_UNPLACEABLE_APPROVAL} is no longer reachable on branch '${UNFETCHED_BRANCH}' — its history was likely rewritten`,
+      branch: UNFETCHED_BRANCH,
+    },
+  ],
+}

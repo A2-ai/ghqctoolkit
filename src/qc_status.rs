@@ -45,85 +45,104 @@ impl std::fmt::Display for QCStatus {
 }
 
 impl QCStatus {
-    pub fn determine_status(issue_thread: &IssueThread) -> Self {
-        let commits = &issue_thread.commits;
+    /// Round-scoped status (§5). `R = latest_round()`.
+    ///
+    /// S0: dispatch on `R.state` **first** — `R.is_closed()` gates S1/S2,
+    /// `!R.is_closed()` gates S3/S4. Drift emptiness is never used to infer which
+    /// branch applies: an open round's drift is also empty (I14), so inferring from
+    /// emptiness would report `Approved` for an unreviewed QC.
+    ///
+    /// S7: `Superseded` never reaches here — under D27 the last round is by
+    /// definition never superseded.
+    ///
+    /// **D55: this refuses rather than guesses.** It requires a *placed* latest round
+    /// whose representative commit resolves (`Round::latest_commit()`, D54); when it does
+    /// not, the caller gets the error from `Round::unresolved_commit_error()` — D60's
+    /// `LocalBranchNotFound` or `ApprovalNotOnBranch`, both of which the status endpoint
+    /// renders as `IssueStatusError { kind: branch_not_local, branch }`.
+    /// `QCStatus` gains **no** variant for it — S5 still holds. Per D10 only the *latest*
+    /// round matters here, so an earlier unplaceable round does not block status.
+    pub fn determine_status(issue_thread: &IssueThread) -> Result<Self, IssueError> {
+        let round = issue_thread.latest_round();
 
-        let status = if let Some(approved) = issue_thread.approved_commit() {
-            // Find the approved commit index in the chronological sequence
-            let approved_index = commits
-                .iter()
-                .position(|commit| commit.hash == approved.hash)
-                .expect("Approved commit must be in commits");
+        // Either the round could not be placed (D54.1) or its approval is no longer
+        // among the commits it owns (D54.2). Both would otherwise be answered with a
+        // status derived from a commit set the round does not really own.
+        // D60: `Round::unresolved_commit_error` names the branch in both cases and tells
+        // them apart in the message — "fetch this branch" is wrong for a rewritten
+        // approval — while both still classify as `branch_not_local` for clients.
+        if let Some(error) = round.unresolved_commit_error() {
+            return Err(error);
+        }
 
-            // Check if there are any commits after the approved commit that touch the file
-            // (commits are ordered chronologically, newer commits have lower indices)
-            let commits_after_approval = &commits[..approved_index];
-            let file_changes_after_approval = commits_after_approval
-                .iter()
-                .find(|commit| commit.file_changed);
-
-            if let Some(latest_file_change) = file_changes_after_approval {
-                Self::ChangesAfterApproval(latest_file_change.hash)
-            } else {
-                Self::Approved
+        Ok(if round.is_closed() {
+            // S1/S2: read `thread.drift` only. D10 forbids reading an earlier round
+            // or any `preceding_gap`.
+            match issue_thread.drift.newest_file_change() {
+                // S1
+                Some(hash) => Self::ChangesAfterApproval(*hash),
+                // S2 (including an empty drift)
+                None => Self::Approved,
             }
+        } else if !issue_thread.open {
+            // S3: not approved and the issue is closed.
+            Self::ApprovalRequired
         } else {
-            // if not approved and closed
-            if !issue_thread.open {
-                Self::ApprovalRequired
-            } else {
-                // Find the newest (lowest index) file-changing commit.
-                // Commits are stored newest-first, so lower index = more recent.
-                let latest_file_entry = commits.iter().enumerate().find(|(_, c)| c.file_changed);
+            // S4: the pre-rounds algorithm **verbatim**, now scoped to `R.commits`
+            // (D8) rather than the whole thread — this is the §0.5 fix. Verbatim
+            // includes the `unwrap_or(false)` "no status commits at all ⇒
+            // ChangesToComment" edge and all three arms of the `None` case; D33/R26
+            // keep `CommitStatus::Initial` in storage precisely so an `Initial`-only
+            // commit still counts as status-bearing here.
+            let commits = &round.commits;
 
-                match latest_file_entry {
-                    Some((file_idx, latest_fc)) => {
-                        // Find the newest commit that carries any status.
-                        // A status commit "covers" the file change if it is at the same
-                        // position or newer (index ≤ file_idx).
-                        let latest_status_entry = commits
-                            .iter()
-                            .enumerate()
-                            .find(|(_, c)| !c.statuses.is_empty());
+            // Find the newest (lowest index) file-changing commit.
+            // Commits are stored newest-first, so lower index = more recent.
+            let latest_file_entry = commits.iter().enumerate().find(|(_, c)| c.file_changed);
 
-                        let covered = latest_status_entry
-                            .map(|(si, _)| si <= file_idx)
-                            .unwrap_or(false);
+            match latest_file_entry {
+                Some((file_idx, latest_fc)) => {
+                    // Find the newest commit that carries any status.
+                    // A status commit "covers" the file change if it is at the same
+                    // position or newer (index ≤ file_idx).
+                    let latest_status_entry = commits
+                        .iter()
+                        .enumerate()
+                        .find(|(_, c)| !c.statuses.is_empty());
 
-                        if covered {
-                            let status_commit = latest_status_entry.unwrap().1;
-                            if status_commit
-                                .statuses
-                                .contains(&crate::issue::CommitStatus::Reviewed)
-                            {
-                                Self::ChangeRequested
-                            } else {
-                                Self::AwaitingReview
-                            }
+                    let covered = latest_status_entry
+                        .map(|(si, _)| si <= file_idx)
+                        .unwrap_or(false);
+
+                    if covered {
+                        let status_commit = latest_status_entry.unwrap().1;
+                        if status_commit
+                            .statuses
+                            .contains(&crate::issue::CommitStatus::Reviewed)
+                        {
+                            Self::ChangeRequested
                         } else {
-                            Self::ChangesToComment(latest_fc.hash)
+                            Self::AwaitingReview
                         }
+                    } else {
+                        Self::ChangesToComment(latest_fc.hash)
                     }
-                    None => {
-                        // No file-changing commit found, but the issue has been posted
-                        // (an Initial/Notification commit exists). Treat like a covered
-                        // status commit: awaiting review unless already reviewed.
-                        let latest_status_entry = commits.iter().find(|c| !c.statuses.is_empty());
-                        match latest_status_entry {
-                            Some(sc)
-                                if sc.statuses.contains(&crate::issue::CommitStatus::Reviewed) =>
-                            {
-                                Self::ChangeRequested
-                            }
-                            Some(_) => Self::AwaitingReview,
-                            None => Self::InProgress,
+                }
+                None => {
+                    // No file-changing commit found, but the issue has been posted
+                    // (an Initial/Notification commit exists). Treat like a covered
+                    // status commit: awaiting review unless already reviewed.
+                    let latest_status_entry = commits.iter().find(|c| !c.statuses.is_empty());
+                    match latest_status_entry {
+                        Some(sc) if sc.statuses.contains(&crate::issue::CommitStatus::Reviewed) => {
+                            Self::ChangeRequested
                         }
+                        Some(_) => Self::AwaitingReview,
+                        None => Self::InProgress,
                     }
                 }
             }
-        };
-
-        status
+        })
     }
 
     /// Returns true if this status represents an approved issue
@@ -139,7 +158,7 @@ impl QCStatus {
     ) -> Result<Self, QCStatusError> {
         let issue = git_info.get_issue(blocking_qc.issue_number).await?;
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let status = QCStatus::determine_status(&issue_thread);
+        let status = QCStatus::determine_status(&issue_thread)?;
         Ok(status)
     }
 }
@@ -311,7 +330,7 @@ fn extract_header_text(line: &str) -> Option<String> {
 /// - [ ] Unchecked item
 /// - [x] Checked item
 /// - [X] Checked item
-fn analyze_checklist_in_text(text: &str) -> ChecklistSummary {
+pub(crate) fn analyze_checklist_in_text(text: &str) -> ChecklistSummary {
     let mut total = 0;
     let mut completed = 0;
 
@@ -492,7 +511,10 @@ mod tests {
 
     #[test]
     fn test_change_requested_status_matrix() {
-        use crate::issue::{CommitStatus, IssueCommit, IssueThread};
+        use crate::issue::{
+            Approval, CommitStatus, Gap, IssueCommit, IssueThread, Round, RoundChecklist,
+            RoundPlacement, RoundState,
+        };
         use gix::ObjectId;
         use std::path::PathBuf;
         use std::str::FromStr;
@@ -509,8 +531,9 @@ mod tests {
                     (
                         make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
-                    (make_statuses(&[CommitStatus::Notification]), true),
+                    (make_statuses(&[CommitStatus::Notification]), true, false),
                 ],
                 true,
                 "AwaitingReview",
@@ -521,10 +544,12 @@ mod tests {
                     (
                         make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
                     (
                         make_statuses(&[CommitStatus::Notification, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
                 ],
                 true,
@@ -536,8 +561,9 @@ mod tests {
                     (
                         make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
-                    (make_statuses(&[CommitStatus::Reviewed]), true),
+                    (make_statuses(&[CommitStatus::Reviewed]), true, false),
                 ],
                 true,
                 "ChangeRequested",
@@ -548,9 +574,10 @@ mod tests {
                     (
                         make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
-                    (make_statuses(&[CommitStatus::Reviewed]), false), // reviewed but no file change
-                    (make_statuses(&[CommitStatus::Notification]), true), // new notification with file change
+                    (make_statuses(&[CommitStatus::Reviewed]), false, false), // reviewed but no file change
+                    (make_statuses(&[CommitStatus::Notification]), true, false), // new notification with file change
                 ],
                 true,
                 "AwaitingReview",
@@ -561,11 +588,9 @@ mod tests {
                     (
                         make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
-                    (
-                        make_statuses(&[CommitStatus::Approved, CommitStatus::Reviewed]),
-                        true,
-                    ),
+                    (make_statuses(&[CommitStatus::Reviewed]), true, true),
                 ],
                 true,
                 "Approved",
@@ -576,9 +601,10 @@ mod tests {
                     (
                         make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
-                    (make_statuses(&[CommitStatus::Approved]), true),
-                    (make_statuses(&[CommitStatus::Initial]), true), // file change after approval (use Initial for uncommitted files)
+                    (make_statuses(&[]), true, true),
+                    (make_statuses(&[CommitStatus::Initial]), true, false), // file change after approval (use Initial for uncommitted files)
                 ],
                 true,
                 "ChangesAfterApproval",
@@ -589,9 +615,10 @@ mod tests {
                     (
                         make_statuses(&[CommitStatus::Initial, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
-                    (make_statuses(&[CommitStatus::Notification]), true), // latest comment
-                    (make_statuses(&[]), true), // new file changes, not commented or reviewed
+                    (make_statuses(&[CommitStatus::Notification]), true, false), // latest comment
+                    (make_statuses(&[]), true, false), // new file changes, not commented or reviewed
                 ],
                 true,
                 "ChangesToComment",
@@ -599,8 +626,8 @@ mod tests {
             (
                 "I -> C_nofile: AwaitingReview (notification on non-file-changing commit after last file change)",
                 vec![
-                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change with initial
-                    (make_statuses(&[CommitStatus::Notification]), false), // newest: notification, no file change
+                    (make_statuses(&[CommitStatus::Initial]), true, false), // oldest: file change with initial
+                    (make_statuses(&[CommitStatus::Notification]), false, false), // newest: notification, no file change
                 ],
                 true,
                 "AwaitingReview",
@@ -608,8 +635,8 @@ mod tests {
             (
                 "I -> R_nofile: ChangeRequested (review on non-file-changing commit after last file change)",
                 vec![
-                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change
-                    (make_statuses(&[CommitStatus::Reviewed]), false), // newest: reviewed, no file change
+                    (make_statuses(&[CommitStatus::Initial]), true, false), // oldest: file change
+                    (make_statuses(&[CommitStatus::Reviewed]), false, false), // newest: reviewed, no file change
                 ],
                 true,
                 "ChangeRequested",
@@ -617,9 +644,9 @@ mod tests {
             (
                 "I -> C_nofile -> nofile_nostatuses: ChangesToComment (uncommitted changes after notification-on-non-file-commit)",
                 vec![
-                    (make_statuses(&[CommitStatus::Initial]), true), // oldest: file change
-                    (make_statuses(&[CommitStatus::Notification]), false), // middle: notification, no file change
-                    (make_statuses(&[]), true), // newest: new file change, no status
+                    (make_statuses(&[CommitStatus::Initial]), true, false), // oldest: file change
+                    (make_statuses(&[CommitStatus::Notification]), false, false), // middle: notification, no file change
+                    (make_statuses(&[]), true, false), // newest: new file change, no status
                 ],
                 true,
                 "ChangesToComment",
@@ -627,10 +654,11 @@ mod tests {
             (
                 "Closed without approval: ApprovalRequired",
                 vec![
-                    (make_statuses(&[CommitStatus::Initial]), true),
+                    (make_statuses(&[CommitStatus::Initial]), true, false),
                     (
                         make_statuses(&[CommitStatus::Notification, CommitStatus::Reviewed]),
                         true,
+                        false,
                     ),
                 ],
                 false, // issue closed
@@ -638,38 +666,77 @@ mod tests {
             ),
             (
                 "I/A: Approved",
-                vec![(
-                    make_statuses(&[CommitStatus::Initial, CommitStatus::Approved]),
-                    false,
-                )],
+                vec![(make_statuses(&[CommitStatus::Initial]), false, true)],
                 false,
                 "Approved",
             ),
         ];
 
         for (scenario, commit_data, issue_open, expected_status) in test_cases {
-            let commits: Vec<IssueCommit> = commit_data
+            // Oldest-first, as authored.
+            let authored: Vec<(IssueCommit, bool)> = commit_data
                 .into_iter()
                 .enumerate()
-                .map(|(i, (statuses, file_changed))| IssueCommit {
-                    hash: ObjectId::from_str(&format!("{:040x}", i + 1)).unwrap(),
-                    message: format!("Commit {}", i + 1),
-                    statuses,
-                    file_changed,
+                .map(|(i, (statuses, file_changed, approved))| {
+                    (
+                        IssueCommit {
+                            hash: ObjectId::from_str(&format!("{:040x}", i + 1)).unwrap(),
+                            message: format!("Commit {}", i + 1),
+                            statuses,
+                            file_changed,
+                        },
+                        approved,
+                    )
                 })
-                .rev() // Reverse to match real implementation: newest commits first
                 .collect();
+
+            // D8: the round owns `[start ..= approval]`; everything after the
+            // approval is the thread's drift. With no approval the round owns
+            // `[start .. tip]` and the drift is empty (I14).
+            let approved_position = authored.iter().position(|(_, approved)| *approved);
+            let (round_commits, drift_commits) = match approved_position {
+                Some(position) => (&authored[..=position], &authored[position + 1..]),
+                None => (&authored[..], &authored[authored.len()..]),
+            };
+            let newest_first = |slice: &[(IssueCommit, bool)]| -> Vec<IssueCommit> {
+                slice
+                    .iter()
+                    .rev()
+                    .map(|(commit, _)| commit.clone())
+                    .collect()
+            };
+            let round_commits = newest_first(round_commits);
+            let state = match approved_position {
+                Some(_) => RoundState::Approved(Approval {
+                    commit: round_commits[0].hash,
+                    comment_id: None,
+                }),
+                None => RoundState::Unapproved,
+            };
 
             let issue_thread = IssueThread {
                 file: PathBuf::from("test.rs"),
-                branch: "main".to_string(),
-                open: issue_open,
-                commits,
                 milestone: "milestone".to_string(),
+                open: issue_open,
                 blocking_qcs: vec![],
+                rounds: vec![Round {
+                    index: 1,
+                    branch: "main".to_string(),
+                    branch_inherited: false,
+                    placement: RoundPlacement::Placed,
+                    start_commit: round_commits.last().unwrap().hash,
+                    preceding_gap: Gap::default(),
+                    checklist: RoundChecklist::default(),
+                    commits: round_commits,
+                    state,
+                }],
+                drift: Gap {
+                    commits: newest_first(drift_commits),
+                    divergent: false,
+                },
             };
 
-            let status = QCStatus::determine_status(&issue_thread);
+            let status = QCStatus::determine_status(&issue_thread).expect("placed round");
             let actual_status = match status {
                 QCStatus::Approved => "Approved",
                 QCStatus::ChangesAfterApproval(_) => "ChangesAfterApproval",
@@ -685,6 +752,310 @@ mod tests {
                 "Failed for scenario: {}. Expected {}, got {}",
                 scenario, expected_status, actual_status
             );
+        }
+    }
+
+    // §5 round-scoped status. `thread_with` builds the minimal legal shape: one
+    // round plus the thread's drift, so each test names exactly the two inputs S0
+    // dispatches on — `RoundState` and `drift` — and nothing else.
+    mod round_scoped_status {
+        use super::*;
+        use crate::issue::{
+            Approval, CommitStatus, Gap, IssueCommit, IssueThread, Round, RoundChecklist,
+            RoundPlacement, RoundState,
+        };
+
+        fn oid(n: u8) -> ObjectId {
+            ObjectId::from_str(&format!("{:040x}", n)).unwrap()
+        }
+
+        fn commit(n: u8, statuses: &[CommitStatus], file_changed: bool) -> IssueCommit {
+            IssueCommit {
+                hash: oid(n),
+                message: format!("Commit {}", n),
+                statuses: statuses.iter().cloned().collect(),
+                file_changed,
+            }
+        }
+
+        /// `round_commits` and `drift_commits` are newest-first, per D8/M4.
+        fn thread_with(
+            issue_open: bool,
+            state: RoundState,
+            round_commits: Vec<IssueCommit>,
+            drift_commits: Vec<IssueCommit>,
+        ) -> IssueThread {
+            IssueThread {
+                file: PathBuf::from("test.rs"),
+                milestone: "milestone".to_string(),
+                open: issue_open,
+                blocking_qcs: vec![],
+                rounds: vec![Round {
+                    index: 1,
+                    branch: "main".to_string(),
+                    branch_inherited: false,
+                    placement: RoundPlacement::Placed,
+                    start_commit: round_commits.last().unwrap().hash,
+                    preceding_gap: Gap::default(),
+                    checklist: RoundChecklist::default(),
+                    commits: round_commits,
+                    state,
+                }],
+                drift: Gap {
+                    commits: drift_commits,
+                    divergent: false,
+                },
+            }
+        }
+
+        fn approved_at(n: u8) -> RoundState {
+            RoundState::Approved(Approval {
+                commit: oid(n),
+                comment_id: Some(7),
+            })
+        }
+
+        /// S1: closed round, drift carries a `file_changed` commit. The hash reported
+        /// is the *newest* such commit in drift — drift is newest-first, and the
+        /// newer commit here does not touch the file, so the scan must skip it.
+        #[test]
+        fn s1_changes_after_approval_from_nonempty_drift() {
+            let thread = thread_with(
+                true,
+                approved_at(1),
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![commit(3, &[], false), commit(2, &[], true)],
+            );
+
+            match QCStatus::determine_status(&thread).expect("placed round") {
+                QCStatus::ChangesAfterApproval(hash) => assert_eq!(hash, oid(2)),
+                other => panic!("expected ChangesAfterApproval, got {:?}", other),
+            }
+        }
+
+        /// S2: closed round, empty drift.
+        #[test]
+        fn s2_approved_from_empty_drift() {
+            let thread = thread_with(
+                true,
+                approved_at(1),
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![],
+            );
+
+            assert!(matches!(
+                QCStatus::determine_status(&thread),
+                Ok(QCStatus::Approved)
+            ));
+        }
+
+        /// S2 again: a non-empty drift with no `file_changed` commit is still
+        /// `Approved`. Emptiness is not the test — `file_changed` is.
+        #[test]
+        fn s2_approved_from_drift_without_file_changes() {
+            let thread = thread_with(
+                true,
+                approved_at(1),
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![commit(2, &[], false)],
+            );
+
+            assert!(matches!(
+                QCStatus::determine_status(&thread),
+                Ok(QCStatus::Approved)
+            ));
+        }
+
+        /// **The S0 trap.** An open round's drift is empty too (I14), so a dispatch
+        /// on drift emptiness instead of `RoundState` reports `Approved` for a QC
+        /// nobody has reviewed. This unreviewed round must reach S4.
+        #[test]
+        fn s0_open_round_with_empty_drift_is_not_approved() {
+            let thread = thread_with(
+                true,
+                RoundState::Unapproved,
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![],
+            );
+
+            let status = QCStatus::determine_status(&thread).expect("placed round");
+            assert!(
+                !status.is_approved(),
+                "an unapproved round must never report approved; got {:?}",
+                status
+            );
+            assert!(
+                matches!(status, QCStatus::AwaitingReview),
+                "got {:?}",
+                status
+            );
+        }
+
+        /// S3: unapproved round, issue closed.
+        #[test]
+        fn s3_approval_required_when_issue_closed_unapproved() {
+            let thread = thread_with(
+                false,
+                RoundState::Unapproved,
+                vec![
+                    commit(2, &[CommitStatus::Notification], true),
+                    commit(1, &[CommitStatus::Initial], true),
+                ],
+                vec![],
+            );
+
+            assert!(matches!(
+                QCStatus::determine_status(&thread),
+                Ok(QCStatus::ApprovalRequired)
+            ));
+        }
+
+        /// D55: `determine_status` refuses rather than guessing when the latest round
+        /// is unplaceable. The error carries the branch, which the status endpoint
+        /// renders as `IssueStatusError { kind: branch_not_local, branch }` — and
+        /// `QCStatus` gains no variant for it (S5).
+        #[test]
+        fn d55_status_refuses_an_unplaceable_latest_round() {
+            let mut thread = thread_with(
+                true,
+                RoundState::Unapproved,
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![],
+            );
+            thread.rounds[0].placement = RoundPlacement::Unplaceable {
+                branch: "feature".to_string(),
+            };
+            thread.rounds[0].commits.clear();
+
+            match QCStatus::determine_status(&thread) {
+                Err(IssueError::LocalBranchNotFound(branch)) => assert_eq!(branch, "feature"),
+                other => panic!("expected LocalBranchNotFound, got {other:?}"),
+            }
+        }
+
+        /// D55, the other `None` case (D54.2): the latest round is placed and approved,
+        /// but its approval is no longer among the commits it owns. Status refuses; it
+        /// must never answer from a substituted commit.
+        ///
+        /// D60: and it refuses with `ApprovalNotOnBranch`, **not**
+        /// `LocalBranchNotFound` — the branch is local, so "fetch it" would be wrong.
+        #[test]
+        fn d60_status_refuses_an_off_branch_approval_with_a_distinct_error() {
+            let thread = thread_with(
+                true,
+                RoundState::Approved(Approval {
+                    commit: oid(9),
+                    comment_id: None,
+                }),
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![],
+            );
+
+            let error = QCStatus::determine_status(&thread).unwrap_err();
+            let IssueError::ApprovalNotOnBranch { commit, branch } = &error else {
+                panic!("expected ApprovalNotOnBranch, got {error:?}")
+            };
+            assert_eq!(*commit, oid(9));
+            assert_eq!(branch, "main");
+            // The message must not tell the user to fetch a branch they already have.
+            let message = error.to_string();
+            assert!(!message.contains("not checked out locally"), "{message}");
+            assert!(message.contains("no longer reachable"), "{message}");
+            assert!(message.contains("rewritten"), "{message}");
+            // D60: still one case for clients — `branch_not_local` + the branch.
+            assert_eq!(error.branch_not_local(), Some("main"));
+        }
+
+        /// D60: the *other* `None` case keeps `LocalBranchNotFound`'s message — the
+        /// branch really is missing there — and the two classify identically on the wire.
+        #[test]
+        fn d60_the_two_unresolved_cases_differ_in_message_only() {
+            let mut unplaceable = thread_with(
+                true,
+                RoundState::Unapproved,
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![],
+            );
+            unplaceable.rounds[0].placement = RoundPlacement::Unplaceable {
+                branch: "feature".to_string(),
+            };
+            unplaceable.rounds[0].commits.clear();
+
+            let off_branch = thread_with(
+                true,
+                RoundState::Approved(Approval {
+                    commit: oid(9),
+                    comment_id: None,
+                }),
+                vec![commit(1, &[CommitStatus::Initial], true)],
+                vec![],
+            );
+
+            let a = QCStatus::determine_status(&unplaceable).unwrap_err();
+            let b = QCStatus::determine_status(&off_branch).unwrap_err();
+
+            assert_ne!(a.to_string(), b.to_string());
+            assert!(a.to_string().contains("not checked out locally"), "{a}");
+            // The distinction is the point: only the unplaceable round says "fetch it".
+            assert!(!b.to_string().contains("not checked out locally"), "{b}");
+            // Same wire classification for both (`branch_not_local` + a branch).
+            assert_eq!(a.branch_not_local(), Some("feature"));
+            assert_eq!(b.branch_not_local(), Some("main"));
+        }
+
+        /// D10: only the **latest** round feeds status, so an *earlier* unplaceable
+        /// round must not block it.
+        #[test]
+        fn d55_an_earlier_unplaceable_round_does_not_block_status() {
+            let mut thread = thread_with(
+                true,
+                RoundState::Unapproved,
+                vec![
+                    commit(3, &[CommitStatus::Notification], true),
+                    commit(2, &[CommitStatus::Initial], true),
+                ],
+                vec![],
+            );
+            let mut stale = thread.rounds[0].clone();
+            stale.index = 1;
+            stale.commits = Vec::new();
+            stale.placement = RoundPlacement::Unplaceable {
+                branch: "old-feature".to_string(),
+            };
+            thread.rounds[0].index = 2;
+            thread.rounds.insert(0, stale);
+
+            assert!(matches!(
+                QCStatus::determine_status(&thread),
+                Ok(QCStatus::AwaitingReview)
+            ));
+        }
+
+        /// S5/D10: the S4 scan is bounded by the round, and never reads drift. A
+        /// drift populated behind an *open* round (which I14 forbids, but which a
+        /// rewritten history could produce) must not change the verdict.
+        #[test]
+        fn s4_scan_ignores_drift() {
+            let commits = vec![
+                commit(2, &[CommitStatus::Reviewed], false),
+                commit(1, &[CommitStatus::Initial], true),
+            ];
+            let clean = thread_with(true, RoundState::Unapproved, commits.clone(), vec![]);
+            let polluted = thread_with(
+                true,
+                RoundState::Unapproved,
+                commits,
+                vec![commit(3, &[], true)],
+            );
+
+            assert!(matches!(
+                QCStatus::determine_status(&clean),
+                Ok(QCStatus::ChangeRequested)
+            ));
+            assert!(matches!(
+                QCStatus::determine_status(&polluted),
+                Ok(QCStatus::ChangeRequested)
+            ));
         }
     }
 

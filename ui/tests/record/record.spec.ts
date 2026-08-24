@@ -1,7 +1,8 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
-import { closedMilestone, openMilestone, defaultRepoInfo, rootFileTree, srcFileTree } from '../fixtures/index'
+import { closedMilestone, openMilestone, defaultRepoInfo, emptyGap, makeApprovedRound, makeRound, rootFileTree, srcFileTree } from '../fixtures/index'
 import type { Issue, IssueStatusResponse, BatchIssueStatusResponse, QCStatus } from '../../src/api/issues'
+import type { FileTreeResponse } from '../../src/api/files'
 
 // ── Test-local fixtures ───────────────────────────────────────────────────────
 
@@ -18,8 +19,9 @@ const issue90: Issue = {
   closed_at: '2024-01-10T00:00:00Z',
   created_by: 'test-user',
   branch: 'main',
-  checklist_name: 'Code Review',
+  has_qc_rounds_marker: false,
   relevant_files: [],
+  file_history: [],
 }
 
 const issue91: Issue = {
@@ -30,19 +32,20 @@ const issue91: Issue = {
 }
 
 function makeStatus(issue: Issue, status: QCStatus['status']): IssueStatusResponse {
+  const approved = status === 'approved' || status === 'changes_after_approval'
   return {
     issue,
-    qc_status: {
-      status,
-      status_detail: '',
-      approved_commit: status === 'approved' ? 'aaa1111' : null,
-      initial_commit: 'bbb2222',
-      latest_commit: 'ccc3333',
-    },
+    qc_status: { status, status_detail: '' },
     dirty: false,
-    branch: 'main',
-    commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
-    checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
+    rounds: [
+      approved
+        ? makeApprovedRound('aaa1111', { checklist_summary: { completed: 5, total: 5, percentage: 1.0 } })
+        : makeRound({
+            commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
+            checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
+          }),
+    ],
+    drift: emptyGap(),
     blocking_qc_status: { total: 0, approved_count: 0, summary: '0/0', approved: [], not_approved: [], errors: [] },
   }
 }
@@ -66,7 +69,7 @@ const allErrorBatch: BatchIssueStatusResponse = {
 }
 
 // File tree including a PDF for the "Add File" tests
-const rootFileTreeWithPdf = {
+const rootFileTreeWithPdf: FileTreeResponse = {
   path: '',
   entries: [
     { name: 'src', kind: 'directory' },

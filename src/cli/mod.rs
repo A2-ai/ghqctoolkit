@@ -6,6 +6,7 @@ mod context;
 mod file_parser;
 mod interactive;
 pub mod rename;
+mod round;
 mod sitrep;
 mod status;
 
@@ -27,6 +28,7 @@ pub(crate) fn section_header(title: &str) -> String {
 
 pub use archive::{
     MilestoneSelectionFilter, generate_archive_name, get_milestone_issue_threads, prompt_archive,
+    report_skipped,
 };
 pub use auth::{gh_auth_login, gh_auth_logout, gh_auth_status, gh_auth_token};
 pub use cache::{CacheCommands, handle_cache};
@@ -42,6 +44,7 @@ pub use interactive::{
     prompt_milestone_archive, prompt_milestone_record,
 };
 pub use rename::{confirm_rename_noninteractive, interactive_rename};
+pub use round::QCRoundCreate;
 pub use sitrep::SitRep;
 pub use status::{
     interactive_milestone_status, interactive_status, milestone_status, single_issue_status,

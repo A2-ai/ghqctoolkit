@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 use tera::{Context, Tera};
 
 use crate::{
-    ChecklistSummary, Configuration, DiskCache, GitCommitOps, GitHubReader, GitRepository,
-    GitStatusOps, RepoUser, get_git_status, get_issue_comments, get_issue_events, get_repo_users,
+    Configuration, DiskCache, GitCommitOps, GitHubReader, GitRepository, GitStatusOps, RepoUser,
+    get_git_status, get_issue_comments, get_issue_events, get_repo_users,
     git::{GitComment, GitState},
     issue::IssueThread,
-    qc_status::{QCStatus, analyze_issue_checklists},
+    qc_status::QCStatus,
     utils::EnvProvider,
 };
 
@@ -311,12 +311,21 @@ pub async fn create_issue_information(
     let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
 
     // QC Status
-    let qc_status = QCStatus::determine_status(&issue_thread).to_string();
+    // D55: the record never invents a status. When the latest round has no resolvable
+    // commit the error names the branch to fetch, and that is what the record prints.
+    let qc_status = match QCStatus::determine_status(&issue_thread) {
+        Ok(status) => status.to_string(),
+        Err(e) => format!(
+            "Undetermined — round {} ({e})",
+            issue_thread.latest_round().index
+        ),
+    };
 
-    // Checklist Summary
-    let checklist_summaries = analyze_issue_checklists(issue.body.as_deref());
-    let checklist_summary =
-        ChecklistSummary::sum(checklist_summaries.iter().map(|c| &c.1)).to_string();
+    // Checklist Summary — summed over ALL rounds (M7/R8). Status and the milestone
+    // table read the latest round only, but the record spans the QC's whole life, so
+    // it must be able to show that not everything was checked off. Reading the issue
+    // body alone would silently miss rounds 2..n entirely.
+    let checklist_summary = issue_thread.checklist_summary_all_rounds().to_string();
 
     // Git Status for this specific file
     let file_commits = issue_thread.file_commits();
@@ -378,9 +387,29 @@ pub async fn create_issue_information(
         .closed_at
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
 
-    // Commit information
+    // Commit information. `initial_qc_commit` stays round 1's start commit — the QC's
+    // original starting point, unchanged for legacy single-round issues (D2). Its
+    // counterpart is the *latest round's* latest commit, which is what
+    // `IssueThread::latest_commit` delegates to (M8).
     let initial_qc_commit = issue_thread.initial_commit().to_string();
-    let latest_qc_commit = issue_thread.latest_commit().hash.to_string();
+    // D55: never blank and never a substituted hash. When the latest round's commit does
+    // not resolve — the round could not be placed (D54.1), or its approval is no longer
+    // on its branch (D54.2) — the record says which round it is and which branch would
+    // resolve it.
+    let latest_qc_commit = match issue_thread.latest_commit() {
+        Some(commit) => commit.hash.to_string(),
+        None => {
+            // D60: the two D54 cases need different remediation. "fetch the branch" is
+            // right for an unplaceable round and wrong for a rewritten approval, where
+            // the branch is already local. `unresolved_commit_error` is the one place
+            // that distinction is made, so defer to its message rather than restating it.
+            let round = issue_thread.latest_round();
+            match round.unresolved_commit_error() {
+                Some(error) => format!("unresolved (round {}: {error})", round.index),
+                None => format!("unresolved (round {})", round.index),
+            }
+        }
+    };
 
     // Create IssueImage structs for all images in the issue and comments
     // Images are downloaded to staging_dir for use during Typst rendering
@@ -906,5 +935,156 @@ mod tests {
             issue_info.closed_by.as_deref(),
             Some("Alice Reviewer (reviewer1)")
         );
+    }
+
+    // ── P7: the record spans every round ────────────────────────────────────────
+
+    fn oid(n: u64) -> ObjectId {
+        ObjectId::from_str(&format!("{:040x}", n)).unwrap()
+    }
+
+    fn comment(body: &str) -> GitComment {
+        GitComment {
+            id: None,
+            body: body.to_string(),
+            author_login: "test-user".to_string(),
+            created_at: chrono::Utc::now(),
+            html: None,
+        }
+    }
+
+    /// Two rounds on `main`: round 1 `[c1..=c2]`, approved at c2, checklist 1/2;
+    /// round 2 `[c4..tip]`, open, checklist 2/3. The all-rounds sum is therefore
+    /// 3/5 while the issue body alone reads 1/2.
+    async fn two_round_issue_information() -> IssueInformation {
+        let body = format!(
+            "## Metadata\ninitial qc commit: {}\ngit branch: main\n\n\
+             # Checklist One\n- [x] first\n- [ ] second\n",
+            oid(1)
+        );
+        let issue = create_test_issue("owner", "repo", 7, "src/model.R", &body, Some(1), "open");
+
+        let git_info = TestGitInfo {
+            comments: vec![
+                comment(&format!("approved qc commit: {}", oid(2))),
+                comment(&format!(
+                    "# QC Round 2\n\n## Metadata\nround: 2\ninitial qc commit: {}\n\
+                     git branch: main\n\n# Checklist Two\n- [x] a\n- [x] b\n- [ ] c\n",
+                    oid(4)
+                )),
+                comment(&format!("current commit: {}", oid(5))),
+            ],
+            events: Vec::new(),
+            commits: (1..=5)
+                .rev()
+                .map(|n| GitCommit {
+                    commit: oid(n),
+                    message: format!("commit {n}"),
+                })
+                .collect(),
+        };
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        create_issue_information(
+            &issue,
+            "v1.0",
+            &[],
+            &GitState::Clean,
+            &[],
+            None,
+            &git_info,
+            &TestDownloader,
+            staging_dir.path(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// R8/M7: status and the milestone table read the latest round only, but the
+    /// record sums **all** rounds, so it can show that not everything was checked off
+    /// over the QC's life. Reading the issue body alone would score 1/2 and miss
+    /// round 2 entirely.
+    #[tokio::test]
+    async fn checklist_summary_sums_every_round() {
+        let issue_info = two_round_issue_information().await;
+        assert_eq!(issue_info.checklist_summary, "3/5 (60.0%)");
+    }
+
+    /// D55: the record never blanks the commit and never substitutes one. When the
+    /// latest round's approval is no longer among the commits it owns (D54.2), the
+    /// record names the round and defers to `unresolved_commit_error`'s message, and the
+    /// status says it is undetermined rather than reporting `Approved` against a
+    /// substituted commit. Note this scenario is D54.2, not D54.1 — the branch IS local
+    /// and the approval was rewritten off it, so "fetch the branch" would be the wrong
+    /// remediation (D60).
+    #[tokio::test]
+    async fn an_unresolvable_latest_round_is_rendered_as_a_fetch_state() {
+        let body = format!(
+            "## Metadata\ninitial qc commit: {}\ngit branch: main\n\n\
+             # Checklist One\n- [x] first\n",
+            oid(1)
+        );
+        let issue = create_test_issue("owner", "repo", 7, "src/model.R", &body, Some(1), "open");
+        let git_info = TestGitInfo {
+            comments: vec![
+                comment(&format!("approved qc commit: {}", oid(2))),
+                comment(&format!(
+                    "# QC Round 2\n\n## Metadata\nround: 2\ninitial qc commit: {}\n\
+                     git branch: main\n\n# Checklist Two\n- [x] a\n",
+                    oid(4)
+                )),
+                // Approved at a commit that is not on the branch any more — force-push.
+                comment(&format!("approved qc commit: {}", oid(99))),
+            ],
+            events: Vec::new(),
+            commits: (1..=5)
+                .rev()
+                .map(|n| GitCommit {
+                    commit: oid(n),
+                    message: format!("commit {n}"),
+                })
+                .collect(),
+        };
+
+        let staging_dir = tempfile::tempdir().unwrap();
+        let issue_info = create_issue_information(
+            &issue,
+            "v1.0",
+            &[],
+            &GitState::Clean,
+            &[],
+            None,
+            &git_info,
+            &TestDownloader,
+            staging_dir.path(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            issue_info.latest_qc_commit.contains("round 2")
+                && issue_info.latest_qc_commit.contains("main"),
+            "got {}",
+            issue_info.latest_qc_commit
+        );
+        assert!(
+            !issue_info.latest_qc_commit.contains(&oid(5).to_string()),
+            "the branch tip must never stand in for the approval: {}",
+            issue_info.latest_qc_commit
+        );
+        assert!(
+            issue_info.qc_status.starts_with("Undetermined"),
+            "got {}",
+            issue_info.qc_status
+        );
+    }
+
+    /// P7: `latest_qc_commit` is the *latest round's* latest commit; `initial_qc_commit`
+    /// stays round 1's start commit (D2 — unchanged for legacy single-round issues).
+    #[tokio::test]
+    async fn qc_commits_span_first_round_start_to_latest_round() {
+        let issue_info = two_round_issue_information().await;
+        assert_eq!(issue_info.initial_qc_commit, oid(1).to_string());
+        assert_eq!(issue_info.latest_qc_commit, oid(5).to_string());
     }
 }

@@ -14,6 +14,7 @@ mod qc_status;
 mod record;
 mod relevant_files;
 mod review;
+mod round;
 pub mod utils;
 
 #[cfg(test)]
@@ -33,7 +34,10 @@ pub use approve::{
     QCUnapprove, UnapprovalResult, approve_with_validation, get_unapproved_blocking_qcs,
     unapprove_with_impact,
 };
-pub use archive::{ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, archive};
+pub use archive::{
+    ArchiveError, ArchiveFile, ArchiveMetadata, ArchiveQC, SkippedFile, archive,
+    archive_files_for_threads,
+};
 pub use auth::{
     AuthStore, AuthStoreError, AuthToken, canonicalize_base_url, extract_host_from_base_url,
     token_page_url, validate_github_token,
@@ -59,8 +63,9 @@ pub use git::{
     head_commit_hash,
 };
 pub use issue::{
-    BlockingQC, BlockingRelationship, CommitStatus, FileRenameEvent, IssueCommit, IssueError,
-    IssueThread, determine_relationship_from_body, file_history_section, find_checklist_start,
+    Approval, BlockingQC, BlockingRelationship, CommitStatus, DerivedState, FileRenameEvent, Gap,
+    IssueCommit, IssueError, IssueThread, Round, RoundChecklist, RoundPlacement, RoundState,
+    Segment, determine_relationship_from_body, file_history_section, find_checklist_start,
     parse_blocking_qcs, parse_branch_from_body, parse_file_history, splice_file_history,
 };
 pub use qc_status::{
@@ -74,3 +79,4 @@ pub use record::{
 };
 pub use relevant_files::{RelevantFile, RelevantFileClass};
 pub use review::{QCReview, ReviewStashResult, ReviewStashStatus, stash_review_file};
+pub use round::QCRound;

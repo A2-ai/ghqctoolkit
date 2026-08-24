@@ -6,6 +6,8 @@
     "dev": "bunx --bun vite dev --port 3103",
     "build": "bunx --bun vite build && bun run scripts/gen-index-html.ts",
     "preview": "bunx --bun vite preview",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed"

@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import type { CreateIssueRequest } from './create'
 import type { ApproveRequest, CreateCommentRequest, ReviewRequest, UnapproveRequest } from './issues'
 import { API_BASE } from '../config'
@@ -117,6 +118,59 @@ export async function fetchIssuePreview(request: CreateIssueRequest): Promise<st
     throw new Error(data?.error ?? `Failed to fetch preview: ${res.status}`)
   }
   return res.text()
+}
+
+/**
+ * Body for `POST /api/preview/round` (D47). There is deliberately **no
+ * `round_index`**: the server derives it the same way `POST /rounds` does, so a
+ * preview cannot title itself with a round number the creation would not use.
+ */
+export interface RoundPreviewRequest {
+  issue_number: number
+  start_commit: string
+  branch: string
+  /** `content` excludes the `# {name}` heading line (D37). */
+  checklist: { name: string; content: string }
+}
+
+/**
+ * D47: renders the `# QC Round N` comment through the server's real
+ * `QCRound::generate_body` — the same code path `POST /rounds` posts. The round
+ * comment body has exactly one implementation, so the preview cannot drift from
+ * what gets posted, and only the server can emit the
+ * `[file contents at initial qc commit](url)` line (the URL comes from the git
+ * provider's blob-URL builder, which the UI cannot compute without guessing the
+ * host).
+ */
+export async function previewRound(request: RoundPreviewRequest): Promise<string> {
+  const res = await fetch(`${API_BASE}/preview/round`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to fetch round preview: ${res.status}`)
+  }
+  return res.text()
+}
+
+/**
+ * `request === null` disables the fetch — callers pass null while the preview is
+ * not being looked at, or before the checkout's branch/commit are known. Pass
+ * debounced checklist fields: the checklist is an editable textarea and the query
+ * key is the request, so an undebounced value would fire a request per keystroke.
+ */
+export function useRoundPreview(request: RoundPreviewRequest | null) {
+  return useQuery({
+    queryKey: ['preview', 'round', request],
+    queryFn: () => previewRound(request!),
+    enabled: request !== null,
+    // The other preview paths report a failure the moment it happens; the global
+    // default of three retries would leave the user watching a spinner for seconds
+    // before the error appears, and any edit re-fires the request anyway.
+    retry: false,
+  })
 }
 
 export async function fetchPreviousQCDiffPreview(request: PreviousQCDiffPreviewRequest): Promise<string> {
