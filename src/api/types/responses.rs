@@ -555,6 +555,48 @@ pub struct BlockingQCStatus {
     pub errors: Vec<BlockingQCError>,
 }
 
+/// Which kind of segment a `SegmentRef` points at (M2).
+///
+/// `Drift` is a distinct kind even though it is the same `Gap` type as a preceding gap:
+/// D30 — what a trailing gap *is* comes from its position, and the client picks the
+/// pinned tail block (D80/D81) by kind, not by index arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentKind {
+    Round,
+    Gap,
+    Drift,
+}
+
+/// One row of the History dropdown (M2): a **pointer** into `rounds`/`drift`, never a
+/// copy of their commits.
+///
+/// The order of `IssueStatusResponse::history` is W6's, projected from
+/// `IssueThread::segments()`. It carries two positional suppression rules — round 1's
+/// preceding gap is skipped, and `drift` is emitted only when the latest round is closed
+/// — and rebuilding those client-side is the derivation D30/U7 pushes to the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SegmentRef {
+    pub kind: SegmentKind,
+    /// The round this segment belongs to: itself for a round, the round it precedes for
+    /// a gap, the latest round for drift. A **declared** index (D53.2), so it is never a
+    /// position in `history` or in `rounds`.
+    pub round_index: u32,
+}
+
+impl From<&crate::issue::Segment<'_>> for SegmentRef {
+    fn from(segment: &crate::issue::Segment<'_>) -> Self {
+        Self {
+            kind: match segment {
+                crate::issue::Segment::Round(_) => SegmentKind::Round,
+                crate::issue::Segment::Gap { .. } => SegmentKind::Gap,
+                crate::issue::Segment::Drift { .. } => SegmentKind::Drift,
+            },
+            round_index: segment.round().index,
+        }
+    }
+}
+
 /// Full issue status response.
 ///
 /// D24/A2/A3: no top-level field may duplicate a round-scoped value. `commits`,
@@ -572,6 +614,9 @@ pub struct IssueStatusResponse {
     /// checks `rounds[rounds.length - 1].state.kind` to know whether it is
     /// meaningful — the same dispatch the backend uses (S0).
     pub drift: Gap,
+    /// W6's segment order (M2) — the History dropdown's rows. Always non-empty: I1
+    /// guarantees a round, and a lone open round projects to exactly `[Round 1]`.
+    pub history: Vec<SegmentRef>,
     pub blocking_qc_status: BlockingQCStatus,
 }
 
@@ -592,6 +637,11 @@ impl IssueStatusResponse {
                 .map(|position| RoundInfo::new(issue_thread, position))
                 .collect(),
             drift: (&issue_thread.drift).into(),
+            history: issue_thread
+                .segments()
+                .iter()
+                .map(SegmentRef::from)
+                .collect(),
             blocking_qc_status: BlockingQCStatus::default(),
         })
     }
@@ -1129,6 +1179,108 @@ mod tests {
             // I14: the latest round is unapproved, so there is no anchor and no drift.
             drift: crate::Gap::default(),
         }
+    }
+
+    // ── M2: the `history` projection ────────────────────────────────────────────
+
+    fn history(value: &serde_json::Value) -> Vec<(String, u64)> {
+        value["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry["kind"].as_str().unwrap().to_string(),
+                    entry["round_index"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// W6 order, on the wire. Round 1's preceding gap is suppressed (W6.1) and each gap
+    /// names the round it **precedes**, so the client never infers ownership from a
+    /// position.
+    #[test]
+    fn test_history_projects_w6_order_with_gaps_naming_the_round_they_precede() {
+        let value = response(&three_round_thread());
+
+        assert_eq!(
+            history(&value),
+            vec![
+                ("round".to_string(), 1),
+                ("gap".to_string(), 2),
+                ("round".to_string(), 2),
+                ("gap".to_string(), 3),
+                ("round".to_string(), 3),
+            ],
+            "R1 (G R)* with no leading gap and no trailing drift"
+        );
+    }
+
+    /// W6.2: `drift` is emitted only when the latest round is closed. An open latest
+    /// round has no trailing segment, so the tail block (D81) is the round itself.
+    #[test]
+    fn test_history_omits_drift_while_the_latest_round_is_open() {
+        let value = response(&three_round_thread());
+
+        assert!(
+            !history(&value).iter().any(|(kind, _)| kind == "drift"),
+            "an open latest round has no trailing segment: {:?}",
+            history(&value)
+        );
+    }
+
+    /// The other half of W6.2: once the latest round is approved, drift is the tail and
+    /// it names the latest round (D81).
+    #[test]
+    fn test_history_appends_drift_once_the_latest_round_is_approved() {
+        let mut thread = three_round_thread();
+        thread.rounds[2].state = RoundState::Approved(Approval {
+            commit: oid(4),
+            comment_id: Some(9),
+        });
+
+        let value = response(&thread);
+        assert_eq!(
+            history(&value).last(),
+            Some(&("drift".to_string(), 3)),
+            "drift is the tail and belongs to the latest round: {:?}",
+            history(&value)
+        );
+    }
+
+    /// D53.2: `round_index` is the **declared** index. With a hole in `rounds` a gap
+    /// still names the round it precedes, so no index may be read off a position — in
+    /// `history` or in `rounds`.
+    #[test]
+    fn test_history_uses_declared_indices_when_rounds_have_a_hole() {
+        let mut thread = three_round_thread();
+        // Round 2's declaration was malformed and dropped without renumbering, so
+        // `rounds` is [1, 3] and position 1 holds round *3*.
+        thread.rounds.remove(1);
+
+        let value = response(&thread);
+        assert_eq!(
+            history(&value),
+            vec![
+                ("round".to_string(), 1),
+                ("gap".to_string(), 3),
+                ("round".to_string(), 3),
+            ],
+            "a positional index would name the gap 2 — a round that does not exist"
+        );
+    }
+
+    /// I1 guarantees a round, so `history` is never empty: the single-round case
+    /// projects to exactly one row, which is also D71's default selection.
+    #[test]
+    fn test_history_of_a_single_open_round_is_one_row() {
+        let mut thread = three_round_thread();
+        thread.rounds.truncate(1);
+        thread.rounds[0].state = RoundState::Unapproved;
+
+        let value = response(&thread);
+        assert_eq!(history(&value), vec![("round".to_string(), 1)]);
     }
 
     /// D53/D54 on the wire: an unplaceable round is **present**, with its declared

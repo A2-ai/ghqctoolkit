@@ -58,6 +58,13 @@ pub struct MockGitInfo {
     milestones: Arc<Mutex<Vec<octocrab::models::Milestone>>>,
     users: Arc<Mutex<Vec<crate::RepoUser>>>,
 
+    /// File contents per commit hex, for the diff paths. **Empty means "every commit
+    /// reads as an empty file"** — the long-standing behaviour every other test relies
+    /// on. Once anything is registered the map becomes authoritative, so an
+    /// unregistered commit reads as unreadable, which is how the not-local case is
+    /// exercised.
+    file_bytes: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
     git_state: GitState,
@@ -100,6 +107,7 @@ pub struct MockGitInfoBuilder {
     blocked_issues: HashMap<u64, Vec<Issue>>,
     milestones: Vec<octocrab::models::Milestone>,
     users: Vec<crate::RepoUser>,
+    file_bytes: HashMap<String, Vec<u8>>,
     dirty_files: Vec<PathBuf>,
     git_state: GitState,
     current_user: Option<String>,
@@ -121,6 +129,7 @@ impl MockGitInfoBuilder {
             blocked_issues: HashMap::new(),
             milestones: Vec::new(),
             users: Vec::new(),
+            file_bytes: HashMap::new(),
             dirty_files: Vec::new(),
             git_state: GitState::Clean,
             current_user: Some("test-user".to_string()),
@@ -196,6 +205,19 @@ impl MockGitInfoBuilder {
         self
     }
 
+    /// Register the file's contents at one commit. Registering *any* commit makes the
+    /// map authoritative: commits left out then fail to read, which is the seam the
+    /// "fetch the branch" refusal needs.
+    pub fn with_file_bytes(
+        mut self,
+        commit: impl Into<String>,
+        contents: impl Into<String>,
+    ) -> Self {
+        self.file_bytes
+            .insert(commit.into(), contents.into().into_bytes());
+        self
+    }
+
     pub fn with_dirty_file(mut self, file: impl Into<PathBuf>) -> Self {
         self.dirty_files.push(file.into());
         self
@@ -240,6 +262,7 @@ impl MockGitInfoBuilder {
             blocked_issues: Arc::new(Mutex::new(self.blocked_issues)),
             milestones: Arc::new(Mutex::new(self.milestones)),
             users: Arc::new(Mutex::new(self.users)),
+            file_bytes: Arc::new(Mutex::new(self.file_bytes)),
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
             git_state: self.git_state,
             current_user: self.current_user,
@@ -413,10 +436,17 @@ impl GitFileOps for MockGitInfo {
 
     fn file_bytes_at_commit(
         &self,
-        _file: &Path,
-        _commit: &ObjectId,
+        file: &Path,
+        commit: &ObjectId,
     ) -> Result<Vec<u8>, GitFileOpsError> {
-        Ok(vec![])
+        let registered = self.file_bytes.lock().unwrap();
+        if registered.is_empty() {
+            return Ok(vec![]);
+        }
+        registered
+            .get(&commit.to_string())
+            .cloned()
+            .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
     }
 
     fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {

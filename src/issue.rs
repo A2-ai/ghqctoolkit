@@ -168,13 +168,50 @@ pub struct RoundChecklist {
     pub content: String,
 }
 
+/// Trim whole blank lines off both ends of a checklist body.
+///
+/// A checklist section runs from its `# ` heading to the end of the body or comment, so
+/// the content almost always opens with the blank line after the heading and closes with
+/// whatever trailing newlines the comment had. Those are artefacts of where the section
+/// was cut, not content.
+///
+/// Trims **lines**, never characters: interior blank lines separate `## ` subsections
+/// (R5), and leading whitespace on the first real line is a nested checklist item.
+fn trim_blank_lines(content: &str) -> &str {
+    let mut start = 0usize;
+    while let Some(len) = content[start..].find('\n').map(|i| i + 1) {
+        if !content[start..start + len].trim().is_empty() {
+            break;
+        }
+        start += len;
+    }
+
+    let mut end = content.len();
+    loop {
+        let head = &content[start..end];
+        let last = head.rfind('\n').map(|i| i + 1);
+        match last {
+            // A blank final line: drop it *and* the newline that introduced it.
+            Some(at) if head[at..].trim().is_empty() => end = start + at - 1,
+            // No newline left, so `head` is the only line.
+            None if head.trim().is_empty() => {
+                end = start;
+                break;
+            }
+            _ => break,
+        }
+    }
+
+    &content[start..end]
+}
+
 impl RoundChecklist {
     /// Split a checklist section (`# {name}\n{rest}`) per D37.
     fn from_section(section: &str) -> Self {
         match section.split_once('\n') {
             Some((heading, content)) => Self {
                 name: heading.trim_start_matches('#').trim().to_string(),
-                content: content.to_string(),
+                content: trim_blank_lines(content).to_string(),
             },
             None => Self {
                 name: section.trim_start_matches('#').trim().to_string(),
@@ -345,10 +382,17 @@ impl Round {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Segment<'a> {
     Round(&'a Round),
-    /// A round's preceding gap.
-    Gap(&'a Gap),
-    /// The trailing gap — same type, labelled by position (D30).
-    Drift(&'a Gap),
+    /// A round's preceding gap, with the round it precedes.
+    Gap {
+        gap: &'a Gap,
+        round: &'a Round,
+    },
+    /// The trailing gap — same type, labelled by position (D30) — with the latest
+    /// round.
+    Drift {
+        gap: &'a Gap,
+        round: &'a Round,
+    },
 }
 
 impl<'a> Segment<'a> {
@@ -356,7 +400,30 @@ impl<'a> Segment<'a> {
     pub fn commits(&self) -> &'a [IssueCommit] {
         match self {
             Segment::Round(round) => &round.commits,
-            Segment::Gap(gap) | Segment::Drift(gap) => &gap.commits,
+            Segment::Gap { gap, .. } | Segment::Drift { gap, .. } => &gap.commits,
+        }
+    }
+
+    /// The round this segment belongs to: itself for a round, the round it precedes for
+    /// a gap, the latest round for drift.
+    ///
+    /// M2/D9: a gap's owning round is part of its identity, not merely its position —
+    /// a gap's branch *is* its owning round's branch — so the wire projection can name
+    /// it without re-deriving W6's ordering.
+    pub fn round(&self) -> &'a Round {
+        match self {
+            Segment::Round(round) | Segment::Gap { round, .. } | Segment::Drift { round, .. } => {
+                round
+            }
+        }
+    }
+
+    /// Whether this segment's history does not continue the previous segment's
+    /// (D22/D31). A round is never itself divergent — its *preceding gap* is.
+    pub fn divergent(&self) -> bool {
+        match self {
+            Segment::Round(_) => false,
+            Segment::Gap { gap, .. } | Segment::Drift { gap, .. } => gap.divergent,
         }
     }
 }
@@ -980,14 +1047,20 @@ impl IssueThread {
             // W6.1: round 1 has no predecessor, so emitting its gap would prepend a
             // `G` before `R1`.
             if position > 0 {
-                segments.push(Segment::Gap(&round.preceding_gap));
+                segments.push(Segment::Gap {
+                    gap: &round.preceding_gap,
+                    round,
+                });
             }
             segments.push(Segment::Round(round));
         }
         // W6.2: R1's "no trailing segment after an open round", enforced here rather
         // than in storage (D17).
-        if self.rounds.last().is_some_and(Round::is_closed) {
-            segments.push(Segment::Drift(&self.drift));
+        if let Some(latest) = self.rounds.last().filter(|round| round.is_closed()) {
+            segments.push(Segment::Drift {
+                gap: &self.drift,
+                round: latest,
+            });
         }
         segments
     }
@@ -1146,10 +1219,7 @@ impl IssueThread {
             .collect();
         let mut seen: HashSet<ObjectId> = HashSet::new();
         for segment in self.segments() {
-            let divergent = match segment {
-                Segment::Gap(gap) | Segment::Drift(gap) => gap.divergent,
-                Segment::Round(_) => false,
-            };
+            let divergent = segment.divergent();
             for commit in segment.commits() {
                 if divergent || overlaps.contains(&commit.hash) {
                     continue;
@@ -2565,7 +2635,7 @@ git branch: main
         let segments = thread.segments();
         assert_eq!(segments.len(), 3);
         assert!(matches!(segments[0], Segment::Round(r) if r.index == 1));
-        assert!(matches!(segments[1], Segment::Gap(_)));
+        assert!(matches!(segments[1], Segment::Gap { round, .. } if round.index == 2));
         assert!(matches!(segments[2], Segment::Round(r) if r.index == 2));
 
         // D10: status reads the latest round, so the walk no longer grows with the
@@ -2637,7 +2707,7 @@ git branch: main
         // W6.2: the trailing segment is emitted only after a closed round.
         assert!(matches!(
             approved.segments().last(),
-            Some(Segment::Drift(_))
+            Some(Segment::Drift { .. })
         ));
         assert!(matches!(open.segments().last(), Some(Segment::Round(_))));
 
@@ -3827,6 +3897,40 @@ author: test"#;
     fn test_find_checklist_start_empty_body() {
         let pos = find_checklist_start("");
         assert!(pos.is_none());
+    }
+
+    // ── checklist content is trimmed of blank lines ───────────────────────────
+
+    /// The section is cut at its heading and runs to the end of the body, so the blank
+    /// line after the heading and the body's trailing newlines are artefacts of the cut.
+    #[test]
+    fn test_checklist_content_drops_leading_and_trailing_blank_lines() {
+        let checklist =
+            RoundChecklist::from_section("# My list\n\n\n- [ ] one\n- [ ] two\n\n   \n\n");
+        assert_eq!(checklist.name, "My list");
+        assert_eq!(checklist.content, "- [ ] one\n- [ ] two");
+    }
+
+    /// Lines, not characters: an interior blank line separates `## ` subsections (R5),
+    /// and leading whitespace on the first real line is a nested item.
+    #[test]
+    fn test_checklist_content_keeps_interior_blanks_and_indentation() {
+        let checklist =
+            RoundChecklist::from_section("# L\n\n  - [ ] nested\n\n## Part two\n\n- [ ] b\n");
+        assert_eq!(
+            checklist.content,
+            "  - [ ] nested\n\n## Part two\n\n- [ ] b"
+        );
+    }
+
+    /// An all-blank section is empty content, not a string of newlines — `summary()`
+    /// counts checkboxes either way, but the editable content the UI seeds from it
+    /// should not open with phantom lines.
+    #[test]
+    fn test_checklist_content_all_blank_is_empty() {
+        assert_eq!(RoundChecklist::from_section("# L\n\n \n\n").content, "");
+        assert_eq!(RoundChecklist::from_section("# L\n").content, "");
+        assert_eq!(RoundChecklist::from_section("# L").content, "");
     }
 
     // ── splice_file_history ───────────────────────────────────────────────────

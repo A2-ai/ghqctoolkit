@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -21,8 +21,9 @@ import { IconAsterisk, IconX } from '@tabler/icons-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { ApproveRequest, Issue, IssueStatusResponse, QCStatus, ReviewRequest, ReviewStashResult } from '~/api/issues'
 import { approvalCommentUrl, fetchSingleIssueStatus, latestRound, postApprove, postComment, postReview, roundApprovedCommit, roundByIndex, useInvalidateBlockingDependents } from '~/api/issues'
-import { RoundSwitcher } from '~/components/RoundSwitcher'
-import { ApprovalNotInBranchBadge, UnplaceableRoundAlert } from '~/components/RoundBadges'
+import { HistorySelect } from '~/components/HistorySelect'
+import { buildHistory, defaultSelection, flattenSelection, rangeCrossesBreak } from '~/utils/history'
+import { ApprovalNotInBranchBadge, RoundPill, UnplaceableRoundAlert } from '~/components/RoundBadges'
 import { fetchApprovePreview, fetchCommentPreview, fetchReviewPreview } from '~/api/preview'
 import { CommitSlider } from '~/components/CommitSlider'
 import { UnapproveSwimLanes } from '~/components/UnapproveSwimLanes'
@@ -123,13 +124,27 @@ function ModalContent({ status, onClose, onStatusUpdate }: { status: IssueStatus
 function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  // U4/W5: the slider is round-scoped, defaulting to the latest round. It never spans
-  // the whole QC's life again (§0.5).
-  const [roundIndex, setRoundIndex] = useState(latestRound(status).index)
-  const round = roundByIndex(status, roundIndex)
+  // §22/D70: the slider spans the selected segments, not one round. D71: the default
+  // selection is the latest round alone, so the opening view is exactly the pre-§22 one
+  // and §0.5 is not reopened.
+  const history = useMemo(() => buildHistory(status), [status])
+  const [selectedKeys, setSelectedKeys] = useState<string[]>(() => defaultSelection(history))
+  const selected = useMemo(() => new Set(selectedKeys), [selectedKeys])
+  const { commits: orderedCommits, tailStart } = useMemo(
+    () => flattenSelection(history, selected),
+    [history, selected],
+  )
+  const round = latestRound(status)
 
-  // Build oldest-first commit list
-  const orderedCommits = [...round.commits].reverse()
+  // D80: the tail block is pinned, so this only ever adds or removes an earlier segment.
+  const toggleSegment = (key: string) =>
+    setSelectedKeys((keys) => (keys.includes(key) ? keys.filter((k) => k !== key) : [...keys, key]))
+
+  // D77: the selected rounds that cannot be placed, so each can name the branch to fetch.
+  const unplaceableSelected = history
+    .filter((segment) => segment.ref.kind === 'round' && selected.has(segment.key))
+    .map((segment) => segment.round)
+    .filter((candidate) => candidate.placement === 'unplaceable')
 
   // Default FROM: last index with statuses.length > 0
   let fromDefault = 0
@@ -189,8 +204,8 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setPostResultUrl(null)
     setPostError(null)
     setAckApproved(false)
-    // Re-defaults when the round changes too: each round has its own commit list.
-  }, [status.issue.number, roundIndex]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-defaults when the selection changes too: the commit list is a different list.
+  }, [status.issue.number, selectedKeys.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
     .map((c, i) => ({ ...c, origIdx: i }))
@@ -222,16 +237,47 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
   const snapA = snapToVisible(sliderAOrigIdx)
   const snapB = snapToVisible(sliderBOrigIdx)
 
+  // D79: `to` becomes `current_commit`, which must come from the tail block — the latest
+  // round and its drift (D81). Enforced as a clamp on the *max* handle, checked here on
+  // every render, so handles still cross freely and dragging the max handle left simply
+  // stops at the tail's first commit. An illegal range is never constructible.
+  const firstTailVisiblePos = tailStart === -1
+    ? -1
+    : visibleCommits.findIndex((c) => c.origIdx >= tailStart)
+  const rawMax = Math.max(snapA, snapB)
+  const toPos = firstTailVisiblePos >= 0 ? Math.max(rawMax, firstTailVisiblePos) : rawMax
+  const fromPos = Math.min(Math.min(snapA, snapB), toPos)
+
+  // The thumbs render from the **clamped** pair, not from `snapA`/`snapB`.
+  //
+  // Clamping only the derived `to` left the max thumb sitting wherever it was dragged
+  // while From/To — and the posted comment — used a different commit: the control
+  // displayed a range it was not going to send. Driving both thumbs off `fromPos`/`toPos`
+  // makes that disagreement unrepresentable; dragging the max thumb below the tail now
+  // visibly snaps it back to the tail's first commit, which is what "locked" should look
+  // like. The stored handles stay free to cross, so which thumb is the max still follows
+  // the drag rather than being pinned to A or B.
+  const aIsMax = snapA >= snapB
+  const displayA = aIsMax ? toPos : fromPos
+  const displayB = aIsMax ? fromPos : toPos
+
   // from = earlier handle, to = later handle — handles can freely cross
-  const fromCommit = visibleCommits[Math.min(snapA, snapB)]
-  const toCommit   = visibleCommits[Math.max(snapA, snapB)]
+  const fromCommit = visibleCommits[fromPos]
+  const toCommit   = visibleCommits[toPos]
   const fromOrigIdx = fromCommit?.origIdx ?? 0
   const toOrigIdx   = toCommit?.origIdx ?? 0
 
+  // D75: across a break the commits between the handles are not one history, so the walk
+  // below is not a fact about the range. Content is unaffected (D22 — a blob-to-blob diff
+  // needs no ancestry), so this goes conservative-`true` (as D39.3): the diff stays on
+  // offer rather than being silently dropped.
+  const crossesBreak = rangeCrossesBreak(orderedCommits, fromOrigIdx, toOrigIdx)
+
   // File changed: any commit strictly after from, up to and including to
   const fileChangedInRange =
-    fromOrigIdx < toOrigIdx &&
-    orderedCommits.slice(fromOrigIdx + 1, toOrigIdx + 1).some((c) => c.file_changed)
+    crossesBreak ||
+    (fromOrigIdx < toOrigIdx &&
+      orderedCommits.slice(fromOrigIdx + 1, toOrigIdx + 1).some((c) => c.file_changed))
 
   const commentRequest = {
     current_commit: toCommit?.hash ?? '',
@@ -290,13 +336,36 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
         </Alert>
       )}
 
-      {/* U4: the round switcher sits above the slider; the slider below renders the
-          selected round's commits only. */}
-      <RoundSwitcher status={status} value={roundIndex} onChange={setRoundIndex} />
+      {/* §22/D70: the History dropdown replaces the round switcher — the slider below
+          renders the union of the ticked segments. D80: the tail is pinned here, because
+          `current_commit` has nowhere else legal to come from (D79). */}
+      <HistorySelect
+        status={status}
+        history={history}
+        selected={selected}
+        onToggle={toggleSegment}
+        commits={orderedCommits}
+        pinTail
+      />
 
-      {/* D53/D55: an unplaceable round owns no commits, so the slider below renders
-          nothing — say why and name the branch instead of leaving a blank panel. */}
-      {round.placement === 'unplaceable' && <UnplaceableRoundAlert round={round} />}
+      {/* D53/D55/D77: an unplaceable round contributes no commits, so *every* selected
+          one gets a notice naming its branch. Keying this to the latest round alone would
+          let a deliberately-added earlier round add nothing in silence — the degradation
+          §18 exists to remove. */}
+      {unplaceableSelected.map((unplaceable) => (
+        <UnplaceableRoundAlert key={unplaceable.index} round={unplaceable} />
+      ))}
+
+      {/* D75: stated wherever the range spans one, because the range's *order*-derived
+          facts stop being facts there even though its diff is still valid. */}
+      {crossesBreak && (
+        <Alert color="orange" p="xs" data-testid="notify-range-crosses-break">
+          <Text size="xs">
+            The selected range crosses a break in history, so the commits between the two
+            ends are not a single sequence. The diff between them is still valid.
+          </Text>
+        </Alert>
+      )}
 
       {/* Commit range slider */}
       {visibleCommits.length > 0 && (
@@ -312,8 +381,39 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
           </div>
 
           {/* Dots row + two independent overlaid sliders */}
+          {/* Padding is symmetric on purpose: the first and last mark labels are centred
+              on their marks and so overhang the track by about half a hash-width each.
+              It used to be 16 left / 40 right, which left room for the last label only
+              and visibly pushed the whole track off-centre. */}
           <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-          <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
+          <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 80), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 40, paddingRight: 40 }}>
+            {/* D74: the break marker on the track, in the same language the History
+                dropdown uses — one concept for "these two commits are not adjacent in
+                history", whether the cause is divergence (D22) or a segment the
+                selection skipped. Positioned midway between the two commits it parts. */}
+            <div style={{ position: 'relative', height: 10 }}>
+              {visibleCommits.map((c, i) => {
+                if (i === 0 || !c.breakBefore) return null
+                const n = visibleCommits.length
+                const pct = n > 1 ? (i - 0.5) / (n - 1) : 0.5
+                const left = `calc(10px + ${pct * 100}% - ${pct * 20}px)`
+                return (
+                  <div
+                    key={`break-${i}`}
+                    data-testid={`slider-break-${c.hash.slice(0, 7)}`}
+                    title="not adjacent in history"
+                    style={{
+                      position: 'absolute',
+                      left,
+                      transform: 'translateX(-50%)',
+                      width: 0,
+                      height: 10,
+                      borderLeft: '2px dashed var(--mantine-color-red-5)',
+                    }}
+                  />
+                )
+              })}
+            </div>
             <div style={{ position: 'relative', height: 8 }}>
               {visibleCommits.map((c, i) => {
                 const n = visibleCommits.length
@@ -333,7 +433,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
             <div style={{ position: 'relative' }}>
               <CommitSlider
                 commits={visibleCommits}
-                value={snapA}
+                value={displayA}
                 mb={28}
                 onChange={(val) => setSliderAOrigIdx(visibleCommits[val]?.origIdx ?? sliderAOrigIdx)}
               />
@@ -344,7 +444,7 @@ function NotifyTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
                     min={0}
                     max={Math.max(0, visibleCommits.length - 1)}
                     step={1}
-                    value={snapB}
+                    value={displayB}
                     onChange={(val) => setSliderBOrigIdx(visibleCommits[val]?.origIdx ?? sliderBOrigIdx)}
                     label={null}
                     styles={{
@@ -518,8 +618,10 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
             </Tooltip>
           )}
         </div>
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <RoundPill index={round.index} />
+        </div>
         <Text size="sm"><b>Branch:</b> {branch}</Text>
-        <Text size="sm"><b>Round:</b> {round.index}</Text>
         {/* U8: the approved-commit row deep-links the approval comment (D36). D44:
             `comment_id` is nullable, so with no id the hash is plain text rather than
             a link to comment 0. */}
@@ -601,11 +703,26 @@ function StatusCard({ status }: { status: IssueStatusResponse }) {
 function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void; isApproved: boolean }) {
   const { issue } = status
 
-  // U4/W5: round-scoped, latest by default.
-  const [roundIndex, setRoundIndex] = useState(latestRound(status).index)
-  const round = roundByIndex(status, roundIndex)
+  // §22/D82: the review's commit is the **old** end — `QCReview` diffs it against the
+  // working tree — so it is `from`-like and takes no tail constraint. Selecting across
+  // rounds is the point here: "review my working tree against what round 1 approved."
+  const history = useMemo(() => buildHistory(status), [status])
+  const [selectedKeys, setSelectedKeys] = useState<string[]>(() => defaultSelection(history))
+  const selected = useMemo(() => new Set(selectedKeys), [selectedKeys])
+  const { commits: orderedCommits } = useMemo(
+    () => flattenSelection(history, selected),
+    [history, selected],
+  )
+  const round = latestRound(status)
 
-  const orderedCommits = [...round.commits].reverse()
+  const toggleSegment = (key: string) =>
+    setSelectedKeys((keys) => (keys.includes(key) ? keys.filter((k) => k !== key) : [...keys, key]))
+
+  // D77: the selected rounds that cannot be placed, so each can name the branch to fetch.
+  const unplaceableSelected = history
+    .filter((segment) => segment.ref.kind === 'round' && selected.has(segment.key))
+    .map((segment) => segment.round)
+    .filter((candidate) => candidate.placement === 'unplaceable')
 
   // Default: newest commit (last in orderedCommits = latest)
   const defaultCommitOrigIdx = orderedCommits.length - 1
@@ -646,8 +763,8 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
     setPostStashResult(null)
     setPostError(null)
     setAckApproved(false)
-    // Re-defaults when the round changes too: each round has its own commit list.
-  }, [status.issue.number, roundIndex]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-defaults when the selection changes too: the commit list is a different list.
+  }, [status.issue.number, selectedKeys.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleCommits = orderedCommits
     .map((c, i) => ({ ...c, origIdx: i }))
@@ -737,13 +854,24 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
         </Alert>
       )}
 
-      {/* U4: the round switcher sits above the slider; the slider below renders the
-          selected round's commits only. */}
-      <RoundSwitcher status={status} value={roundIndex} onChange={setRoundIndex} />
+      {/* §22/D82: same control as Notify, but nothing is pinned — the review's commit is
+          the old end of its diff, so any segment is a legal place to rest. */}
+      <HistorySelect
+        status={status}
+        history={history}
+        selected={selected}
+        onToggle={toggleSegment}
+        commits={orderedCommits}
+        pinTail={false}
+      />
 
-      {/* D53/D55: an unplaceable round owns no commits, so the slider below renders
-          nothing — say why and name the branch instead of leaving a blank panel. */}
-      {round.placement === 'unplaceable' && <UnplaceableRoundAlert round={round} />}
+      {/* D53/D55/D77: an unplaceable round contributes no commits, so *every* selected
+          one gets a notice naming its branch. Keying this to the latest round alone would
+          let a deliberately-added earlier round add nothing in silence — the degradation
+          §18 exists to remove. */}
+      {unplaceableSelected.map((unplaceable) => (
+        <UnplaceableRoundAlert key={unplaceable.index} round={unplaceable} />
+      ))}
 
       {visibleCommits.length > 0 && (
         <Stack gap="xs">
@@ -757,7 +885,7 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
           </div>
 
           <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
+            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 80), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 40, paddingRight: 40 }}>
               <div style={{ position: 'relative', height: 8 }}>
                 {visibleCommits.map((c, i) => {
                   const n = visibleCommits.length
@@ -901,9 +1029,11 @@ function ReviewTab({ status, onStatusUpdate, isApproved }: { status: IssueStatus
 function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; onStatusUpdate: (status: IssueStatusResponse) => void }) {
   const { issue } = status
 
-  // U4/W5: round-scoped, latest by default.
-  const [roundIndex, setRoundIndex] = useState(latestRound(status).index)
-  const round = roundByIndex(status, roundIndex)
+  // §22/D83: **no segment selection here.** An approval must lie after its round's start
+  // commit (D8), so every earlier segment would be unselectable — and the switcher this
+  // replaces did not merely offer them, it posted them, producing a round whose approval
+  // is outside the commits it owns (D54's shape, §22.0.4). Fixed to the latest round.
+  const round = latestRound(status)
 
   const orderedCommits = [...round.commits].reverse()
 
@@ -944,8 +1074,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
     setPostResultOpen(false)
     setPostResultUrl(null)
     setPostError(null)
-    // Re-defaults when the round changes too: each round has its own commit list.
-  }, [status.issue.number, roundIndex]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status.issue.number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const bqs = status.blocking_qc_status ?? EMPTY_BLOCKING_QC_STATUS
   const hasBlockingIssues = bqs.total > 0 && (bqs.not_approved.length > 0 || bqs.errors.length > 0)
@@ -1054,9 +1183,13 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
         </Alert>
       )}
 
-      {/* U4: the round switcher sits above the slider; the slider below renders the
-          selected round's commits only. */}
-      <RoundSwitcher status={status} value={roundIndex} onChange={setRoundIndex} />
+      {/* §22/D83: no segment control. The approval must land inside the round that will
+          own it (D8), so the only honest scope is the latest round — stated, not chosen. */}
+      <Group gap="xs" align="center" data-testid="approve-round-scope">
+        <Text size="sm" fw={700}>Round:</Text>
+        <Text size="sm">{round.index}</Text>
+        <Text size="xs" c="dimmed">an approval belongs to the round it closes</Text>
+      </Group>
 
       {/* D53/D55: an unplaceable round owns no commits, so the slider below renders
           nothing — say why and name the branch instead of leaving a blank panel. */}
@@ -1074,7 +1207,7 @@ function ApproveTab({ status, onStatusUpdate }: { status: IssueStatusResponse; o
           </div>
 
           <ScrollArea scrollbars="x" type="always" offsetScrollbars viewportRef={sliderViewportRef} style={{ marginLeft: -16, marginRight: -16 }}>
-            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 56), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 40 }}>
+            <div style={{ minWidth: Math.max(300, visibleCommits.length * 60 + 80), display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 40, paddingRight: 40 }}>
               <div style={{ position: 'relative', height: 8 }}>
                 {visibleCommits.map((c, i) => {
                   const n = visibleCommits.length
@@ -1200,7 +1333,10 @@ function CommitBlock({
   commit: { hash: string; message: string; statuses: string[] }
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+    <div
+      data-testid={`commit-block-${label.toLowerCase()}`}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}
+    >
       <Text size="sm" fw={700} style={{ flexShrink: 0 }}>{label}:</Text>
       <Text size="sm" style={{ fontFamily: 'monospace', flexShrink: 0 }}>{commit.hash.slice(0, 7)}</Text>
       <Text size="sm" c="dimmed" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>

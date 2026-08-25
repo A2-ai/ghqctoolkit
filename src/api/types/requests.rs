@@ -241,6 +241,18 @@ pub struct PreviewRoundRequest {
     pub checklist: RoundChecklistRequest,
 }
 
+/// Request to preview the file diff a new round would be started over.
+///
+/// Carries only the *new* end of the comparison. The old end — the prior round's
+/// approval — is derived server-side exactly as `create_round` derives the
+/// notification's `previous commit` (D5): a client that could choose both ends could
+/// show a diff for a transition that is not the one about to happen.
+#[derive(Debug, Deserialize)]
+pub struct PreviewRoundDiffRequest {
+    pub issue_number: u64,
+    pub start_commit: String,
+}
+
 /// Request to preview a Previous QC diff comment during issue creation.
 #[derive(Debug, Deserialize)]
 pub struct PreviousQCDiffPreviewRequest {

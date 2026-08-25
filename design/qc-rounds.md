@@ -1353,3 +1353,352 @@ re-added client gate.
 had been written with an all-files-skipped request — the degenerate shape — so it was tightened to
 carry a real archived file alongside the skip, i.e. the actual D62 scenario, asserting both that
 the resolvable file is archived and that the skipped one never appears in `files`.
+
+## §21 New-round modal review (D65–D69)
+
+Post-implementation UI review of `NewRoundModal`. §9's U1–U8 stand except where a clause below
+supersedes them; where §9's text and this section disagree, this section wins.
+
+**D65.** *(The checkout facts are facts, not inputs.)* The branch and the start commit render as
+read-only text in a bordered block captioned "read from the current checkout", **not** as
+`TextInput readOnly`. D23 gives the round flow no commit picker; a control that looks like a field
+implies one exists. Regression pinned by asserting the Round tab contains **no** text input at all,
+rather than by asserting a `readonly` attribute — the attribute-based assertion passes on exactly
+the control this decision removes.
+
+**D66.** *(Notification gets its own tab.)* Notify-the-difference, include-diff, the note, and a
+notification preview move to a `Notify` tab. The notification is a second comment with its own
+commit pair, so sharing the round's tab with it made the round's own identity harder to read.
+
+**D67.** *(The Round tab carries the change, not just the commit.)* The first screen answers the
+question the user actually has — *is there anything here worth a round?* — so it renders the file's
+diff between the prior round's approval and the checked-out commit, plus a count of the commits in
+`drift` and how many touched the file. Without this the default tab was read-only context with no
+action on it, and every path required a tab click.
+
+- **D67.1.** New endpoint `POST /api/preview/round-diff`, request `{ issue_number, start_commit }`.
+  Only the **new** end of the comparison is sent; the old end is the prior round's approval,
+  derived server-side exactly as `create_round` derives the notification's `previous commit` (D5).
+  A client that could pass both ends could show a diff for a transition that is not the one about
+  to happen.
+- **D67.2.** `diff_utils::file_diff_between_commits` becomes the single implementation of "what
+  changed in this file between these two commits", and `QCComment::file_diff` delegates to it. The
+  modal shows this diff next to the button that posts a notification embedding it; two
+  implementations would be two answers. Pinned by a test that pulls the diff back out of
+  `QCComment::generate_body` and asserts equality — it is the assertion that catches a reversed
+  pair, which the content-level assertions do not.
+- **D67.3.** `None` from the diff helper means **unreadable**, never *unchanged*: an unchanged text
+  file still yields `Some`, carrying diff_utils' own "No difference between file versions." So
+  `None` is a `400` naming the branch to fetch (D60), never an empty diff. Collapsing the two would
+  hide a fetch problem behind a reassuring "nothing changed".
+- **D67.4.** No request is made at all when the checkout **is** the approval: U3 already proves
+  there is no difference, so the tab says so without a round-trip.
+- **D67.5.** An unapproved latest round is a `409`, not a diff against a substituted commit — §18's
+  rule applied to a new surface.
+
+**D68.** *(Footer is Preview and the action.)* `Cancel` is dropped and `Preview` takes its place,
+matching the notify modal. The header close button and Escape are the documented exits, and a test
+pins Escape so dropping Cancel stays safe. `Preview` opens a nested modal whose tabs are *Round
+comment* and — **only when a notification will actually be posted** — *Notification*; previewing a
+comment nobody will send misrepresents what Start Round does. The selected preview tab is therefore
+**derived**, not stored, so turning notify off cannot leave a vanished tab selected.
+
+The notification preview needs no new endpoint: the round notification is a plain `QCComment`, and
+`POST /preview/:n/comment` builds that same struct.
+
+**D69.** *(The checklist seed's provenance is always stated.)* With more than one prior round the
+base-round `Select` stands. With exactly one, a static line names it instead of rendering nothing:
+a user seeding round 2 is still looking at a checklist that came from somewhere. Round 1 is named
+"Round 1 (the initial QC)", since its checklist lives in the issue body rather than in a
+`# QC Round 1` comment (D2).
+
+*Note:* `/api/preview/round` is a **prefix** of `/api/preview/round-diff`, so unanchored matchers
+answer the diff request with the round comment. Three test-side matchers and one route mock had to
+be anchored; an unanchored mock is mutation-confirmed to break the D47 request-count assertion.
+
+## §22 Cross-round commit selection (D70–D84)
+
+Supersedes **W5** and **U4**: the slider is no longer bounded to one round, and the round
+`SegmentedControl` is replaced by a History dropdown. Everything else in §9 stands.
+
+### §22.0 Diagnosis
+
+1. W5 bounds the slider to `round(i).commits` and U4 picks exactly one `i`, so the cross-round
+   comparison is unreachable: with round 3 open there is no way to notify the delta since **round
+   1's** approval. Round-scoping was the right fix for §0.5 but it over-corrected.
+2. Gap and `drift` commits are selectable **nowhere**. `RoundSwitcher` maps `rounds` only, so
+   commits between rounds, and everything after the latest approval, are invisible in all three
+   tabs.
+3. A `SegmentedControl` of round numbers cannot express a gap, a break, or anything that is not a
+   round.
+4. `ApproveTab` renders a round switcher and posts the commit selected in **any** round. Nothing
+   client-side or server-side (`src/api/routes/comments.rs`, which only parses the hash) constrains
+   the approval to the latest round's span. D8 gives an `Approved` round `[start_n ..= approval_n]`,
+   so an approval before `start_n` gives the round a negative span — reachable in two clicks today,
+   and it lands in exactly D54's state (`archive_commit: null`, status refusing with a "fetch the
+   branch" remedy that is wrong, because the branch is local).
+
+### §22.1 Decisions
+
+**D70.** The `SegmentedControl` becomes a **History dropdown** whose rows are segments in W6 order
+(`R1, G2, R2, G3, R3, drift`). Selection is a **set**; the slider renders the union of the selected
+segments' commits.
+
+**D71.** The default selection is **the latest round only** — byte-identical to today's view. §0.5
+is not reopened: the bounded view is the default and widening is deliberate.
+
+**D72.** Granularity is the **segment**, never the commit. The slider already filters commits
+(`showAll` hides those with no file change and no statuses); a per-commit picker in the dropdown
+would be a second answer to that question.
+
+**D73.** Gaps and `drift` are selectable rows, not decoration. A gap commit is a real commit on the
+round's branch (D9).
+
+**D74.** **One visual language for discontinuity.** Two causes produce "these commits are not
+adjacent in history": a divergent gap (D22/D31), and *the selection skipping a segment in the
+middle*. Both render as the same break marker. The second is self-inflicted and previously unnamed
+— selecting R1 and R3 makes R1's newest commit look adjacent to R3's oldest.
+
+**D75.** Across a break, **content survives and order degrades** — D22's "diffs still work, which is
+what matters." `current_commit`/`previous_commit` stay valid (a blob-to-blob diff needs no
+ancestry). `fileChangedInRange`, which walks the commits between the handles, does not: it goes
+conservative-`true` (as D39.3) so the diff is offered rather than silently dropped, and the range
+says its commits are not one history.
+
+**D76.** *(revised by D83.)* One control, on the tabs that can use it.
+
+**D77.** An unplaceable round (D53) is a row that contributes zero commits and keeps its
+`FetchBranchBadge`. Never hidden — the remedy is the point.
+
+**D78.** Two concepts, previously conflated in one control:
+- **History selection = what the slider *displays*.**
+- **Landing rules = where each *handle* may rest**, per tab, because the selected commit means
+  something different in each.
+
+**D79.** Notify: `to` ⇒ `current_commit` is confined to the **tail block**; `from` may reach into
+any displayed segment. Enforced as *the max handle is constrained to tail positions*, checked
+continuously, so handles still cross freely and dragging the max handle left stops at the tail's
+first commit. Clamped through the existing `snapToVisible`, so an illegal range is never
+constructible rather than constructible-then-rejected.
+
+**D80.** The tail block is therefore **pinned** in the dropdown — deselecting it would leave no
+legal `to`. This makes D71's default exactly the minimum selection.
+
+**D81.** The tail block is **latest round ∪ drift**, one contiguous region: both are "now". With the
+latest round approved and drift non-empty (`ChangesAfterApproval`), drift is the tail.
+
+**D82.** Review: the selected commit is the **old** end — `QCReview` diffs it against the *working
+tree* — so it is `from`-like and takes **no** constraint. This is the largest capability the change
+unlocks: "review my working tree against what was approved in round 1."
+
+*Known gap, deliberately not fixed here:* the posted review body records `comparing commit: X` with
+no round attribution, so a reader seeing round 1's hash on a round-3 review has nothing saying it
+was deliberate. A round-attributing line in the review body is a possible follow-up.
+
+**D83.** *(supersedes D76 for one tab.)* **Approve has no segment selection at all.** An approval
+must lie after its round's start commit (D8), so every row other than the latest round would be
+unselectable — and today's switcher does not merely offer them, it posts them (§22.0.4). The tab is
+fixed to the latest round. I14 also makes `drift` empty whenever the latest round is unapproved, so
+the tail collapses to the latest round there anyway.
+
+*Not fixed here:* the server still accepts an out-of-span approval. Removing the switcher closes the
+reachable path; a `409` in `approve_issue` is the durable fix and is left as its own change.
+
+**D84.** No cap on how many segments may be selected — the user opted in explicitly — but the
+selected commit count is displayed, because §0.5 was about unusability at volume.
+
+### §22.2 Wire
+
+**M2.** `IssueStatusResponse` gains `history: Vec<SegmentRef>`, where
+`SegmentRef { kind: 'round' | 'gap' | 'drift', round_index }` — **pointers, not payload**, so no
+commit is duplicated. For a gap, `round_index` is the round it precedes; for drift, the latest
+round.
+
+W6's ordering carries two *positional* suppression rules (skip `rounds[0].preceding_gap`; emit
+`drift` only when the last round is closed). Rebuilding those in TypeScript is the derivation
+D30/U7 pushes to the server, so `history` is projected from `IssueThread::segments()` and W6 keeps
+exactly one implementation. To make that possible, `Segment::Gap` and `Segment::Drift` carry their
+**owning round** rather than only a `&Gap`: which round owns a gap is part of its identity (D9 —
+a gap's branch *is* its owning round's branch), not merely its position.
+
+## §23 The approval span rule reaches the write endpoint (D85)
+
+**D85.** *(closes §22.0.4, which §22/D83 only made unreachable.)* `POST /api/issues/{n}/approve`
+**refuses** an approval commit that is not among `latest_round().commits`.
+
+D8 gives an `Approved` round `[start_n ..= approval_n]`, so an approval outside that set gives the
+round a negative span, and the fold then lands in D54's state: `latest_commit()` is `None`,
+`archive_commit` is null, and status refuses with a "fetch the branch" remedy that is *wrong*
+because the branch is local and fine. D83 removed the UI control that could post one, but removing
+a control only makes a state unreachable from one screen — the endpoint still accepted it, so the
+CLI, a script, or a future caller could still write it.
+
+- **D85.1.** This is not a new rule. `QCApprove::from_args` has always resolved a user-supplied
+  commit against `latest_round().commits` and errored otherwise, and `from_interactive` only ever
+  offers that set. D85 makes the API agree with the CLI rather than inventing a constraint.
+- **D85.2.** Deliberately **not** waivable by `?force=true`. `force` exists to bypass blocking-QC
+  *policy*; this is a model invariant, and no caller has standing to waive it. Pinned by its own
+  test.
+- **D85.3.** `409 Conflict`, and the refusal is **total** — no approval comment, and the issue is
+  not closed. A posted approval is an audit record, so a partial write here would be the lie the
+  guard exists to prevent. Also pinned by asserting no writes occurred.
+- **D85.4.** When the latest round is `Unplaceable` there is nothing to verify against, so the
+  message names the branch to fetch instead (D55) rather than reporting the commit as wrong.
+
+*Cost:* one extra comments fetch per approval (cached), to build the thread. Correctness on a write
+that produces an audit record outranks a cached round-trip.
+
+## §24 History dropdown presentation (D86–D89)
+
+Refines §22's first-pass UI (Q7 was explicitly left to be tuned against a POC). No decision in
+§22 is reversed; D86–D88 are presentation, D89 is a correctness fix.
+
+**D86.** *(timeline, not a list.)* Rounds render as **dots**; the gap between two rounds renders as
+the **line connecting** them. A gap is the distance between two rounds, so drawing it as the
+connector rather than as another list item makes the alternating `R (G R)*` structure visible
+instead of merely stated. Selection checkboxes are right-justified into their own grid column, so
+every row's control lands on one edge regardless of how many badges the row carries.
+
+**D87.** *(newest-first.)* The dropdown reads top-down newest→oldest: the round in progress is the
+top row, round 1 the bottom. Only the **display** is reversed — `status.history` keeps W6's order
+(M2) and `flattenSelection` still walks it oldest→newest, because the slider's axis is time.
+
+**D88.** *(divergence is drawn on the connection.)* D74's break is two slashes with space between
+them, struck across the connecting line — the conventional "these ends are not continuous" mark.
+Drawing it on the *line* rather than beside either round makes it a property of the connection,
+which is what `preceding_gap.divergent` actually is.
+
+A gap belongs to the round it **precedes** (D9), which in newest-first order is the row directly
+*above* it; the label names that round ("before round 2") so the descriptor cannot be read as
+hanging off the older round below.
+
+The rail's horizontal stub meets the label at the row's **vertical centre**, which is exactly where
+the label sits because the row is `align-items: center`. A first attempt drew the stub at a fixed
+`top: 7px` to bias it toward the round above — it landed 6px above the text it was supposed to
+point at. Every rail graphic is now positioned from a single `RAIL_CENTER` constant with explicit
+widths, rather than from `borderLeft` offsets plus a content-box ring, so the dot's centre and the
+line's centre are the same number by construction instead of by coincidence.
+
+**D89.** *(superseded by D91 — the single derived count became two raw facts.)* A row's count, and
+the total beside the control, count commits that **changed the file or carry a QC status** —
+`isOfInterest` — not raw commits in the segment's span.
+
+The dropdown exists to say what ticking a row adds to the slider, and the slider hides commits that
+touched nothing relevant behind "Show all commits". Counting raw commits therefore advertised
+commits that never appeared: a gap holding one irrelevant commit read as `1` while selecting it
+added nothing visible.
+
+*This was a display bug, not a fold bug.* The gap walk is `walk[start_index + 1 .. anchor]` —
+exclusive at both ends per D8/D34 — with an `index > start_index + 1` guard, so adjacent rounds
+already yield an empty gap. The arithmetic that exposed it: a round whose initial commit **is** its
+approval contributes one commit carrying both statuses, so a two-round QC with one irrelevant
+commit between the rounds has **two** commits of interest, and the raw count claimed three.
+
+**D90.** *(a gap that would add nothing is not selectable.)* A gap or drift row whose
+**of-interest** count (D89) is `0` is disabled. Ticking it would change neither the slider nor the
+total, so offering the tick is a control that does nothing.
+
+- **D90.1.** "Zero" means the number *on screen* — commits of interest — not raw commits in the
+  span. **Accepted cost:** a gap owning only irrelevant commits becomes unreachable, because "Show
+  all commits" widens what the *selected* segments contribute and this gap can no longer be
+  selected. Judged acceptable because an uninteresting commit's diff is identical to its nearest
+  interesting ancestor's, so no comparison becomes impossible — only the specific hash nameable as
+  `previous_commit`. The disabled row's tooltip states what is being withheld and why, so nothing
+  is silently dropped.
+- **D90.2.** **Rounds are exempt.** A round showing `0` is an *unplaceable* one (D53.3), where `0`
+  means "fetch the branch", not "nothing here" — and selecting it is how D77's remedy notice is
+  surfaced. Same digit, different meaning, so the rule keys on segment kind rather than on the
+  count alone.
+- **D90.3.** Divergence must therefore be legible on a gap that can never be selected: the
+  dropdown's rail carries the break (D88) and the badge sits on the row, independent of selection.
+  The slider's own break still appears, via the omitted-segment half of D74 rather than the
+  divergent half.
+
+*Consequence for `flattenSelection`:* the break-carry across an empty selected segment becomes
+effectively unreachable, since the only selectable empty segments are unplaceable rounds and an
+omitted neighbouring gap re-triggers the break anyway. The carry is retained as defensive code, not
+because a current path exercises it.
+
+**D91.** *(supersedes D89; revises D90.1.)* A row states **two raw facts** rather than one derived
+number: `5 commits (3 file changing)`. The parenthetical is dropped when the segment owns nothing.
+
+D89's single count could not distinguish "nothing here" from "nothing *interesting* here" — a gap
+owning one irrelevant commit read as `0`, which is what made D90.1 look like a choice between a
+useless control and an unreachable commit. With both numbers shown there is no such choice: the row
+says it owns a commit and that the commit changed nothing, and the reader can see why the slider
+hides it.
+
+- **D91.1.** The parenthetical is the **file-changing** count, not the count of visible ticks: the
+  slider also draws commits that carry a QC status without touching the file. File-changing is the
+  question a reviewer actually asks of a span, and the two raw numbers stay honest where a
+  "what you will see" number would have to track the `showAll` toggle.
+- **D91.2.** **D90 now keys on the raw count.** Only a segment owning *no commits at all* is
+  disabled, so D90.1's accepted cost is withdrawn — a gap holding a hidden commit stays selectable
+  and "Show all commits" reaches it. D90.2 (rounds exempt) and D90.3 (divergence legible without
+  selection) stand unchanged.
+- **D91.3.** Labels are `white-space: nowrap` and the dropdown is 520px wide. A wrapped label
+  doubled the row height, which dragged the rail's centred stub (D88) away from the text it points
+  at and truncated the divergence badge — the same alignment failure D88 fixed, reintroduced through
+  layout rather than through arithmetic.
+
+**D92.** *(the commit slider is centred.)* The slider wrapper pads **symmetrically**. It padded
+16px left and 40px right in all three tabs — room for the last mark's label but not the first's —
+which inset the track 24px further on the right and read as an off-centre slider.
+
+Both end labels are centred on their own marks and overhang the track by roughly half a hash-width,
+so the padding must leave equal room at both ends or the track cannot be centred. Pre-existing, and
+unrelated to §22 — it became noticeable once the History control drew attention to the row above it.
+
+Pinned by **measuring** the rendered track's insets against its scroll container rather than by
+asserting the padding literal, so the property under test is the geometry a viewer sees. Mutation
+check reproduces exactly the 24px asymmetry.
+
+---
+
+## §25 Archive card status is round-scoped (D93)
+
+**D93.** *(The archive card's status describes the selected round, not the QC.)* `ArchiveTab`'s
+per-file card labelled `Status:` from `qc_status.status` while its `<Select>` chose a round. With
+round 2 open and round 1 approved, picking round 1 froze round 1's approved commit under a card
+that read **"awaiting review"** — the card contradicted the archive it was about to write.
+
+- **D93.1.** `qc_status` is scoped to the **latest** round and its drift (S0–S4), so it is the
+  correct label only while the latest round is the selected one. That case keeps it, and keeps its
+  full nuance (`changes_after_approval` is a distinction only the latest round can carry, S1).
+- **D93.2.** Every earlier round has already resolved, and `RoundState` is the sole encoding of
+  approvedness (D36). So the label is **read off `round.state.kind`** — `approved` → `approved`,
+  `superseded` → `superseded (never approved)`. This is a mapping of a server-sent field, not a
+  derivation, so U7 holds: nothing rescans commits.
+- **D93.3.** `superseded` is **not** rendered as approved. Under D21 it is an *unapproved* round a
+  later round replaced; labelling it "approved" would be the same audit lie D55 removes.
+- **D93.4.** The card's "not approved" warning triangle follows the same rule (`isRoundApproved`) —
+  it warns about the round the archive will freeze, so it disappears when an approved earlier round
+  is selected. A non-latest `open` round is forbidden by D27; the fallback keeps the QC label rather
+  than inventing a state for something that cannot occur.
+- **D93.5.** Milestone-level visibility (`includeNonApproved`) stays **QC-scoped** and is
+  deliberately not re-pointed at the selection. It gates which files enter the grid at all; making
+  it follow a per-card selection would let choosing a round change the checkbox counts of a
+  milestone filter. Consequence: a QC whose latest round is open needs "Include non-approved" to
+  appear, even when the round the user wants is approved.
+
+---
+
+## §26 The tail clamp must be visible (D94)
+
+**D94.** *(The thumbs render from the clamped pair.)* D79 clamped the **derived** `to` and left
+the thumbs at their raw handle positions. The max thumb therefore stayed wherever it was dragged
+while `To:`, the preview and the posted comment all used a different commit — the control displayed
+a range it was not going to send, which is worse than an unenforced constraint because the user's
+own reading of the picker was wrong.
+
+- **D94.1.** Both thumbs are driven off `fromPos`/`toPos` — the same clamped pair the `From:`/`To:`
+  rows and `commentRequest` read. Disagreement between what the picker shows and what it sends is
+  now unrepresentable rather than merely unlikely.
+- **D94.2.** Which thumb is the max still follows the drag (`snapA >= snapB`) rather than being
+  pinned to one handle, so D78's free crossing survives. Dragging the max thumb below the tail
+  visibly snaps it back to the tail's first commit — the clamp *is* the feedback.
+- **D94.3.** The stored handle positions stay unclamped on purpose: they are what makes crossing
+  work, and re-clamping them into state would fight the pointer during a drag.
+- **D94.4.** `CommitBlock` carries `data-testid="commit-block-{from,to}"`; its label and hash are
+  separate flex children with no whitespace between them, so the rendered text is `From:1a11111`
+  and a text-substring assertion silently never matches.

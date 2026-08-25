@@ -1,6 +1,7 @@
 import type { RepoInfo } from '../../src/api/repo'
 import type { Milestone } from '../../src/api/milestones'
 import type {
+  SegmentRef,
   Gap,
   Issue,
   IssueCommit,
@@ -131,6 +132,45 @@ export function makeApprovedRound(commit: string, overrides: Partial<RoundInfo> 
   })
 }
 
+/**
+ * W6's segment order, for fixtures only. The **server** owns this projection (M2) — this
+ * exists so a fixture cannot silently disagree with it, and its output is pinned against
+ * the same concrete two-round case `test_history_projects_w6_order_with_gaps_naming_the_round_they_precede`
+ * asserts on the Rust side.
+ *
+ * Two positional rules: round 1's preceding gap is skipped (W6.1), and `drift` is
+ * emitted only when the latest round is closed (W6.2). A last round is closed exactly
+ * when it is `approved` — `superseded` means a later round exists, so it can never be
+ * last.
+ */
+export function historyOf(rounds: RoundInfo[]): SegmentRef[] {
+  const history: SegmentRef[] = []
+  rounds.forEach((round, position) => {
+    if (position > 0) history.push({ kind: 'gap', round_index: round.index })
+    history.push({ kind: 'round', round_index: round.index })
+  })
+  const latest = rounds[rounds.length - 1]
+  if (latest?.state.kind === 'approved') {
+    history.push({ kind: 'drift', round_index: latest.index })
+  }
+  return history
+}
+
+/**
+ * Fills in `history` from `rounds` so a fixture can never disagree with the server's M2
+ * projection. An explicit `history` still wins — a fixture that wants a shape the
+ * projection would not produce says so deliberately.
+ */
+export function withHistory(
+  status: Omit<IssueStatusResponse, 'history'> & { history?: SegmentRef[] },
+): IssueStatusResponse {
+  // Always **recomputed**, never inherited. These fixtures are built by spreading one
+  // another, and a spread carries the source's `history` — which would keep a `drift` row
+  // (W6.2) on a fixture whose latest round is open, i.e. a segment the server would never
+  // project.
+  return { ...status, history: historyOf(status.rounds) }
+}
+
 function makeStatusResponse(
   issue: Issue,
   status: QCStatus['status'],
@@ -144,6 +184,7 @@ function makeStatusResponse(
     dirty: false,
     rounds: [approved ? makeApprovedRound('aaa1111') : makeRound()],
     drift: emptyGap(),
+    history: historyOf([approved ? makeApprovedRound('aaa1111') : makeRound()]),
     ...overrides,
   }
 }
@@ -196,7 +237,7 @@ const emptyBlockingQCStatus = {
 
 // Single commit: one file-changing initial commit. Slider should center it.
 export const singleCommitIssue = makeIssue({ number: 70, title: 'src/single.rs', branch: 'feature-branch', assignees: ['alice'] })
-export const singleCommitStatus: IssueStatusResponse = {
+export const singleCommitStatus: IssueStatusResponse = withHistory({
   issue: singleCommitIssue,
   qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
   dirty: false,
@@ -211,7 +252,7 @@ export const singleCommitStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
-}
+})
 
 // Multi-commit: 4 commits, one hidden by default (ccccccc: no file change, no statuses).
 // Newest-first order as the API returns them.
@@ -220,7 +261,7 @@ export const singleCommitStatus: IssueStatusResponse = {
 //   bbbbbbb – file_changed=true,  statuses=['notification'] ← FROM default
 //   aaaaaaa – file_changed=true,  statuses=['initial']
 export const multiCommitIssue = makeIssue({ number: 71, title: 'src/multi.rs' })
-export const multiCommitStatus: IssueStatusResponse = {
+export const multiCommitStatus: IssueStatusResponse = withHistory({
   issue: multiCommitIssue,
   qc_status: { status: 'changes_to_comment', status_detail: 'New changes since last notification' },
   dirty: false,
@@ -237,14 +278,14 @@ export const multiCommitStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
-}
+})
 
 // Notification landed on a non-file-changing commit after the last file change.
 // FROM and TO both default to bbbbbbb (FROM is already the last commit).
 //   bbbbbbb – file_changed=false, statuses=['notification'] ← FROM=TO default, also exceptionIdx
 //   aaaaaaa – file_changed=true,  statuses=['initial']
 export const notifOnNonFileIssue = makeIssue({ number: 72, title: 'src/notif-nofile.rs' })
-export const notifOnNonFileStatus: IssueStatusResponse = {
+export const notifOnNonFileStatus: IssueStatusResponse = withHistory({
   issue: notifOnNonFileIssue,
   qc_status: { status: 'awaiting_review', status_detail: 'Awaiting review' },
   dirty: false,
@@ -259,11 +300,11 @@ export const notifOnNonFileStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
-}
+})
 
 // Approved modal issue — used to test the unapprove tab (defaults to 'unapprove' tab)
 export const approvedModalIssue = makeIssue({ number: 74, title: 'src/approved-modal.rs', branch: 'feature-branch' })
-export const approvedModalStatus: IssueStatusResponse = {
+export const approvedModalStatus: IssueStatusResponse = withHistory({
   issue: approvedModalIssue,
   qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
@@ -277,20 +318,20 @@ export const approvedModalStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
-}
+})
 
 // Dirty modal issue — used to test the asterisk in the modal status card
 export const dirtyModalIssue = makeIssue({ number: 73, title: 'src/dirty-modal.rs' })
-export const dirtyModalStatus: IssueStatusResponse = {
+export const dirtyModalStatus: IssueStatusResponse = withHistory({
   ...singleCommitStatus,
   issue: dirtyModalIssue,
   dirty: true,
-}
-export const cleanModalStatus: IssueStatusResponse = {
+})
+export const cleanModalStatus: IssueStatusResponse = withHistory({
   ...singleCommitStatus,
   issue: dirtyModalIssue,
   dirty: false,
-}
+})
 
 // ── Unapprove / blocked fixtures ─────────────────────────────────────────────
 
@@ -316,7 +357,7 @@ export const grandchildBlocked: BlockedIssueStatus = {
 }
 
 // Full IssueStatusResponse for approvedChildIssue (used in unapproval cache tests)
-export const approvedChildStatus: IssueStatusResponse = {
+export const approvedChildStatus: IssueStatusResponse = withHistory({
   issue: approvedChildIssue,
   qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
@@ -329,11 +370,11 @@ export const approvedChildStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
-}
+})
 
 // Non-approved issue for tab-disabled tests (defaults to Notify tab)
 export const inProgressModalIssue = makeIssue({ number: 82, title: 'src/in-progress-modal.rs', branch: 'feature-branch' })
-export const inProgressModalStatus: IssueStatusResponse = {
+export const inProgressModalStatus: IssueStatusResponse = withHistory({
   issue: inProgressModalIssue,
   qc_status: { status: 'in_progress', status_detail: 'In progress' },
   dirty: false,
@@ -347,7 +388,7 @@ export const inProgressModalStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
-}
+})
 
 // ── Blocking QC inverse-map / cache-invalidation fixtures ────────────────────
 // helperIssue (#90) is a blocking QC for fileAIssue (#91).
@@ -357,7 +398,7 @@ export const inProgressModalStatus: IssueStatusResponse = {
 export const helperIssue = makeIssue({ number: 90, title: 'src/helper.rs', branch: 'feature-branch' })
 export const fileAIssue  = makeIssue({ number: 91, title: 'src/file_a.rs' })
 
-export const helperStatusInitial: IssueStatusResponse = {
+export const helperStatusInitial: IssueStatusResponse = withHistory({
   issue: helperIssue,
   qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
   dirty: false,
@@ -371,9 +412,9 @@ export const helperStatusInitial: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: emptyBlockingQCStatus,
-}
+})
 
-export const helperStatusApproved: IssueStatusResponse = {
+export const helperStatusApproved: IssueStatusResponse = withHistory({
   ...helperStatusInitial,
   qc_status: { status: 'approved', status_detail: 'Approved' },
   rounds: [
@@ -384,9 +425,9 @@ export const helperStatusApproved: IssueStatusResponse = {
       ],
     }),
   ],
-}
+})
 
-export const fileAStatusBlocked: IssueStatusResponse = {
+export const fileAStatusBlocked: IssueStatusResponse = withHistory({
   issue: fileAIssue,
   qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
   dirty: false,
@@ -406,9 +447,9 @@ export const fileAStatusBlocked: IssueStatusResponse = {
     not_approved: [{ issue_number: 90, file_name: 'src/helper.rs', status: 'awaiting_review' }],
     errors: [],
   },
-}
+})
 
-export const fileAStatusUnblocked: IssueStatusResponse = {
+export const fileAStatusUnblocked: IssueStatusResponse = withHistory({
   ...fileAStatusBlocked,
   blocking_qc_status: {
     total: 1,
@@ -418,7 +459,7 @@ export const fileAStatusUnblocked: IssueStatusResponse = {
     not_approved: [],
     errors: [],
   },
-}
+})
 
 // ── Create tab fixtures ───────────────────────────────────────────────────────
 
@@ -570,21 +611,21 @@ export const twoRoundRounds: RoundInfo[] = [
   }),
 ]
 
-export const twoRoundStatus: IssueStatusResponse = {
+export const twoRoundStatus: IssueStatusResponse = withHistory({
   issue: twoRoundIssue,
   qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
   rounds: twoRoundRounds,
   drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
-}
+})
 
 /** D44: an approval whose `comment_id` is unknown. `comment_id` is nullable precisely
  *  because a `0` sentinel is indistinguishable from a real comment id, so the
  *  approved-commit row must drop U8's deep-link rather than point at comment 0. */
 export const nullCommentIdIssue = makeIssue({ number: 76, title: 'src/no-comment-id.rs' })
 
-export const nullCommentIdStatus: IssueStatusResponse = {
+export const nullCommentIdStatus: IssueStatusResponse = withHistory({
   issue: nullCommentIdIssue,
   qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
@@ -594,21 +635,108 @@ export const nullCommentIdStatus: IssueStatusResponse = {
     }),
   ],
   drift: emptyGap(),
-}
+})
 
 /** A divergent preceding gap (D22): the round-2 start is not descended from the
  *  round-1 approval, so the two rounds share no cohesive history (U6). */
-export const divergentGapStatus: IssueStatusResponse = {
+export const divergentGapStatus: IssueStatusResponse = withHistory({
   ...twoRoundStatus,
   rounds: [
     twoRoundRounds[0],
     { ...twoRoundRounds[1], preceding_gap: { ...twoRoundRounds[1].preceding_gap, divergent: true } },
   ],
-}
+})
+
+/**
+ * Two rounds with the latest one **open**, so the Approve tab is reachable. I14 keeps
+ * `drift` empty here, which is why D83's tail collapses to the latest round on that tab.
+ */
+export const approvableTwoRoundStatus: IssueStatusResponse = withHistory({
+  ...twoRoundStatus,
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
+  rounds: [twoRoundRounds[0], { ...twoRoundRounds[1], state: { kind: 'open' } }],
+})
+
+/**
+ * The shape from the reported miscount: round 1's initial commit **is** its approval (one
+ * commit carrying both statuses), and the gap before round 2 holds a commit that changed
+ * nothing and carries no status — one the slider hides. Two commits are of interest; a raw
+ * count would claim three.
+ */
+export const QUIET_GAP_COMMIT = '7c77777777777777777777777777777777777777'
+
+export const quietGapStatus: IssueStatusResponse = withHistory({
+  ...twoRoundStatus,
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
+  rounds: [
+    makeRound({
+      index: 1,
+      state: { kind: 'approved', commit: R1_START, comment_id: 111 },
+      // One commit, both roles: the initial commit is the approved commit.
+      commits: [
+        { hash: R1_START, message: 'round 1 initial', statuses: ['initial', 'approved'], file_changed: true },
+      ],
+      start_commit: R1_START,
+      archive_commit: R1_START,
+    }),
+    makeRound({
+      index: 2,
+      state: { kind: 'open' },
+      commits: [
+        { hash: R2_START, message: 'round 2 initial', statuses: ['initial'], file_changed: true },
+      ],
+      start_commit: R2_START,
+      archive_commit: R2_START,
+      preceding_gap: {
+        commits: [
+          { hash: QUIET_GAP_COMMIT, message: 'unrelated change', statuses: [], file_changed: false },
+        ],
+        divergent: false,
+        newest_file_change: null,
+      },
+    }),
+  ],
+})
+
+/**
+ * D8's overlap case *plus* divergence: a divergent gap that owns **no commits**. The
+ * break marker attaches to the next commit that actually appears, so a fixture with
+ * nothing in the gap is what proves the marker is carried across rather than lost.
+ */
+export const divergentEmptyGapStatus: IssueStatusResponse = withHistory({
+  ...twoRoundStatus,
+  rounds: [
+    twoRoundRounds[0],
+    {
+      ...twoRoundRounds[1],
+      preceding_gap: { commits: [], divergent: true, newest_file_change: null },
+    },
+  ],
+})
+
+/**
+ * A break with **no file-changing commit inside the crossed range**, so D75's
+ * conservative-`true` is observable in the payload: the order-derived walk says "nothing
+ * changed", and D75 says that walk is not a fact across a break.
+ */
+export const breakNoFileChangeStatus: IssueStatusResponse = withHistory({
+  ...approvableTwoRoundStatus,
+  rounds: [
+    twoRoundRounds[0],
+    {
+      ...twoRoundRounds[1],
+      state: { kind: 'open' },
+      commits: [
+        { hash: R2_APPROVAL, message: 'round 2 approval', statuses: ['notification'], file_changed: false },
+        { hash: R2_START, message: 'round 2 initial', statuses: ['initial'], file_changed: false },
+      ],
+    },
+  ],
+})
 
 /** A divergent drift (D31): a force-push removed the approval from its branch, so
  *  the reported ChangesAfterApproval hash is not meaningful (U6). */
-export const divergentDriftStatus: IssueStatusResponse = {
+export const divergentDriftStatus: IssueStatusResponse = withHistory({
   ...twoRoundStatus,
   qc_status: { status: 'changes_after_approval', status_detail: 'Changes after approval' },
   drift: {
@@ -621,7 +749,7 @@ export const divergentDriftStatus: IssueStatusResponse = {
     divergent: true,
     newest_file_change: GAP_COMMIT,
   },
-}
+})
 
 // ── §18 (D53–D56) fixtures ───────────────────────────────────────────────────
 
@@ -643,7 +771,7 @@ export const unplaceableRoundIssue = makeIssue({
   has_qc_rounds_marker: true,
 })
 
-export const unplaceableRoundStatus: IssueStatusResponse = {
+export const unplaceableRoundStatus: IssueStatusResponse = withHistory({
   issue: unplaceableRoundIssue,
   qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
@@ -671,7 +799,7 @@ export const unplaceableRoundStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
-}
+})
 
 /**
  * D55: an issue whose **latest** round is unresolvable arrives in `errors[]` as
@@ -691,10 +819,10 @@ export const latestRoundUnplaceableError: BatchIssueStatusResponse = {
 }
 
 /** D56: round 2's comment declared no `git branch:`, so it inherited round 1's. */
-export const branchInheritedStatus: IssueStatusResponse = {
+export const branchInheritedStatus: IssueStatusResponse = withHistory({
   ...twoRoundStatus,
   rounds: [twoRoundRounds[0], { ...twoRoundRounds[1], branch_inherited: true }],
-}
+})
 
 export const R3_START = '3a33333333333333333333333333333333333333'
 export const R3_APPROVAL = '3b33333333333333333333333333333333333333'
@@ -711,7 +839,7 @@ export const holeRoundsIssue = makeIssue({
   has_qc_rounds_marker: true,
 })
 
-export const holeRoundsStatus: IssueStatusResponse = {
+export const holeRoundsStatus: IssueStatusResponse = withHistory({
   issue: holeRoundsIssue,
   qc_status: { status: 'approved', status_detail: 'Approved' },
   dirty: false,
@@ -732,7 +860,7 @@ export const holeRoundsStatus: IssueStatusResponse = {
   ],
   drift: emptyGap(),
   blocking_qc_status: { total: 0, approved_count: 0, summary: '-', approved: [], not_approved: [], errors: [] },
-}
+})
 
 /**
  * D60: the *other* `None` case of `Round::latest_commit()` (D54.2) — the branch is

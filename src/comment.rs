@@ -77,22 +77,18 @@ impl CommentBody for QCComment {
 }
 
 impl QCComment {
-    /// Generate a diff between two commits for this comment's file
+    /// Generate a diff between two commits for this comment's file.
+    ///
+    /// Delegates so that the round modal's Round tab, which previews the change this
+    /// notification would embed, cannot show a different diff from the one that gets
+    /// posted.
     fn file_diff(
         &self,
         from_commit: &ObjectId,
         to_commit: &ObjectId,
         git_info: &impl GitFileOps,
     ) -> Option<String> {
-        let Ok(from_bytes) = git_info.file_bytes_at_commit(&self.file, from_commit) else {
-            log::debug!("Could not read file at from commit ({from_commit})...");
-            return None;
-        };
-        // Get bytes from both commits
-        let to_bytes = git_info.file_bytes_at_commit(&self.file, to_commit).ok()?;
-
-        // Use the shared diff utilities
-        diff_utils::file_diff(from_bytes, to_bytes, &self.file)
+        diff_utils::file_diff_between_commits(git_info, &self.file, from_commit, to_commit)
     }
 }
 

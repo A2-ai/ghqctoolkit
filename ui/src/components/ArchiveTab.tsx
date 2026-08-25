@@ -59,6 +59,35 @@ function isApprovedStatus(s: IssueStatusResponse): boolean {
   return s.qc_status.status === 'approved' || s.qc_status.status === 'changes_after_approval'
 }
 
+/**
+ * The status of the **selected** round, which is the only one the card's commit,
+ * badge and Preview button describe.
+ *
+ * `qc_status` is scoped to the latest round and its drift (S0-S4), so it is the right
+ * label only while the latest round is the one selected. Every earlier round has
+ * already resolved, and `state.kind` is the sole encoding of that (D36) — so the label
+ * is read off the round the server sent, not derived from its commits (U7).
+ *
+ * A non-latest `open` round is forbidden by D27; the fallback keeps the QC label rather
+ * than inventing a state for something that cannot happen.
+ */
+function roundStatusLabel(s: IssueStatusResponse, round: RoundInfo): string {
+  const qcLabel = s.qc_status.status.replace(/_/g, ' ')
+  if (round.index === latestRound(s).index) return qcLabel
+  switch (round.state.kind) {
+    case 'approved': return 'approved'
+    case 'superseded': return 'superseded (never approved)'
+    default: return qcLabel
+  }
+}
+
+/** Whether the selected round is approved — the same question `isApprovedStatus` asks
+ *  of the QC, asked of the round the archive will actually freeze. */
+function isRoundApproved(s: IssueStatusResponse, round: RoundInfo): boolean {
+  if (round.index === latestRound(s).index) return isApprovedStatus(s)
+  return round.state.kind === 'approved'
+}
+
 function basename(path: string): string {
   return path.split('/').pop() ?? path
 }
@@ -889,14 +918,15 @@ export function ArchiveTab() {
                 : undefined
 
               if (issueStatus) {
-                const approved = isApprovedStatus(issueStatus)
                 const round = roundFor(issueStatus)
+                const approved = isRoundApproved(issueStatus, round)
                 const commit = round.archive_commit
-                const statusLabel = issueStatus.qc_status.status.replace(/_/g, ' ')
+                const statusLabel = roundStatusLabel(issueStatus, round)
 
                 return (
                   <Stack
                     key={`added-${fileName}`}
+                    data-testid={`archive-card-${issueStatus.issue.number}`}
                     gap={5}
                     style={{
                       padding: '10px 12px',
@@ -924,8 +954,8 @@ export function ArchiveTab() {
                           {issueStatus.issue.title}
                         </Anchor>
                         {!approved && (
-                          <Tooltip label="Not yet approved" withArrow>
-                            <span style={{ flexShrink: 0, marginTop: 2 }}>
+                          <Tooltip label="The selected round is not approved" withArrow>
+                            <span style={{ flexShrink: 0, marginTop: 2 }} data-testid={`archive-round-unapproved-${issueStatus.issue.number}`}>
                               <IconAlertTriangle size={12} color="#f59f00" />
                             </span>
                           </Tooltip>
@@ -1021,14 +1051,15 @@ export function ArchiveTab() {
             {archive.selectedMilestones.length > 0 && (<>
             {/* ── Milestone issue cards ──────────────────────────────────── */}
             {statuses.filter(s => isStatusVisible(s)).map((s) => {
-              const approved = isApprovedStatus(s)
               const round = roundFor(s)
+              const approved = isRoundApproved(s, round)
               const commit = round.archive_commit
-              const statusLabel = s.qc_status.status.replace(/_/g, ' ')
+              const statusLabel = roundStatusLabel(s, round)
 
               return (
                 <Stack
                   key={s.issue.number}
+                  data-testid={`archive-card-${s.issue.number}`}
                   gap={5}
                   style={{
                     padding: '10px 12px',
@@ -1053,8 +1084,8 @@ export function ArchiveTab() {
                         {s.issue.title}
                       </Anchor>
                       {!approved && (
-                        <Tooltip label="Not yet approved" withArrow>
-                          <span style={{ flexShrink: 0, marginTop: 2 }}>
+                        <Tooltip label="The selected round is not approved" withArrow>
+                          <span style={{ flexShrink: 0, marginTop: 2 }} data-testid={`archive-round-unapproved-${s.issue.number}`}>
                             <IconAlertTriangle size={12} color="#f59f00" />
                           </span>
                         </Tooltip>

@@ -1,6 +1,6 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
-import { closedMilestone, openMilestone, defaultRepoInfo, emptyGap, makeApprovedRound, makeRound, rootFileTree, srcFileTree } from '../fixtures/index'
+import { closedMilestone, openMilestone, defaultRepoInfo, emptyGap, makeApprovedRound, makeRound, withHistory, rootFileTree, srcFileTree } from '../fixtures/index'
 import type { Issue, IssueStatusResponse, BatchIssueStatusResponse, QCStatus } from '../../src/api/issues'
 import type { FileTreeResponse } from '../../src/api/files'
 
@@ -33,7 +33,7 @@ const issue91: Issue = {
 
 function makeStatus(issue: Issue, status: QCStatus['status']): IssueStatusResponse {
   const approved = status === 'approved' || status === 'changes_after_approval'
-  return {
+  return withHistory({
     issue,
     qc_status: { status, status_detail: '' },
     dirty: false,
@@ -47,7 +47,7 @@ function makeStatus(issue: Issue, status: QCStatus['status']): IssueStatusRespon
     ],
     drift: emptyGap(),
     blocking_qc_status: { total: 0, approved_count: 0, summary: '0/0', approved: [], not_approved: [], errors: [] },
-  }
+  })
 }
 
 const allApprovedBatch: BatchIssueStatusResponse = {

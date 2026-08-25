@@ -5,7 +5,7 @@ import type { IssueStatusResponse, RoundInfo } from '~/api/issues'
 import { approvalCommentUrl, canStartRound, latestRound, roundApprovedCommit } from '~/api/issues'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
-import { ApprovalNotInBranchBadge, FetchBranchBadge } from './RoundBadges'
+import { ApprovalNotInBranchBadge, FetchBranchBadge, RoundPill } from './RoundBadges'
 
 interface Props {
   status: IssueStatusResponse
@@ -100,6 +100,12 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
         >
           {issue.title}
         </Anchor>
+      </div>
+
+      {/* Which round the QC is on — the same pill the detail modal's card shows, so the
+          two cannot drift. */}
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <RoundPill index={round.index} />
       </div>
 
       {/* Milestone */}

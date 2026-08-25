@@ -74,6 +74,8 @@ export interface RouteOverrides {
   previousQcDiffPreviewHtml: string
   /** HTML response for POST /api/preview/round (D47); null → 500 error */
   roundPreviewHtml: string | null
+  /** HTML response for POST /api/preview/round-diff; null → 500 error */
+  roundDiffPreviewHtml: string | null
   /** Response for POST /api/issues/:n/approve; null → 500 error */
   postApproveResponse: { approval_url: string; skipped_unapproved: number[]; skipped_errors: unknown[]; closed: boolean } | null
   /** Response for POST /api/issues/:n/unapprove; null → 500 error */
@@ -136,6 +138,10 @@ const defaultOverrides: RouteOverrides = {
   // `[file contents at initial qc commit]` line the client cannot produce.
   roundPreviewHtml:
     '<h1>QC Round 3</h1><p><a href="https://github.com/test-owner/test-repo/blob/ccc3333/src/two-rounds.rs">file contents at initial qc commit</a></p>',
+  // Stands in for `markdown_to_html` of diff_utils' fenced diff — the same text the
+  // notification embeds.
+  roundDiffPreviewHtml:
+    '<pre><code class="language-diff">-approved line\n+rewritten line\n</code></pre>',
   postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
   postUnapproveResponse: { unapproval_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-66666', opened: true },
   blockedResponse: [],
@@ -333,7 +339,25 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
-  await page.route(/\/api\/preview\/round/, (route) => {
+  // Anchored: `/api/preview/round` is a prefix of `/api/preview/round-diff`, so an
+  // unanchored pattern here silently answers the diff request with the round comment.
+  await page.route(/\/api\/preview\/round-diff/, (route) => {
+    if (cfg.roundDiffPreviewHtml === null) {
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Failed to render the round diff' }),
+      })
+      return
+    }
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: cfg.roundDiffPreviewHtml,
+    })
+  })
+
+  await page.route(/\/api\/preview\/round$/, (route) => {
     if (cfg.roundPreviewHtml === null) {
       route.fulfill({
         status: 500,

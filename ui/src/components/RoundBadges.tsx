@@ -2,6 +2,29 @@ import { Alert, Badge, Text, Tooltip } from '@mantine/core'
 import type { RoundInfo } from '~/api/issues'
 
 /**
+ * Which round a QC is currently on — the latest round's **declared** index (D53.2), never
+ * a position or a count, so a QC whose round 2 declaration was dropped still reads
+ * "Round 3".
+ *
+ * Shown on both status cards, including single-round QCs: "Round 1" is information, and a
+ * pill that appears only past round 1 makes its absence ambiguous — the reader cannot tell
+ * a first round from a UI that forgot to say.
+ */
+export function RoundPill({ index }: { index: number }) {
+  return (
+    <Tooltip
+      label={`This QC is on round ${index}`}
+      withArrow
+      position="top"
+    >
+      <Badge color="gray" variant="light" size="xs" data-testid="round-pill">
+        Round {index}
+      </Badge>
+    </Tooltip>
+  )
+}
+
+/**
  * U6/D22: a divergent `preceding_gap` — the round's start commit is not descended
  * from the previous round's approval, so the two rounds share no cohesive history.
  * Diffs still work, which is what matters; the badge only stops the sequence from

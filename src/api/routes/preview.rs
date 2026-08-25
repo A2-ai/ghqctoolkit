@@ -10,8 +10,8 @@ use std::{path::PathBuf, str::FromStr};
 
 use crate::api::state::AppState;
 use crate::api::types::{
-    ApproveRequest, CreateIssueRequest, PreviewRoundRequest, PreviousQCDiffPreviewRequest,
-    RelevantIssueClass, ReviewRequest, UnapproveRequest,
+    ApproveRequest, CreateIssueRequest, PreviewRoundDiffRequest, PreviewRoundRequest,
+    PreviousQCDiffPreviewRequest, RelevantIssueClass, ReviewRequest, UnapproveRequest,
 };
 use crate::configuration::Checklist;
 use crate::create::{
@@ -310,6 +310,62 @@ pub async fn preview_comment<G: GitProvider + 'static>(
     Ok(Html(html))
 }
 
+/// POST /api/preview/round-diff
+///
+/// Renders the file's diff between the prior round's approval and the commit a new
+/// round would start at — the change a reviewer is being asked to QC. It is the same
+/// diff `# QC Notification` embeds, through the same
+/// `diff_utils::file_diff_between_commits`, because the round modal shows this next to
+/// the button that posts that notification.
+pub async fn preview_round_diff<G: GitProvider + 'static>(
+    State(state): State<AppState<G>>,
+    Json(request): Json<PreviewRoundDiffRequest>,
+) -> Result<Html<String>, ApiError> {
+    let start_commit = ObjectId::from_str(&request.start_commit)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid commit format: {e}")))?;
+
+    let number = request.issue_number;
+    let issue = state.git_info().get_issue(number).await?;
+    let comments = crate::get_issue_comments(&issue, state.disk_cache(), state.git_info()).await?;
+    let thread =
+        IssueThread::from_issue_comments(&issue, &comments, state.git_info(), state.disk_cache())?;
+
+    // D5/D12: the old end of the diff is the prior round's approval, and a round can
+    // only start from one. Refusing here rather than falling back to the branch tip is
+    // §18's rule: a diff against a substituted commit is a claim about a change nobody
+    // made.
+    let latest = thread.latest_round();
+    let approved_commit = latest.approved_commit().copied().ok_or_else(|| {
+        ApiError::Conflict(format!(
+            "Round {} of issue #{number} is not approved, so there is no approval to diff against",
+            latest.index
+        ))
+    })?;
+
+    let file = PathBuf::from(&issue.title);
+    let markdown = crate::diff_utils::file_diff_between_commits(
+        state.git_info(),
+        &file,
+        &approved_commit,
+        &start_commit,
+    )
+    .ok_or_else(|| {
+        // `None` is never "unchanged" — an unchanged file still diffs to
+        // "No difference between file versions." So this is a commit or a path
+        // that could not be read, and the branch to fetch is the actionable half
+        // of the message (D60).
+        ApiError::BadRequest(format!(
+            "Could not read {} at {} or {}; fetch '{}' if the commit is not local",
+            issue.title,
+            approved_commit,
+            start_commit,
+            thread.branch()
+        ))
+    })?;
+
+    Ok(Html(markdown_to_html(&markdown)))
+}
+
 /// POST /api/preview/previous-qc-diff
 ///
 /// Generates the Previous QC diff comment body as HTML without posting it.
@@ -468,6 +524,191 @@ mod tests {
             .expect("the round comment previews");
 
         assert!(html.contains("QC Round 3"), "unexpected html: {html}");
+    }
+
+    // ── POST /api/preview/round-diff ────────────────────────────────────────────
+
+    /// The commit the *checkout* is on. Deliberately not `MOCK_COMMIT`: the approval is
+    /// the only commit a mocked thread can anchor on, and the new end of the diff is
+    /// request-side, so it never needs to be in the walk.
+    const CHECKOUT_COMMIT: &str = "2222222222222222222222222222222222222222";
+
+    /// An approved round 1 whose approval and current checkout hold different content,
+    /// so there is a real diff to render.
+    fn diff_state() -> AppState<MockGitInfo> {
+        let issue = crate::test_utils::create_test_issue(
+            "test-owner",
+            "test-repo",
+            1,
+            "src/test.rs",
+            &format!("## Metadata\n* initial qc commit: {MOCK_COMMIT}\n* git branch: main\n"),
+            Some(1),
+            "closed",
+        );
+        let mock = MockGitInfo::builder()
+            .with_issue(issue.number, issue)
+            .with_comments(1, vec![&format!("approved qc commit: {MOCK_COMMIT}")])
+            .with_commit(MOCK_COMMIT)
+            .with_branch("main")
+            .with_file_bytes(MOCK_COMMIT, "line one\napproved line\nline three\n")
+            .with_file_bytes(CHECKOUT_COMMIT, "line one\nrewritten line\nline three\n")
+            .build();
+        AppState::new(mock, Configuration::default(), None, None)
+    }
+
+    fn diff_request() -> PreviewRoundDiffRequest {
+        PreviewRoundDiffRequest {
+            issue_number: 1,
+            start_commit: CHECKOUT_COMMIT.to_string(),
+        }
+    }
+
+    /// The Round tab's whole reason to exist: what changed in this file since the
+    /// approval the next round starts from.
+    #[tokio::test]
+    async fn test_preview_round_diff_renders_the_change_since_the_approval() {
+        let Html(html) = preview_round_diff(State(diff_state()), Json(diff_request()))
+            .await
+            .expect("the round diff previews");
+
+        assert!(html.contains("rewritten line"), "unexpected html: {html}");
+        assert!(html.contains("approved line"), "unexpected html: {html}");
+        // Context is kept, so an unchanged neighbouring line is still there.
+        assert!(html.contains("line three"), "unexpected html: {html}");
+    }
+
+    /// The pair is the round transition's, and the *old* end is derived server-side as
+    /// the prior round's approval (D5), never taken from the request. The round modal
+    /// shows this diff next to the button that posts the notification embedding it, so
+    /// the two are the same text or one of them is lying.
+    #[tokio::test]
+    async fn test_preview_round_diff_is_the_diff_the_notification_embeds() {
+        let state = diff_state();
+
+        let Html(html) = preview_round_diff(State(state.clone()), Json(diff_request()))
+            .await
+            .expect("the round diff previews");
+
+        let issue = crate::GitHubReader::get_issue(state.git_info(), 1)
+            .await
+            .unwrap();
+        let notification = crate::QCComment {
+            file: PathBuf::from(&issue.title),
+            issue,
+            current_commit: ObjectId::from_str(CHECKOUT_COMMIT).unwrap(),
+            previous_commit: Some(ObjectId::from_str(MOCK_COMMIT).unwrap()),
+            note: None,
+            no_diff: false,
+        }
+        .generate_body(state.git_info());
+
+        let embedded = notification
+            .split_once("## File Difference\n")
+            .expect("the notification embeds a diff")
+            .1
+            .trim_end()
+            .to_string();
+
+        assert_eq!(html, markdown_to_html(&embedded));
+    }
+
+    /// D12: a round starts from an approval, so an unapproved latest round has nothing
+    /// to diff against. Refusing beats diffing against a substituted commit — §18's rule.
+    #[tokio::test]
+    async fn test_preview_round_diff_refuses_an_unapproved_latest_round() {
+        let state = state_with(vec![]);
+
+        let error = preview_round_diff(State(state), Json(diff_request()))
+            .await
+            .expect_err("an unapproved round has no approval to diff against");
+
+        assert!(
+            matches!(error, ApiError::Conflict(ref message) if message.contains("not approved")),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    /// A commit that is not local reads as unreadable, and the remedy is named (D60).
+    /// `None` from the diff helper never means "unchanged", so it must not be rendered
+    /// as an empty diff.
+    #[tokio::test]
+    async fn test_preview_round_diff_names_the_branch_to_fetch() {
+        let issue = crate::test_utils::create_test_issue(
+            "test-owner",
+            "test-repo",
+            1,
+            "src/test.rs",
+            &format!("## Metadata\n* initial qc commit: {MOCK_COMMIT}\n* git branch: main\n"),
+            Some(1),
+            "closed",
+        );
+        let mock = MockGitInfo::builder()
+            .with_issue(issue.number, issue)
+            .with_comments(1, vec![&format!("approved qc commit: {MOCK_COMMIT}")])
+            .with_commit(MOCK_COMMIT)
+            .with_branch("main")
+            // Only the approval side is registered, so the checkout commit cannot be read.
+            .with_file_bytes(MOCK_COMMIT, "line one\n")
+            .build();
+        let state = AppState::new(mock, Configuration::default(), None, None);
+
+        let error = preview_round_diff(State(state), Json(diff_request()))
+            .await
+            .expect_err("an unreadable commit is refused, not rendered as no-change");
+
+        assert!(
+            matches!(error, ApiError::BadRequest(ref message) if message.contains("fetch 'main'")),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    /// An unchanged file is **not** the same as an unreadable one: it renders, and it
+    /// says so. Collapsing the two would hide a fetch problem behind "nothing changed".
+    #[tokio::test]
+    async fn test_preview_round_diff_renders_an_unchanged_file_as_no_difference() {
+        let issue = crate::test_utils::create_test_issue(
+            "test-owner",
+            "test-repo",
+            1,
+            "src/test.rs",
+            &format!("## Metadata\n* initial qc commit: {MOCK_COMMIT}\n* git branch: main\n"),
+            Some(1),
+            "closed",
+        );
+        let mock = MockGitInfo::builder()
+            .with_issue(issue.number, issue)
+            .with_comments(1, vec![&format!("approved qc commit: {MOCK_COMMIT}")])
+            .with_commit(MOCK_COMMIT)
+            .with_branch("main")
+            .with_file_bytes(MOCK_COMMIT, "same\n")
+            .with_file_bytes(CHECKOUT_COMMIT, "same\n")
+            .build();
+        let state = AppState::new(mock, Configuration::default(), None, None);
+
+        let Html(html) = preview_round_diff(State(state), Json(diff_request()))
+            .await
+            .expect("an unchanged file still previews");
+
+        assert!(
+            html.contains("No difference between file versions"),
+            "unexpected html: {html}"
+        );
+    }
+
+    /// A preview never writes.
+    #[tokio::test]
+    async fn test_preview_round_diff_posts_nothing() {
+        let state = diff_state();
+
+        let _html = preview_round_diff(State(state.clone()), Json(diff_request()))
+            .await
+            .expect("the round diff previews");
+
+        assert!(
+            state.git_info().write_calls().is_empty(),
+            "a preview must not write: {:?}",
+            state.git_info().write_calls()
+        );
     }
 
     /// A preview never writes: no comment, no body edit, no re-open.

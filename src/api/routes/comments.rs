@@ -90,6 +90,44 @@ pub async fn approve_issue<G: GitProvider + 'static>(
 
     let commit = parse_str_as_commit(&request.commit)?;
 
+    // D8/§22.0.4: an `Approved` round owns `[start_n ..= approval_n]`, so an approval
+    // outside the latest round's commits gives that round a negative span. The fold then
+    // lands in D54's state — `latest_commit()` is `None`, `archive_commit` is null, and
+    // status refuses with a "fetch the branch" remedy that is *wrong*, because the branch
+    // is local and fine.
+    //
+    // The CLI has always enforced this (`QCApprove::from_args` resolves the commit against
+    // `latest_round().commits`); this makes the API agree rather than inventing a rule.
+    // Deliberately **not** overridable by `force`, which exists to bypass blocking-QC
+    // policy: this is a model invariant, and no caller has standing to waive it.
+    let comments = crate::get_issue_comments(&issue, state.disk_cache(), state.git_info()).await?;
+    let thread = crate::issue::IssueThread::from_issue_comments(
+        &issue,
+        &comments,
+        state.git_info(),
+        state.disk_cache(),
+    )?;
+    let latest = thread.latest_round();
+    if !latest.commits.iter().any(|owned| owned.hash == commit) {
+        // D55: when the round could not be placed there is nothing to check against, and
+        // the branch to fetch is the actionable half of the message.
+        return Err(ApiError::Conflict(
+            if let crate::issue::RoundPlacement::Unplaceable { branch } = &latest.placement {
+                format!(
+                    "Round {} of issue #{number} could not be placed on '{branch}', so no \
+                     approval can be verified against it; fetch '{branch}' first",
+                    latest.index
+                )
+            } else {
+                format!(
+                    "Commit {commit} is not one of round {}'s commits, and an approval \
+                     belongs to the round it closes",
+                    latest.index
+                )
+            },
+        ));
+    }
+
     let approval = QCApprove {
         file: PathBuf::from(&issue.title),
         commit,
@@ -242,6 +280,107 @@ mod tests {
         assert!(status.approved.is_empty());
         assert!(status.not_approved.is_empty());
         assert!(status.errors.is_empty());
+    }
+
+    // ── D8/§22.0.4: the approval must lie inside the round that will own it ──────
+
+    /// The commit `MockGitInfo`'s walk returns — the only one a mocked thread can anchor
+    /// on, and therefore the only legal approval for that thread.
+    const IN_ROUND_COMMIT: &str = "456def789abc012345678901234567890123cdef";
+    /// A well-formed commit that is *not* in the round's walk.
+    const OUT_OF_ROUND_COMMIT: &str = "1111111111111111111111111111111111111111";
+
+    fn approve_state(branch: &str) -> AppState<MockGitInfo> {
+        let issue = crate::test_utils::create_test_issue(
+            "test-owner",
+            "test-repo",
+            1,
+            "src/test.rs",
+            &format!(
+                "## Metadata\n* initial qc commit: {IN_ROUND_COMMIT}\n* git branch: {branch}\n"
+            ),
+            Some(1),
+            "open",
+        );
+        let mock = MockGitInfo::builder()
+            .with_issue(issue.number, issue)
+            .with_comments(1, vec![])
+            .with_commit(IN_ROUND_COMMIT)
+            .with_branch("main")
+            .build();
+        AppState::new(mock, Configuration::default(), None, None)
+    }
+
+    async fn approve(
+        state: AppState<MockGitInfo>,
+        commit: &str,
+        force: bool,
+    ) -> Result<(StatusCode, Json<ApprovalResponse>), ApiError> {
+        approve_issue(
+            State(state),
+            Path(1),
+            Query(ApproveQuery { force }),
+            Json(ApproveRequest {
+                commit: commit.to_string(),
+                note: None,
+            }),
+        )
+        .await
+    }
+
+    /// The legitimate case still works — a guard that refused real approvals would be
+    /// worse than the hole it closes.
+    #[tokio::test]
+    async fn test_approving_a_commit_the_round_owns_succeeds() {
+        let state = approve_state("main");
+
+        let (status, _) = approve(state, IN_ROUND_COMMIT, false)
+            .await
+            .expect("a commit inside the round is approvable");
+
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    /// D8: an `Approved` round owns `[start_n ..= approval_n]`, so this would give the
+    /// round a negative span — and it is what the pre-§22 Approve tab could post.
+    #[tokio::test]
+    async fn test_approving_a_commit_outside_the_round_is_refused() {
+        let state = approve_state("main");
+
+        let error = approve(state.clone(), OUT_OF_ROUND_COMMIT, false)
+            .await
+            .expect_err("an approval outside the round it closes is refused");
+
+        assert!(
+            matches!(&error, ApiError::Conflict(message)
+                if message.contains("not one of round 1's commits")),
+            "unexpected error: {error:?}"
+        );
+
+        // The refusal is total: no approval comment, and the issue stays open. A posted
+        // comment is an audit record, so a partial write here would be the lie itself.
+        assert!(
+            state.git_info().write_calls().is_empty(),
+            "a refused approval must write nothing: {:?}",
+            state.git_info().write_calls()
+        );
+    }
+
+    /// `force` exists to bypass blocking-QC *policy*. This is a model invariant, so no
+    /// caller has standing to waive it.
+    #[tokio::test]
+    async fn test_force_does_not_waive_the_round_span_rule() {
+        let state = approve_state("main");
+
+        let error = approve(state, OUT_OF_ROUND_COMMIT, true)
+            .await
+            .expect_err("force does not reach this rule");
+
+        assert!(
+            matches!(&error, ApiError::Conflict(message)
+                if message.contains("not one of round 1's commits")),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[tokio::test]

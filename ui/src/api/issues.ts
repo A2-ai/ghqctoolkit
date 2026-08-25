@@ -183,6 +183,28 @@ export interface BlockingQCStatus {
  * and `checklist_summary` are gone — read `rounds[rounds.length - 1]` (list indexing,
  * not derivation) and `drift`.
  */
+/**
+ * Which kind of segment a `SegmentRef` points at (M2). `drift` is its own kind even
+ * though it is the same `Gap` shape as a preceding gap: D30 — a trailing gap is defined
+ * by its position — and the pinned tail block (D80/D81) is picked by kind, never by
+ * index arithmetic.
+ */
+export type SegmentKind = 'round' | 'gap' | 'drift'
+
+/**
+ * One row of the History dropdown (M2): a **pointer** into `rounds`/`drift`, never a
+ * copy of their commits.
+ */
+export interface SegmentRef {
+  kind: SegmentKind
+  /**
+   * The round this segment belongs to: itself for a round, the round it **precedes**
+   * for a gap, the latest round for drift. A *declared* index (D53.2) — never a position
+   * in `history` or in `rounds`.
+   */
+  round_index: number
+}
+
 export interface IssueStatusResponse {
   issue: Issue
   qc_status: QCStatus
@@ -195,6 +217,13 @@ export interface IssueStatusResponse {
    * dispatch the backend uses (S0).
    */
   drift: Gap
+  /**
+   * W6's segment order (M2) — the History dropdown's rows, and the only source of that
+   * order. It encodes two positional suppression rules (round 1's preceding gap is
+   * skipped; `drift` appears only once the latest round is closed) that the client must
+   * not reimplement (D30/U7). Never empty: I1 guarantees a round.
+   */
+  history: SegmentRef[]
   blocking_qc_status?: BlockingQCStatus
 }
 
@@ -730,8 +759,14 @@ export function useRenames(milestoneNumbers: number[]) {
     queries: milestoneNumbers.map((n) => ({
       queryKey: ['milestones', n, 'renames'],
       queryFn: () => fetchMilestoneRenames(n),
-      // Refresh on window focus so renames are detected promptly after a git operation.
-      staleTime: 30 * 1000,
+      // Rename detection is an expensive git-history walk (~1s per milestone), so it runs
+      // once per milestone selection and is never refetched on remount, focus or reconnect.
+      // Freshness comes from explicit invalidation: after confirming a rename, and when the
+      // repo's local commit changes (see useRepoInfo).
+      staleTime: Infinity,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     })),
   })
   return {

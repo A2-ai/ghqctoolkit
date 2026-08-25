@@ -90,6 +90,7 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
         // D47: the round comment's preview renders through `QCRound`'s real
         // `CommentBody`, so it cannot drift from what `POST /rounds` posts.
         .route("/api/preview/round", post(preview::preview_round))
+        .route("/api/preview/round-diff", post(preview::preview_round_diff))
         .route(
             "/api/preview/previous-qc-diff",
             post(preview::preview_previous_qc_diff),

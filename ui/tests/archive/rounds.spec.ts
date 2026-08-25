@@ -7,6 +7,7 @@ import {
   twoRoundIssue,
   twoRoundStatus,
 } from '../fixtures/index'
+import type { IssueStatusResponse } from '../../src/api/issues'
 import type { Milestone } from '../../src/api/milestones'
 
 // The archive tab reads QC files out of milestones, so the fixture issue needs a
@@ -258,4 +259,77 @@ test('U5: choosing a round on a QC-attached added file does not open the edit mo
   await expect(select).toHaveValue('Round 1')
   // …and the card's own onClick did not fire, so no "Edit: {file}" modal opened.
   await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// The card's status describes the *selected* round
+// ---------------------------------------------------------------------------
+
+// `qc_status` is scoped to the latest round and its drift (S0-S4). Reading the card's
+// status label off it made the card contradict itself: with round 2 still open, picking
+// round 1 froze round 1's approved commit while the card underneath said "awaiting
+// review". Every earlier round has resolved, and `state.kind` is the sole encoding of
+// that (D36), so the label comes from the selected round.
+
+/** Round 2 open, round 1 approved — the reported shape. The QC as a whole is
+ *  `awaiting_review`, so the milestone needs "Include non-approved" to show it. */
+const openLatestStatus: IssueStatusResponse = {
+  ...archiveStatus,
+  qc_status: { status: 'awaiting_review', status_detail: 'Awaiting first review' },
+  rounds: [archiveStatus.rounds[0], { ...archiveStatus.rounds[1], state: { kind: 'open' } }],
+}
+
+async function setupArchiveNonApproved(page: Page, status: IssueStatusResponse) {
+  await setupRoutes(page, {
+    milestones: [sprint1],
+    milestoneIssues: { 1: [archiveIssue] },
+    issueStatuses: { results: [status], errors: [] },
+  })
+  await goToArchive(page)
+  await page.locator('main').getByPlaceholder('Search milestones…').click()
+  await page.getByRole('option', { name: /Sprint 1/ }).click()
+  await expect(page.getByText(/issues? loading/)).not.toBeVisible({ timeout: 10_000 })
+  await page.getByRole('switch', { name: 'Include non-approved' }).click()
+  await expect(page.getByTestId(`archive-round-select-${archiveIssue.number}`)).toBeVisible()
+}
+
+test('the status label follows the selected round, not the QC', async ({ page }) => {
+  await setupArchiveNonApproved(page, openLatestStatus)
+
+  const card = page.getByTestId(`archive-card-${archiveIssue.number}`)
+  const select = page.getByTestId(`archive-round-select-${archiveIssue.number}`)
+
+  // The latest round is the open one, so the QC status is the round's status.
+  await expect(select).toHaveValue('Round 2')
+  await expect(card).toContainText('awaiting review')
+  await expect(page.getByTestId(`archive-round-unapproved-${archiveIssue.number}`)).toBeVisible()
+
+  await select.click()
+  await page.getByRole('option', { name: 'Round 1' }).click()
+
+  // Round 1 is approved, and that is the commit the archive would freeze.
+  await expect(card).toContainText('approved')
+  await expect(card).not.toContainText('awaiting review')
+  await expect(page.getByText(R1_APPROVAL.slice(0, 7))).toBeVisible()
+  // …so the "not approved" warning goes away with it.
+  await expect(page.getByTestId(`archive-round-unapproved-${archiveIssue.number}`)).toHaveCount(0)
+})
+
+test('an earlier round that was never approved reads as superseded', async ({ page }) => {
+  await setupArchiveNonApproved(page, {
+    ...openLatestStatus,
+    rounds: [
+      { ...openLatestStatus.rounds[0], state: { kind: 'superseded' } },
+      openLatestStatus.rounds[1],
+    ],
+  })
+
+  const select = page.getByTestId(`archive-round-select-${archiveIssue.number}`)
+  await select.click()
+  await page.getByRole('option', { name: 'Round 1' }).click()
+
+  // Not "approved": D21's superseded round is an *unapproved* round a later one replaced,
+  // so the archive must not present it as approved content.
+  await expect(page.getByTestId(`archive-card-${archiveIssue.number}`))
+    .toContainText('superseded (never approved)')
 })

@@ -185,3 +185,68 @@ export async function fetchPreviousQCDiffPreview(request: PreviousQCDiffPreviewR
   }
   return res.text()
 }
+
+/**
+ * The round notification is a plain `QCComment` (D5) — the very type
+ * `POST /issues/:n/comment` posts — so `POST /preview/:n/comment` renders it through
+ * the identical server-side body builder. There is deliberately no round-specific
+ * notification preview endpoint, because there is no round-specific notification:
+ * `create_round` builds a `QCComment` with `current_commit` = the round's start and
+ * `previous_commit` = the prior round's approval, and this preview is asked for
+ * exactly that pair.
+ *
+ * `request === null` disables the fetch. Pass a debounced note for the same reason
+ * `useRoundPreview` wants a debounced checklist — the note is a live textarea.
+ */
+export function useCommentPreview(issueNumber: number, request: CreateCommentRequest | null) {
+  return useQuery({
+    queryKey: ['preview', 'comment', issueNumber, request],
+    queryFn: () => fetchCommentPreview(issueNumber, request!),
+    enabled: request !== null,
+    // Same reasoning as useRoundPreview: report the failure at once rather than
+    // spinning through three retries, since any edit re-fires the request anyway.
+    retry: false,
+  })
+}
+
+/**
+ * Body for `POST /api/preview/round-diff`. Carries only the *new* end of the
+ * comparison: the old end is the prior round's approval, derived server-side exactly as
+ * `create_round` derives the notification's `previous commit` (D5). A client that could
+ * pass both ends could show a diff for a transition that is not the one about to happen.
+ */
+export interface RoundDiffPreviewRequest {
+  issue_number: number
+  start_commit: string
+}
+
+export async function previewRoundDiff(request: RoundDiffPreviewRequest): Promise<string> {
+  const res = await fetch(`${API_BASE}/preview/round-diff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to fetch round diff: ${res.status}`)
+  }
+  return res.text()
+}
+
+/**
+ * The change a new round would be opened over: this file, between the prior round's
+ * approval and the checked-out commit. It is the same diff the `# QC Notification`
+ * embeds, through the same `diff_utils::file_diff_between_commits`.
+ *
+ * `request === null` disables the fetch — callers pass null when the checkout is still
+ * sitting on the approval, because there is provably nothing to diff (U3) and asking
+ * would spend a round-trip to be told so.
+ */
+export function useRoundDiffPreview(request: RoundDiffPreviewRequest | null) {
+  return useQuery({
+    queryKey: ['preview', 'round-diff', request],
+    queryFn: () => previewRoundDiff(request!),
+    enabled: request !== null,
+    retry: false,
+  })
+}
