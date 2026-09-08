@@ -751,6 +751,39 @@ export const divergentDriftStatus: IssueStatusResponse = withHistory({
   },
 })
 
+/** A drift-touching commit and two that leave the file alone. The two counts the Round
+ *  tab reports must therefore **differ** — a fixture where they agree cannot tell
+ *  `drift.commits.length` from the file-changing filter. */
+export const DRIFT_TOUCHING = '4d44444444444444444444444444444444444444'
+const DRIFT_QUIET_A = '5e55555555555555555555555555555555555555'
+const DRIFT_QUIET_B = '6f66666666666666666666666666666666666666'
+
+/** A **non-divergent** drift that actually holds commits — the ordinary
+ *  `changes_after_approval` shape a new round starts from. */
+export const driftingStatus: IssueStatusResponse = withHistory({
+  ...twoRoundStatus,
+  qc_status: { status: 'changes_after_approval', status_detail: 'Changes after approval' },
+  drift: {
+    commits: [
+      { hash: DRIFT_TOUCHING, message: 'touched the qc file', statuses: [], file_changed: true },
+      { hash: DRIFT_QUIET_A, message: 'unrelated change', statuses: [], file_changed: false },
+      { hash: DRIFT_QUIET_B, message: 'another unrelated change', statuses: [], file_changed: false },
+    ],
+    divergent: false,
+    newest_file_change: DRIFT_TOUCHING,
+  },
+})
+
+/** D96: round 1 lived on a different branch than the round the QC is on now, so its
+ *  commits were walked against that branch. Round 2 is on `main`, the reference. */
+export const otherBranchStatus: IssueStatusResponse = withHistory({
+  ...twoRoundStatus,
+  rounds: [
+    { ...twoRoundRounds[0], branch: 'feature/round-one' },
+    { ...twoRoundRounds[1], branch: 'main' },
+  ],
+})
+
 // ── §18 (D53–D56) fixtures ───────────────────────────────────────────────────
 
 /** The branch a round was declared on but which is not fetched locally (D53). */

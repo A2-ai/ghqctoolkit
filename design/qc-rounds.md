@@ -1702,3 +1702,65 @@ own reading of the picker was wrong.
 - **D94.4.** `CommitBlock` carries `data-testid="commit-block-{from,to}"`; its label and hash are
   separate flex children with no whitespace between them, so the rendered text is `From:1a11111`
   and a text-substring assertion silently never matches.
+
+## §27 Resolutions from adversarial review (D95–D97)
+
+Eight read-only reviewers were run over the whole branch against this spec. Their confirmed
+findings are resolved here. This section supersedes earlier text where it says so.
+
+**D95.** *(A status marker must begin its line.)* `parse_commit_from_pattern` did a bare
+`body.find(pattern)`, so any occurrence anywhere in a comment counted. Moving checklists into
+round comments (D45) made that unsafe in a way it had never been: a round's checklist is
+**user-editable text living inside a comment the partition scan walks** (F3/F5), so a checklist
+item reading `- [ ] approved qc commit: matches the build output` registered a real approval for
+that round. Pre-rounds this was impossible — checklists lived only in the issue body, which is
+never scanned for status markers.
+
+- **D95.1.** The pattern must start a line, after optional leading whitespace and at most one
+  list bullet (`* `, `- `, `+ `). Every real marker is written that way: `metadata.join("\n* ")`
+  yields `* approved qc commit: {sha}`, and round-declaration bodies use the bare key.
+- **D95.2.** This rejects a checklist item on **position, not content**. Once `- ` is stripped a
+  checklist item still begins `[ ] `, so it cannot match however well-formed the sha it quotes is.
+  Prose mentioning the phrase mid-sentence cannot match either.
+- **D95.3.** Anchoring on the **line**, not on the comment's `# QC …` heading, is deliberate and
+  supersedes the reading of D20 that treats H1 detection as the guard.
+  `body_splitter::inject_part_label` gives part 2+ of an oversized comment a `_2/3_` prefix
+  instead of the heading, so a heading gate would drop a real approval from a split comment —
+  turning a false positive into a false negative, in the direction that silently unapproves a
+  round. A metadata bullet keeps its own line through any split.
+- **D95.4.** This also closes D20's `new qc initial qc commit:` collision at the source, rather
+  than relying on H1 detection to keep `# Previous QC` bodies out of reach of this function.
+
+**D96.** *(An older round names its branch in the History dropdown.)* D56 required an inherited
+branch be surfaced "wherever that round is the one being viewed", and `InheritedBranchBadge`
+covers the round switcher and the new-round modal. The review found the status card and detail
+modal render a bare `Branch: {branch}`. Rather than extend the inheritance badge, the History
+dropdown now names the branch whenever a round's branch differs from the **latest** round's:
+branch scopes both the round's and its gap's commit walk (D7/D9), so what a reader of an older
+round needs is *which* branch produced those commits, which inheritance only implies.
+
+- **D96.1.** Shown on round rows only, and never on the latest round — it is the reference the
+  others are read against.
+- **D96.2.** Suppressed for an unplaceable round: `FetchBranchBadge` already names that branch,
+  and two badges naming one branch read as two separate problems.
+- **D96.3.** D56's enumeration is therefore read as **illustrative, not exhaustive**.
+
+**D97.** *(D64's all-empty archive refusal is server-only, on purpose.)* D61 made an unresolvable
+commit skip-and-continue instead of aborting, so the CLI can now write a tarball holding only
+`ghqc_archive_metadata.json`. D64's refusal lives on the `POST /archive/generate` endpoint and is
+**not** extended to `archive_files_for_threads` or the CLI. The CLI is deliberately the more
+permissive surface — it lets a user do things the UI does not allow — and it prints a per-file
+skip warning to a human who is present. This resolves the asymmetry as intended rather than as a
+gap. D64's own "rather than a re-added client gate" wording refers to the browser UI, not the CLI.
+
+*Also applied, as spec compliance rather than new decisions:*
+
+- **A7 compliance.** `openapi.yml` was missing `history`, `SegmentRef` and `SegmentKind` entirely
+  while §22's M2 field was live in `IssueStatusResponse` and already consumed by the frontend.
+  Added, with `history` in `required` and `minItems: 1` per I1.
+- **Test integrity.** Two tests could not fail. The Round tab's commit-count test ran only against
+  an empty `drift`, asserting `0`/`0`, and `toContainText('0 commit')` also matches `"10 commits"`;
+  it now uses a drift of three commits of which one is file-changing, asserted as a whole
+  sentence. D91.2's disabling rule was indistinguishable from `segment.divergent` because every
+  fixture varied raw-count and divergence together; a divergent gap that owns commits is now
+  asserted selectable. Both were confirmed by mutation before and after.

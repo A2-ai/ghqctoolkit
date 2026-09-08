@@ -1563,14 +1563,38 @@ impl BranchWalks {
     }
 }
 
-/// Parse a commit from a body using the given pattern
-/// Supports both full and short SHAs with minimum 7 character length
+/// Parse a metadata value out of a body, keyed on `pattern`.
+///
+/// Supports both full and short SHAs with minimum 7 character length.
+///
+/// The pattern must **begin a metadata line** (D95). Every real marker is written
+/// that way — `metadata.join("\n* ")` yields `* approved qc commit: {sha}` — so
+/// anchoring costs nothing and buys two things a bare `find` cannot:
+///
+/// * A round's checklist is user-editable text living inside a comment this scan
+///   walks, so a checklist item reading `- [ ] approved qc commit: matches build`
+///   must not register an approval. After the optional bullet is stripped such a
+///   line still begins `[ ] `, so it cannot match. Prose mentioning the phrase
+///   mid-sentence cannot match either.
+/// * It closes D20's `new qc initial qc commit:` collision at the source, instead
+///   of relying on H1 detection to keep that body out of reach of this function.
+///
+/// Anchoring on the line — rather than on the comment's `# QC ...` heading — is
+/// deliberate: `body_splitter::inject_part_label` gives part 2+ of an oversized
+/// comment a `_2/3_` prefix instead of the heading, so a heading gate could drop a
+/// real approval. A metadata bullet keeps its own line through any split.
 fn parse_commit_from_pattern<'a>(body: &'a str, pattern: &str) -> Option<&'a str> {
-    let start = body.find(pattern)?;
-    let commit_start = start + pattern.len();
-
-    let remaining = &body[commit_start..];
-    remaining.lines().next()?.split_whitespace().next()
+    body.lines().find_map(|line| {
+        let line = line.trim_start();
+        // One list bullet may precede the key. A checklist item still begins `[ ]`
+        // once its `- ` is stripped, so it can never match a pattern.
+        let rest = line
+            .strip_prefix("* ")
+            .or_else(|| line.strip_prefix("- "))
+            .or_else(|| line.strip_prefix("+ "))
+            .unwrap_or(line);
+        rest.strip_prefix(pattern)?.split_whitespace().next()
+    })
 }
 
 /// Parse branch name from issue body
@@ -3293,6 +3317,91 @@ git branch: main
 
         let result = parse_commit_from_pattern(body, "current commit: ");
         assert_eq!(result, None);
+    }
+
+    /// D95: a round's checklist is user-editable text inside a comment the partition
+    /// scan walks, so a checklist item that spells a marker verbatim must not be read
+    /// as one. Rejected on **position**, not content — the sha here is well-formed.
+    #[test]
+    fn test_a_checklist_item_is_not_a_status_marker() {
+        for pattern in [
+            "approved qc commit: ",
+            "current commit: ",
+            "comparing commit: ",
+            "initial qc commit: ",
+        ] {
+            let body = format!(
+                "# Second Pass\n\n- [ ] {pattern}abc123def456789012345678901234567890abcd\n- [x] done\n"
+            );
+            assert_eq!(
+                parse_commit_from_pattern(&body, pattern),
+                None,
+                "checklist item was read as a `{pattern}` marker"
+            );
+        }
+    }
+
+    /// The same guard covers prose: a marker has to *begin* its line.
+    #[test]
+    fn test_prose_mentioning_a_marker_is_not_a_marker() {
+        let body = "I checked that the approved qc commit: abc123def456789012345678901234567890abcd looks right";
+
+        assert_eq!(
+            parse_commit_from_pattern(body, "approved qc commit: "),
+            None
+        );
+    }
+
+    /// Anchoring must not cost a real marker: these are the exact shapes the writers
+    /// emit — a `metadata.join("\n* ")` bullet, and the bare key some bodies use.
+    #[test]
+    fn test_the_emitted_metadata_forms_still_parse() {
+        let bulleted = format!(
+            "# QC Approved\n\n## Metadata\n* approved qc commit: {}\n* [file](url)",
+            "abc123def456789012345678901234567890abcd"
+        );
+        assert_eq!(
+            parse_commit_from_pattern(&bulleted, "approved qc commit: "),
+            Some("abc123def456789012345678901234567890abcd")
+        );
+
+        let bare = format!(
+            "## Metadata\nround: 2\ninitial qc commit: {}",
+            "abc123def456789012345678901234567890abcd"
+        );
+        assert_eq!(
+            parse_commit_from_pattern(&bare, "initial qc commit: "),
+            Some("abc123def456789012345678901234567890abcd")
+        );
+    }
+
+    /// D20's collision, now closed at the source rather than by relying on H1
+    /// detection to keep `# Previous QC` bodies away from this function.
+    #[test]
+    fn test_new_qc_initial_qc_commit_is_not_an_initial_qc_commit() {
+        let body = format!(
+            "# Previous QC\n\n## Metadata\n* new qc initial qc commit: {}",
+            "abc123def456789012345678901234567890abcd"
+        );
+
+        assert_eq!(
+            parse_commit_from_pattern(&body, "initial qc commit: "),
+            None
+        );
+    }
+
+    /// The end-to-end claim: a round declaration whose checklist spells an approval
+    /// leaves the partition unapproved. Without the anchor this partition approves.
+    #[test]
+    fn test_parse_partition_ignores_an_approval_spelled_in_a_checklist() {
+        let comments = vec![comment(
+            "# QC Round 2\n\n## Metadata\n* round: 2\n* initial qc commit: abc123def456789012345678901234567890abcd\n* git branch: main\n\n# Second Pass\n\n- [ ] approved qc commit: abc123def456789012345678901234567890abcd\n",
+        )];
+
+        let parsed = parse_partition(&comments);
+
+        assert_eq!(parsed.approval, None);
+        assert!(parsed.statuses.is_empty());
     }
 
     fn comment(body: &str) -> GitComment {

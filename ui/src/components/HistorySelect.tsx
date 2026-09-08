@@ -1,10 +1,15 @@
 import { Badge, Button, Checkbox, Group, Popover, Text, Tooltip } from '@mantine/core'
 import { IconChevronDown } from '@tabler/icons-react'
 import type { IssueCommit, IssueStatusResponse } from '~/api/issues'
-import { approvalCommentUrl } from '~/api/issues'
+import { approvalCommentUrl, latestRound } from '~/api/issues'
 import type { HistorySegment } from '~/utils/history'
 import { describeCommits } from '~/utils/history'
-import { FetchBranchBadge, InheritedBranchBadge, NoCohesiveHistoryBadge } from './RoundBadges'
+import {
+  FetchBranchBadge,
+  InheritedBranchBadge,
+  NoCohesiveHistoryBadge,
+  OtherBranchBadge,
+} from './RoundBadges'
 
 interface Props {
   status: IssueStatusResponse
@@ -105,6 +110,9 @@ function HistoryRow({
 }) {
   const { round, ref } = segment
   const isRound = ref.kind === 'round'
+  // The branch the QC is on now — the reference every other round's branch is read
+  // against. List indexing off the server's `rounds[]`, not a derivation (U7).
+  const currentBranch = latestRound(status).branch
   // D90: a gap that owns **no commits at all** is not selectable — ticking it could not
   // change anything. This keys on the raw count, not the file-changing one: a gap holding
   // a commit that touched nothing still has something to put on the slider under "Show
@@ -167,6 +175,12 @@ function HistoryRow({
         {/* D77/D53: an unplaceable round is a row that contributes nothing and names its
             remedy — never hidden. */}
         {isRound && round.placement === 'unplaceable' && <FetchBranchBadge branch={round.branch} />}
+        {/* D96: name the branch when this round is not on the one the QC is on now —
+            branch scopes the walk, so an older round's commits came from somewhere else.
+            `FetchBranchBadge` already names it for an unplaceable round. */}
+        {isRound && round.placement !== 'unplaceable' && round.branch !== currentBranch && (
+          <OtherBranchBadge branch={round.branch} />
+        )}
         {isRound && round.branch_inherited && <InheritedBranchBadge branch={round.branch} />}
         {segment.divergent && <NoCohesiveHistoryBadge />}
       </Group>

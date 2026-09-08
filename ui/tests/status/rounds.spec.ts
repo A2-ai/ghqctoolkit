@@ -18,6 +18,8 @@ import {
   QUIET_GAP_COMMIT,
   divergentEmptyGapStatus,
   divergentGapStatus,
+  driftingStatus,
+  otherBranchStatus,
   breakNoFileChangeStatus,
   GAP_COMMIT,
   nullCommentIdIssue,
@@ -644,19 +646,18 @@ test('a failed diff says so instead of reading as "nothing changed"', async ({ p
 })
 
 test('the Round tab counts the commits since the approval', async ({ page }) => {
-  await setupStatus(page, [twoRoundIssue], [twoRoundStatus])
+  // `driftingStatus`'s drift holds three commits of which exactly one touched the file,
+  // so the two numbers differ: a build that reported `drift.commits.length` for both,
+  // or a constant, cannot pass. The counts come off `drift.commits` — which commit is
+  // which stays the server's call (U7).
+  await setupStatus(page, [twoRoundIssue], [driftingStatus])
 
   const dialog = await openNewRoundModal(page, twoRoundIssue.number)
 
-  // Counts come off `drift.commits`, the trailing gap after the latest round — which
-  // commit is which stays the server's call (U7).
-  const expectedCommits = twoRoundStatus.drift.commits.length
-  const expectedFileChanges = twoRoundStatus.drift.commits.filter((c) => c.file_changed).length
-  await expect(dialog.getByTestId('new-round-drift-summary')).toContainText(
-    `${expectedCommits} commit`,
-  )
-  await expect(dialog.getByTestId('new-round-drift-summary')).toContainText(
-    `${expectedFileChanges} of which touched this file`,
+  // Asserted as the whole sentence, not a substring: `toContainText('0 commit')` also
+  // matches "10 commits", so a substring check is no check at all here.
+  await expect(dialog.getByTestId('new-round-drift-summary')).toHaveText(
+    '3 commits since the approval, 1 of which touched this file.',
   )
 })
 
@@ -916,6 +917,57 @@ test('D90: an empty gap is not selectable', async ({ page }) => {
   // A round showing nothing is a different case — unplaceable, where empty means "fetch
   // the branch" — so the rule keys on segment kind, not on the count alone (D90.2).
   await expect(page.getByTestId('history-check-round:1')).toBeEnabled()
+})
+
+/** D91.2: the disabling rule keys on the **raw commit count**, never on divergence. The
+ *  two travel together in every other fixture, so without this a build reading
+ *  `segment.divergent` instead would pass the suite — and would lock the user out of
+ *  exactly the commits they most need to inspect once history has diverged. */
+test('D91.2: a divergent gap that owns commits stays selectable', async ({ page }) => {
+  await setupStatus(page, [twoRoundIssue], [divergentGapStatus])
+
+  const panel = await openNotifyPanel(page, twoRoundIssue.number)
+  await panel.getByTestId('history-select-trigger').click()
+
+  // Divergent, and it owns a commit: the badge is shown and the checkbox still works.
+  await expect(page.getByTestId('history-row-gap:2').getByTestId('no-cohesive-history-badge')).toBeVisible()
+  await expect(page.getByTestId('history-row-gap:2')).toContainText('1 commit')
+  await expect(page.getByTestId('history-check-gap:2')).toBeEnabled()
+
+  await page.getByTestId('history-check-gap:2').click()
+  await expect(page.getByTestId('history-check-gap:2')).toBeChecked()
+})
+
+/** D96: branch scopes a round's commit walk (D7/D9), so an older round on a different
+ *  branch is a fact about where its commits came from — the dropdown names the branch
+ *  rather than leaving the row to read as if it were on the current one. */
+test('D96: a round on another branch names that branch in the History dropdown', async ({ page }) => {
+  await setupStatus(page, [twoRoundIssue], [otherBranchStatus])
+
+  const panel = await openNotifyPanel(page, twoRoundIssue.number)
+  await panel.getByTestId('history-select-trigger').click()
+
+  await expect(page.getByTestId('history-row-round:1').getByTestId('other-branch-badge'))
+    .toHaveText('on feature/round-one')
+  // The round the QC is on now is the reference, so it is never badged against itself.
+  await expect(page.getByTestId('history-row-round:2').getByTestId('other-branch-badge'))
+    .toHaveCount(0)
+})
+
+/** The badge is about *difference*, not about branches in general: when every round
+ *  shares one branch the dropdown stays quiet. Without this, a badge rendered
+ *  unconditionally would still pass the test above. */
+test('D96: rounds sharing a branch carry no branch badge', async ({ page }) => {
+  await setupStatus(page, [twoRoundIssue], [twoRoundStatus])
+
+  const panel = await openNotifyPanel(page, twoRoundIssue.number)
+  await panel.getByTestId('history-select-trigger').click()
+
+  // Anchor the absence to a dropdown that demonstrably rendered: a bare `toHaveCount(0)`
+  // also passes when nothing opened at all.
+  await expect(page.getByTestId('history-row-round:1')).toBeVisible()
+  await expect(page.getByTestId('history-row-round:2')).toBeVisible()
+  await expect(page.getByTestId('other-branch-badge')).toHaveCount(0)
 })
 
 /** Newest-first: the round in progress is the top row and round 1 is the bottom one. */

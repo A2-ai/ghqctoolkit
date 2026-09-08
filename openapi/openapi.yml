@@ -1141,7 +1141,7 @@ components:
         No top-level field duplicates a round-scoped value: `commits`, `branch` and
         `checklist_summary` were removed in favour of `rounds[]` and `drift`.
         Consumers read `rounds[rounds.length - 1]`.
-      required: [issue, qc_status, dirty, rounds, drift, blocking_qc_status]
+      required: [issue, qc_status, dirty, rounds, drift, history, blocking_qc_status]
       properties:
         issue:
           $ref: '#/components/schemas/Issue'
@@ -1163,6 +1163,17 @@ components:
             The commits after the latest approval that no round has closed yet. Always
             present; empty and meaningless when
             `rounds[rounds.length - 1].state.kind != "approved"`.
+        history:
+          type: array
+          description: |
+            The History dropdown's rows in W6 order: pointers into `rounds[]`/`drift`,
+            never copies of their commits. Carries two positional suppression rules the
+            client must not rebuild (D30/U7) — round 1's preceding gap is skipped, and
+            `drift` is emitted only when the latest round is closed. Never empty: a lone
+            open round projects to exactly one `round` entry.
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/SegmentRef'
         blocking_qc_status:
           $ref: '#/components/schemas/BlockingQCStatus'
 
@@ -1309,6 +1320,31 @@ components:
           description: |
             The newest file-changing commit in this gap. For `drift` this is the hash
             reported by the `changes_after_approval` status — the only source for it.
+
+    SegmentKind:
+      type: string
+      description: |
+        Which kind of segment a `SegmentRef` points at. `drift` is a distinct kind even
+        though it is the same `Gap` type as a preceding gap: what a trailing gap *is*
+        comes from its position, and the client selects the pinned tail block by kind
+        rather than by index arithmetic.
+      enum: [round, gap, drift]
+
+    SegmentRef:
+      type: object
+      description: |
+        One row of the History dropdown: a pointer into `rounds`/`drift`, never a copy
+        of their commits.
+      required: [kind, round_index]
+      properties:
+        kind:
+          $ref: '#/components/schemas/SegmentKind'
+        round_index:
+          type: integer
+          description: |
+            The round this segment belongs to: itself for a `round`, the round it
+            precedes for a `gap`, the latest round for `drift`. A *declared* index, so
+            it is never a position in `history` or in `rounds`.
 
     QCStatus:
       type: object

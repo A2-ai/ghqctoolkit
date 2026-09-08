@@ -112,6 +112,31 @@ export function InheritedBranchBadge({ branch }: { branch: string }) {
 }
 
 /**
+ * D96: this round lived on a different branch than the round the QC is on now, so its
+ * commits were walked against that branch (D7/D9). The History dropdown names the
+ * branch rather than only flagging inheritance, because the fact that matters when
+ * reading an older round's commits is *which* branch produced them.
+ *
+ * Suppressed for an unplaceable round — `FetchBranchBadge` already names the branch,
+ * and two badges naming the same branch reads as two separate problems.
+ */
+export function OtherBranchBadge({ branch }: { branch: string }) {
+  return (
+    <Tooltip
+      label={`This round's commits were walked against ${branch}, not the branch the QC is on now`}
+      withArrow
+      position="top"
+      multiline
+      w={300}
+    >
+      <Badge color="grape" variant="light" size="xs" data-testid="other-branch-badge">
+        on {branch}
+      </Badge>
+    </Tooltip>
+  )
+}
+
+/**
  * D55: the explicit state a round with no local commits renders in place of a commit
  * UI. The slider above it has nothing to draw (`commits` is empty for an unplaceable
  * round, D53.3) — without this the panel would simply go blank, which is the silent
