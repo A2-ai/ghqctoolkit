@@ -68,10 +68,28 @@ function buildCheckoutCommand(branches: string[], remote: string): string | null
   return parts.join(' && ')
 }
 
+// D60: both `None` cases of `Round::latest_commit()` (D54) arrive as
+// `branch_not_local` — deliberately one wire kind, so this affordance keeps working —
+// but only one of them is fixed by fetching. In the off-branch-approval case the
+// branch *is* local and the approval was force-pushed or rebased off it; suggesting
+// `git fetch && git branch --track` there does nothing and reads as a broken tool.
+// The payload carries no structural discriminator, so the backend's message is the
+// only signal: `IssueError::ApprovalNotOnBranch`'s text is the one that says the
+// approval commit is no longer reachable. Kept deliberately narrow.
+const APPROVAL_NOT_ON_BRANCH = /is no longer reachable on branch/
+
+function isApprovalNotOnBranch(e: AnyStatusError): boolean {
+  return e.kind === 'branch_not_local' && APPROVAL_NOT_ON_BRANCH.test(e.error)
+}
+
 // Extract the missing-branch name from an error. Falls back to a regex match
 // on the legacy `"Branch not found: <name>"` string when `kind`/`branch` aren't
 // populated (rolling-deploy of an older backend).
 function extractMissingBranch(e: AnyStatusError): string | null {
+  // D60: no branch to fetch here — recovering a rewritten approval is a judgement
+  // call, so the message stands on its own and no command is offered. Returning null
+  // also keeps the error out of the branch group, so it is still reported in full.
+  if (isApprovalNotOnBranch(e)) return null
   if (e.kind === 'branch_not_local') return e.branch ?? null
   const m = /^Branch not found: (.+)$/.exec(e.error)
   return m ? m[1] : null

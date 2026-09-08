@@ -420,7 +420,10 @@ impl QCComment {
 
         // Create IssueThread to get commits from the issue's specific branch
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let commits = &issue_thread.commits;
+        // W5/D16: the commit picker is **round-scoped** — the latest round's
+        // commits, never the whole thread's. An earlier round's commits belong to a
+        // cycle that is already closed.
+        let commits = &issue_thread.latest_round().commits;
 
         if commits.is_empty() {
             return Err(anyhow!("No commits found for file: {}", file.display()));
@@ -571,7 +574,8 @@ impl QCApprove {
 
         // Create IssueThread to get commits from the issue's specific branch
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let commits = &issue_thread.commits;
+        // W5/D16: round-scoped, and C5 says approve operates on the latest round.
+        let commits = &issue_thread.latest_round().commits;
 
         if commits.is_empty() {
             bail!("No commits found for file: {}", file_path.display());
@@ -579,11 +583,11 @@ impl QCApprove {
 
         // Select single commit to approve with status annotations
         // Default to latest_commit position, otherwise use position 0 (most recent file change)
-        let latest = issue_thread.latest_commit();
-        let default_position = issue_thread
-            .commits
-            .iter()
-            .position(|c| c.hash == latest.hash)
+        // D54: `latest_commit()` is `None` for an unplaceable round or an approval
+        // that is no longer on its branch; there is then no position to default to.
+        let latest = issue_thread.latest_commit().map(|commit| commit.hash);
+        let default_position = latest
+            .and_then(|latest| commits.iter().position(|c| c.hash == latest))
             .unwrap_or(0);
 
         let approved_commit = prompt_single_commit(
@@ -629,7 +633,8 @@ impl QCApprove {
         }
 
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
-        let commits = &issue_thread.commits;
+        // W5/D16: round-scoped (C5: approve operates on the latest round).
+        let commits = &issue_thread.latest_round().commits;
 
         if commits.is_empty() {
             bail!(
@@ -771,7 +776,10 @@ impl QCReview {
         // Create IssueThread to get QC-tracked commits for status/metadata
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
 
-        if issue_thread.commits.is_empty() {
+        // W5/D16: round-scoped (C5: review operates on the latest round).
+        let commits = &issue_thread.latest_round().commits;
+
+        if commits.is_empty() {
             return Err(anyhow!(
                 "No commits found for file: {}",
                 file_path.display()
@@ -782,8 +790,7 @@ impl QCReview {
         let default_position = match git_info.commit() {
             Ok(head_str) => {
                 // Look for HEAD commit in the file's commit history
-                if let Some(head_position) = issue_thread
-                    .commits
+                if let Some(head_position) = commits
                     .iter()
                     .position(|c| c.hash.to_string().starts_with(&head_str[..8]))
                 {
@@ -870,7 +877,8 @@ impl QCReview {
         // Create IssueThread to get commits from the issue's specific branch
         let issue_thread = IssueThread::from_issue(&issue, cache, git_info).await?;
 
-        if issue_thread.commits.is_empty() {
+        // W5/D16: round-scoped (C5: review operates on the latest round).
+        if issue_thread.latest_round().commits.is_empty() {
             return Err(anyhow!("No commits found for file: {}", file.display()));
         }
 
@@ -878,6 +886,7 @@ impl QCReview {
             Some(commit_str) => {
                 // Try to find the commit in the file's history first
                 issue_thread
+                    .latest_round()
                     .commits
                     .iter()
                     .find(|c| c.hash.to_string().contains(&commit_str))
@@ -915,7 +924,7 @@ impl QCReview {
     /// Get default commit with robust fallback chain:
     /// 1. HEAD commit from repository
     /// 2. Latest commit from issue thread
-    /// 3. Most recent file commit (position 0)
+    /// 3. The latest round's start commit
     fn get_default_commit(git_info: &GitInfo, issue_thread: &IssueThread) -> gix::ObjectId {
         // Try HEAD commit from repository
         if let Ok(head_str) = git_info.commit() {
@@ -924,9 +933,41 @@ impl QCReview {
             }
         }
 
-        // Use latest_commit from issue thread as fallback
-        issue_thread.latest_commit().hash
+        // Use latest_commit from issue thread as fallback. D54: it is absent for an
+        // unplaceable round or an approval no longer on its branch, and the declared
+        // start commit is the only other thing this round is known to be about — a
+        // *declared* value, not a substituted observation.
+        issue_thread
+            .latest_commit()
+            .map(|commit| commit.hash)
+            .unwrap_or(issue_thread.latest_round().start_commit)
     }
+}
+
+/// The same lookup as [`find_issue`] but for an issue in **any** state.
+///
+/// A round starts from an approved QC (D12) and approval closes the issue, so the
+/// open-only filter would never find it.
+pub(crate) async fn find_issue_any_state(
+    milestone_name: &str,
+    file: impl AsRef<Path>,
+    milestones: &[Milestone],
+    git_info: &impl GitHubReader,
+) -> Result<Issue> {
+    let milestone = milestones
+        .iter()
+        .find(|m| m.title == milestone_name)
+        .ok_or(anyhow!("Milestone '{}' not found", milestone_name))?;
+
+    let issues = git_info.get_issues(Some(milestone.number as u64)).await?;
+
+    let file_str = file.as_ref().to_string_lossy();
+    issues
+        .into_iter()
+        .find(|issue| issue.title.contains(file_str.as_ref()))
+        .ok_or(anyhow!(
+            "No issue found for file '{file_str}' in milestone '{milestone_name}'"
+        ))
 }
 
 pub async fn find_issue(

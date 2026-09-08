@@ -27,8 +27,19 @@ export interface Issue {
   updated_at: string
   closed_at: string | null
   created_by: string
+  /**
+   * Round 1's declared branch, parsed from the issue body (D50). Valid as the
+   * *current* branch only when `has_qc_rounds_marker` is false; when it is true the
+   * current branch is `rounds[last].branch`, which needs the comment fetch.
+   */
   branch: string | null
-  checklist_name: string | null
+  /**
+   * D52: whether the body carries a `## QC Rounds` marker. Presence only — it never
+   * reports a round count and is never authoritative for round data (D51). It exists
+   * so a cheap list path that never fetches comments can tell whether `branch` above
+   * is still current.
+   */
+  has_qc_rounds_marker: boolean
   relevant_files: RelevantFileInfo[]
   file_history: FileRenameEvent[]
 }
@@ -46,6 +57,11 @@ export interface ChecklistSummary {
   percentage: number
 }
 
+/**
+ * A verdict, not a commit carrier (D35). `approved_commit`, `initial_commit` and
+ * `latest_commit` are gone: all three were round-scoped and duplicated
+ * `rounds[last].state`, `rounds[0].start_commit` and `rounds[last].archive_commit`.
+ */
 export interface QCStatus {
   status:
     | 'approved'
@@ -56,9 +72,80 @@ export interface QCStatus {
     | 'approval_required'
     | 'changes_to_comment'
   status_detail: string
-  approved_commit: string | null
-  initial_commit: string
-  latest_commit: string
+}
+
+/**
+ * A round's state (D36) — a tagged union, so an open round carrying an approval is
+ * inexpressible. Switch on `kind`; there is no `approved_commit` field.
+ */
+export type RoundState =
+  | { kind: 'open' }
+  | { kind: 'approved'; commit: string; comment_id: number | null }
+  | { kind: 'superseded' }
+
+/** One shape for both gap positions — a round's `preceding_gap` and the thread's `drift` (D30). */
+export interface Gap {
+  /** newest-first; `[]` is normal and meaningful (the D8 overlap case). */
+  commits: IssueCommit[]
+  /** The anchoring approval is not in this branch's ancestry (D22/D31). */
+  divergent: boolean
+  /**
+   * D35: the hash `ChangesAfterApproval` reports. The **only** legal source for it —
+   * rescanning `commits` client-side would violate U7.
+   */
+  newest_file_change: string | null
+}
+
+/**
+ * D53: whether the round could be placed on its branch. `unplaceable` means the
+ * declared start commit could not be resolved there — usually the branch is not
+ * fetched locally. The round still exists and keeps its declared index; the remedy
+ * is to fetch `RoundInfo.branch`.
+ */
+export type RoundPlacement = 'placed' | 'unplaceable'
+
+/** One QC round (A4). The status card reads `drift`; the round switcher reads `rounds[]`. */
+export interface RoundInfo {
+  /**
+   * The **declared** round number (D53.2) — never a position. `rounds` can carry a
+   * hole (a malformed declaration is dropped without renumbering), so `rounds[i].index`
+   * is not `i + 1` and no round number may be derived from an array position or length.
+   */
+  index: number
+  branch: string
+  /**
+   * D56: `true` when the round comment declared no `git branch:` and inherited this
+   * one. Surfaced wherever the round is viewed — branch is load-bearing for both the
+   * round's and its gap's commit walk (D7/D9), so the inheritance must not be silent.
+   */
+  branch_inherited: boolean
+  /** D53: `unplaceable` ⇒ `commits` and `preceding_gap` are empty and
+   *  `archive_commit` is `null`. */
+  placement: RoundPlacement
+  start_commit: string
+  /** The sole encoding of approvedness (D36). */
+  state: RoundState
+  /** '' when the round carries no checklist. */
+  checklist_name: string
+  /** Excludes its `# ` heading line (D37) — never re-add it. */
+  checklist_content: string
+  checklist_summary: ChecklistSummary
+  /** This round's commits only (D8/W5) — never the whole QC's life. */
+  commits: IssueCommit[]
+  preceding_gap: Gap
+  /**
+   * `Round::latest_commit().hash` (M8) — the commit the archive freezes.
+   *
+   * D54: `null` in exactly that function's two `None` cases — the round is
+   * unplaceable, or it is approved and its approval is no longer among the commits it
+   * owns (a force-push). D55: consumers **refuse and name the branch**; a substitute
+   * here would let an archive claim approved content over content that was never
+   * approved.
+   */
+  archive_commit: string | null
+  /** D39.3: conservatively `true` whenever `archive_commit` is `null` — with no
+   *  resolved commit there is nothing to measure "after". */
+  subsequent_file_changes: boolean
 }
 
 export interface BlockingQCItem {
@@ -91,14 +178,146 @@ export interface BlockingQCStatus {
   errors: BlockingQCError[]
 }
 
+/**
+ * D24/A2/A3: no top-level field duplicates a round-scoped value. `commits`, `branch`
+ * and `checklist_summary` are gone — read `rounds[rounds.length - 1]` (list indexing,
+ * not derivation) and `drift`.
+ */
+/**
+ * Which kind of segment a `SegmentRef` points at (M2). `drift` is its own kind even
+ * though it is the same `Gap` shape as a preceding gap: D30 — a trailing gap is defined
+ * by its position — and the pinned tail block (D80/D81) is picked by kind, never by
+ * index arithmetic.
+ */
+export type SegmentKind = 'round' | 'gap' | 'drift'
+
+/**
+ * One row of the History dropdown (M2): a **pointer** into `rounds`/`drift`, never a
+ * copy of their commits.
+ */
+export interface SegmentRef {
+  kind: SegmentKind
+  /**
+   * The round this segment belongs to: itself for a round, the round it **precedes**
+   * for a gap, the latest round for drift. A *declared* index (D53.2) — never a position
+   * in `history` or in `rounds`.
+   */
+  round_index: number
+}
+
 export interface IssueStatusResponse {
   issue: Issue
   qc_status: QCStatus
   dirty: boolean
-  branch: string
-  commits: IssueCommit[]
-  checklist_summary: ChecklistSummary
+  /** Never empty (I1); `rounds[0]` comes from the issue body. */
+  rounds: RoundInfo[]
+  /**
+   * Always present; empty when the latest round is unapproved (D17). Check
+   * `latestRound(status).state.kind` to know whether it is meaningful — the same
+   * dispatch the backend uses (S0).
+   */
+  drift: Gap
+  /**
+   * W6's segment order (M2) — the History dropdown's rows, and the only source of that
+   * order. It encodes two positional suppression rules (round 1's preceding gap is
+   * skipped; `drift` appears only once the latest round is closed) that the client must
+   * not reimplement (D30/U7). Never empty: I1 guarantees a round.
+   */
+  history: SegmentRef[]
   blocking_qc_status?: BlockingQCStatus
+}
+
+/** The latest round — list indexing, never derivation (D24). */
+export function latestRound(status: IssueStatusResponse): RoundInfo {
+  return status.rounds[status.rounds.length - 1]
+}
+
+/** A round by its 1-based index, falling back to the latest. */
+export function roundByIndex(status: IssueStatusResponse, index: number): RoundInfo {
+  return status.rounds.find((r) => r.index === index) ?? latestRound(status)
+}
+
+/**
+ * D54/D55: why this round cannot be archived, or `null` when it can. The message
+ * names the branch to fetch — it never stands in for a commit, because inventing one
+ * would freeze a false claim (D28.3).
+ */
+export function archiveBlockedReason(round: RoundInfo): string | null {
+  if (round.archive_commit !== null) return null
+  return `Fetch ${round.branch} to archive round ${round.index}`
+}
+
+/** The approval commit of a round, or null when it is not approved (D36). */
+export function roundApprovedCommit(round: RoundInfo): string | null {
+  return round.state.kind === 'approved' ? round.state.commit : null
+}
+
+/**
+ * Deep-link to the approval comment (U8/D36), or null when there is none.
+ *
+ * D44: `comment_id` is nullable — the old `#[serde(default)]` made a missing id
+ * deserialize to `0`, a valid-looking comment id that lies. `None` means "unknown",
+ * and U8's deep-link is omitted rather than pointing at comment 0.
+ */
+export function approvalCommentUrl(issue: Issue, round: RoundInfo): string | null {
+  if (round.state.kind !== 'approved' || round.state.comment_id == null) return null
+  return `${issue.html_url}#issuecomment-${round.state.comment_id}`
+}
+
+/** A new round may be started only from an approved QC (D12/U1). */
+export function canStartRound(status: QCStatus['status']): boolean {
+  return status === 'approved' || status === 'changes_after_approval'
+}
+
+// ---------------------------------------------------------------------------
+// Rounds (A5)
+// ---------------------------------------------------------------------------
+
+export interface CreateRoundRequest {
+  /** From the checkout, read-only — there is no commit picker (D23). */
+  start_commit: string
+  /** From the checkout, read-only (D23). */
+  branch: string
+  /** `content` excludes the `# {name}` heading line (D37). */
+  checklist: { name: string; content: string }
+  notify: boolean
+  note: string | null
+  include_diff: boolean
+}
+
+/**
+ * D45: the notification outcome is a tagged union, because a bare
+ * `notification_url: null` conflated "not requested" with "requested but failed" —
+ * the second is the one a user must be able to act on.
+ */
+export type RoundNotification =
+  | { kind: 'not_requested' }
+  | { kind: 'posted'; url: string }
+  | { kind: 'failed'; error: string }
+
+export interface CreateRoundResponse {
+  round_index: number
+  comment_url: string
+  /**
+   * D45: false means the issue stayed closed with an unapproved latest round, which
+   * S3 reads as `ApprovalRequired` — a just-created round reporting "approval
+   * required". That must be visible, not logged.
+   */
+  reopened: boolean
+  notification: RoundNotification
+}
+
+export async function postRound(issueNumber: number, request: CreateRoundRequest): Promise<CreateRoundResponse> {
+  const res = await fetch(`${API_BASE}/issues/${issueNumber}/rounds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `Failed to start round: ${res.status}`)
+  }
+  return res.json()
 }
 
 export interface CreateCommentRequest {
@@ -540,8 +759,14 @@ export function useRenames(milestoneNumbers: number[]) {
     queries: milestoneNumbers.map((n) => ({
       queryKey: ['milestones', n, 'renames'],
       queryFn: () => fetchMilestoneRenames(n),
-      // Refresh on window focus so renames are detected promptly after a git operation.
-      staleTime: 30 * 1000,
+      // Rename detection is an expensive git-history walk (~1s per milestone), so it runs
+      // once per milestone selection and is never refetched on remount, focus or reconnect.
+      // Freshness comes from explicit invalidation: after confirming a rename, and when the
+      // repo's local commit changes (see useRepoInfo).
+      staleTime: Infinity,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     })),
   })
   return {

@@ -20,6 +20,35 @@ pub fn file_diff(from_bytes: Vec<u8>, to_bytes: Vec<u8>, file: &Path) -> Option<
     diff_text_files(from_bytes, to_bytes)
 }
 
+/// Diff one file between two commits.
+///
+/// The single implementation of "what changed in this file between these two commits",
+/// shared by the `# QC Notification` comment body and the round modal's Round tab. Two
+/// copies of this would be two answers to the same question, and the round flow shows
+/// the diff *next to* the button that posts a comment embedding it — they must agree.
+///
+/// `None` means the diff could not be produced (a commit that is not local, a file that
+/// does not exist at one end), never "the file is unchanged": an unchanged text file
+/// still yields `Some`, carrying diff_utils' own "No difference between file versions."
+/// So a caller must not read `None` as "nothing changed".
+pub fn file_diff_between_commits(
+    git_info: &impl crate::GitFileOps,
+    file: &Path,
+    from_commit: &gix::ObjectId,
+    to_commit: &gix::ObjectId,
+) -> Option<String> {
+    let Ok(from_bytes) = git_info.file_bytes_at_commit(file, from_commit) else {
+        log::debug!("Could not read {file:?} at from commit ({from_commit})...");
+        return None;
+    };
+    let Ok(to_bytes) = git_info.file_bytes_at_commit(file, to_commit) else {
+        log::debug!("Could not read {file:?} at to commit ({to_commit})...");
+        return None;
+    };
+
+    file_diff(from_bytes, to_bytes, file)
+}
+
 /// Check if a file is an Excel file based on its extension
 pub fn is_excel_file(file: &Path) -> bool {
     if let Some(ext) = file.extension().and_then(|e| e.to_str()) {

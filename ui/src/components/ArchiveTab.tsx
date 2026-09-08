@@ -3,11 +3,13 @@ import {
   ActionIcon,
   Alert,
   Anchor,
+  Badge,
   Button,
   Combobox,
   InputBase,
   Loader,
   Modal,
+  Select,
   Stack,
   Text,
   TextInput,
@@ -27,11 +29,15 @@ import {
   type IssueStatusResponse,
   type RelevantFileInfo,
   type MilestoneStatusInfo,
+  type RoundInfo,
+  archiveBlockedReason,
   fetchMilestoneIssues,
   issueStatusBatcher,
+  latestRound,
+  roundByIndex,
   useMilestoneIssues,
 } from '~/api/issues'
-import { type ArchiveFileRequest, generateArchive } from '~/api/archive'
+import { type ArchiveFileRequest, type SkippedFileRequest, generateArchive } from '~/api/archive'
 import { useRepoInfo } from '~/api/repo'
 import { OpenPill } from './MilestoneFilter'
 import { StatusErrorDisplay } from './StatusErrorDisplay'
@@ -53,8 +59,115 @@ function isApprovedStatus(s: IssueStatusResponse): boolean {
   return s.qc_status.status === 'approved' || s.qc_status.status === 'changes_after_approval'
 }
 
+/**
+ * The status of the **selected** round, which is the only one the card's commit,
+ * badge and Preview button describe.
+ *
+ * `qc_status` is scoped to the latest round and its drift (S0-S4), so it is the right
+ * label only while the latest round is the one selected. Every earlier round has
+ * already resolved, and `state.kind` is the sole encoding of that (D36) — so the label
+ * is read off the round the server sent, not derived from its commits (U7).
+ *
+ * A non-latest `open` round is forbidden by D27; the fallback keeps the QC label rather
+ * than inventing a state for something that cannot happen.
+ */
+function roundStatusLabel(s: IssueStatusResponse, round: RoundInfo): string {
+  const qcLabel = s.qc_status.status.replace(/_/g, ' ')
+  if (round.index === latestRound(s).index) return qcLabel
+  switch (round.state.kind) {
+    case 'approved': return 'approved'
+    case 'superseded': return 'superseded (never approved)'
+    default: return qcLabel
+  }
+}
+
+/** Whether the selected round is approved — the same question `isApprovedStatus` asks
+ *  of the QC, asked of the round the archive will actually freeze. */
+function isRoundApproved(s: IssueStatusResponse, round: RoundInfo): boolean {
+  if (round.index === latestRound(s).index) return isApprovedStatus(s)
+  return round.state.kind === 'approved'
+}
+
 function basename(path: string): string {
   return path.split('/').pop() ?? path
+}
+
+/**
+ * U5: a round `<Select>` per QC-attached file, defaulting to the latest, showing the
+ * resolved commit and warning when file-changing commits exist after it.
+ *
+ * The resolved commit is `rounds[i].archive_commit` (M8) — which is exactly what the
+ * old `approved_commit ?? latest_commit` was approximating (A3).
+ */
+function ArchiveRoundSelect({
+  status,
+  round,
+  onChange,
+}: {
+  status: IssueStatusResponse
+  round: RoundInfo
+  onChange: (roundIndex: number) => void
+}) {
+  return (
+    // Mantine portals `Combobox.Dropdown` out of this subtree in the DOM, but its options
+    // stay React-tree descendants of this element — and React events bubble the fiber
+    // tree, not the DOM tree. Without a guard at a common React ancestor of both the
+    // target and the dropdown, choosing a round fires the enclosing card's `onClick`
+    // and opens the edit modal. Guarding the `<Select>` alone only covers the input.
+    <div style={{ display: 'grid', gap: 3 }} onClick={(e) => e.stopPropagation()}>
+      <Select
+        size="xs"
+        label="Round"
+        styles={{ label: { fontSize: 11, fontWeight: 700 } }}
+        data={status.rounds.map((r) => ({ value: String(r.index), label: `Round ${r.index}` }))}
+        value={String(round.index)}
+        onChange={(value) => { if (value !== null) onChange(Number(value)) }}
+        allowDeselect={false}
+        comboboxProps={{ withinPortal: true }}
+        data-testid={`archive-round-select-${status.issue.number}`}
+      />
+      {/* D54/D55: with no resolved commit there is nothing to show and nothing to
+          freeze — name the branch to fetch. A substituted hash here is exactly the
+          audit lie §18 removes: the archive would claim approved content over
+          content that was never approved. */}
+      {round.archive_commit === null ? (
+        <Text size="xs" c="orange.7" data-testid={`archive-round-unresolved-${status.issue.number}`}>
+          {archiveBlockedReason(round)}
+        </Text>
+      ) : (
+        <Text size="xs" c="dimmed"><b>Commit:</b> {round.archive_commit.slice(0, 7)}</Text>
+      )}
+      {round.subsequent_file_changes && (
+        <Tooltip label="The file has committed changes after this commit" withArrow>
+          <Badge color="yellow" variant="light" size="xs" data-testid={`archive-subsequent-changes-${status.issue.number}`}>
+            changed since
+          </Badge>
+        </Tooltip>
+      )}
+    </div>
+  )
+}
+
+/**
+ * D62: one file that will be omitted from the archive, in the shape the wire wants
+ * (`SkippedFileRequest`) plus the two fields the notice needs to point the user at the
+ * card whose round they can change.
+ */
+type RoundSkip = SkippedFileRequest & { issueNumber: number; issueTitle: string }
+
+/** The four frozen facts a QC-attached file carries, or `null` when it carries none.
+ *  D28.3: the quartet is all-or-nothing — a partial one is a 400. */
+function archiveQcFields(status: IssueStatusResponse, round: RoundInfo) {
+  // Without a milestone there is nothing to freeze the QC against, so the file is
+  // archived as a plain file rather than with a milestone we invented.
+  if (!status.issue.milestone) return null
+  return {
+    milestone: status.issue.milestone,
+    // D36: approvedness of *this* round, read off the tagged union.
+    approved: round.state.kind === 'approved',
+    round: round.index,
+    subsequent_file_changes: round.subsequent_file_changes,
+  }
 }
 
 // ─── ArchiveTab ───────────────────────────────────────────────────────────────
@@ -134,6 +247,23 @@ export function ArchiveTab() {
     }
     return m
   }, [addedFileIssueNums, addedFileStatusQueries])
+
+  // U5: the selected round per issue, defaulting to the latest. Selection is stored;
+  // the round itself is read from `rounds[]` — the UI derives no boundaries (U7).
+  const roundFor = useCallback(
+    (s: IssueStatusResponse): RoundInfo =>
+      roundByIndex(s, archive.selectedRounds[s.issue.number] ?? latestRound(s).index),
+    [archive.selectedRounds],
+  )
+
+  const selectRound = useCallback(
+    (issueNumber: number, roundIndex: number) =>
+      setArchive(prev => ({
+        ...prev,
+        selectedRounds: { ...prev.selectedRounds, [issueNumber]: roundIndex },
+      })),
+    [setArchive],
+  )
 
   // Map milestone title → number for per-milestone visibility checks
   const milestoneTitleToNumber = useMemo(() => {
@@ -289,6 +419,40 @@ export function ArchiveTab() {
     [addedFileConflicts],
   )
 
+  // D62: a selected round whose commit does not resolve no longer blocks the whole
+  // archive — that left the UI refusing where the CLI skipped one file and archived
+  // the rest (D61). The file is dropped from `files`, declared in `skipped`, and shown
+  // here first so the omission is never silent. The user's remedy is often to pick a
+  // different round for that one file, which is a click away on the card itself.
+  //
+  // What is unchanged and absolute: a substituted commit is never sent. A file is in
+  // `files` with its own resolved commit, or it is in `skipped`.
+  const roundSkips = useMemo(() => {
+    const seen = new Map<string, RoundSkip>()
+    const add = (repositoryFile: string, s: IssueStatusResponse) => {
+      const round = roundFor(s)
+      const reason = archiveBlockedReason(round)
+      if (reason === null) return
+      seen.set(repositoryFile, {
+        repository_file: repositoryFile,
+        round: round.index,
+        branch: round.branch,
+        reason,
+        issueNumber: s.issue.number,
+        issueTitle: s.issue.title,
+      })
+    }
+    statuses.filter(s => isStatusVisible(s)).forEach(s => add(s.issue.title, s))
+    for (const r of archive.addedFiles.values()) {
+      // Mirror the generation filter exactly: a conflicting added file is not posted,
+      // so it is not skipped either — it was never going into the archive.
+      if (addedFileConflicts.has(r.file_name)) continue
+      const s = r.source_issue_number != null ? addedFileStatusMap.get(r.source_issue_number) : undefined
+      if (s) add(r.file_name, s)
+    }
+    return [...seen.values()]
+  }, [statuses, isStatusVisible, archive.addedFiles, addedFileConflicts, addedFileStatusMap, roundFor])
+
   // ─── Relevant file selection handlers ──────────────────────────────────
 
   function handleSelectRelevantFile(rf: RelevantFileInfo) {
@@ -362,40 +526,79 @@ export function ArchiveTab() {
     }
   }
 
+  /** Scroll the affected file's card into view and open its round `<Select>` (D62/D61:
+   *  picking a resolvable round is often the real remedy, so keep it one click away). */
+  function focusRoundSelect(issueNumber: number) {
+    const el = document.querySelector<HTMLInputElement>(`[data-testid="archive-round-select-${issueNumber}"]`)
+    if (!el) return
+    el.scrollIntoView({ block: 'center' })
+    el.focus()
+  }
+
   // ─── Generation ──────────────────────────────────────────────────────────
 
   async function handleGenerate() {
-    setArchive(prev => ({ ...prev, generateError: null, generateSuccess: null, generateLoading: true }))
+    setArchive(prev => ({ ...prev, generateError: null, generateSuccess: null, generateSkipped: [], generateLoading: true }))
     try {
+      // D28.3: every QC-attached file sends all four of milestone / approved / round /
+      // subsequent_file_changes. A partial quartet is a 400 — there is no safe default
+      // for the round, so the backend refuses to guess one.
       const milestoneIssueFiles: ArchiveFileRequest[] = statuses
         .filter(s => isStatusVisible(s))
-        .map(s => ({
-          repository_file: s.issue.title,
-          commit: s.qc_status.approved_commit ?? s.qc_status.latest_commit,
-          milestone: s.issue.milestone ?? undefined,
-          approved: isApprovedStatus(s),
-        }))
+        .flatMap(s => {
+          const round = roundFor(s)
+          // D62: no resolved commit, no entry in `files` — the file is declared in
+          // `skipped` below instead. The null is dropped rather than coerced, because
+          // the only alternative is a substituted commit.
+          if (round.archive_commit === null) return []
+          return [{
+            repository_file: s.issue.title,
+            commit: round.archive_commit,
+            ...(archiveQcFields(s, round) ?? {}),
+          }]
+        })
 
       const addedFilesRequests: ArchiveFileRequest[] = Array.from(archive.addedFiles.values())
         .filter(r => !addedFileConflicts.has(r.file_name))
-        .map(r => {
-          // For QC files added via relevant files, prefer the status-derived commit
-          const statusCommit = r.source_issue_number != null
+        .flatMap(r => {
+          // For QC files added via relevant files, the backing issue's selected round
+          // supplies both the commit and the four frozen facts.
+          const issueStatus = r.source_issue_number != null
             ? addedFileStatusMap.get(r.source_issue_number)
             : undefined
-          const commit = statusCommit
-            ? (statusCommit.qc_status.approved_commit ?? statusCommit.qc_status.latest_commit)
-            : r.commit
-          return {
-            repository_file: r.file_name,
-            commit,
-            approved: false,
+          if (!issueStatus) {
+            // A plain file: none of the four, so `qc` is None server-side.
+            return [{ repository_file: r.file_name, commit: r.commit }]
           }
+          const round = roundFor(issueStatus)
+          // D62: same omission as above — no resolved commit, no entry in `files`.
+          if (round.archive_commit === null) return []
+          return [{
+            repository_file: r.file_name,
+            commit: round.archive_commit,
+            ...(archiveQcFields(issueStatus, round) ?? {}),
+          }]
         })
 
       const files = [...milestoneIssueFiles, ...addedFilesRequests]
-      const result = await generateArchive({ output_path: archive.outputPath, flatten: archive.flatten, files })
-      setArchive(prev => ({ ...prev, generateSuccess: result.output_path }))
+      // D62: declare the omissions on the wire. The server writes them verbatim into
+      // the archive's metadata, so a partial archive says it is partial — a warning in
+      // the browser scrolls away, the manifest outlives it.
+      const skipped = roundSkips.map(({ repository_file, round, branch, reason }) => ({
+        repository_file,
+        round,
+        branch,
+        reason,
+      }))
+      const result = await generateArchive({
+        output_path: archive.outputPath,
+        flatten: archive.flatten,
+        files,
+        ...(skipped.length > 0 ? { skipped } : {}),
+      })
+      // D62: report back what the server *recorded*, not what we asked for — the
+      // response echoes the manifest's `skipped` list.
+      setArchive(prev => ({ ...prev, generateSuccess: result.output_path, generateSkipped: result.skipped }))
     } catch (err) {
       setArchive(prev => ({ ...prev, generateError: (err as Error).message }))
     } finally {
@@ -515,6 +718,32 @@ export function ArchiveTab() {
                   </Tooltip>
                 ) : undefined}
               />
+              {/* D62: a notice, not a blocker. Naming the branch and the round keeps the
+                  remedy in view — fetch the branch, or pick a round that resolves. */}
+              {roundSkips.length > 0 && (
+                <Alert color="orange" p="xs" data-testid="archive-round-skips">
+                  <Text size="xs" fw={600}>
+                    {roundSkips.length === 1 ? '1 file will be skipped' : `${roundSkips.length} files will be skipped`}
+                  </Text>
+                  {roundSkips.map(skip => (
+                    <Text key={skip.repository_file} size="xs">
+                      #{skip.issueNumber} {skip.repository_file}: {skip.reason} —{' '}
+                      <Anchor
+                        component="button"
+                        type="button"
+                        size="xs"
+                        onClick={() => focusRoundSelect(skip.issueNumber)}
+                        data-testid={`archive-skip-choose-round-${skip.issueNumber}`}
+                      >
+                        choose another round
+                      </Anchor>
+                    </Text>
+                  ))}
+                  <Text size="xs" c="dimmed">
+                    Skipped files are omitted from the archive and recorded in its metadata.
+                  </Text>
+                </Alert>
+              )}
               {archive.generateError && (
                 <Alert color="red" p="xs">
                   <Text size="xs">{archive.generateError}</Text>
@@ -523,6 +752,15 @@ export function ArchiveTab() {
               {archive.generateSuccess && (
                 <Alert color="green" p="xs">
                   <Text size="xs">Archive written to {archive.generateSuccess}</Text>
+                  {archive.generateSkipped.length > 0 && (
+                    <Text size="xs" data-testid="archive-generate-skipped">
+                      {archive.generateSkipped.length === 1
+                        ? '1 file was skipped and recorded in the archive metadata:'
+                        : `${archive.generateSkipped.length} files were skipped and recorded in the archive metadata:`}
+                      {' '}
+                      {archive.generateSkipped.map(sk => sk.repository_file).join(', ')}
+                    </Text>
+                  )}
                 </Alert>
               )}
               <Tooltip
@@ -680,14 +918,15 @@ export function ArchiveTab() {
                 : undefined
 
               if (issueStatus) {
-                const approved = isApprovedStatus(issueStatus)
-                const commit = issueStatus.qc_status.approved_commit ?? issueStatus.qc_status.latest_commit
-                const shortCommit = commit.slice(0, 7)
-                const statusLabel = issueStatus.qc_status.status.replace(/_/g, ' ')
+                const round = roundFor(issueStatus)
+                const approved = isRoundApproved(issueStatus, round)
+                const commit = round.archive_commit
+                const statusLabel = roundStatusLabel(issueStatus, round)
 
                 return (
                   <Stack
                     key={`added-${fileName}`}
+                    data-testid={`archive-card-${issueStatus.issue.number}`}
                     gap={5}
                     style={{
                       padding: '10px 12px',
@@ -715,8 +954,8 @@ export function ArchiveTab() {
                           {issueStatus.issue.title}
                         </Anchor>
                         {!approved && (
-                          <Tooltip label="Not yet approved" withArrow>
-                            <span style={{ flexShrink: 0, marginTop: 2 }}>
+                          <Tooltip label="The selected round is not approved" withArrow>
+                            <span style={{ flexShrink: 0, marginTop: 2 }} data-testid={`archive-round-unapproved-${issueStatus.issue.number}`}>
                               <IconAlertTriangle size={12} color="#f59f00" />
                             </span>
                           </Tooltip>
@@ -735,7 +974,11 @@ export function ArchiveTab() {
                       {issueStatus.issue.milestone && (
                         <Text size="xs" c="dimmed"><b>Milestone:</b> {issueStatus.issue.milestone}</Text>
                       )}
-                      <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
+                      <ArchiveRoundSelect
+                        status={issueStatus}
+                        round={round}
+                        onChange={(roundIndex) => selectRound(issueStatus.issue.number, roundIndex)}
+                      />
                       <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
                       <RelevantFilesList
                         relevantFiles={issueStatus.issue.relevant_files ?? []}
@@ -745,16 +988,20 @@ export function ArchiveTab() {
                         onSelectAll={handleSelectAllRelevant}
                       />
                     </div>
-                    <div>
-                      <Button
-                        size="compact-xs"
-                        variant="light"
-                        leftSection={<IconEye size={12} />}
-                        onClick={e => { e.stopPropagation(); void handlePreviewFile(fileName, commit) }}
-                      >
-                        Preview
-                      </Button>
-                    </div>
+                    {/* D55: no resolved commit, nothing to preview at — the round
+                        select above names the branch to fetch instead. */}
+                    {commit !== null && (
+                      <div>
+                        <Button
+                          size="compact-xs"
+                          variant="light"
+                          leftSection={<IconEye size={12} />}
+                          onClick={e => { e.stopPropagation(); void handlePreviewFile(fileName, commit) }}
+                        >
+                          Preview
+                        </Button>
+                      </div>
+                    )}
                   </Stack>
                 )
               }
@@ -804,14 +1051,15 @@ export function ArchiveTab() {
             {archive.selectedMilestones.length > 0 && (<>
             {/* ── Milestone issue cards ──────────────────────────────────── */}
             {statuses.filter(s => isStatusVisible(s)).map((s) => {
-              const approved = isApprovedStatus(s)
-              const commit = s.qc_status.approved_commit ?? s.qc_status.latest_commit
-              const shortCommit = commit.slice(0, 7)
-              const statusLabel = s.qc_status.status.replace(/_/g, ' ')
+              const round = roundFor(s)
+              const approved = isRoundApproved(s, round)
+              const commit = round.archive_commit
+              const statusLabel = roundStatusLabel(s, round)
 
               return (
                 <Stack
                   key={s.issue.number}
+                  data-testid={`archive-card-${s.issue.number}`}
                   gap={5}
                   style={{
                     padding: '10px 12px',
@@ -836,8 +1084,8 @@ export function ArchiveTab() {
                         {s.issue.title}
                       </Anchor>
                       {!approved && (
-                        <Tooltip label="Not yet approved" withArrow>
-                          <span style={{ flexShrink: 0, marginTop: 2 }}>
+                        <Tooltip label="The selected round is not approved" withArrow>
+                          <span style={{ flexShrink: 0, marginTop: 2 }} data-testid={`archive-round-unapproved-${s.issue.number}`}>
                             <IconAlertTriangle size={12} color="#f59f00" />
                           </span>
                         </Tooltip>
@@ -846,7 +1094,11 @@ export function ArchiveTab() {
                     {s.issue.milestone && (
                       <Text size="xs" c="dimmed"><b>Milestone:</b> {s.issue.milestone}</Text>
                     )}
-                    <Text size="xs" c="dimmed"><b>Commit:</b> {shortCommit}</Text>
+                    <ArchiveRoundSelect
+                      status={s}
+                      round={round}
+                      onChange={(roundIndex) => selectRound(s.issue.number, roundIndex)}
+                    />
                     <Text size="xs" c="dimmed"><b>Status:</b> {statusLabel}</Text>
                     <RelevantFilesList
                       relevantFiles={s.issue.relevant_files ?? []}
@@ -856,16 +1108,19 @@ export function ArchiveTab() {
                       onSelectAll={handleSelectAllRelevant}
                     />
                   </div>
-                  <div>
-                    <Button
-                      size="compact-xs"
-                      variant="light"
-                      leftSection={<IconEye size={12} />}
-                      onClick={() => void handlePreviewFile(s.issue.title, commit)}
-                    >
-                      Preview
-                    </Button>
-                  </div>
+                  {/* D55: no resolved commit, nothing to preview at. */}
+                  {commit !== null && (
+                    <div>
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        leftSection={<IconEye size={12} />}
+                        onClick={() => void handlePreviewFile(s.issue.title, commit)}
+                      >
+                        Preview
+                      </Button>
+                    </div>
+                  )}
                 </Stack>
               )
             })}

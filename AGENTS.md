@@ -34,3 +34,18 @@ The API is documented in `openapi/openapi.yml`. This file is manually maintained
 
 ## Planning
 When writing a plan, use the AskUserQuestions tool for all decisions.
+
+## Frontend checks
+
+Run from `ui/`:
+
+- `npm run typecheck` — typechecks **both** `src` and `tests`. Prefer this over a bare
+  `tsc --noEmit`, which covers `src` only.
+- `npm run typecheck:tests` — `tests` alone (`tsconfig.tests.json`).
+- `CI=true npm run test:e2e` — Playwright. **Kill any listener on port 3103 first**
+  (`lsof -ti tcp:3103 | xargs kill -9`): a stale one serves an old build and silently
+  invalidates the run, including mutation checks.
+
+`ui/tests/` is typechecked deliberately (D63 in `design/qc-rounds.md`): Playwright fixtures are
+hand-maintained against the wire types, and a fixture carrying a removed field or missing a new
+required one otherwise compiles and runs green.

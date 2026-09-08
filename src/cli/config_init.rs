@@ -890,7 +890,7 @@ fn prompt_items(message: &str) -> Result<Vec<String>> {
 ///
 /// `inquire` defaults to `nano`; `$VISUAL`/`$EDITOR` come first so the user's
 /// configured editor wins, and `vim` is preferred over `nano` as the fallback.
-fn editor_command() -> OsString {
+pub(crate) fn editor_command() -> OsString {
     for var in ["VISUAL", "EDITOR"] {
         if let Some(editor) = std::env::var_os(var).filter(|e| !e.is_empty()) {
             return editor;

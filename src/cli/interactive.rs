@@ -559,10 +559,21 @@ pub fn prompt_issue(issues: &[Issue]) -> Result<Issue> {
     }
 }
 
+/// The commits the CLI pickers address.
+///
+/// W5/D16: **round-scoped** — the latest round's commits, never the whole thread's.
+/// C5 has `comment` / `approve` / `review` operate on the latest round implicitly,
+/// and an earlier round's commits belong to a cycle that is already closed. Drift is
+/// not offered either: it is only ever non-empty on an approved (closed) round, and
+/// the way to QC a post-approval change is a new round (D6), not a comment on the
+/// closed one.
+fn picker_commits(issue_thread: &IssueThread) -> &[crate::issue::IssueCommit] {
+    &issue_thread.latest_round().commits
+}
+
 /// Helper function to format commit options for display
 fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<String> {
-    issue_thread
-        .commits
+    picker_commits(issue_thread)
         .iter()
         .enumerate()
         .map(|(i, commit)| {
@@ -581,10 +592,9 @@ fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<
 
             // Determine commit status with priority display system
             // Priority: Show Initial+Approved both, hide Notification when others present
-            let status_indicator = if commit
-                .statuses
-                .contains(&crate::issue::CommitStatus::Approved)
-            {
+            // D33: approvedness lives in `RoundState`, not on the commit.
+            let approved = issue_thread.latest_round().approved_commit();
+            let status_indicator = if approved == Some(&commit.hash) {
                 if commit
                     .statuses
                     .contains(&crate::issue::CommitStatus::Initial)
@@ -603,7 +613,7 @@ fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<
                 .contains(&crate::issue::CommitStatus::Notification)
             {
                 "💬" // Has comments
-            } else if commit.hash == issue_thread.latest_commit().hash {
+            } else if issue_thread.latest_commit().map(|c| c.hash) == Some(commit.hash) {
                 "📍" // Latest commit
             } else {
                 "  " // Regular commit
@@ -631,17 +641,17 @@ fn format_commit_options(issue_thread: &IssueThread, selected: &[usize]) -> Vec<
 
 /// Select commits for comparison - returns (current, previous) in chronological order
 pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<ObjectId>)> {
-    if issue_thread.commits.is_empty() {
+    let thread_commits = picker_commits(issue_thread);
+    if thread_commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
 
-    if issue_thread.commits.len() == 1 {
-        return Ok((issue_thread.commits[0].hash, None));
+    if thread_commits.len() == 1 {
+        return Ok((thread_commits[0].hash, None));
     }
 
     // Get commits that actually changed the file for smart defaults
-    let file_changing_commits: Vec<_> = issue_thread
-        .commits
+    let file_changing_commits: Vec<_> = thread_commits
         .iter()
         .enumerate()
         .filter(|(_, c)| c.file_changed)
@@ -683,8 +693,7 @@ pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<Ob
         .trim();
 
     // Find the commit index
-    let first_index = issue_thread
-        .commits
+    let first_index = thread_commits
         .iter()
         .position(|commit| commit.hash.to_string().starts_with(first_short_hash))
         .unwrap_or(0);
@@ -735,16 +744,15 @@ pub fn prompt_commits(issue_thread: &IssueThread) -> Result<(ObjectId, Option<Ob
             .unwrap_or("")
             .trim();
 
-        let second_index = issue_thread
-            .commits
+        let second_index = thread_commits
             .iter()
             .position(|commit| commit.hash.to_string().starts_with(second_short_hash))
             .unwrap_or(0);
 
-        Some(issue_thread.commits[second_index].hash)
+        Some(thread_commits[second_index].hash)
     };
 
-    Ok((issue_thread.commits[first_index].hash, second_commit))
+    Ok((thread_commits[first_index].hash, second_commit))
 }
 
 /// Select a single commit from file commits - returns the selected commit
@@ -753,13 +761,14 @@ pub fn prompt_single_commit(
     prompt_text: &str,
     default_position: usize,
 ) -> Result<ObjectId> {
-    if issue_thread.commits.is_empty() {
+    let thread_commits = picker_commits(issue_thread);
+    if thread_commits.is_empty() {
         return Err(anyhow::anyhow!("No commits found for this file"));
     }
 
-    if issue_thread.commits.len() == 1 {
+    if thread_commits.len() == 1 {
         log::info!("Only one commit found for this file. Selecting the commit...");
-        return Ok(issue_thread.commits[0].hash);
+        return Ok(thread_commits[0].hash);
     }
 
     println!("📋 Commit Status Legend:");
@@ -771,7 +780,7 @@ pub fn prompt_single_commit(
 
     println!("{}", prompt_text);
     let commit_selection = Select::new("Pick commit:", commit_options)
-        .with_starting_cursor(default_position.min(issue_thread.commits.len() - 1)) // Use provided default position, clamped to valid range
+        .with_starting_cursor(default_position.min(thread_commits.len() - 1)) // Use provided default position, clamped to valid range
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
@@ -790,13 +799,12 @@ pub fn prompt_single_commit(
         .unwrap_or("")
         .trim();
 
-    let commit_index = issue_thread
-        .commits
+    let commit_index = thread_commits
         .iter()
         .position(|commit| commit.hash.to_string().starts_with(commit_short_hash))
         .unwrap_or(0);
 
-    Ok(issue_thread.commits[commit_index].hash)
+    Ok(thread_commits[commit_index].hash)
 }
 
 /// Prompt for optional note for a comment
@@ -1468,5 +1476,80 @@ mod tests {
         // This test just verifies the function doesn't panic with valid configuration
         // Actual interactive testing would require manual verification
         assert!(config.checklists.len() == 3); // Including the default "Custom" checklist
+    }
+
+    /// W5/D16: the commit picker is round-scoped. A multi-round thread must never
+    /// offer an earlier round's commits — that is the §0.5 bug the rounds model
+    /// exists to fix.
+    #[test]
+    fn test_commit_picker_is_round_scoped() {
+        use crate::issue::{
+            Approval, Gap, IssueCommit, Round, RoundChecklist, RoundPlacement, RoundState,
+        };
+        use std::collections::HashSet;
+
+        fn commit(seed: char) -> ObjectId {
+            ObjectId::from_hex(seed.to_string().repeat(40).as_bytes()).unwrap()
+        }
+
+        fn issue_commit(seed: char, statuses: HashSet<crate::CommitStatus>) -> IssueCommit {
+            IssueCommit {
+                hash: commit(seed),
+                message: format!("commit {seed}"),
+                statuses,
+                file_changed: true,
+            }
+        }
+
+        fn round(index: u32, start: char, others: &[char], state: RoundState) -> Round {
+            let mut commits = vec![issue_commit(
+                start,
+                HashSet::from([crate::CommitStatus::Initial]),
+            )];
+            commits.extend(others.iter().map(|c| issue_commit(*c, HashSet::new())));
+            Round {
+                index,
+                branch: format!("round-{index}"),
+                branch_inherited: false,
+                placement: RoundPlacement::Placed,
+                start_commit: commit(start),
+                preceding_gap: Gap::default(),
+                checklist: RoundChecklist::default(),
+                commits,
+                state,
+            }
+        }
+
+        let thread = IssueThread {
+            file: PathBuf::from("src/main.rs"),
+            milestone: "v1".to_string(),
+            open: true,
+            blocking_qcs: Vec::new(),
+            rounds: vec![
+                round(
+                    1,
+                    'a',
+                    &['b'],
+                    RoundState::Approved(Approval {
+                        commit: commit('b'),
+                        comment_id: None,
+                    }),
+                ),
+                round(2, 'c', &['d'], RoundState::Unapproved),
+            ],
+            drift: Gap::default(),
+        };
+
+        let commits = picker_commits(&thread);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].hash, commit('c'));
+        assert_eq!(commits[1].hash, commit('d'));
+
+        let options = format_commit_options(&thread, &[]).join("\n");
+        assert!(options.contains("cccccccc"), "{options}");
+        assert!(options.contains("dddddddd"), "{options}");
+        // Round 1's commits — including its approval — belong to a closed cycle.
+        assert!(!options.contains("aaaaaaaa"), "{options}");
+        assert!(!options.contains("bbbbbbbb"), "{options}");
     }
 }

@@ -14,8 +14,10 @@ use inquire::{
 use octocrab::models::Milestone;
 
 use crate::{
-    DiskCache, GitCommitOps, GitHubReader, GitRepository, IssueThread, archive::ArchiveFile,
-    get_issue_comments, git::GitCommit,
+    DiskCache, GitCommitOps, GitHubReader, GitRepository, IssueThread,
+    archive::{ArchiveFile, SkippedFile, archive_files_for_threads},
+    get_issue_comments,
+    git::GitCommit,
 };
 
 pub async fn prompt_archive(
@@ -23,7 +25,7 @@ pub async fn prompt_archive(
     current_dir: &PathBuf,
     git_info: &(impl GitHubReader + GitCommitOps + GitRepository),
     cache: Option<&DiskCache>,
-) -> Result<(Vec<ArchiveFile>, PathBuf)> {
+) -> Result<(Vec<ArchiveFile>, Vec<SkippedFile>, PathBuf)> {
     println!("📦 Welcome to GHQC Milestone Archive Mode!");
 
     let milestone_selection_method = Select::new(
@@ -102,13 +104,13 @@ pub async fn prompt_archive(
         if approved_issues_only {
             issue_threads = issue_threads
                 .into_iter()
-                .filter(|i| i.approved_commit().is_some())
+                .filter(|i| i.latest_round().is_closed())
                 .collect()
         };
 
         if !issue_threads
             .iter()
-            .any(|i| git_info.branch().map(|b| b == i.branch).unwrap_or(true))
+            .any(|i| git_info.branch().map(|b| b == i.branch()).unwrap_or(true))
         {
             println!(
                 "⚠️ No issues in selected milestones match local branch. Selecting additional files may not have commits of interested"
@@ -145,10 +147,14 @@ pub async fn prompt_archive(
         .prompt()
         .map_err(|e| anyhow::anyhow!("Selection cancelled: {}", e))?;
 
-    let mut archive_files = Vec::new();
-    for issue_thread in issue_threads {
-        archive_files.push(ArchiveFile::from_issue_thread(&issue_thread, flatten)?);
+    let mut selections = Vec::new();
+    for issue_thread in &issue_threads {
+        selections.push((issue_thread, prompt_archive_round(issue_thread)?));
     }
+    // D61: one round whose commit does not resolve costs the user that file, not the
+    // whole run — and the omission is reported here *and* recorded in the manifest.
+    let (mut archive_files, skipped) = archive_files_for_threads(selections, flatten)?;
+    report_skipped(&skipped);
     for (file, commit) in additional_files {
         archive_files.push(ArchiveFile::from_file(file, commit, flatten));
     }
@@ -166,7 +172,100 @@ pub async fn prompt_archive(
 
     let final_archive_path = PathBuf::from(archive_path_input.trim());
 
-    Ok((archive_files, final_archive_path))
+    Ok((archive_files, skipped, final_archive_path))
+}
+
+/// D61: the skip is user-visible as it happens, *and* recorded in
+/// `ghqc_archive_metadata.json` — this warning scrolls away, the archive does not.
+pub fn report_skipped(skipped: &[SkippedFile]) {
+    for skip in skipped {
+        println!(
+            "⚠️ Skipping {} (round {}): {} — select a round that resolves, or fetch '{}'",
+            skip.repository_file.display(),
+            skip.round,
+            skip.reason,
+            skip.branch
+        );
+    }
+    if !skipped.is_empty() {
+        println!(
+            "⚠️ {} file(s) omitted from the archive; the omission is recorded in ghqc_archive_metadata.json",
+            skipped.len()
+        );
+    }
+}
+
+/// C4: pick the round to archive for one QC-attached file, defaulting to the latest.
+///
+/// Returns the 1-based round index, or `None` for "the latest round" — the same default
+/// `ArchiveFile::from_issue_thread` applies. A single-round thread has nothing to choose
+/// between, so it is not prompted for: the overwhelmingly common milestone archive would
+/// otherwise be one keypress per file for zero information.
+fn prompt_archive_round(issue_thread: &IssueThread) -> Result<Option<u32>> {
+    if issue_thread.rounds.len() < 2 {
+        return Ok(None);
+    }
+
+    let options = issue_thread
+        .rounds
+        .iter()
+        .map(|round| {
+            // D55: an unresolved commit is rendered as the branch to fetch, never as
+            // a substituted hash and never blank.
+            let commit = match round.latest_commit() {
+                Some(commit) => commit.hash.to_string()[..8].to_string(),
+                None => format!("fetch {}", round.branch),
+            };
+            let state = if round.is_closed() {
+                "approved"
+            } else if round.index == issue_thread.latest_round().index {
+                "open"
+            } else {
+                // D21/D39.4: superseded does NOT imply malformed — an unapproval before a
+                // later round comment is a legitimate cause.
+                "superseded"
+            };
+            // U6: a divergent preceding gap has no cohesive history back to the prior
+            // approval.
+            // D56: the inheritance is kept, but it is never silent where the round is
+            // being chosen — branch scopes both the round's and its gap's walk.
+            let inherited = if round.branch_inherited {
+                " (inherited branch)"
+            } else {
+                ""
+            };
+            let divergence = if round.preceding_gap.divergent {
+                " ⚠️ no cohesive history"
+            } else {
+                ""
+            };
+            format!(
+                "Round {} ({}) - {} on {}{}{}",
+                round.index, state, commit, round.branch, inherited, divergence
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let latest = options.len() - 1;
+    let selection = Select::new(
+        &format!(
+            "🔄 Select round to archive for {}:",
+            issue_thread.file.display()
+        ),
+        options.clone(),
+    )
+    .with_starting_cursor(latest)
+    .with_help_message("Defaults to the latest round")
+    .prompt()
+    .map_err(|e| anyhow::anyhow!("Selection cancelled: {e}"))?;
+
+    let position = options
+        .iter()
+        .position(|option| *option == selection)
+        .ok_or_else(|| anyhow::anyhow!("Selected round not found"))?;
+    let round = &issue_thread.rounds[position];
+
+    Ok(Some(round.index))
 }
 
 fn prompt_open_milestones() -> Result<MilestoneSelectionFilter> {

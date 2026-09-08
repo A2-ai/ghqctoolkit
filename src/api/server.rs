@@ -62,6 +62,7 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
             get(issues::get_blocked_issues),
         )
         .route("/api/issues/{number}/rename", post(issues::rename_issue))
+        .route("/api/issues/{number}/rounds", post(issues::create_round))
         // Comments & Actions
         .route(
             "/api/issues/{number}/comment",
@@ -86,6 +87,10 @@ pub fn create_router<G: GitProvider + 'static, C: GitCli + Send + Sync + 'static
         .route("/api/files/raw", get(files::get_file_raw))
         // Previews
         .route("/api/preview/issue", post(preview::preview_issue))
+        // D47: the round comment's preview renders through `QCRound`'s real
+        // `CommentBody`, so it cannot drift from what `POST /rounds` posts.
+        .route("/api/preview/round", post(preview::preview_round))
+        .route("/api/preview/round-diff", post(preview::preview_round_diff))
         .route(
             "/api/preview/previous-qc-diff",
             post(preview::preview_previous_qc_diff),

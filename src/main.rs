@@ -7,22 +7,22 @@ use std::path::PathBuf;
 use ghqctoolkit::AuthStore;
 use ghqctoolkit::cli::{
     CacheCommands, ConfigurationEditCommands, FileCommitPair, FileCommitPairParser, IssueUrlArg,
-    IssueUrlArgParser, MilestoneSelectionFilter, RelevantFileArg, RelevantFileArgParser,
-    configuration_edit, configuration_init, confirm_rename_noninteractive, find_issue,
-    generate_archive_name, get_milestone_issue_threads, gh_auth_login, gh_auth_logout,
+    IssueUrlArgParser, MilestoneSelectionFilter, QCRoundCreate, RelevantFileArg,
+    RelevantFileArgParser, configuration_edit, configuration_init, confirm_rename_noninteractive,
+    find_issue, generate_archive_name, get_milestone_issue_threads, gh_auth_login, gh_auth_logout,
     gh_auth_status, gh_auth_token, handle_cache, interactive_milestone_status, interactive_rename,
     interactive_status, milestone_status, prompt_archive, prompt_context_files,
-    prompt_milestone_record, single_issue_status,
+    prompt_milestone_record, report_skipped, single_issue_status,
 };
 use ghqctoolkit::utils::StdEnvProvider;
 use ghqctoolkit::{
-    ArchiveFile, ArchiveMetadata, ConfigUpdateResult, Configuration, ContextPosition, DiskCache,
-    GitCommand, GitCommitOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread,
-    PullOutcome, QCContext, QCStatus, UreqDownloader, analyze_issue_checklists,
-    approve_with_validation, archive, configuration_status, create_labels_if_needed,
-    create_staging_dir, determine_config_dir, fetch_milestone_issues, get_blocking_qc_status,
-    get_git_status, get_milestone_issue_information, get_repo_users, record, render,
-    setup_configuration, stash_review_file, unapprove_with_impact, update_configuration,
+    ArchiveMetadata, ConfigUpdateResult, Configuration, ContextPosition, DiskCache, GitCommand,
+    GitCommitOps, GitHubReader, GitHubWriter, GitInfo, GitRepository, IssueThread, PullOutcome,
+    QCContext, QCStatus, UreqDownloader, approve_with_validation, archive,
+    archive_files_for_threads, configuration_status, create_labels_if_needed, create_staging_dir,
+    determine_config_dir, fetch_milestone_issues, get_blocking_qc_status, get_git_status,
+    get_milestone_issue_information, get_repo_users, record, render, setup_configuration,
+    stash_review_file, unapprove_with_impact, update_configuration,
 };
 use ghqctoolkit::{QCApprove, QCComment, QCIssue, QCReview, QCUnapprove};
 
@@ -303,6 +303,11 @@ enum IssueCommands {
         #[arg(short, long)]
         file: Option<PathBuf>,
     },
+    /// Start a new QC round on an approved issue
+    Round {
+        #[command(subcommand)]
+        round_command: RoundCommands,
+    },
     /// Confirm detected file renames and update issue titles
     Rename {
         /// Milestone to check for renames (will prompt if not provided)
@@ -313,6 +318,51 @@ enum IssueCommands {
         /// Requires --milestone. Skips interactive prompts.
         #[arg(short, long, requires = "milestone")]
         file: Option<PathBuf>,
+    },
+}
+
+/// C2: `create` is the **only** `round` subcommand at v1. `round list` is omitted —
+/// `ghqc issue status` covers it (C3) — and `round edit` / `round checklist` are
+/// rejected: they would mean editing a posted comment, which is audit-hostile.
+#[derive(Subcommand)]
+enum RoundCommands {
+    /// Declare a new QC round with a `# QC Round N` comment
+    ///
+    /// There is deliberately no `--commit` and no `--branch`: both come from the
+    /// current checkout, read-only, exactly like `issue create` (D23).
+    Create {
+        /// Milestone for the issue (will prompt if not provided)
+        #[arg(short, long)]
+        milestone: Option<String>,
+
+        /// File path of the issue to start a round on (will prompt if not provided)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Name of a configured checklist to use instead of seeding from a round
+        #[arg(short, long, conflicts_with = "base_round")]
+        checklist_name: Option<String>,
+
+        /// Round whose checklist seeds this one, with every `- [x]` reset
+        /// (defaults to the latest round)
+        #[arg(long)]
+        base_round: Option<u32>,
+
+        /// Optional note to include in the notification comment
+        #[arg(short, long)]
+        note: Option<String>,
+
+        /// Post the `# QC Notification` comment after the round comment (default)
+        #[arg(long, overrides_with = "no_notify")]
+        notify: bool,
+
+        /// Do not post the notification comment
+        #[arg(long)]
+        no_notify: bool,
+
+        /// Do not include the diff in the notification comment
+        #[arg(long)]
+        no_diff: bool,
     },
 }
 
@@ -697,6 +747,59 @@ async fn main() -> Result<()> {
                         println!("{}", message);
                     }
                 }
+                IssueCommands::Round { round_command } => match round_command {
+                    RoundCommands::Create {
+                        milestone,
+                        file,
+                        checklist_name,
+                        base_round,
+                        note,
+                        notify: _,
+                        no_notify,
+                        no_diff,
+                    } => {
+                        let milestones = git_info.get_milestones().await?;
+                        let cache = DiskCache::from_git_info(&git_info).ok();
+
+                        let round = match (milestone, file) {
+                            (Some(milestone), Some(file)) => {
+                                let config_dir = determine_config_dir(cli.config_dir, &env)?;
+                                let mut configuration = Configuration::from_path(&config_dir);
+                                configuration.load_checklists();
+
+                                QCRoundCreate::from_args(
+                                    milestone,
+                                    file,
+                                    checklist_name,
+                                    base_round,
+                                    note,
+                                    !no_notify,
+                                    no_diff,
+                                    &milestones,
+                                    &configuration,
+                                    cache.as_ref(),
+                                    &git_info,
+                                )
+                                .await?
+                            }
+                            (None, None) => {
+                                QCRoundCreate::from_interactive(
+                                    &milestones,
+                                    cache.as_ref(),
+                                    &git_info,
+                                )
+                                .await?
+                            }
+                            _ => {
+                                bail!(
+                                    "Must provide both --milestone and --file arguments or neither to enter interactive mode"
+                                )
+                            }
+                        };
+
+                        println!("{}", round.post(cache.as_ref(), &git_info).await?);
+                    }
+                },
                 IssueCommands::Rename { milestone, file } => {
                     match (milestone, file) {
                         (Some(milestone_name), Some(old_file)) => {
@@ -745,11 +848,10 @@ async fn main() -> Result<()> {
                         (Some(milestone), Some(file)) => {
                             let issue =
                                 find_issue(&milestone, &file, &milestones, &git_info).await?;
-                            let checklist_summaries =
-                                analyze_issue_checklists(issue.body.as_deref());
                             let issue_thread =
                                 IssueThread::from_issue(&issue, cache.as_ref(), &git_info).await?;
                             let git_status = get_git_status(&git_info)?;
+                            // D55: rendered, not fatal — see `single_issue_status`.
                             let qc_status = QCStatus::determine_status(&issue_thread);
                             let file_commits = issue_thread.file_commits();
                             let blocking_qc_status = get_blocking_qc_status(
@@ -766,7 +868,6 @@ async fn main() -> Result<()> {
                                     &qc_status,
                                     &git_status.dirty,
                                     &file_commits,
-                                    &checklist_summaries,
                                     &blocking_qc_status
                                 )
                             );
@@ -999,7 +1100,7 @@ async fn main() -> Result<()> {
                     let milestones_data = git_info.get_milestones().await?;
 
                     // Determine milestone selection first
-                    let (mut archive_files, archive_path) = match (
+                    let (mut archive_files, skipped, archive_path) = match (
                         milestones.is_empty(),
                         all_closed_milestones,
                         all_milestones,
@@ -1027,28 +1128,35 @@ async fn main() -> Result<()> {
                                 PathBuf::from("archive")
                                     .join(generate_archive_name(&[], &git_info)),
                             );
-                            (Vec::new(), archive_path)
+                            (Vec::new(), Vec::new(), archive_path)
                         }
                         (true, false, true) => {
                             // All milestones requested
                             let selected_milestones =
                                 MilestoneSelectionFilter::All.filter_milestones(&milestones_data);
-                            let artifact_files = get_milestone_issue_threads(
+                            let issue_threads = get_milestone_issue_threads(
                                 &selected_milestones,
                                 &git_info,
                                 cache.as_ref(),
                             )
                             .await?
                             .into_iter()
-                            .filter(|i| include_unapproved || i.approved_commit().is_some())
-                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
-                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+                            .filter(|i| include_unapproved || i.latest_round().is_closed())
+                            .collect::<Vec<_>>();
+                            // C4/U5: `None` selects the latest round, the archive default (D15).
+                            // D61: a round whose commit does not resolve is skipped and
+                            // recorded, never aborted over and never substituted.
+                            let (artifact_files, skipped) = archive_files_for_threads(
+                                issue_threads.iter().map(|i| (i, None)),
+                                flatten,
+                            )?;
+                            report_skipped(&skipped);
 
                             let archive_path = archive_path.unwrap_or(
                                 PathBuf::from("archive")
                                     .join(generate_archive_name(&selected_milestones, &git_info)),
                             );
-                            (artifact_files, archive_path)
+                            (artifact_files, skipped, archive_path)
                         }
                         (true, true, false) => {
                             // All closed milestones requested
@@ -1059,22 +1167,29 @@ async fn main() -> Result<()> {
                                 bail!("No closed milestones found in repository");
                             }
 
-                            let artifact_files = get_milestone_issue_threads(
+                            let issue_threads = get_milestone_issue_threads(
                                 &selected_milestones,
                                 &git_info,
                                 cache.as_ref(),
                             )
                             .await?
                             .into_iter()
-                            .filter(|i| include_unapproved || i.approved_commit().is_some())
-                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
-                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+                            .filter(|i| include_unapproved || i.latest_round().is_closed())
+                            .collect::<Vec<_>>();
+                            // C4/U5: `None` selects the latest round, the archive default (D15).
+                            // D61: a round whose commit does not resolve is skipped and
+                            // recorded, never aborted over and never substituted.
+                            let (artifact_files, skipped) = archive_files_for_threads(
+                                issue_threads.iter().map(|i| (i, None)),
+                                flatten,
+                            )?;
+                            report_skipped(&skipped);
 
                             let archive_path = archive_path.unwrap_or(
                                 PathBuf::from("archive")
                                     .join(generate_archive_name(&selected_milestones, &git_info)),
                             );
-                            (artifact_files, archive_path)
+                            (artifact_files, skipped, archive_path)
                         }
                         (false, false, false) => {
                             // Specific milestones provided
@@ -1090,22 +1205,29 @@ async fn main() -> Result<()> {
                                 );
                             }
 
-                            let artifact_files = get_milestone_issue_threads(
+                            let issue_threads = get_milestone_issue_threads(
                                 &selected_milestones,
                                 &git_info,
                                 cache.as_ref(),
                             )
                             .await?
                             .into_iter()
-                            .filter(|i| include_unapproved || i.approved_commit().is_some())
-                            .map(|i| ArchiveFile::from_issue_thread(&i, flatten))
-                            .collect::<std::result::Result<Vec<ArchiveFile>, _>>()?;
+                            .filter(|i| include_unapproved || i.latest_round().is_closed())
+                            .collect::<Vec<_>>();
+                            // C4/U5: `None` selects the latest round, the archive default (D15).
+                            // D61: a round whose commit does not resolve is skipped and
+                            // recorded, never aborted over and never substituted.
+                            let (artifact_files, skipped) = archive_files_for_threads(
+                                issue_threads.iter().map(|i| (i, None)),
+                                flatten,
+                            )?;
+                            report_skipped(&skipped);
 
                             let archive_path = archive_path.unwrap_or(
                                 PathBuf::from("archive")
                                     .join(generate_archive_name(&selected_milestones, &git_info)),
                             );
-                            (artifact_files, archive_path)
+                            (artifact_files, skipped, archive_path)
                         }
                         (false, true, true) => {
                             bail!("Cannot specify both milestone names and --all-milestones flag");
@@ -1133,7 +1255,7 @@ async fn main() -> Result<()> {
                     };
 
                     // Create the actual archive using ArchiveFile approach
-                    let metadata = ArchiveMetadata::new(archive_files, &env)?;
+                    let metadata = ArchiveMetadata::new_with_skipped(archive_files, skipped, &env)?;
                     archive(metadata, &git_info, &archive_path)?;
 
                     println!(

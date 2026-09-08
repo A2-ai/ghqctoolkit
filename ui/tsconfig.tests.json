@@ -1,0 +1,8 @@
+{
+  // D63: `tsconfig.json` includes only `src` and `vite.config.ts`, so `tsc --noEmit`
+  // never looked at `tests/` — hand-maintained Playwright fixtures could carry a
+  // removed field or miss a new required one and still compile and run green. This
+  // config makes fixture drift a compile error. Run via `npm run typecheck:tests`.
+  "extends": "./tsconfig.json",
+  "include": ["tests"]
+}

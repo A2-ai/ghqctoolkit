@@ -1,6 +1,6 @@
 import { test, expect } from 'playwright/test'
 import { setupRoutes } from '../helpers/routes'
-import { closedMilestone, defaultRepoInfo } from '../fixtures/index'
+import { closedMilestone, defaultRepoInfo, emptyGap, makeApprovedRound, makeRound, withHistory } from '../fixtures/index'
 import type { Issue, IssueStatusResponse, BatchIssueStatusResponse, QCStatus } from '../../src/api/issues'
 import type { Milestone } from '../../src/api/milestones'
 import type { FileTreeResponse } from '../../src/api/files'
@@ -19,27 +19,31 @@ function makeIssue(overrides: Partial<Issue> & Pick<Issue, 'number' | 'title'>):
     closed_at: '2024-01-02T00:00:00Z',
     created_by: 'test-user',
     branch: 'main',
-    checklist_name: 'Code Review',
+    has_qc_rounds_marker: false,
     relevant_files: [],
+    file_history: [],
     ...overrides,
   }
 }
 
 function makeStatus(issue: Issue, status: QCStatus['status'] = 'approved'): IssueStatusResponse {
-  return {
+  const approved = status === 'approved' || status === 'changes_after_approval'
+  return withHistory({
     issue,
-    qc_status: {
-      status,
-      status_detail: '',
-      approved_commit: status === 'approved' ? 'aaa1111' : null,
-      initial_commit: 'bbb2222',
-      latest_commit: 'ccc3333',
-    },
+    qc_status: { status, status_detail: '' },
     dirty: false,
-    branch: 'main',
-    commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
-    checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
-  }
+    // A3: the archive commit is `rounds[i].archive_commit` — what
+    // `approved_commit ?? latest_commit` was always approximating.
+    rounds: [
+      approved
+        ? makeApprovedRound('aaa1111', { checklist_summary: { completed: 5, total: 5, percentage: 1.0 } })
+        : makeRound({
+            commits: [{ hash: 'ccc3333', message: 'initial', statuses: ['initial'], file_changed: true }],
+            checklist_summary: { completed: 5, total: 5, percentage: 1.0 },
+          }),
+    ],
+    drift: emptyGap(),
+  })
 }
 
 const milestoneA: Milestone = {
@@ -352,8 +356,10 @@ test.describe('flatten toggle conflict detection', () => {
       title: 'src/utils.R',
       milestone: 'Milestone A',
       relevant_files: [
-        { file_name: 'lib/utils.R', kind: 'relevant', issue_url: null },
-        { file_name: 'src/other.R', kind: 'relevant', issue_url: null },
+        // A bare relevant file (no backing QC issue) is kind 'file' — 'relevant' is
+        // not a RelevantFileKind.
+        { file_name: 'lib/utils.R', kind: 'file', issue_url: null },
+        { file_name: 'src/other.R', kind: 'file', issue_url: null },
       ],
     })
     const statusWithRelevant = makeStatus(issueWithRelevant)

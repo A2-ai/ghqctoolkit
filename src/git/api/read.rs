@@ -10,6 +10,15 @@ use crate::git::GitInfo;
 /// Git comment data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitComment {
+    /// GitHub's comment id, when the API reported one. Carried so the fold can
+    /// populate `Approval::comment_id` for U8's approval-comment deep-link (O2/D36).
+    ///
+    /// D44: `Option`, never a `#[serde(default)]` sentinel. A missing id defaulting to
+    /// `0` is a valid-looking `u64` indistinguishable from a real comment id — a stored
+    /// value that lies. `None` says "unknown" honestly, so caches written before this
+    /// field existed deserialize to `None` and self-heal on the next refresh; no cache
+    /// version bump and no migration.
+    pub id: Option<u64>,
     pub body: String,
     pub author_login: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -400,7 +409,8 @@ impl GitHubReader for GitInfo {
 
             for (idx, comment) in all_comments.into_iter().enumerate() {
                 let is_last_comment = total_comments > 0 && idx == total_comments - 1;
-                let comment_id = comment.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
+                // D44: no `unwrap_or(0)` — an absent id stays absent.
+                let comment_id = comment.get("id").and_then(|id| id.as_u64());
 
                 // Extract body
                 let body = match comment.get("body").and_then(|b| b.as_str()) {
@@ -409,7 +419,7 @@ impl GitHubReader for GitInfo {
                         error_count += 1;
                         if is_last_comment {
                             log::error!(
-                                "Failed to extract body from last comment {} for issue #{}",
+                                "Failed to extract body from last comment {:?} for issue #{}",
                                 comment_id,
                                 issue_number
                             );
@@ -422,7 +432,7 @@ impl GitHubReader for GitInfo {
                             }));
                         } else {
                             log::warn!(
-                                "Failed to extract body from comment {} for issue #{}: missing body field",
+                                "Failed to extract body from comment {:?} for issue #{}: missing body field",
                                 comment_id,
                                 issue_number
                             );
@@ -454,6 +464,7 @@ impl GitHubReader for GitInfo {
                 });
 
                 git_comments.push(GitComment {
+                    id: comment_id,
                     body,
                     author_login,
                     created_at,
@@ -659,5 +670,48 @@ impl GitHubReader for GitInfo {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitComment;
+
+    /// D44: a cached comment written before `id` existed deserializes to `None`, not to
+    /// `0`. `0` is a valid-looking `u64` indistinguishable from a real comment id — a
+    /// stored value that lies — so the absence has to survive as an absence. This is
+    /// also why no cache version bump is needed: old entries degrade gracefully and
+    /// self-heal on the next refresh.
+    #[test]
+    fn test_a_comment_cached_without_an_id_deserializes_to_none() {
+        let cached = r#"{
+            "body": "approved qc commit: abc1234",
+            "author_login": "reviewer",
+            "created_at": "2024-01-01T00:00:00Z"
+        }"#;
+
+        let comment: GitComment =
+            serde_json::from_str(cached).expect("old cache entries still read");
+
+        assert_eq!(
+            comment.id, None,
+            "a missing id must not become a real-looking id"
+        );
+    }
+
+    #[test]
+    fn test_a_comment_id_round_trips() {
+        let comment = GitComment {
+            id: Some(918_273),
+            body: "approved qc commit: abc1234".to_string(),
+            author_login: "reviewer".to_string(),
+            created_at: chrono::Utc::now(),
+            html: None,
+        };
+
+        let json = serde_json::to_string(&comment).unwrap();
+        let read_back: GitComment = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(read_back.id, Some(918_273));
     }
 }

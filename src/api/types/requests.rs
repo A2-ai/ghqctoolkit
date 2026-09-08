@@ -197,6 +197,62 @@ pub struct ReviewRequest {
     pub auto_stash: bool,
 }
 
+/// A round's checklist (A5). Nested, matching `configuration::Checklist`: `content`
+/// excludes the `# {name}` heading line, which `Display` emits (D37).
+#[derive(Debug, Deserialize)]
+pub struct RoundChecklistRequest {
+    pub name: String,
+    pub content: String,
+}
+
+/// Request to start a new QC round (A5).
+///
+/// `start_commit` and `branch` both come from the caller's checkout, read-only —
+/// there is no commit picker anywhere in the round flow (D23).
+#[derive(Debug, Deserialize)]
+pub struct CreateRoundRequest {
+    pub start_commit: String,
+    pub branch: String,
+    pub checklist: RoundChecklistRequest,
+    /// D57: notification defaults **ON**, matching the CLI's `!no_notify`. A plain
+    /// `#[serde(default)]` here yielded `false`, which made the two sanctioned paths
+    /// disagree about what "start a round" does.
+    #[serde(default = "default_true")]
+    pub notify: bool,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default = "default_true")]
+    pub include_diff: bool,
+}
+
+/// Request to preview a `# QC Round N` comment (D47).
+///
+/// Mirrors `CreateRoundRequest`'s round-comment half — nothing about the optional
+/// notification, which has its own preview endpoint. The round index is **not** a field:
+/// the server derives it exactly as `POST /rounds` does, so the preview cannot claim a
+/// round number the creation would not use. Same reason the whole endpoint exists: the
+/// `[file contents at initial qc commit](url)` line comes from `GitHelpers`, which the UI
+/// cannot compute without guessing the host.
+#[derive(Debug, Deserialize)]
+pub struct PreviewRoundRequest {
+    pub issue_number: u64,
+    pub start_commit: String,
+    pub branch: String,
+    pub checklist: RoundChecklistRequest,
+}
+
+/// Request to preview the file diff a new round would be started over.
+///
+/// Carries only the *new* end of the comparison. The old end — the prior round's
+/// approval — is derived server-side exactly as `create_round` derives the
+/// notification's `previous commit` (D5): a client that could choose both ends could
+/// show a diff for a transition that is not the one about to happen.
+#[derive(Debug, Deserialize)]
+pub struct PreviewRoundDiffRequest {
+    pub issue_number: u64,
+    pub start_commit: String,
+}
+
 /// Request to preview a Previous QC diff comment during issue creation.
 #[derive(Debug, Deserialize)]
 pub struct PreviousQCDiffPreviewRequest {
@@ -217,6 +273,27 @@ pub struct ArchiveFileRequest {
     pub commit: String,
     pub milestone: Option<String>,
     pub approved: Option<bool>,
+    /// A6: the round the selected commit belongs to.
+    #[serde(default)]
+    pub round: Option<u32>,
+    /// A6: whether file-changing commits exist after the selected commit (R11/R12).
+    #[serde(default)]
+    pub subsequent_file_changes: Option<bool>,
+}
+
+/// One file the client declares it is **omitting** from the archive, and why (D62).
+///
+/// Mirrors [`crate::archive::SkippedFile`]. `ArchiveFileRequest` carries an explicit
+/// `commit` and no issue number, so the server cannot resolve a round for this path — the
+/// skip decision is necessarily the client's and the server's job is to record it verbatim.
+/// Same footing as `round`/`approved` (D28.3): only the client holds the round it selected.
+#[derive(Debug, Deserialize)]
+pub struct SkippedFileRequest {
+    pub repository_file: PathBuf,
+    /// The 1-based index of the round that was selected but could not be resolved.
+    pub round: u32,
+    pub branch: String,
+    pub reason: String,
 }
 
 /// Request to generate an archive.
@@ -225,6 +302,11 @@ pub struct ArchiveGenerateRequest {
     pub output_path: String,
     pub flatten: bool,
     pub files: Vec<ArchiveFileRequest>,
+    /// D62: files the client is omitting, recorded verbatim in the archive manifest so a
+    /// partial archive declares itself partial whichever interface produced it. `default`
+    /// keeps existing clients working unchanged.
+    #[serde(default)]
+    pub skipped: Vec<SkippedFileRequest>,
 }
 
 #[derive(serde::Deserialize)]

@@ -1,34 +1,49 @@
-import { Anchor, Stack, Text, Tooltip } from '@mantine/core'
+import { Anchor, Button, Stack, Text, Tooltip } from '@mantine/core'
 import { IconAsterisk } from '@tabler/icons-react'
 import type { ReactNode } from 'react'
-import type { IssueStatusResponse } from '~/api/issues'
+import type { IssueStatusResponse, RoundInfo } from '~/api/issues'
+import { approvalCommentUrl, canStartRound, latestRound, roundApprovedCommit } from '~/api/issues'
 import { useChecklistDisplayName } from '~/api/configuration'
 import { capitalize } from '~/utils/displayName'
+import { ApprovalNotInBranchBadge, FetchBranchBadge, RoundPill } from './RoundBadges'
 
 interface Props {
   status: IssueStatusResponse
   currentBranch: string
   remoteCommit: string
   postApprovalCommit?: string
+  /**
+   * Opens the new-round modal (U1). The modal itself is owned by the parent: a Mantine
+   * Modal is portaled in the DOM but still bubbles React events up its *element* tree,
+   * so a modal rendered here would re-open the detail modal on every click inside it.
+   */
+  onNewRound?: () => void
 }
 
-export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCommit }: Props) {
-  const { issue, qc_status, dirty, branch, checklist_summary, blocking_qc_status } = status
+export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCommit, onNewRound }: Props) {
+  const { issue, qc_status, dirty, drift, blocking_qc_status } = status
+  // D24: the branch and the checklist are round-scoped — read the latest round, never
+  // a top-level copy that could disagree with it.
+  const round = latestRound(status)
+  const branch = round.branch
+  const checklist_summary = round.checklist_summary
   const isWrongBranch = branch !== currentBranch
   const { singular } = useChecklistDisplayName()
   const singularCap = capitalize(singular)
+  const approvedCommit = roundApprovedCommit(round)
+  const approvalUrl = approvalCommentUrl(issue, round)
 
   // Per-lane commit rows (commits array is newest-first)
   let commitRows: ReactNode = null
   switch (qc_status.status) {
     case 'awaiting_review':
     case 'approval_required':
-      commitRows = <CommitRow label="Latest" hash={qc_status.latest_commit} />
+      commitRows = <ArchiveCommitRow label="Latest" round={round} />
       break
     case 'change_requested':
       commitRows = (
         <>
-          <CommitRow label="Reviewed" hash={qc_status.latest_commit} />
+          <ArchiveCommitRow label="Reviewed" round={round} />
           {remoteCommit && <CommitRow label="Remote" hash={remoteCommit} />}
         </>
       )
@@ -37,7 +52,7 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
     case 'changes_to_comment':
       commitRows = (
         <>
-          <CommitRow label="Last Posted" hash={qc_status.latest_commit} />
+          <ArchiveCommitRow label="Last Posted" round={round} />
           {remoteCommit && <CommitRow label="Remote" hash={remoteCommit} />}
         </>
       )
@@ -46,8 +61,11 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
     case 'changes_after_approval':
       commitRows = (
         <>
-          {qc_status.approved_commit && <CommitRow label="Approved" hash={qc_status.approved_commit} />}
+          {/* U8: the approved-commit row deep-links the approval comment via state.comment_id. */}
+          {approvedCommit && <CommitRow label="Approved" hash={approvedCommit} href={approvalUrl} />}
           {postApprovalCommit && <CommitRow label="Changed" hash={postApprovalCommit} />}
+          {/* U6/D31: badge a divergent drift so the Changed hash is not read as meaningful. */}
+          {drift.divergent && <ApprovalNotInBranchBadge />}
         </>
       )
       break
@@ -84,6 +102,12 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
         </Anchor>
       </div>
 
+      {/* Which round the QC is on — the same pill the detail modal's card shows, so the
+          two cannot drift. */}
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <RoundPill index={round.index} />
+      </div>
+
       {/* Milestone */}
       {issue.milestone && (
         <Text size="sm" c="black"><b>Milestone:</b> {issue.milestone}</Text>
@@ -96,6 +120,22 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
 
       {/* Commit info */}
       {commitRows}
+
+      {/* U1: a new round may only be started from an approved QC (D12). */}
+      {canStartRound(qc_status.status) && onNewRound && (
+        <Button
+          size="compact-xs"
+          variant="light"
+          color="blue"
+          data-testid={`new-round-${issue.number}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            onNewRound()
+          }}
+        >
+          New Round
+        </Button>
+      )}
 
       {/* Checklist progress */}
       {checklist_summary.total > 0 && (
@@ -122,9 +162,35 @@ export function IssueCard({ status, currentBranch, remoteCommit, postApprovalCom
   )
 }
 
-function CommitRow({ label, hash }: { label: string; hash: string }) {
+/**
+ * D54/D55: `archive_commit` is `null` when the round's representative commit does not
+ * resolve. The remedy is named — never a substituted hash. In practice the status
+ * endpoint returns `branch_not_local` for an issue whose *latest* round is in that
+ * state, so this is the belt-and-braces half of the same refusal.
+ */
+function ArchiveCommitRow({ label, round }: { label: string; round: RoundInfo }) {
+  if (round.archive_commit === null) return <FetchBranchBadge branch={round.branch} />
+  return <CommitRow label={label} hash={round.archive_commit} />
+}
+
+function CommitRow({ label, hash, href }: { label: string; hash: string; href?: string | null }) {
+  const short = hash.slice(0, 7)
   return (
-    <Text size="sm" c="black"><b>{label}:</b> <span style={{ fontFamily: 'monospace' }}>{hash.slice(0, 7)}</span></Text>
+    <Text size="sm" c="black">
+      <b>{label}:</b>{' '}
+      {href ? (
+        <Anchor
+          href={href}
+          target="_blank"
+          onClick={(event) => event.stopPropagation()}
+          style={{ fontFamily: 'monospace' }}
+        >
+          {short}
+        </Anchor>
+      ) : (
+        <span style={{ fontFamily: 'monospace' }}>{short}</span>
+      )}
+    </Text>
   )
 }
 

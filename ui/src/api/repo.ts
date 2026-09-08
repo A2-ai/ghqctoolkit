@@ -78,6 +78,11 @@ export function useRepoInfo() {
     const commit = query.data?.local_commit ?? null
     if (commit !== null && prevCommitRef.current !== null && commit !== prevCommitRef.current) {
       queryClient.invalidateQueries({ queryKey: ['issue', 'status'] })
+      // Rename detection is never refetched on its own (see useRenames); a new commit is the
+      // only thing that can change its answer, so re-run it for the mounted milestones.
+      queryClient.invalidateQueries({
+        predicate: (q) => q.queryKey[0] === 'milestones' && q.queryKey[2] === 'renames',
+      })
     }
     prevCommitRef.current = commit
   }, [query.data?.local_commit, queryClient])

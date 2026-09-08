@@ -5,6 +5,7 @@ import type { CreateOutcome } from '~/components/CreateResultModal'
 import type { QueuedItem, RelevantFileDraft } from '~/components/CreateIssueModal'
 import type { FileResolution } from '~/components/FileResolveModal'
 import type { FilePreviewKind } from '~/api/preview'
+import type { SkippedFileRequest } from '~/api/archive'
 
 export type CreateMilestoneMode = 'select' | 'new'
 
@@ -87,7 +88,18 @@ export interface ArchiveUiState {
   generateLoading: boolean
   generateError: string | null
   generateSuccess: string | null
+  /**
+   * D62: what the server recorded as skipped, read back off the generate response.
+   * Kept so the confirmation says the archive is partial — the manifest is the durable
+   * record, but the user should not have to open it to learn what was left out.
+   */
+  generateSkipped: SkippedFileRequest[]
   addedFiles: Map<string, FileResolution>
+  /**
+   * U5: issue number → selected round index. Absent means "the latest round", which
+   * is the default; the UI never stores a derived round list, only the choice.
+   */
+  selectedRounds: Record<number, number>
   editFileModal: string | null
   addFileModalOpen: boolean
 }
@@ -165,7 +177,9 @@ const defaultArchiveState: ArchiveUiState = {
   generateLoading: false,
   generateError: null,
   generateSuccess: null,
+  generateSkipped: [],
   addedFiles: new Map(),
+  selectedRounds: {},
   editFileModal: null,
   addFileModalOpen: false,
 }

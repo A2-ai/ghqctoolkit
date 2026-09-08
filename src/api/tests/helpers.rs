@@ -53,14 +53,27 @@ pub struct MockGitInfo {
 
     // Mock data storage
     issues: Arc<Mutex<HashMap<u64, Issue>>>,
+    comments: Arc<Mutex<HashMap<u64, Vec<crate::GitComment>>>>,
     blocked_issues: Arc<Mutex<HashMap<u64, Vec<Issue>>>>,
     milestones: Arc<Mutex<Vec<octocrab::models::Milestone>>>,
     users: Arc<Mutex<Vec<crate::RepoUser>>>,
+
+    /// File contents per commit hex, for the diff paths. **Empty means "every commit
+    /// reads as an empty file"** — the long-standing behaviour every other test relies
+    /// on. Once anything is registered the map becomes authoritative, so an
+    /// unregistered commit reads as unreadable, which is how the not-local case is
+    /// exercised.
+    file_bytes: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 
     // Status
     dirty_files: Arc<Mutex<Vec<PathBuf>>>,
     git_state: GitState,
     stash_error: Option<String>,
+    /// Injected failures for the two writes `POST /rounds` treats specially: the D6
+    /// re-open (non-fatal, reported as `reopened: false` per D45) and the D51 marker
+    /// write (fatal — it aborts the round).
+    open_issue_fails: bool,
+    update_issue_fails: bool,
 
     // Authentication
     current_user: Option<String>,
@@ -90,13 +103,17 @@ pub struct MockGitInfoBuilder {
     branch: String,
     remote_commit: String,
     issues: HashMap<u64, Issue>,
+    comments: HashMap<u64, Vec<crate::GitComment>>,
     blocked_issues: HashMap<u64, Vec<Issue>>,
     milestones: Vec<octocrab::models::Milestone>,
     users: Vec<crate::RepoUser>,
+    file_bytes: HashMap<String, Vec<u8>>,
     dirty_files: Vec<PathBuf>,
     git_state: GitState,
     current_user: Option<String>,
     stash_error: Option<String>,
+    open_issue_fails: bool,
+    update_issue_fails: bool,
 }
 
 impl MockGitInfoBuilder {
@@ -108,13 +125,17 @@ impl MockGitInfoBuilder {
             branch: "main".to_string(),
             remote_commit: "def4567890abcdef4567890abcdef4567890abc0".to_string(),
             issues: HashMap::new(),
+            comments: HashMap::new(),
             blocked_issues: HashMap::new(),
             milestones: Vec::new(),
             users: Vec::new(),
+            file_bytes: HashMap::new(),
             dirty_files: Vec::new(),
             git_state: GitState::Clean,
             current_user: Some("test-user".to_string()),
             stash_error: None,
+            open_issue_fails: false,
+            update_issue_fails: false,
         }
     }
 
@@ -143,6 +164,27 @@ impl MockGitInfoBuilder {
         self
     }
 
+    /// Comment bodies for an issue's timeline, in posting order — the fold reads
+    /// them as the round/approval log.
+    pub fn with_comments(mut self, number: u64, bodies: Vec<&str>) -> Self {
+        self.comments.insert(
+            number,
+            bodies
+                .into_iter()
+                .enumerate()
+                .map(|(index, body)| crate::GitComment {
+                    // Distinct ids so `Approval::comment_id` is observable.
+                    id: Some(index as u64 + 1),
+                    body: body.to_string(),
+                    author_login: "test-user".to_string(),
+                    created_at: chrono::Utc::now(),
+                    html: None,
+                })
+                .collect(),
+        );
+        self
+    }
+
     pub fn with_issue(mut self, number: u64, issue: Issue) -> Self {
         self.issues.insert(number, issue);
         self
@@ -160,6 +202,19 @@ impl MockGitInfoBuilder {
 
     pub fn with_users(mut self, users: Vec<crate::RepoUser>) -> Self {
         self.users = users;
+        self
+    }
+
+    /// Register the file's contents at one commit. Registering *any* commit makes the
+    /// map authoritative: commits left out then fail to read, which is the seam the
+    /// "fetch the branch" refusal needs.
+    pub fn with_file_bytes(
+        mut self,
+        commit: impl Into<String>,
+        contents: impl Into<String>,
+    ) -> Self {
+        self.file_bytes
+            .insert(commit.into(), contents.into().into_bytes());
         self
     }
 
@@ -183,6 +238,18 @@ impl MockGitInfoBuilder {
         self
     }
 
+    /// Make `open_issue` fail — D45's `reopened: false` path.
+    pub fn with_failing_open_issue(mut self) -> Self {
+        self.open_issue_fails = true;
+        self
+    }
+
+    /// Make `update_issue` fail — D51's marker write, which aborts round creation.
+    pub fn with_failing_update_issue(mut self) -> Self {
+        self.update_issue_fails = true;
+        self
+    }
+
     pub fn build(self) -> MockGitInfo {
         MockGitInfo {
             owner: self.owner,
@@ -191,13 +258,17 @@ impl MockGitInfoBuilder {
             current_branch: self.branch,
             remote_commit: self.remote_commit,
             issues: Arc::new(Mutex::new(self.issues)),
+            comments: Arc::new(Mutex::new(self.comments)),
             blocked_issues: Arc::new(Mutex::new(self.blocked_issues)),
             milestones: Arc::new(Mutex::new(self.milestones)),
             users: Arc::new(Mutex::new(self.users)),
+            file_bytes: Arc::new(Mutex::new(self.file_bytes)),
             dirty_files: Arc::new(Mutex::new(self.dirty_files)),
             git_state: self.git_state,
             current_user: self.current_user,
             stash_error: self.stash_error,
+            open_issue_fails: self.open_issue_fails,
+            update_issue_fails: self.update_issue_fails,
             calls: Arc::new(Mutex::new(Vec::new())),
             write_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -365,10 +436,17 @@ impl GitFileOps for MockGitInfo {
 
     fn file_bytes_at_commit(
         &self,
-        _file: &Path,
-        _commit: &ObjectId,
+        file: &Path,
+        commit: &ObjectId,
     ) -> Result<Vec<u8>, GitFileOpsError> {
-        Ok(vec![])
+        let registered = self.file_bytes.lock().unwrap();
+        if registered.is_empty() {
+            return Ok(vec![]);
+        }
+        registered
+            .get(&commit.to_string())
+            .cloned()
+            .ok_or_else(|| GitFileOpsError::FileNotFoundAtCommit(file.to_path_buf()))
     }
 
     fn list_tree_entries(&self, path: &str) -> Result<Vec<(String, bool)>, GitFileOpsError> {
@@ -467,9 +545,15 @@ impl GitHubReader for MockGitInfo {
 
     async fn get_issue_comments(
         &self,
-        _issue: &Issue,
+        issue: &Issue,
     ) -> Result<Vec<crate::GitComment>, GitHubApiError> {
-        Ok(vec![])
+        Ok(self
+            .comments
+            .lock()
+            .unwrap()
+            .get(&issue.number)
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn get_issue_events(
@@ -618,6 +702,9 @@ impl GitHubWriter for MockGitInfo {
             .lock()
             .unwrap()
             .push(WriteCall::OpenIssue { issue_number });
+        if self.open_issue_fails {
+            return Err(GitHubApiError::NoApi);
+        }
         Ok(())
     }
 
@@ -634,6 +721,17 @@ impl GitHubWriter for MockGitInfo {
                 issue_number,
                 new_title: new_title.clone(),
             });
+        if self.update_issue_fails {
+            return Err(GitHubApiError::NoApi);
+        }
+        // Store the new body so a later read observes the D51 marker.
+        if let Some(body) = new_body {
+            if let Ok(mut issues) = self.issues.lock() {
+                if let Some(issue) = issues.get_mut(&issue_number) {
+                    issue.body = Some(body);
+                }
+            }
+        }
         // Also update the issue in the mock store so subsequent reads see the new title
         if let Some(title) = new_title {
             if let Ok(mut issues) = self.issues.lock() {

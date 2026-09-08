@@ -22,7 +22,8 @@ import type { Assignee } from '../../src/api/assignees'
 import type { Checklist } from '../../src/api/checklists'
 import type { FileTreeResponse } from '../../src/api/files'
 import type { CreateIssueResponse } from '../../src/api/create'
-import type { BlockedIssueStatus, CommentResponse, ReviewResponse, UnapprovalResponse } from '../../src/api/issues'
+import type { ArchiveGenerateResponse } from '../../src/api/archive'
+import type { BlockedIssueStatus, CommentResponse, CreateRoundResponse, ReviewResponse, UnapprovalResponse } from '../../src/api/issues'
 
 export interface RouteOverrides {
   repo: RepoInfo
@@ -71,6 +72,10 @@ export interface RouteOverrides {
   postReviewResponse: ReviewResponse | null
   /** HTML response for POST /api/preview/previous-qc-diff */
   previousQcDiffPreviewHtml: string
+  /** HTML response for POST /api/preview/round (D47); null → 500 error */
+  roundPreviewHtml: string | null
+  /** HTML response for POST /api/preview/round-diff; null → 500 error */
+  roundDiffPreviewHtml: string | null
   /** Response for POST /api/issues/:n/approve; null → 500 error */
   postApproveResponse: { approval_url: string; skipped_unapproved: number[]; skipped_errors: unknown[]; closed: boolean } | null
   /** Response for POST /api/issues/:n/unapprove; null → 500 error */
@@ -85,8 +90,11 @@ export interface RouteOverrides {
   recordGenerateSuccess: boolean
   /** Response for POST /api/record/upload; null → 400 */
   recordUploadResponse: { temp_path: string } | null
-  /** Response for POST /api/archive/generate; null → 500 */
-  archiveGenerateResponse: { output_path: string } | null
+  /** Response for POST /api/archive/generate; null → 500.
+   *  Typed against the real response so D62's non-optional `skipped` cannot drift. */
+  archiveGenerateResponse: ArchiveGenerateResponse | null
+  /** Response for POST /api/issues/:n/rounds (A5); null → 500 error */
+  createRoundResponse: CreateRoundResponse | null
   /** Response for GET /api/commits */
   commitsResponse: { commits: { hash: string; message: string; file_changed: boolean }[]; total: number; page: number; page_size: number }
 }
@@ -125,6 +133,15 @@ const defaultOverrides: RouteOverrides = {
     stash: { status: 'stashed', message: 'Stashed local changes for src/single.rs' },
   },
   previousQcDiffPreviewHtml: '<p>Previous QC diff preview</p>',
+  // D47: the round comment body is rendered server-side, so the mock stands in for
+  // `markdown_to_html(QCRound::generate_body(..))` — including the
+  // `[file contents at initial qc commit]` line the client cannot produce.
+  roundPreviewHtml:
+    '<h1>QC Round 3</h1><p><a href="https://github.com/test-owner/test-repo/blob/ccc3333/src/two-rounds.rs">file contents at initial qc commit</a></p>',
+  // Stands in for `markdown_to_html` of diff_utils' fenced diff — the same text the
+  // notification embeds.
+  roundDiffPreviewHtml:
+    '<pre><code class="language-diff">-approved line\n+rewritten line\n</code></pre>',
   postApproveResponse: { approval_url: 'https://github.com/test-owner/test-repo/issues/70#issuecomment-77777', skipped_unapproved: [], skipped_errors: [], closed: true },
   postUnapproveResponse: { unapproval_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-66666', opened: true },
   blockedResponse: [],
@@ -132,8 +149,14 @@ const defaultOverrides: RouteOverrides = {
   recordPreviewResponse: { key: 'preview-test-key' },
   recordGenerateSuccess: true,
   recordUploadResponse: { temp_path: '/tmp/ghqc-uploads/test123.pdf' },
-  archiveGenerateResponse: { output_path: '/mock/repo/test-archive.tar.gz' },
+  archiveGenerateResponse: { output_path: '/mock/repo/test-archive.tar.gz', skipped: [] },
   commitsResponse: { commits: [{ hash: 'abc1234567890', message: 'Initial commit', file_changed: true }], total: 1, page: 0, page_size: 10 },
+  createRoundResponse: {
+    round_index: 2,
+    comment_url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-55555',
+    reopened: true,
+    notification: { kind: 'posted', url: 'https://github.com/test-owner/test-repo/issues/74#issuecomment-55556' },
+  },
 }
 
 export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides> = {}): Promise<void> {
@@ -316,6 +339,40 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
     })
   })
 
+  // Anchored: `/api/preview/round` is a prefix of `/api/preview/round-diff`, so an
+  // unanchored pattern here silently answers the diff request with the round comment.
+  await page.route(/\/api\/preview\/round-diff/, (route) => {
+    if (cfg.roundDiffPreviewHtml === null) {
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Failed to render the round diff' }),
+      })
+      return
+    }
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: cfg.roundDiffPreviewHtml,
+    })
+  })
+
+  await page.route(/\/api\/preview\/round$/, (route) => {
+    if (cfg.roundPreviewHtml === null) {
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Failed to render the round comment' }),
+      })
+      return
+    }
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: cfg.roundPreviewHtml,
+    })
+  })
+
   await page.route(/\/api\/preview\/previous-qc-diff/, (route) => {
     route.fulfill({
       status: 200,
@@ -481,6 +538,24 @@ export async function setupRoutes(page: Page, overrides: Partial<RouteOverrides>
         status: 500,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'Archive generation failed' }),
+      })
+    }
+  })
+
+  // A5: POST /api/issues/:n/rounds
+  await page.route(/\/api\/issues\/\d+\/rounds/, (route, request) => {
+    if (request.method() !== 'POST') { void route.continue(); return }
+    if (cfg.createRoundResponse) {
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify(cfg.createRoundResponse),
+      })
+    } else {
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Internal server error' }),
       })
     }
   })

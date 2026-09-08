@@ -223,7 +223,19 @@ impl QCIssue {
                     if let Ok(thread) =
                         IssueThread::from_issue(&prev_issue_obj, None, git_info).await
                     {
-                        let prev_commit = thread.latest_commit().hash;
+                        // D54/D55: no resolvable commit for the previous QC's latest
+                        // round (unplaceable, or an approval force-pushed off its
+                        // branch) means there is nothing honest to diff against. Skip
+                        // the diff comment and say which branch would fix it, rather
+                        // than diffing a substituted commit.
+                        let Some(prev_commit) = thread.latest_commit().map(|c| c.hash) else {
+                            log::warn!(
+                                "Skipping Previous QC diff for #{prev_issue_number}: its latest \
+                                 round has no resolvable commit — fetch '{}'",
+                                thread.branch()
+                            );
+                            continue;
+                        };
                         let diff_comment = PreviousQCDiffComment {
                             issue: issue.clone(),
                             prev_file,
